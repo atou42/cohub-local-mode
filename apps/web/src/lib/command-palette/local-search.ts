@@ -15,6 +15,11 @@ import {
 	type SpaceRecordCacheRecord,
 } from "$lib/cache/db";
 import { getCacheUserKey } from "$lib/cache/keys";
+import {
+	getSpaceOrigin,
+	resolveSpaceOrigin,
+	routeWithSpaceOrigin,
+} from "$lib/space-origin";
 import { getSpacePublicProfile } from "$lib/space-profile";
 import { buildSpaceLandingRoute } from "$lib/space-routes";
 import { getCachedSpaceList } from "$lib/stores/space-list-cache";
@@ -58,24 +63,43 @@ function hrefFor(
 		| "sequence"
 		| "labelResourceType"
 		| "labelResourceRef"
+		| "spaceOrigin"
 	>,
 ) {
-	if (item.type === "space") return buildSpaceLandingRoute(item.spaceId);
+	const origin = item.spaceOrigin ?? resolveSpaceOrigin(item.spaceId);
+	if (item.type === "space") {
+		return routeWithSpaceOrigin(buildSpaceLandingRoute(item.spaceId), origin);
+	}
 	if (item.type === "session")
-		return `/spaces/${item.spaceId}/sessions/${item.sessionId}`;
+		return routeWithSpaceOrigin(
+			`/spaces/${item.spaceId}/sessions/${item.sessionId}`,
+			origin,
+		);
 	if (item.type === "label") {
 		if (item.labelResourceType === "session")
-			return `/spaces/${item.spaceId}/sessions/${item.labelResourceRef}`;
+			return routeWithSpaceOrigin(
+				`/spaces/${item.spaceId}/sessions/${item.labelResourceRef}`,
+				origin,
+			);
 		if (item.labelResourceType === "checkpoint")
-			return `/spaces/${item.spaceId}/checkpoints/${item.labelResourceRef}`;
+			return routeWithSpaceOrigin(
+				`/spaces/${item.spaceId}/checkpoints/${item.labelResourceRef}`,
+				origin,
+			);
 		if (item.labelResourceType === "file")
-			return `/spaces/${item.spaceId}/files/${(item.labelResourceRef ?? "")
-				.split("/")
-				.map(encodeURIComponent)
-				.join("/")}`;
-		return buildSpaceLandingRoute(item.spaceId);
+			return routeWithSpaceOrigin(
+				`/spaces/${item.spaceId}/files/${(item.labelResourceRef ?? "")
+					.split("/")
+					.map(encodeURIComponent)
+					.join("/")}`,
+				origin,
+			);
+		return routeWithSpaceOrigin(buildSpaceLandingRoute(item.spaceId), origin);
 	}
-	return `/spaces/${item.spaceId}/sessions/${item.sessionId}?turn=${item.sequence}`;
+	return routeWithSpaceOrigin(
+		`/spaces/${item.spaceId}/sessions/${item.sessionId}?turn=${item.sequence}`,
+		origin,
+	);
 }
 
 function compactText(value: string | null | undefined, limit: number) {
@@ -127,13 +151,15 @@ function spaceToItem(
 		spaceProfile: getSpacePublicProfile(space),
 		sessionTitle: null,
 		matchedField,
-		href: buildSpaceLandingRoute(space.id),
+		href: routeWithSpaceOrigin(
+			buildSpaceLandingRoute(space.id),
+			getSpaceOrigin(space),
+		),
 		updatedAt: activityAt,
 		source: "local",
 		localScore: scored.score,
 		isPinned: space.isPinned ?? false,
-		viewerRelation,
-		viewerTier: viewerRelation === "creator" ? 0 : 1,
+		spaceOrigin: getSpaceOrigin(space),
 		...scored,
 	};
 }

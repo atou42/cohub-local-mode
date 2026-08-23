@@ -266,6 +266,7 @@ export async function createSessionFork(input: {
       source: parent.source,
       status: "active",
       externalSessionId: null,
+      agentHarness: parent.agentHarness,
       meta: sanitizePostgresJsonValue(requestedTitle ? setSessionTitleMeta(childMeta, { source: "user" }) : childMeta),
       lastMessageAt: now,
       lastMessageId: null,
