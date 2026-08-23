@@ -3,7 +3,11 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { Transform, type TransformCallback } from "node:stream";
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import {
   collectLocalPageAssetRefs,
@@ -161,8 +165,16 @@ function getStorage() {
 
 function requireStorage() {
   const storage = getStorage();
-  if (!storage.bucket || !storage.endpoint || !storage.accessKeyId || !storage.secretAccessKey) {
-    throw new WorkPublishAssetError(500, "work asset storage is not configured");
+  if (
+    !storage.bucket ||
+    !storage.endpoint ||
+    !storage.accessKeyId ||
+    !storage.secretAccessKey
+  ) {
+    throw new WorkPublishAssetError(
+      500,
+      "work asset storage is not configured",
+    );
   }
   return {
     ...storage,
@@ -178,7 +190,7 @@ function getS3Client() {
   s3Client ??= new S3Client({
     endpoint: storage.endpoint,
     region: storage.region,
-    forcePathStyle: false,
+    forcePathStyle: config.s3ForcePathStyle,
     credentials: {
       accessKeyId: storage.accessKeyId,
       secretAccessKey: storage.secretAccessKey,
@@ -189,23 +201,33 @@ function getS3Client() {
 
 const cacheBuster = () => randomUUID().replaceAll("-", "").slice(0, 12);
 const envPrefix = () => (config.env === "prod" ? "" : `${config.env}/`);
-const buildWorkArtifactRoot = (input: { spaceId: string; appSlug: string }) => `${envPrefix()}w/${input.spaceId}/${input.appSlug}/${cacheBuster()}`;
-const workContentPrefix = (artifactRootKey: string) => `${artifactRootKey}/content`;
+const buildWorkArtifactRoot = (input: { spaceId: string; appSlug: string }) =>
+  `${envPrefix()}w/${input.spaceId}/${input.appSlug}/${cacheBuster()}`;
+const workContentPrefix = (artifactRootKey: string) =>
+  `${artifactRootKey}/content`;
 
 function getMimeType(path: string) {
   const lower = basename(path).toLowerCase();
   if (lower === "dockerfile") return "text/x-dockerfile";
   if (lower === "makefile") return "text/x-makefile";
-  return mimeByExt[extname(lower)] ?? (lower.startsWith(".") ? "text/plain" : null);
+  return (
+    mimeByExt[extname(lower)] ?? (lower.startsWith(".") ? "text/plain" : null)
+  );
 }
 
-function assertSafeRelativePath(input: string, options?: { allowEmpty?: boolean }) {
-  const value = String(input ?? "").replace(/\\/g, "/").trim();
+function assertSafeRelativePath(
+  input: string,
+  options?: { allowEmpty?: boolean },
+) {
+  const value = String(input ?? "")
+    .replace(/\\/g, "/")
+    .trim();
   if (!value) {
     if (options?.allowEmpty) return "";
     throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
   }
-  if (value.startsWith("/") || value.includes("\0")) throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
+  if (value.startsWith("/") || value.includes("\0"))
+    throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
   return value;
 }
 
@@ -215,11 +237,28 @@ function assertInsideRoot(target: string, root: string) {
   throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
 }
 
-async function resolveTarget(spaceId: string, inputPath: string, options?: { allowEmpty?: boolean }) {
-  if (!config.spaceStorageRoot) throw new WorkPublishAssetError(503, "Space file storage is not configured.", "space_storage_not_configured");
-  const safePath = assertSafeRelativePath(inputPath, { allowEmpty: options?.allowEmpty });
-  const root = await realpath(resolve(config.spaceStorageRoot, spaceId, "workspace")).catch(() => {
-    throw new WorkPublishAssetError(404, "space directory not found", "space_not_found");
+async function resolveTarget(
+  spaceId: string,
+  inputPath: string,
+  options?: { allowEmpty?: boolean },
+) {
+  if (!config.spaceStorageRoot)
+    throw new WorkPublishAssetError(
+      503,
+      "Space file storage is not configured.",
+      "space_storage_not_configured",
+    );
+  const safePath = assertSafeRelativePath(inputPath, {
+    allowEmpty: options?.allowEmpty,
+  });
+  const root = await realpath(
+    resolve(config.spaceStorageRoot, spaceId, "workspace"),
+  ).catch(() => {
+    throw new WorkPublishAssetError(
+      404,
+      "space directory not found",
+      "space_not_found",
+    );
   });
   const target = resolve(root, safePath);
   assertInsideRoot(target, root);
@@ -228,31 +267,66 @@ async function resolveTarget(spaceId: string, inputPath: string, options?: { all
 
 async function openVerifiedFile(path: string, root: string) {
   const realPath = await realpath(path).catch(() => {
-    throw new WorkPublishAssetError(404, "File or directory not found.", "path_not_found");
+    throw new WorkPublishAssetError(
+      404,
+      "File or directory not found.",
+      "path_not_found",
+    );
   });
   assertInsideRoot(realPath, root);
   return open(realPath, OPEN_READ_NOFOLLOW).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ELOOP") {
-      throw new WorkPublishAssetError(400, "Symlink export is not supported.", "symlink_not_supported");
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ELOOP"
+    ) {
+      throw new WorkPublishAssetError(
+        400,
+        "Symlink export is not supported.",
+        "symlink_not_supported",
+      );
     }
     throw error;
   });
 }
 
-async function readWorkFile(spaceId: string, path: string): Promise<WorkSourceFile> {
+async function readWorkFile(
+  spaceId: string,
+  path: string,
+): Promise<WorkSourceFile> {
   const { root, target, relativePath } = await resolveTarget(spaceId, path);
   const pathStats = await lstat(target).catch(() => {
     throw new WorkPublishAssetError(404, "file not found", "path_not_found");
   });
-  if (pathStats.isSymbolicLink()) throw new WorkPublishAssetError(400, "Symlink preview is not supported.", "symlink_not_supported");
-  if (!pathStats.isFile()) throw new WorkPublishAssetError(400, "The selected path is not a file.", "not_a_file");
+  if (pathStats.isSymbolicLink())
+    throw new WorkPublishAssetError(
+      400,
+      "Symlink preview is not supported.",
+      "symlink_not_supported",
+    );
+  if (!pathStats.isFile())
+    throw new WorkPublishAssetError(
+      400,
+      "The selected path is not a file.",
+      "not_a_file",
+    );
 
   const handle = await openVerifiedFile(target, root);
   try {
     const stats = await handle.stat();
-    if (!stats.isFile()) throw new WorkPublishAssetError(400, "The selected path is not a file.", "not_a_file");
+    if (!stats.isFile())
+      throw new WorkPublishAssetError(
+        400,
+        "The selected path is not a file.",
+        "not_a_file",
+      );
     if (stats.size <= 0 || stats.size > MAX_WORK_SITE_BYTES) {
-      throw new WorkPublishAssetError(413, "File publish size must be between 1 byte and 1GiB.", "file_too_large");
+      throw new WorkPublishAssetError(
+        413,
+        "File publish size must be between 1 byte and 1GiB.",
+        "file_too_large",
+      );
     }
     return {
       root,
@@ -271,8 +345,11 @@ async function readWorkHtmlFile(spaceId: string, path: string) {
   const file = await readWorkFile(spaceId, path);
   const prepared = await prepareWorkFile(file, WORK_HTML_METADATA_MAX_BYTES);
   const html = prepared.prefix?.toString("utf8") ?? "";
-  const htmlDir = await realpath(resolve(file.absolutePath, "..")).catch(() => null);
-  if (!htmlDir) return { file, prepared, html, companions: [] as WorkSiteFile[] };
+  const htmlDir = await realpath(resolve(file.absolutePath, "..")).catch(
+    () => null,
+  );
+  if (!htmlDir)
+    return { file, prepared, html, companions: [] as WorkSiteFile[] };
   assertInsideRoot(htmlDir, file.root);
   const companions = await readWorkPageCompanionAssets({
     root: file.root,
@@ -288,13 +365,17 @@ async function readOptionalWorkspaceFile(input: {
   maxBytes: number;
 }): Promise<Buffer | null> {
   const pathStats = await lstat(input.absPath).catch(() => null);
-  if (!pathStats || pathStats.isSymbolicLink() || !pathStats.isFile()) return null;
+  if (!pathStats || pathStats.isSymbolicLink() || !pathStats.isFile())
+    return null;
   if (pathStats.size <= 0 || pathStats.size > input.maxBytes) return null;
-  const handle = await openVerifiedFile(input.absPath, input.root).catch(() => null);
+  const handle = await openVerifiedFile(input.absPath, input.root).catch(
+    () => null,
+  );
   if (!handle) return null;
   try {
     const stats = await handle.stat();
-    if (!stats.isFile() || stats.size <= 0 || stats.size > input.maxBytes) return null;
+    if (!stats.isFile() || stats.size <= 0 || stats.size > input.maxBytes)
+      return null;
     return handle.readFile();
   } finally {
     await handle.close();
@@ -361,14 +442,34 @@ async function readWorkPageCompanionAssets(input: {
 }
 
 async function readWorkDirectoryFiles(spaceId: string, path: string) {
-  const { root, target, relativePath } = await resolveTarget(spaceId, path, { allowEmpty: true });
-  const targetStats = await lstat(target).catch(() => {
-    throw new WorkPublishAssetError(404, "File or directory not found.", "path_not_found");
+  const { root, target, relativePath } = await resolveTarget(spaceId, path, {
+    allowEmpty: true,
   });
-  if (targetStats.isSymbolicLink()) throw new WorkPublishAssetError(400, "Symlink export is not supported.", "symlink_not_supported");
-  if (!targetStats.isDirectory()) throw new WorkPublishAssetError(400, "The selected path is not a directory.", "not_a_directory");
+  const targetStats = await lstat(target).catch(() => {
+    throw new WorkPublishAssetError(
+      404,
+      "File or directory not found.",
+      "path_not_found",
+    );
+  });
+  if (targetStats.isSymbolicLink())
+    throw new WorkPublishAssetError(
+      400,
+      "Symlink export is not supported.",
+      "symlink_not_supported",
+    );
+  if (!targetStats.isDirectory())
+    throw new WorkPublishAssetError(
+      400,
+      "The selected path is not a directory.",
+      "not_a_directory",
+    );
   const realTarget = await realpath(target).catch(() => {
-    throw new WorkPublishAssetError(404, "File or directory not found.", "path_not_found");
+    throw new WorkPublishAssetError(
+      404,
+      "File or directory not found.",
+      "path_not_found",
+    );
   });
   assertInsideRoot(realTarget, root);
 
@@ -382,7 +483,12 @@ async function readWorkDirectoryFiles(spaceId: string, path: string) {
       const absPath = resolve(dir, name);
       assertInsideRoot(absPath, root);
       const pathStats = await lstat(absPath);
-      if (pathStats.isSymbolicLink()) throw new WorkPublishAssetError(400, "Symlink export is not supported.", "symlink_not_supported");
+      if (pathStats.isSymbolicLink())
+        throw new WorkPublishAssetError(
+          400,
+          "Symlink export is not supported.",
+          "symlink_not_supported",
+        );
       if (pathStats.isDirectory()) {
         const realDir = await realpath(absPath);
         assertInsideRoot(realDir, root);
@@ -392,15 +498,29 @@ async function readWorkDirectoryFiles(spaceId: string, path: string) {
       }
       if (!pathStats.isFile()) continue;
       if (files.length >= MAX_WORK_SITE_FILES) {
-        throw new WorkPublishAssetError(413, `Cannot publish more than ${MAX_WORK_SITE_FILES} files from a directory.`, "directory_too_many_files");
+        throw new WorkPublishAssetError(
+          413,
+          `Cannot publish more than ${MAX_WORK_SITE_FILES} files from a directory.`,
+          "directory_too_many_files",
+        );
       }
 
       const handle = await openVerifiedFile(absPath, root);
       try {
         const stats = await handle.stat();
-        if (!stats.isFile()) throw new WorkPublishAssetError(400, "The selected path is not a file.", "not_a_file");
+        if (!stats.isFile())
+          throw new WorkPublishAssetError(
+            400,
+            "The selected path is not a file.",
+            "not_a_file",
+          );
         totalBytes += stats.size;
-        if (totalBytes > MAX_WORK_SITE_BYTES) throw new WorkPublishAssetError(413, "Directory publish size exceeds 1GiB.", "directory_too_large");
+        if (totalBytes > MAX_WORK_SITE_BYTES)
+          throw new WorkPublishAssetError(
+            413,
+            "Directory publish size exceeds 1GiB.",
+            "directory_too_large",
+          );
         const relativePath = relative(realTarget, absPath).replace(/\\/g, "/");
         files.push({
           root,
@@ -420,27 +540,41 @@ async function readWorkDirectoryFiles(spaceId: string, path: string) {
   return { path: relativePath, files };
 }
 
-async function mapWithConcurrency<T>(items: T[], concurrency: number, mapper: (item: T) => Promise<void>) {
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<void>,
+) {
   let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      await mapper(items[index] as T);
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await mapper(items[index] as T);
+      }
+    },
+  );
   await Promise.all(workers);
 }
 
-async function putWorkAssetObject(input: { objectKey: string; body: Buffer | string; contentType: string; sha256: string }) {
-  await getS3Client().send(new PutObjectCommand({
-    Bucket: requireStorage().bucket,
-    Key: input.objectKey,
-    Body: input.body,
-    ContentType: input.contentType,
-    CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
-    Metadata: { sha256: input.sha256 },
-  }));
+async function putWorkAssetObject(input: {
+  objectKey: string;
+  body: Buffer | string;
+  contentType: string;
+  sha256: string;
+}) {
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: requireStorage().bucket,
+      Key: input.objectKey,
+      Body: input.body,
+      ContentType: input.contentType,
+      CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
+      Metadata: { sha256: input.sha256 },
+    }),
+  );
 }
 
 async function writeArtifactManifest(input: {
@@ -470,7 +604,11 @@ async function writeArtifactManifest(input: {
     contentType: "application/json; charset=utf-8",
     sha256: manifestSha256,
   });
-  return { artifactRootKey: input.artifactRootKey, manifestKey, manifestSha256 };
+  return {
+    artifactRootKey: input.artifactRootKey,
+    manifestKey,
+    manifestSha256,
+  };
 }
 
 type FileSnapshot = {
@@ -488,13 +626,22 @@ const fileSnapshot = (stats: Stats): FileSnapshot => ({
 });
 
 const sameFileSnapshot = (left: FileSnapshot, right: FileSnapshot) =>
-  left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.ino === right.ino;
+  left.size === right.size &&
+  left.mtimeMs === right.mtimeMs &&
+  left.ctimeMs === right.ctimeMs &&
+  left.ino === right.ino;
 
-async function hashOpenFile(handle: Awaited<ReturnType<typeof open>>, prefixBytes = 0) {
+async function hashOpenFile(
+  handle: Awaited<ReturnType<typeof open>>,
+  prefixBytes = 0,
+) {
   const hash = createHash("sha256");
   const prefixChunks: Buffer[] = [];
   let prefixRemaining = prefixBytes;
-  for await (const rawChunk of handle.createReadStream({ start: 0, autoClose: false })) {
+  for await (const rawChunk of handle.createReadStream({
+    start: 0,
+    autoClose: false,
+  })) {
     const chunk = rawChunk as Buffer;
     hash.update(chunk);
     if (prefixRemaining <= 0) continue;
@@ -514,14 +661,26 @@ type PreparedWorkFile = {
   prefix: Buffer | null;
 };
 
-async function prepareWorkFile(file: WorkSourceFile, prefixBytes = 0): Promise<PreparedWorkFile> {
+async function prepareWorkFile(
+  file: WorkSourceFile,
+  prefixBytes = 0,
+): Promise<PreparedWorkFile> {
   const handle = await openVerifiedFile(file.absolutePath, file.root);
   try {
     const snapshot = fileSnapshot(await handle.stat());
-    if (snapshot.size !== file.size) throw new WorkPublishAssetError(409, "Source file changed during publish.", "source_changed");
+    if (snapshot.size !== file.size)
+      throw new WorkPublishAssetError(
+        409,
+        "Source file changed during publish.",
+        "source_changed",
+      );
     const prepared = await hashOpenFile(handle, prefixBytes);
     if (!sameFileSnapshot(snapshot, fileSnapshot(await handle.stat()))) {
-      throw new WorkPublishAssetError(409, "Source file changed during publish.", "source_changed");
+      throw new WorkPublishAssetError(
+        409,
+        "Source file changed during publish.",
+        "source_changed",
+      );
     }
     return { snapshot, ...prepared };
   } finally {
@@ -535,18 +694,31 @@ async function putWorkFileObject(input: {
   contentType: string;
   prepared?: PreparedWorkFile;
 }) {
-  const prepared = input.prepared ?? await prepareWorkFile(input.file);
-  const handle = await openVerifiedFile(input.file.absolutePath, input.file.root);
+  const prepared = input.prepared ?? (await prepareWorkFile(input.file));
+  const handle = await openVerifiedFile(
+    input.file.absolutePath,
+    input.file.root,
+  );
   let uploaded = false;
   try {
-    if (!sameFileSnapshot(prepared.snapshot, fileSnapshot(await handle.stat()))) {
-      throw new WorkPublishAssetError(409, "Source file changed during publish.", "source_changed");
+    if (
+      !sameFileSnapshot(prepared.snapshot, fileSnapshot(await handle.stat()))
+    ) {
+      throw new WorkPublishAssetError(
+        409,
+        "Source file changed during publish.",
+        "source_changed",
+      );
     }
 
     const uploadedHash = createHash("sha256");
     const body = handle.createReadStream({ start: 0, autoClose: false }).pipe(
       new Transform({
-        transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+        transform(
+          chunk: Buffer,
+          _encoding: BufferEncoding,
+          callback: TransformCallback,
+        ) {
           uploadedHash.update(chunk);
           callback(null, chunk);
         },
@@ -572,16 +744,33 @@ async function putWorkFileObject(input: {
     uploaded = true;
 
     if (uploadedHash.digest("hex") !== prepared.sha256) {
-      throw new WorkPublishAssetError(409, "Source file changed during publish.", "source_changed");
+      throw new WorkPublishAssetError(
+        409,
+        "Source file changed during publish.",
+        "source_changed",
+      );
     }
-    if (!sameFileSnapshot(prepared.snapshot, fileSnapshot(await handle.stat()))) {
-      throw new WorkPublishAssetError(409, "Source file changed during publish.", "source_changed");
+    if (
+      !sameFileSnapshot(prepared.snapshot, fileSnapshot(await handle.stat()))
+    ) {
+      throw new WorkPublishAssetError(
+        409,
+        "Source file changed during publish.",
+        "source_changed",
+      );
     }
     return { sha256: prepared.sha256, size: prepared.snapshot.size };
   } catch (error) {
     if (uploaded) {
       const storage = requireStorage();
-      await getS3Client().send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: input.objectKey })).catch(() => undefined);
+      await getS3Client()
+        .send(
+          new DeleteObjectCommand({
+            Bucket: storage.bucket,
+            Key: input.objectKey,
+          }),
+        )
+        .catch(() => undefined);
     }
     throw error;
   } finally {
@@ -589,7 +778,10 @@ async function putWorkFileObject(input: {
   }
 }
 
-async function readWorkFilePrefix(file: WorkSourceFile, maxBytes = WORK_HTML_METADATA_MAX_BYTES) {
+async function readWorkFilePrefix(
+  file: WorkSourceFile,
+  maxBytes = WORK_HTML_METADATA_MAX_BYTES,
+) {
   const handle = await openVerifiedFile(file.absolutePath, file.root);
   try {
     const length = Math.min(file.size, maxBytes);
@@ -605,8 +797,17 @@ async function workFileTailIsWhitespace(file: WorkSourceFile, start: number) {
   if (start >= file.size) return true;
   const handle = await openVerifiedFile(file.absolutePath, file.root);
   try {
-    for await (const chunk of handle.createReadStream({ start, autoClose: false })) {
-      if ((chunk as Buffer).some((byte) => byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x20)) return false;
+    for await (const chunk of handle.createReadStream({
+      start,
+      autoClose: false,
+    })) {
+      if (
+        (chunk as Buffer).some(
+          (byte) =>
+            byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x20,
+        )
+      )
+        return false;
     }
     return true;
   } finally {
@@ -619,10 +820,17 @@ function isAbsoluteHttpUrl(value: string) {
 }
 
 function normalizeSitePath(value: string) {
-  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").toLowerCase();
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .toLowerCase();
 }
 
-function keepSiteAssetRef(ref: string | null, available: Set<string>): string | null {
+function keepSiteAssetRef(
+  ref: string | null,
+  available: Set<string>,
+): string | null {
   if (!ref) return null;
   // Inline icons and absolute URLs are fine for any target type.
   if (/^data:image\//i.test(ref)) return ref;
@@ -661,11 +869,22 @@ async function writeWorkHtmlAsset(input: {
   companions?: WorkSiteFile[];
 }) {
   const companions = input.companions ?? [];
-  const companionBytes = companions.reduce((sum, file) => sum + file.content.byteLength, 0);
+  const companionBytes = companions.reduce(
+    (sum, file) => sum + file.content.byteLength,
+    0,
+  );
   const sizeBytes = input.file.size + companionBytes;
-  if (sizeBytes > MAX_WORK_SITE_BYTES) throw new WorkPublishAssetError(413, "HTML publish size exceeds 1GiB.", "file_too_large");
+  if (sizeBytes > MAX_WORK_SITE_BYTES)
+    throw new WorkPublishAssetError(
+      413,
+      "HTML publish size exceeds 1GiB.",
+      "file_too_large",
+    );
 
-  const artifactRootKey = buildWorkArtifactRoot({ spaceId: input.spaceId, appSlug: input.appSlug });
+  const artifactRootKey = buildWorkArtifactRoot({
+    spaceId: input.spaceId,
+    appSlug: input.appSlug,
+  });
   const prefix = workContentPrefix(artifactRootKey);
   const objectKey = `${prefix}/index.html`;
   await putWorkFileObject({
@@ -704,7 +923,10 @@ async function writeWorkHtmlAsset(input: {
     },
   );
 
-  const uploadedPaths = ["index.html", ...companions.map((file) => file.relativePath)];
+  const uploadedPaths = [
+    "index.html",
+    ...companions.map((file) => file.relativePath),
+  ];
   const download = await writeArtifactManifest({
     artifactRootKey,
     targetType: "file",
@@ -721,18 +943,34 @@ async function writeWorkHtmlAsset(input: {
   };
 }
 
-async function writeWorkSiteAssets(input: { spaceId: string; appSlug: string; targetRef: string; files: WorkSourceFile[] }) {
+async function writeWorkSiteAssets(input: {
+  spaceId: string;
+  appSlug: string;
+  targetRef: string;
+  files: WorkSourceFile[];
+}) {
   if (input.files.length <= 0 || input.files.length > MAX_WORK_SITE_FILES) {
-    throw new WorkPublishAssetError(400, `work site must contain 1 to ${MAX_WORK_SITE_FILES} files`);
+    throw new WorkPublishAssetError(
+      400,
+      `work site must contain 1 to ${MAX_WORK_SITE_FILES} files`,
+    );
   }
   const entry = input.files.find((file) => file.relativePath === "index.html");
-  if (!entry) throw new WorkPublishAssetError(400, "work site must contain index.html");
+  if (!entry)
+    throw new WorkPublishAssetError(400, "work site must contain index.html");
 
   const totalBytes = input.files.reduce((sum, file) => sum + file.size, 0);
-  if (totalBytes <= 0 || totalBytes > MAX_WORK_SITE_BYTES) throw new WorkPublishAssetError(400, "work site must be 1 byte to 1GiB");
+  if (totalBytes <= 0 || totalBytes > MAX_WORK_SITE_BYTES)
+    throw new WorkPublishAssetError(400, "work site must be 1 byte to 1GiB");
 
-  const preparedEntry = await prepareWorkFile(entry, WORK_HTML_METADATA_MAX_BYTES);
-  const artifactRootKey = buildWorkArtifactRoot({ spaceId: input.spaceId, appSlug: input.appSlug });
+  const preparedEntry = await prepareWorkFile(
+    entry,
+    WORK_HTML_METADATA_MAX_BYTES,
+  );
+  const artifactRootKey = buildWorkArtifactRoot({
+    spaceId: input.spaceId,
+    appSlug: input.appSlug,
+  });
   const prefix = workContentPrefix(artifactRootKey);
   const manifestFiles = new Array<AppArtifactManifestFile>(input.files.length);
   await mapWithConcurrency(
@@ -767,7 +1005,11 @@ async function writeWorkSiteAssets(input: { spaceId: string; appSlug: string; ta
     assetKey: `${prefix}/index.html`,
     sizeBytes: totalBytes,
     fileCount: input.files.length,
-    extracted: extractPageMetaFromHtml(html, "index.html", input.files.map((file) => file.relativePath)),
+    extracted: extractPageMetaFromHtml(
+      html,
+      "index.html",
+      input.files.map((file) => file.relativePath),
+    ),
     download,
   };
 }
@@ -777,7 +1019,10 @@ async function writeWorkFileAsset(input: {
   appSlug: string;
   file: WorkSourceFile;
 }) {
-  const artifactRootKey = buildWorkArtifactRoot({ spaceId: input.spaceId, appSlug: input.appSlug });
+  const artifactRootKey = buildWorkArtifactRoot({
+    spaceId: input.spaceId,
+    appSlug: input.appSlug,
+  });
   const prefix = workContentPrefix(artifactRootKey);
   const extension = extname(input.file.name).toLowerCase();
   const artifactPath = `content${extension}`;
@@ -792,13 +1037,15 @@ async function writeWorkFileAsset(input: {
     targetType: "file",
     targetRef: input.file.relativePath,
     entrypoint: artifactPath,
-    files: [{
-      artifactPath,
-      outputPath: input.file.name,
-      mimeType: input.file.mimeType,
-      sizeBytes: size,
-      sha256,
-    }],
+    files: [
+      {
+        artifactPath,
+        outputPath: input.file.name,
+        mimeType: input.file.mimeType,
+        sizeBytes: size,
+        sha256,
+      },
+    ],
   });
   return {
     assetKey: objectKey,
@@ -819,17 +1066,35 @@ async function writeWorkFileAsset(input: {
 function collectBoardDependencyPaths(snapshot: BoardSnapshot): string[] {
   const paths = new Set<string>();
   for (const item of snapshot.items) {
-    if (item.type !== "image" && item.type !== "video" && item.type !== "audio" && item.type !== "file") continue;
-    const source = "source" in item
-      ? item.source as { kind?: string; path?: string; snapshot?: Record<string, unknown> } | undefined
-      : undefined;
+    if (
+      item.type !== "image" &&
+      item.type !== "video" &&
+      item.type !== "audio" &&
+      item.type !== "file"
+    )
+      continue;
+    const source =
+      "source" in item
+        ? (item.source as
+            | {
+                kind?: string;
+                path?: string;
+                snapshot?: Record<string, unknown>;
+              }
+            | undefined)
+        : undefined;
     if (!source?.path) continue;
     paths.add(source.path);
-    if (item.type === "file" && typeof source.snapshot?.coverPath === "string") {
+    if (
+      item.type === "file" &&
+      typeof source.snapshot?.coverPath === "string"
+    ) {
       paths.add(source.snapshot.coverPath);
     }
   }
-  const clips = snapshot.compositions.flatMap((composition) => composition.timeline.clips);
+  const clips = snapshot.compositions.flatMap(
+    (composition) => composition.timeline.clips,
+  );
   for (const owner of [...snapshot.effects, ...clips]) {
     for (const ref of owner.assetRefs) {
       if (ref.type === "space-file") paths.add(ref.ref);
@@ -858,7 +1123,8 @@ async function captureBoardDependency(
     return { sourcePath, status: "rejected", reason: "path_invalid" };
   }
   const stats = await lstat(absolutePath).catch(() => null);
-  if (!stats) return { sourcePath, status: "missing", reason: "path_not_found" };
+  if (!stats)
+    return { sourcePath, status: "missing", reason: "path_not_found" };
   if (stats.isSymbolicLink() || !stats.isFile()) {
     return { sourcePath, status: "rejected", reason: "unsupported_file_type" };
   }
@@ -866,7 +1132,11 @@ async function captureBoardDependency(
     return { sourcePath, status: "rejected", reason: "asset_too_large" };
   }
   if (!budget.reserve(stats.size)) {
-    throw new WorkPublishAssetError(413, "Board asset publish size exceeds 1GiB.", "board_assets_too_large");
+    throw new WorkPublishAssetError(
+      413,
+      "Board asset publish size exceeds 1GiB.",
+      "board_assets_too_large",
+    );
   }
   const file: WorkSourceFile = {
     root,
@@ -938,14 +1208,22 @@ async function writeAppBoardAsset(input: {
     spaceId: input.spaceId,
     boardIds: [sourceManifest.boardId],
   });
-  if (!snapshot) throw new WorkPublishAssetError(404, "board not found", "board_not_found");
+  if (!snapshot)
+    throw new WorkPublishAssetError(404, "board not found", "board_not_found");
 
   const dependencyPaths = collectBoardDependencyPaths(snapshot);
   if (dependencyPaths.length > MAX_WORK_SITE_FILES) {
-    throw new WorkPublishAssetError(413, `Board references more than ${MAX_WORK_SITE_FILES} assets.`, "board_too_many_assets");
+    throw new WorkPublishAssetError(
+      413,
+      `Board references more than ${MAX_WORK_SITE_FILES} assets.`,
+      "board_too_many_assets",
+    );
   }
 
-  const artifactRootKey = buildWorkArtifactRoot({ spaceId: input.spaceId, appSlug: input.appSlug });
+  const artifactRootKey = buildWorkArtifactRoot({
+    spaceId: input.spaceId,
+    appSlug: input.appSlug,
+  });
   const prefix = workContentPrefix(artifactRootKey);
   const budget = createByteBudget(MAX_WORK_SITE_BYTES);
   const uploaded = new Set<string>();
@@ -957,7 +1235,11 @@ async function writeAppBoardAsset(input: {
     dependencyPaths.map((sourcePath, index) => ({ sourcePath, index })),
     WORK_FILE_UPLOAD_CONCURRENCY,
     async ({ sourcePath, index }) => {
-      const { file, prepared, ...asset } = await captureBoardDependency(input.root, sourcePath, budget);
+      const { file, prepared, ...asset } = await captureBoardDependency(
+        input.root,
+        sourcePath,
+        budget,
+      );
       assets[index] = asset;
       if (!file || !prepared || !asset.artifactPath || !asset.sha256) return;
       // Content-addressed: identical bytes are stored once.
@@ -1007,12 +1289,24 @@ async function writeAppBoardAsset(input: {
   };
 }
 
-async function processWorkPublishAsset(job: Job<AppPublishAssetJobData>): Promise<AppPublishAssetJobResult> {
+async function processWorkPublishAsset(
+  job: Job<AppPublishAssetJobData>,
+): Promise<AppPublishAssetJobResult> {
   const { spaceId, slug, targetType, targetRef } = job.data;
   if (targetType === "file") {
     if (/\.html?$/i.test(targetRef)) {
-      const { file, prepared, html, companions } = await readWorkHtmlFile(spaceId, targetRef);
-      const written = await writeWorkHtmlAsset({ spaceId, appSlug: slug, file, prepared, html, companions });
+      const { file, prepared, html, companions } = await readWorkHtmlFile(
+        spaceId,
+        targetRef,
+      );
+      const written = await writeWorkHtmlAsset({
+        spaceId,
+        appSlug: slug,
+        file,
+        prepared,
+        html,
+        companions,
+      });
       return {
         ok: true,
         ...written,
@@ -1039,7 +1333,12 @@ async function processWorkPublishAsset(job: Job<AppPublishAssetJobData>): Promis
   }
   if (targetType === "directory") {
     const result = await readWorkDirectoryFiles(spaceId, targetRef);
-    const written = await writeWorkSiteAssets({ spaceId, appSlug: slug, targetRef: result.path, files: result.files });
+    const written = await writeWorkSiteAssets({
+      spaceId,
+      appSlug: slug,
+      targetRef: result.path,
+      files: result.files,
+    });
     return {
       ok: true,
       ...written,
@@ -1055,13 +1354,21 @@ async function processWorkPublishAsset(job: Job<AppPublishAssetJobData>): Promis
   throw new WorkPublishAssetError(400, "target is invalid");
 }
 
-registerSystemJob(APP_PUBLISH_ASSET_JOB, async (job: Job<AppPublishAssetJobData>) => {
-  try {
-    return await processWorkPublishAsset(job);
-  } catch (error) {
-    if (error instanceof WorkPublishAssetError) {
-      return { ok: false, status: error.status, message: error.message, code: error.code };
+registerSystemJob(
+  APP_PUBLISH_ASSET_JOB,
+  async (job: Job<AppPublishAssetJobData>) => {
+    try {
+      return await processWorkPublishAsset(job);
+    } catch (error) {
+      if (error instanceof WorkPublishAssetError) {
+        return {
+          ok: false,
+          status: error.status,
+          message: error.message,
+          code: error.code,
+        };
+      }
+      throw error;
     }
-    throw error;
-  }
-});
+  },
+);

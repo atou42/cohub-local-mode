@@ -9,6 +9,8 @@ export type AppConfig = {
   talesofaiBillingBusinessKey?: string;
   talesofaiBillingAdminApiKey?: string;
   env: "dev" | "prod";
+  nodeOrigin: "cloud" | "local";
+  s3ForcePathStyle: boolean;
   appEncryptionKey: string;
   /** Optional checkpoint to bootstrap first-time Home spaces from; blank when unset. */
   homeBootstrapCheckpointId?: string;
@@ -94,6 +96,14 @@ const getDefaultSandboxImage = (env: "dev" | "prod") => {
 
 const env = (process.env.ENV === "prod" ? "prod" : "dev") as "dev" | "prod";
 
+const parseNodeOrigin = (
+  value: string | undefined,
+): AppConfig["nodeOrigin"] => {
+  if (value === undefined || value.trim() === "") return "cloud";
+  if (value === "cloud" || value === "local") return value;
+  throw new Error("COHUB_NODE_ORIGIN must be one of: cloud, local");
+};
+
 const parseCommaList = (value: string | undefined) => {
   return (value ?? "")
     .split(",")
@@ -103,7 +113,10 @@ const parseCommaList = (value: string | undefined) => {
 
 const parseDomainList = (value: string | undefined, fallback: string[]) => {
   const parsed = parseCommaList(value).map((entry) =>
-    entry.replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase(),
+    entry
+      .replace(/^https?:\/\//, "")
+      .replace(/\/+$/, "")
+      .toLowerCase(),
   );
   return parsed.length > 0 ? parsed : fallback;
 };
@@ -112,7 +125,10 @@ const parseDomainList = (value: string | undefined, fallback: string[]) => {
  * Match a hostname against a suffix list ("cohub.run" or ".cohub.run" both accepted).
  * Exact match covers the bare domain; endsWith covers its subdomains.
  */
-export const isHostAllowedBySuffix = (hostname: string, suffixes: readonly string[]): boolean => {
+export const isHostAllowedBySuffix = (
+  hostname: string,
+  suffixes: readonly string[],
+): boolean => {
   const host = hostname.toLowerCase();
   return suffixes.some((suffix) => {
     const dotSuffix = suffix.startsWith(".") ? suffix : `.${suffix}`;
@@ -134,7 +150,9 @@ const parseSandboxNodeSelector = (value: string | undefined) => {
   );
 };
 
-const parseSandboxTolerations = (value: string | undefined): SandboxToleration[] => {
+const parseSandboxTolerations = (
+  value: string | undefined,
+): SandboxToleration[] => {
   const effects = new Set(["NoSchedule", "PreferNoSchedule", "NoExecute"]);
 
   return parseCommaList(value).map((entry) => {
@@ -142,7 +160,9 @@ const parseSandboxTolerations = (value: string | undefined): SandboxToleration[]
     const selector =
       effectSeparatorIndex >= 0 ? entry.slice(0, effectSeparatorIndex) : entry;
     const effect =
-      effectSeparatorIndex >= 0 ? entry.slice(effectSeparatorIndex + 1) : "NoSchedule";
+      effectSeparatorIndex >= 0
+        ? entry.slice(effectSeparatorIndex + 1)
+        : "NoSchedule";
     const selectorSeparatorIndex = selector.indexOf("=");
     if (
       selectorSeparatorIndex <= 0 ||
@@ -166,63 +186,107 @@ const parseSandboxTolerations = (value: string | undefined): SandboxToleration[]
 
 export const config: AppConfig = {
   workerSecret: process.env.WORKER_SECRET ?? "",
-  logtoEndpoint: resolveLogtoEndpoint({ endpoint: process.env.LOGTO_ENDPOINT, env }),
+  logtoEndpoint: resolveLogtoEndpoint({
+    endpoint: process.env.LOGTO_ENDPOINT,
+    env,
+  }),
   webOrigin: process.env.WEB_ORIGIN,
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   litellmApiKey: process.env.LITELLM_API_KEY,
-  talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(/\/+$/, ""),
+  talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(
+    /\/+$/,
+    "",
+  ),
   talesofaiBillingBusinessKey: process.env.TALESOFAI_BILLING_BUSINESS_KEY,
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
+  nodeOrigin: parseNodeOrigin(process.env.COHUB_NODE_ORIGIN),
+  s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
-  homeBootstrapCheckpointId: process.env.HOME_BOOTSTRAP_CHECKPOINT_ID?.trim() || undefined,
-  sandboxImage:
-    process.env.SANDBOX_IMAGE ?? getDefaultSandboxImage(env),
-  sandboxNodeSelector: parseSandboxNodeSelector(process.env.SANDBOX_NODE_SELECTOR),
+  homeBootstrapCheckpointId:
+    process.env.HOME_BOOTSTRAP_CHECKPOINT_ID?.trim() || undefined,
+  sandboxImage: process.env.SANDBOX_IMAGE ?? getDefaultSandboxImage(env),
+  sandboxNodeSelector: parseSandboxNodeSelector(
+    process.env.SANDBOX_NODE_SELECTOR,
+  ),
   sandboxTolerations: parseSandboxTolerations(process.env.SANDBOX_TOLERATIONS),
-  bullmqRedisUrl:
-    process.env.BULLMQ_REDIS_URL ?? "",
+  bullmqRedisUrl: process.env.BULLMQ_REDIS_URL ?? "",
   spaceStorageRoot: process.env.SPACE_STORAGE_ROOT ?? "",
   spaceStoragePvc: process.env.SPACE_STORAGE_PVC ?? "cohub-spaces-pvc",
-  checkpointCachePvc: process.env.CHECKPOINT_CACHE_PVC ?? process.env.SPACE_STORAGE_PVC ?? "cohub-spaces-pvc",
+  checkpointCachePvc:
+    process.env.CHECKPOINT_CACHE_PVC ??
+    process.env.SPACE_STORAGE_PVC ??
+    "cohub-spaces-pvc",
   checkpointCacheRoot: process.env.CHECKPOINT_CACHE_ROOT ?? "/checkpoint-cache",
-  spaceSystemRoot: process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
-  spaceStorageSubpath: process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev"),
-  checkpointCacheSubpath: process.env.CHECKPOINT_CACHE_SUBPATH ?? `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
-  configsSubpath: process.env.CONFIGS_SUBPATH ?? (env === "prod" ? "configs/prod" : "configs/dev"),
+  spaceSystemRoot:
+    process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
+  spaceStorageSubpath:
+    process.env.SPACE_STORAGE_SUBPATH ??
+    (env === "prod" ? "cohub-prod" : "cohub-dev"),
+  checkpointCacheSubpath:
+    process.env.CHECKPOINT_CACHE_SUBPATH ??
+    `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
+  configsSubpath:
+    process.env.CONFIGS_SUBPATH ??
+    (env === "prod" ? "configs/prod" : "configs/dev"),
   platformConfigRoot: process.env.PLATFORM_CONFIG_ROOT ?? "/configs",
-  turnObjectS3Endpoint: process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
+  turnObjectS3Endpoint:
+    process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
   turnObjectS3PublicEndpoint: process.env.TURN_OBJECT_S3_PUBLIC_ENDPOINT,
   turnObjectS3Region: process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",
   turnObjectS3Bucket: process.env.TURN_OBJECT_S3_BUCKET ?? "cohub-sessions",
   turnObjectS3AccessKeyId: process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
   turnObjectS3SecretAccessKey: process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
-  turnObjectCdnBaseUrl: (process.env.TURN_OBJECT_CDN_BASE_URL ?? "https://sessions.cohub.live").replace(/\/+$/, ""),
+  turnObjectCdnBaseUrl: (
+    process.env.TURN_OBJECT_CDN_BASE_URL ?? "https://sessions.cohub.live"
+  ).replace(/\/+$/, ""),
   publicAssetOssEndpoint: process.env.PUBLIC_ASSET_OSS_ENDPOINT,
   publicAssetOssPublicEndpoint: process.env.PUBLIC_ASSET_OSS_PUBLIC_ENDPOINT,
   publicAssetOssRegion: process.env.PUBLIC_ASSET_OSS_REGION ?? "us-west-1",
   publicAssetOssBucket: process.env.PUBLIC_ASSET_OSS_BUCKET,
   publicAssetOssAccessKeyId: process.env.PUBLIC_ASSET_OSS_ACCESS_KEY_ID,
   publicAssetOssSecretAccessKey: process.env.PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY,
-  publicAssetCdnBaseUrl: process.env.PUBLIC_ASSET_CDN_BASE_URL?.replace(/\/+$/, ""),
+  publicAssetCdnBaseUrl: process.env.PUBLIC_ASSET_CDN_BASE_URL?.replace(
+    /\/+$/,
+    "",
+  ),
   userUploadS3Endpoint: process.env.USER_UPLOAD_S3_ENDPOINT,
   userUploadS3Region: process.env.USER_UPLOAD_S3_REGION ?? "auto",
   userUploadS3AccessKeyId: process.env.USER_UPLOAD_S3_ACCESS_KEY_ID,
   userUploadS3SecretAccessKey: process.env.USER_UPLOAD_S3_SECRET_ACCESS_KEY,
   chatAttachmentS3Bucket: process.env.CHAT_ATTACHMENT_S3_BUCKET,
-  chatAttachmentPublicBaseUrl: process.env.CHAT_ATTACHMENT_PUBLIC_BASE_URL?.replace(/\/+$/, ""),
+  chatAttachmentPublicBaseUrl:
+    process.env.CHAT_ATTACHMENT_PUBLIC_BASE_URL?.replace(/\/+$/, ""),
   spaceUploadS3Bucket: process.env.SPACE_UPLOAD_S3_BUCKET,
   // APP_* is canonical; the WORK_* spelling stays as a fallback for clusters
   // not yet migrated (both are set during the transition).
-  appAssetCdnBaseUrl:
-    (process.env.APP_ASSET_CDN_BASE_URL ?? process.env.WORK_ASSET_CDN_BASE_URL)?.replace(/\/+$/, ""),
-  checkpointAssetOssEndpoint: process.env.CHECKPOINT_ASSET_OSS_ENDPOINT ?? process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
-  checkpointAssetOssPublicEndpoint: process.env.CHECKPOINT_ASSET_OSS_PUBLIC_ENDPOINT ?? process.env.TURN_OBJECT_S3_PUBLIC_ENDPOINT,
-  checkpointAssetOssRegion: process.env.CHECKPOINT_ASSET_OSS_REGION ?? process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",
-  checkpointAssetOssBucket: process.env.CHECKPOINT_ASSET_OSS_BUCKET ?? process.env.TURN_OBJECT_S3_BUCKET,
-  checkpointAssetOssAccessKeyId: process.env.CHECKPOINT_ASSET_OSS_ACCESS_KEY_ID ?? process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
-  checkpointAssetOssSecretAccessKey: process.env.CHECKPOINT_ASSET_OSS_SECRET_ACCESS_KEY ?? process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
-  routerStatusUrl: process.env.ROUTER_STATUS_URL?.trim() || undefined,
+  appAssetCdnBaseUrl: (
+    process.env.APP_ASSET_CDN_BASE_URL ?? process.env.WORK_ASSET_CDN_BASE_URL
+  )?.replace(/\/+$/, ""),
+  checkpointAssetOssEndpoint:
+    process.env.CHECKPOINT_ASSET_OSS_ENDPOINT ??
+    process.env.TURN_OBJECT_S3_ENDPOINT ??
+    "http://127.0.0.1:9000",
+  checkpointAssetOssPublicEndpoint:
+    process.env.CHECKPOINT_ASSET_OSS_PUBLIC_ENDPOINT ??
+    process.env.TURN_OBJECT_S3_PUBLIC_ENDPOINT,
+  checkpointAssetOssRegion:
+    process.env.CHECKPOINT_ASSET_OSS_REGION ??
+    process.env.TURN_OBJECT_S3_REGION ??
+    "us-west-1",
+  checkpointAssetOssBucket:
+    process.env.CHECKPOINT_ASSET_OSS_BUCKET ??
+    process.env.TURN_OBJECT_S3_BUCKET,
+  checkpointAssetOssAccessKeyId:
+    process.env.CHECKPOINT_ASSET_OSS_ACCESS_KEY_ID ??
+    process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
+  checkpointAssetOssSecretAccessKey:
+    process.env.CHECKPOINT_ASSET_OSS_SECRET_ACCESS_KEY ??
+    process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
+  routerStatusUrl: (
+    process.env.ROUTER_STATUS_URL ??
+    "https://router-status.neta.art/api/v1/status"
+  ).trim(),
   previewHostnames: parseDomainList(
     process.env.PREVIEW_HOSTNAMES ?? process.env.PREVIEW_HOSTNAME,
     [],
@@ -233,15 +297,21 @@ export const config: AppConfig = {
   ),
   allowedAppContentHostSuffixes: parseDomainList(
     // Same APP_*-first policy as the asset CDN base URL above.
-    process.env.APP_CONTENT_HOST_SUFFIXES ?? process.env.WORK_CONTENT_HOST_SUFFIXES,
+    process.env.APP_CONTENT_HOST_SUFFIXES ??
+      process.env.WORK_CONTENT_HOST_SUFFIXES,
     [".cohub.live", ".cohub.run"],
   ),
-  checkpointGitAuthorEmail: process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",
+  checkpointGitAuthorEmail:
+    process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",
   metaPromotionPixelId: process.env.COHUB_META_PIXEL_ID?.trim() || undefined,
-  metaPromotionAccessToken: process.env.COHUB_META_CAPI_ACCESS_TOKEN?.trim() || undefined,
-  metaPromotionApiVersion: process.env.COHUB_META_API_VERSION?.trim() || "v21.0",
-  metaPromotionClientIpHeader: process.env.COHUB_META_CLIENT_IP_HEADER?.trim().toLowerCase() || undefined,
-  metaPromotionTestEventCode: process.env.COHUB_META_TEST_EVENT_CODE?.trim() || undefined,
+  metaPromotionAccessToken:
+    process.env.COHUB_META_CAPI_ACCESS_TOKEN?.trim() || undefined,
+  metaPromotionApiVersion:
+    process.env.COHUB_META_API_VERSION?.trim() || "v21.0",
+  metaPromotionClientIpHeader:
+    process.env.COHUB_META_CLIENT_IP_HEADER?.trim().toLowerCase() || undefined,
+  metaPromotionTestEventCode:
+    process.env.COHUB_META_TEST_EVENT_CODE?.trim() || undefined,
 };
 
 export const sessionsNamespace = getSessionsNamespace(config.env);

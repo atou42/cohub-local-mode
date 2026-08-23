@@ -5,6 +5,8 @@ export interface WorkerConfig {
   giteaBaseUrl: string;
   giteaToken?: string;
   giteaOrg: string;
+  localGitRoot?: string;
+  s3ForcePathStyle: boolean;
   workerSecret: string;
   appEncryptionKey: string;
   spaceStorageRoot: string;
@@ -62,22 +64,35 @@ export const config: WorkerConfig = {
   giteaBaseUrl: process.env.GITEA_BASE_URL ?? "",
   giteaToken: process.env.GITEA_TOKEN,
   giteaOrg: process.env.GITEA_ORG ?? "cohub-spaces",
+  localGitRoot: process.env.LOCAL_GIT_ROOT?.trim() || undefined,
+  s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
   workerSecret: process.env.WORKER_SECRET ?? "",
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
   spaceStorageRoot: process.env.SPACE_STORAGE_ROOT ?? "",
-  spaceSystemRoot: process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
-  checkpointCacheRoot: process.env.CHECKPOINT_CACHE_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
-  spaceStorageSubpath: process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev"),
-  checkpointCacheSubpath: process.env.CHECKPOINT_CACHE_SUBPATH ?? `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
-  checkpointAssetThresholdBytes: Number(process.env.CHECKPOINT_ASSET_THRESHOLD_BYTES ?? 4 * 1024 * 1024),
+  spaceSystemRoot:
+    process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
+  checkpointCacheRoot:
+    process.env.CHECKPOINT_CACHE_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
+  spaceStorageSubpath:
+    process.env.SPACE_STORAGE_SUBPATH ??
+    (env === "prod" ? "cohub-prod" : "cohub-dev"),
+  checkpointCacheSubpath:
+    process.env.CHECKPOINT_CACHE_SUBPATH ??
+    `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
+  checkpointAssetThresholdBytes: Number(
+    process.env.CHECKPOINT_ASSET_THRESHOLD_BYTES ?? 4 * 1024 * 1024,
+  ),
   platformConfigRoot: process.env.PLATFORM_CONFIG_ROOT ?? "/configs",
   platformSpaceId: process.env.PLATFORM_SPACE_ID ?? "",
   generationApiKey: process.env.GENERATION_API_KEY ?? "",
   generationBaseUrl: process.env.GENERATION_BASE_URL?.trim() || undefined,
-  turnObjectS3Endpoint: process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
+  turnObjectS3Endpoint:
+    process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
   turnObjectS3Region: process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",
   turnObjectS3Bucket: process.env.TURN_OBJECT_S3_BUCKET ?? "cohub-sessions",
-  turnObjectCdnBaseUrl: (process.env.TURN_OBJECT_CDN_BASE_URL ?? "https://sessions.cohub.live").replace(/\/+$/, ""),
+  turnObjectCdnBaseUrl: (
+    process.env.TURN_OBJECT_CDN_BASE_URL ?? "https://sessions.cohub.live"
+  ).replace(/\/+$/, ""),
   turnObjectS3AccessKeyId: process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
   turnObjectS3SecretAccessKey: process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
   publicAssetOssEndpoint: process.env.PUBLIC_ASSET_OSS_ENDPOINT,
@@ -85,26 +100,50 @@ export const config: WorkerConfig = {
   publicAssetOssBucket: process.env.PUBLIC_ASSET_OSS_BUCKET,
   publicAssetOssAccessKeyId: process.env.PUBLIC_ASSET_OSS_ACCESS_KEY_ID,
   publicAssetOssSecretAccessKey: process.env.PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY,
-  checkpointAssetOssEndpoint: process.env.CHECKPOINT_ASSET_OSS_ENDPOINT ?? process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
-  checkpointAssetOssRegion: process.env.CHECKPOINT_ASSET_OSS_REGION ?? process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",
-  checkpointAssetOssBucket: process.env.CHECKPOINT_ASSET_OSS_BUCKET ?? process.env.TURN_OBJECT_S3_BUCKET,
-  checkpointAssetOssAccessKeyId: process.env.CHECKPOINT_ASSET_OSS_ACCESS_KEY_ID ?? process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
-  checkpointAssetOssSecretAccessKey: process.env.CHECKPOINT_ASSET_OSS_SECRET_ACCESS_KEY ?? process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
-  talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(/\/+$/, ""),
+  checkpointAssetOssEndpoint:
+    process.env.CHECKPOINT_ASSET_OSS_ENDPOINT ??
+    process.env.TURN_OBJECT_S3_ENDPOINT ??
+    "http://127.0.0.1:9000",
+  checkpointAssetOssRegion:
+    process.env.CHECKPOINT_ASSET_OSS_REGION ??
+    process.env.TURN_OBJECT_S3_REGION ??
+    "us-west-1",
+  checkpointAssetOssBucket:
+    process.env.CHECKPOINT_ASSET_OSS_BUCKET ??
+    process.env.TURN_OBJECT_S3_BUCKET,
+  checkpointAssetOssAccessKeyId:
+    process.env.CHECKPOINT_ASSET_OSS_ACCESS_KEY_ID ??
+    process.env.TURN_OBJECT_S3_ACCESS_KEY_ID,
+  checkpointAssetOssSecretAccessKey:
+    process.env.CHECKPOINT_ASSET_OSS_SECRET_ACCESS_KEY ??
+    process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
+  talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(
+    /\/+$/,
+    "",
+  ),
   talesofaiBillingBusinessKey: process.env.TALESOFAI_BILLING_BUSINESS_KEY,
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
-  checkpointGitAuthorEmail: process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",
+  checkpointGitAuthorEmail:
+    process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",
 };
 
 export const assertRequiredConfig = () => {
   assertRedisUrl(config.redisUrl, "REDIS_URL");
   assertRedisUrl(config.bullmqRedisUrl, "BULLMQ_REDIS_URL");
-  if (!config.databaseUrl) throw new Error("Missing required env: DATABASE_URL");
-  if (!config.giteaBaseUrl) throw new Error("Missing required env: GITEA_BASE_URL");
-  if (!config.workerSecret) throw new Error("Missing required env: WORKER_SECRET");
-  if (!config.appEncryptionKey) throw new Error("Missing required env: APP_ENCRYPTION_KEY");
-  if (!config.spaceStorageRoot) throw new Error("Missing required env: SPACE_STORAGE_ROOT");
-  if (!config.spaceSystemRoot) throw new Error("Missing required env: SPACE_SYSTEM_ROOT");
-  if (!config.checkpointCacheRoot) throw new Error("Missing required env: CHECKPOINT_CACHE_ROOT");
+  if (!config.databaseUrl)
+    throw new Error("Missing required env: DATABASE_URL");
+  if (!config.localGitRoot && !config.giteaBaseUrl) {
+    throw new Error("Missing required env: LOCAL_GIT_ROOT or GITEA_BASE_URL");
+  }
+  if (!config.workerSecret)
+    throw new Error("Missing required env: WORKER_SECRET");
+  if (!config.appEncryptionKey)
+    throw new Error("Missing required env: APP_ENCRYPTION_KEY");
+  if (!config.spaceStorageRoot)
+    throw new Error("Missing required env: SPACE_STORAGE_ROOT");
+  if (!config.spaceSystemRoot)
+    throw new Error("Missing required env: SPACE_SYSTEM_ROOT");
+  if (!config.checkpointCacheRoot)
+    throw new Error("Missing required env: CHECKPOINT_CACHE_ROOT");
 };

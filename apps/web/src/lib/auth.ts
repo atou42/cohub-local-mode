@@ -1,4 +1,5 @@
 import LogtoClient, { type IdTokenClaims } from "@logto/browser";
+import { env } from "$env/dynamic/public";
 import {
 	type AuthSessionSnapshot,
 	type AuthTokenRequestOptions,
@@ -9,6 +10,7 @@ import {
 const IS_DEV =
 	(typeof location !== "undefined" && location.hostname.startsWith("dev")) ||
 	Boolean(import.meta.env?.DEV);
+export const IS_COHUB_LOCAL_MODE = env.PUBLIC_COHUB_LOCAL_MODE === "true";
 
 /**
  * Official hosted defaults. Self-hosted deployments should override via
@@ -82,6 +84,7 @@ const OPAQUE_TOKEN_RECHECK_MS = 30_000;
 const TOKEN_EXPIRY_SKEW_MS = 1_000;
 
 function hasLogtoSessionResidue(): boolean {
+	if (IS_COHUB_LOCAL_MODE) return Boolean(getAuthSessionSnapshot().token);
 	if (typeof localStorage === "undefined") return false;
 	try {
 		// Logto BrowserStorage keys: logto:<appId>:<item>
@@ -232,6 +235,37 @@ async function resolveLogtoAccessToken(forceRefresh: boolean) {
 	return refreshWithToken.call(client, API_RESOURCE);
 }
 
+async function resolveLocalModeAccessToken(forceRefresh: boolean) {
+	const baseUrl = (env.PUBLIC_API_ORIGIN ?? "").trim().replace(/\/+$/, "");
+	const query = forceRefresh ? "?refresh=1" : "";
+	const response = await fetch(`${baseUrl}/api/local-mode/auth${query}`, {
+		method: "GET",
+		credentials: "include",
+		cache: "no-store",
+	});
+	if (response.status === 401) return null;
+	if (!response.ok) {
+		const body = await response.json().catch(() => null);
+		const message =
+			body &&
+			typeof body === "object" &&
+			"message" in body &&
+			typeof body.message === "string"
+				? body.message
+				: `Local Mode authentication failed (${response.status})`;
+		throw new Error(message);
+	}
+	const body = (await response.json()) as { accessToken?: unknown };
+	return sanitizeClientToken(
+		typeof body.accessToken === "string" ? body.accessToken : null,
+	);
+}
+
+const resolveAuthAccessToken = (forceRefresh: boolean) =>
+	IS_COHUB_LOCAL_MODE
+		? resolveLocalModeAccessToken(forceRefresh)
+		: resolveLogtoAccessToken(forceRefresh);
+
 function readLegacyAuthToken(): string | null {
 	if (typeof localStorage === "undefined") return null;
 	try {
@@ -350,7 +384,7 @@ function isReusableAuthSnapshot(snapshot: AuthSessionSnapshot) {
 	if (
 		!snapshot.token ||
 		!snapshot.lastResolutionSucceeded ||
-		!hasLogtoSessionResidue()
+		(!IS_COHUB_LOCAL_MODE && !hasLogtoSessionResidue())
 	) {
 		return false;
 	}
@@ -392,8 +426,9 @@ const authRefreshCoordinator = createAuthRefreshCoordinator({
 	},
 	lock: authRefreshLock,
 	isReusable: isReusableAuthSnapshot,
-	resolveToken: resolveLogtoAccessToken,
+	resolveToken: resolveAuthAccessToken,
 	clearSession: async () => {
+		if (IS_COHUB_LOCAL_MODE) return;
 		try {
 			await getLogtoClient().clearAllTokens();
 		} catch {
@@ -443,6 +478,7 @@ export const getAuthToken = async (
 		return token;
 	} catch (error) {
 		logEmptyTokenResolution(options);
+		if (IS_COHUB_LOCAL_MODE) throw error;
 		console.warn("[auth] Failed to resolve access token:", error);
 		return null;
 	}
@@ -451,6 +487,21 @@ export const getAuthToken = async (
 export const getCurrentIdTokenClaims =
 	async (): Promise<IdTokenClaims | null> => {
 		if (typeof window === "undefined") return null;
+		if (IS_COHUB_LOCAL_MODE) {
+			const token = getAuthSessionSnapshot().token;
+			if (!token) return null;
+			const payload = token.split(".")[1];
+			if (!payload) return null;
+			try {
+				const padded = payload
+					.replace(/-/g, "+")
+					.replace(/_/g, "/")
+					.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+				return JSON.parse(atob(padded)) as IdTokenClaims;
+			} catch {
+				return null;
+			}
+		}
 		try {
 			return await getLogtoClient().getIdTokenClaims();
 		} catch {
@@ -460,6 +511,7 @@ export const getCurrentIdTokenClaims =
 
 export const hasRecoverableAuthSession = async (): Promise<boolean> => {
 	if (typeof window === "undefined") return false;
+	if (IS_COHUB_LOCAL_MODE) return true;
 	const client = getLogtoClient();
 	const [hasIdToken, refreshToken] = await Promise.all([
 		client.isAuthenticated().catch(() => false),
@@ -523,6 +575,9 @@ export const completeSignInCallback = async (
 	callbackUri: string,
 ): Promise<string | null> =>
 	authRefreshCoordinator.runExclusiveMutation(async () => {
+		if (IS_COHUB_LOCAL_MODE) {
+			throw new Error("Local Mode authentication is managed by the Cohub CLI");
+		}
 		const client = getLogtoClient();
 		await client.handleSignInCallback(callbackUri);
 		// The callback has replaced the Logto session. Invalidate the previous
@@ -550,6 +605,16 @@ const createRedirectState = (redirectPath?: string) => {
  * auth check can re-enter Logto with a still-valid SSO cookie and loop.
  */
 export const signInWithRedirectPath = async (redirectPath?: string) => {
+	if (IS_COHUB_LOCAL_MODE) {
+		const params = new URLSearchParams();
+		if (redirectPath) {
+			params.set("redirect_path", sanitizeRedirectPath(redirectPath));
+		}
+		window.location.assign(
+			`/local-mode/connect${params.size ? `?${params}` : ""}`,
+		);
+		return;
+	}
 	const client = getLogtoClient();
 	const originalGenerateState = client.adapter.generateState;
 	const safePath =
@@ -571,6 +636,11 @@ export const signInAfterUnauthorized = async (
 	guard: ClearBrokenSessionOptions,
 ): Promise<boolean> =>
 	authRefreshCoordinator.runGuardedMutation(guard, async () => {
+		if (IS_COHUB_LOCAL_MODE) {
+			clearAuthToken();
+			await signInWithRedirectPath(redirectPath);
+			return;
+		}
 		try {
 			await getLogtoClient().clearAllTokens();
 		} catch {

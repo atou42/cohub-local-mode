@@ -37,7 +37,8 @@ const confirm = async (question: string): Promise<boolean> => {
 };
 
 const webBaseUrl = (): string =>
-  resolveCohubEnvironment() === "prod" ? "https://cohub.live" : "https://dev.cohub.live";
+  process.env.COHUB_WEB_URL?.trim() ||
+  (resolveCohubEnvironment() === "prod" ? "https://cohub.live" : "https://dev.cohub.live");
 
 export const resolveLocalSpaceName = (rootDir: string, requestedName?: string): string =>
   requestedName?.trim() || basename(rootDir) || "local-space";
@@ -132,7 +133,7 @@ export function registerSandbox(program: Command): void {
         }
       }
 
-      const url = `${webBaseUrl()}/spaces/${spaceId}`;
+      const url = `${webBaseUrl()}/spaces/${spaceId}?origin=local`;
       if (jsonRequested(opts)) {
         outJson({ spaceId, rootDir, relayUrl, url });
       } else {
