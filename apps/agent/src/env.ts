@@ -13,24 +13,67 @@ const redisUrlSchema = z
     }
   }, "REDIS_URL must use redis:// or rediss://");
 
-const defaultAgentInstanceId = process.env.HOSTNAME?.trim() || `agent-${process.pid}`;
+const defaultAgentInstanceId =
+  process.env.HOSTNAME?.trim() || `agent-${process.pid}`;
 
 export const EnvSchema = z.object({
   AGENT_INSTANCE_ID: z.string().min(1).default(defaultAgentInstanceId),
   REDIS_URL: redisUrlSchema.default("redis://localhost:6379"),
-  BULLMQ_REDIS_URL: redisUrlSchema.default(process.env.REDIS_URL ?? "redis://localhost:6379"),
+  BULLMQ_REDIS_URL: redisUrlSchema.default(
+    process.env.REDIS_URL ?? "redis://localhost:6379",
+  ),
   DATABASE_URL: z.string().min(1),
-  AGENT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(DEFAULT_AGENT_WORKER_CONCURRENCY),
-  AGENT_JOB_LOCK_DURATION_MS: z.coerce.number().int().positive().default(120_000),
-  AGENT_JOB_LOCK_RENEW_TIME_MS: z.coerce.number().int().positive().default(45_000),
-  AGENT_JOB_STALLED_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  AGENT_WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_AGENT_WORKER_CONCURRENCY),
+  AGENT_JOB_LOCK_DURATION_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(120_000),
+  AGENT_JOB_LOCK_RENEW_TIME_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(45_000),
+  AGENT_JOB_STALLED_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60_000),
   AGENT_JOB_MAX_STALLED_COUNT: z.coerce.number().int().min(0).default(1),
-  AGENT_SESSION_LOCK_TTL_MS: z.coerce.number().int().positive().default(120_000),
-  AGENT_SESSION_LOCK_RENEW_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
-  AGENT_STALE_ACTIVE_TURN_MS: z.coerce.number().int().positive().default(30 * 60_000),
-  AGENT_BUSY_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(1_000),
-  AGENT_BUSY_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(30_000),
-  AGENT_SHUTDOWN_DRAIN_TIMEOUT_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),
+  AGENT_SESSION_LOCK_TTL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(120_000),
+  AGENT_SESSION_LOCK_RENEW_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30_000),
+  AGENT_STALE_ACTIVE_TURN_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60_000),
+  AGENT_BUSY_RETRY_BASE_DELAY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1_000),
+  AGENT_BUSY_RETRY_MAX_DELAY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30_000),
+  AGENT_SHUTDOWN_DRAIN_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(24 * 60 * 60_000),
   WORKSPACE_ROOT: z
     .string()
     .min(1)
@@ -60,21 +103,42 @@ export const EnvSchema = z.object({
     })
     .default("/configs"),
   ENV: z.enum(["dev", "prod"]).default("dev"),
+  INTERNAL_API_BASE_URL: z.string().url().optional(),
   AGENT_VERSION: z.string().optional(),
   WORKER_SECRET: z.string().optional(),
   APP_ENCRYPTION_KEY: z.string().min(1),
   SESSIONS_NAMESPACE: z.string().min(1),
-  TURN_OBJECT_S3_ENDPOINT: z.string().min(1).default("https://oss-us-west-1-internal.aliyuncs.com"),
+  S3_FORCE_PATH_STYLE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  TURN_OBJECT_S3_ENDPOINT: z
+    .string()
+    .min(1)
+    .default("https://oss-us-west-1-internal.aliyuncs.com"),
   TURN_OBJECT_S3_REGION: z.string().min(1).default("us-west-1"),
   TURN_OBJECT_S3_BUCKET: z.string().min(1).default("cohub-sessions"),
   TURN_OBJECT_S3_ACCESS_KEY_ID: z.string().optional(),
   TURN_OBJECT_S3_SECRET_ACCESS_KEY: z.string().optional(),
   TURN_OBJECT_S3_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   TURN_OBJECT_S3_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
-  TURN_OBJECT_CDN_BASE_URL: z.string().optional().transform((value) => value?.replace(/\/+$/, "")),
-  PUBLIC_ASSET_CDN_BASE_URL: z.string().optional().transform((value) => value?.replace(/\/+$/, "")),
-  CHAT_ATTACHMENT_PUBLIC_BASE_URL: z.string().optional().transform((value) => value?.replace(/\/+$/, "")),
-  PUBLIC_ASSET_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  TURN_OBJECT_CDN_BASE_URL: z
+    .string()
+    .optional()
+    .transform((value) => value?.replace(/\/+$/, "")),
+  PUBLIC_ASSET_CDN_BASE_URL: z
+    .string()
+    .optional()
+    .transform((value) => value?.replace(/\/+$/, "")),
+  CHAT_ATTACHMENT_PUBLIC_BASE_URL: z
+    .string()
+    .optional()
+    .transform((value) => value?.replace(/\/+$/, "")),
+  PUBLIC_ASSET_DOWNLOAD_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5_000),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

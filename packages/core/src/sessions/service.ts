@@ -189,6 +189,7 @@ export function createSessionServices(input: {
       source: options.source,
       status: "active",
       externalSessionId: null,
+      agentHarness: "pi",
       meta: sanitizePostgresJsonValue(title ? setSessionTitleMeta(participantMeta, { source: "user" }) : participantMeta),
       lastMessageAt: new Date(),
       lastMessageId: null,

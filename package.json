@@ -34,7 +34,12 @@
     "changelog:generate": "tsx scripts/changelog/generate.ts",
     "changelog:render": "tsx scripts/changelog/render.ts",
     "changelog:release": "tsx scripts/changelog/release.ts",
-    "billing:configure-first-purchase": "tsx scripts/billing/configure-first-purchase-discounts.ts"
+    "billing:configure-first-purchase": "tsx scripts/billing/configure-first-purchase-discounts.ts",
+    "local:setup": "node scripts/local-mode/setup.mjs",
+    "local:infra": "node scripts/local-mode/run.mjs infra",
+    "local:init": "node scripts/local-mode/run.mjs init",
+    "local:up": "node scripts/local-mode/run.mjs up",
+    "local:status": "node scripts/local-mode/run.mjs status"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",

@@ -181,6 +181,9 @@ importers:
       '@kubernetes/client-node':
         specifier: ^1.4.0
         version: 1.4.0
+      '@neta-art/cohub-cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@neta-art/generation':
         specifier: ^0.1.21
         version: 0.1.21
