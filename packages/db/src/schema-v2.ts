@@ -19,6 +19,7 @@ import {
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { TaskPayload } from "@cohub/protocol/task";
 import type {
+  AgentHarness,
   SessionTurnExecutionKind,
   SessionTurnIntent,
   SessionTurnIntermediateIndex,
@@ -762,6 +763,7 @@ export const spaceSessions = v2.table(
     source: varchar("source", { length: 255 }),
     status: varchar("status", { length: 50 }).default("active"),
     externalSessionId: text("external_session_id"),
+    agentHarness: varchar("agent_harness", { length: 32 }).$type<AgentHarness>().notNull().default("pi"),
     meta: jsonb("meta"),
     latestMessageText: text("latest_message_text"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
