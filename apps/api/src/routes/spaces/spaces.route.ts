@@ -3,7 +3,7 @@ import { DEFAULT_SANDBOX_SPEC_ID, SANDBOX_SPECS, getSandboxSpecRank, isSandboxSp
 import { createLogger } from "@cohub/infra/logging";
 import { Hono, type Context } from "hono";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { getDefaultSpaceModsForEnv } from "@cohub/protocol";
+import { getDefaultSpaceModsForEnv, type AgentHarness } from "@cohub/protocol";
 import {
   parseSpaceSlug,
   validatePublicIdentifierAssignment,
@@ -91,6 +91,12 @@ import { featureGateResponse } from "../../lib/feature-gate.js";
 import { billingBlockedResponse } from "../../lib/billing-blocked.js";
 import { applyRequestSourceToMeta, getRequestSource, resolveSessionSourceFromRequest } from "../../lib/request-source.js";
 import { validatePromptModel } from "../../llm/models.js";
+import {
+  AgentHarnessLockedError,
+  assertAgentHarnessLocked,
+  InvalidAgentHarnessError,
+  resolveAgentHarness,
+} from "../../session-agent-harness.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -307,6 +313,7 @@ type SpacePromptInput = {
     meta?: Record<string, unknown>;
   } | null;
   sessionId?: string | null;
+  agentHarness?: AgentHarness | null;
   title?: string | null;
   source?: string | null;
   content?: ContentBlock[];
@@ -938,7 +945,11 @@ router.post("/", async (c) => {
     if (!(await hasPermission(user, "checkpoint.view", { spaceId: checkpoint.spaceId }))) return authzDenied(c);
   }
 
-  const createMods = Array.isArray(body.mods) ? body.mods : getDefaultSpaceModsForEnv(config.env);
+  const createMods = Array.isArray(body.mods)
+    ? body.mods
+    : config.nodeOrigin === "local"
+      ? []
+      : getDefaultSpaceModsForEnv(config.env);
   // spaceId is remapped inside createOwnedSpace; placeholder for prepare only.
   const preparedModValues = await prepareSpaceModInserts({
     actor: user,
@@ -952,7 +963,10 @@ router.post("/", async (c) => {
   });
   if (!Array.isArray(preparedModValues)) return c.json({ message: preparedModValues.message }, preparedModValues.status);
 
-  const sandboxProvider = normalizedConfig.sandbox?.provider ?? "cloud";
+  const sandboxProvider =
+    config.nodeOrigin === "local"
+      ? "local"
+      : normalizedConfig.sandbox?.provider ?? "cloud";
   const sandboxAutoDestroy = normalizedConfig.sandbox?.autoDestroy ?? DEFAULT_SPACE_SANDBOX_AUTO_DESTROY;
 
   let space: typeof spaces.$inferSelect | undefined;
@@ -1832,6 +1846,9 @@ router.post("/:id/prompt", async (c) => {
 
   const body = await c.req.json<SpacePromptInput>().catch(() => null);
   if (body?.mode === "create") {
+    if (body.agentHarness !== undefined && body.agentHarness !== null) {
+      return c.json({ message: "agentHarness is only valid for agent prompts" }, 400);
+    }
     const generation = body.generation;
     if (!generation?.model || !Array.isArray(generation.content) || generation.content.length === 0) {
       return c.json({ message: "generation.model and generation.content are required" }, 400);
@@ -1871,6 +1888,13 @@ router.post("/:id/prompt", async (c) => {
   if (!validatePromptContentBlocks(body?.content)) {
     return c.json({ message: "content must be a non-empty ContentBlock array" }, 400);
   }
+  let requestedAgentHarness: AgentHarness | null;
+  try {
+    requestedAgentHarness = resolveAgentHarness(body.agentHarness, null);
+  } catch (error) {
+    if (error instanceof InvalidAgentHarnessError) return c.json({ message: error.message }, 400);
+    throw error;
+  }
   const accessMode = normalizePromptAccessMode(body.accessMode);
   if (!accessMode) return c.json({ message: "accessMode must be one of: read_only, full_access" }, 400);
   const promptIntent = normalizeSpacePromptIntent(body.intent);
@@ -1895,12 +1919,28 @@ router.post("/:id/prompt", async (c) => {
       return authzDenied(c);
     }
     promptSession = session;
+    try {
+      assertAgentHarnessLocked(session.agentHarness as AgentHarness, requestedAgentHarness);
+    } catch (error) {
+      if (error instanceof AgentHarnessLockedError) return c.json({ message: error.message }, 409);
+      throw error;
+    }
   }
+	const effectiveAgentHarness = promptSession?.agentHarness ?? requestedAgentHarness ?? "pi";
+	if (effectiveAgentHarness !== "pi") {
+		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
+		if (sandbox?.provider !== "local") {
+			return c.json({ message: "Codex and Grok Build require a local Space" }, 422);
+		}
+	}
 
   const schedule = body.schedule ?? { mode: "immediate" as const };
   const mode = schedule.mode ?? "immediate";
   if (!["immediate", "delay", "at", "repeat"].includes(mode)) {
     return c.json({ message: "schedule.mode must be one of: immediate, delay, at, repeat" }, 400);
+  }
+  if (mode !== "immediate" && !sessionId && requestedAgentHarness && requestedAgentHarness !== "pi") {
+    return c.json({ message: "non-Pi harnesses require an immediate first prompt" }, 400);
   }
 
   const generationPolicy = body.generationPolicy === undefined || body.generationPolicy === null
@@ -1973,6 +2013,7 @@ router.post("/:id/prompt", async (c) => {
         title: body.title ?? null,
         source,
         externalSessionId: null,
+        agentHarness: requestedAgentHarness ?? "pi",
         meta: { createdBy: "api_space_prompt" },
       });
       createdPromptSession = promptSession;
@@ -2166,12 +2207,26 @@ router.post("/:id/sessions", async (c) => {
   const space = await getSpaceById(spaceId);
   if (!space) return c.json({ message: "space not found" }, 404);
 
-  let body: { title?: string | null; source?: string | null; labelRefs?: unknown };
+  let body: { title?: string | null; source?: string | null; labelRefs?: unknown; agentHarness?: AgentHarness | null };
   try {
-    body = await c.req.json<{ title?: string | null; source?: string | null; labelRefs?: unknown }>();
+    body = await c.req.json<{ title?: string | null; source?: string | null; labelRefs?: unknown; agentHarness?: AgentHarness | null }>();
   } catch {
     return c.json({ message: "invalid json body" }, 400);
   }
+
+  let agentHarness: AgentHarness;
+  try {
+    agentHarness = resolveAgentHarness(body.agentHarness, "pi") ?? "pi";
+  } catch (error) {
+    if (error instanceof InvalidAgentHarnessError) return c.json({ message: error.message }, 400);
+    throw error;
+  }
+	if (agentHarness !== "pi") {
+		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
+		if (sandbox?.provider !== "local") {
+			return c.json({ message: "Codex and Grok Build require a local Space" }, 422);
+		}
+	}
 
   let userLabelIds: string[] = [];
   try {
@@ -2194,6 +2249,7 @@ router.post("/:id/sessions", async (c) => {
     title: body.title ?? null,
     source,
     externalSessionId: null,
+    agentHarness,
     meta: { createdBy: "api_space_session_create" },
   });
 

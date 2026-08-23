@@ -25,6 +25,7 @@ import {
 	Gift,
 	History,
 	Keyboard,
+	Laptop,
 	Loader2,
 	LogOut,
 	MessageSquare,
@@ -90,7 +91,7 @@ import {
 } from "$lib/labels/resource-label-actions";
 import { formatResourceMentionTextForDisplay } from "$lib/mentions/resource";
 import { m } from "$lib/paraglide/messages.js";
-import { sdk } from "$lib/sdk";
+import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
 import {
 	mergeSessionRecord,
 	mergeSessionRecords,
@@ -99,6 +100,7 @@ import {
 	getSessionSortTime,
 	sortSessionsByRecentActivity,
 } from "$lib/session-sort";
+import { isLocalSpace, resolveSpaceOrigin } from "$lib/space-origin";
 import {
 	buildSessionsRoute,
 	buildSpaceAppRoute,
@@ -416,6 +418,7 @@ const activeCronjob = $derived(
 const currentSpace = $derived(
 	currentSpaceId ? (spaces.find((s) => s.id === currentSpaceId) ?? null) : null,
 );
+const currentSpaceIsLocal = $derived(isLocalSpace(currentSpace));
 const canAssignLabels = $derived(
 	Boolean(currentSpace?.access?.permissions?.includes("space.label.assign")),
 );
@@ -2245,7 +2248,9 @@ async function loadCronjobsForSpace(spaceId: string, force = false) {
 		refreshingCronjobs = true;
 	}
 	try {
-		const result = await sdk.cronJobs.list(spaceId);
+		const result = await sdkForSpaceOrigin(
+			resolveSpaceOrigin(spaceId),
+		).cronJobs.list(spaceId);
 		if (spaceId === currentSpaceId) cronjobs = result.jobs ?? [];
 	} catch (error) {
 		console.warn("[sidebar] Failed to load cronjobs", { spaceId, error });
@@ -2287,7 +2292,10 @@ async function loadTasksForSpace(spaceId: string, force = false) {
 		refreshingTasks = true;
 	}
 	try {
-		const result = await sdk.tasks.list({ spaceId, limit: TASK_PAGE_SIZE });
+		const result = await sdkForSpaceOrigin(resolveSpaceOrigin(spaceId)).tasks.list({
+			spaceId,
+			limit: TASK_PAGE_SIZE,
+		});
 		if (spaceId === currentSpaceId) {
 			tasks = result.runs ?? [];
 			tasksPageInfo = result.pageInfo ?? { hasMore: false, nextCursor: null };
@@ -2310,7 +2318,7 @@ async function loadMoreTasksForSpace(spaceId: string) {
 	if (!cursor) return;
 	loadingMoreTasks = true;
 	try {
-		const result = await sdk.tasks.list({
+		const result = await sdkForSpaceOrigin(resolveSpaceOrigin(spaceId)).tasks.list({
 			spaceId,
 			limit: TASK_PAGE_SIZE,
 			cursor,
@@ -2347,7 +2355,9 @@ async function loadAppsForSpace(spaceId: string, force = false) {
 	}
 	appsBuffer.reset();
 	try {
-		const result = await sdk.apps.listBySpace(spaceId);
+		const result = await sdkForSpaceOrigin(
+			resolveSpaceOrigin(spaceId),
+		).apps.listBySpace(spaceId);
 		if (spaceId === currentSpaceId) {
 			apps = appsBuffer.apply(result.apps ?? []);
 		}
@@ -4141,6 +4151,11 @@ $effect(() => {
         {#if currentSpace}
           <SpaceAvatar name={currentSpace.name || currentSpace.title || currentSpace.id} profile={currentSpace.publicProfile} size="sm" />
           <span class="flex-1 text-[13px] font-medium text-text-primary truncate text-left">{currentSpace.name || currentSpace.title || currentSpace.id.slice(0, 12)}</span>
+          {#if currentSpaceIsLocal}
+            <span class="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-text-tertiary" title="Data and execution stay on this node">
+              <Laptop class="h-3 w-3" /> Local
+            </span>
+          {/if}
           {@render syncSpinner(refreshingSpaces)}
         {:else}
           <span class="flex-1 text-[13px] text-text-placeholder truncate text-left">{m.sidebar_select_space({}, { locale })}</span>

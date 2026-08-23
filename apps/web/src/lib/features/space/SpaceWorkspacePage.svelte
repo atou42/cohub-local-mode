@@ -92,6 +92,7 @@ import {
 	subscribeSpaceConfigBackgroundAction,
 } from "$lib/space-config";
 import type { SpaceFsNode } from "$lib/space-fs";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import {
 	buildSpaceNewSessionRoute,
 	buildSpaceSessionRoute,
@@ -353,6 +354,7 @@ const sessionChat = createSessionChatHost({
 	getConnectionState: () => connectionStateBox.current,
 	canManageSessionAccess: () => canManageSessionAccess,
 	hasSpace: () => Boolean(space),
+	isLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 });
 
 // Host is the unique owner of chat controllers and session records.

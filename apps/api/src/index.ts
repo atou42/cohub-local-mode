@@ -238,6 +238,7 @@ configureBillingRuntime({
 const server = serve({
   fetch: app.fetch,
   port,
+  hostname: process.env.HOST ?? "0.0.0.0",
   serverOptions: {
     requestTimeout: 0,
     keepAliveTimeout: 75_000,

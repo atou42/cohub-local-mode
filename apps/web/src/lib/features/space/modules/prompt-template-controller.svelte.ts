@@ -3,7 +3,8 @@ import {
 	readCachedPromptTemplates,
 	writeCachedPromptTemplates,
 } from "$lib/prompt-template-cache";
-import { sdk } from "$lib/sdk";
+import { sdkForSpaceOrigin } from "$lib/sdk";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 
 export function createPromptTemplateController(options: {
 	getSpaceId: () => string;
@@ -33,7 +34,9 @@ export function createPromptTemplateController(options: {
 		}
 		const run = (async () => {
 			try {
-				const response = await sdk.prompts.list({ spaceId: targetSpaceId });
+				const response = await sdkForSpaceOrigin(
+					resolveSpaceOrigin(targetSpaceId),
+				).prompts.list({ spaceId: targetSpaceId });
 				writeCachedPromptTemplates(targetSpaceId, response.prompts);
 				if (options.getSpaceId() !== targetSpaceId) return;
 				items = response.prompts;

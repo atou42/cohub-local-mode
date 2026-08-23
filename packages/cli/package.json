@@ -7,6 +7,12 @@
   "bin": {
     "cohub": "./bin/cohub.js"
   },
+  "exports": {
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "default": "./dist/auth.js"
+    }
+  },
   "files": [
     "dist",
     "bin",

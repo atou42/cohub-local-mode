@@ -28,6 +28,7 @@ import usersRouter from "./users.route.js";
 import referencesRouter from "./references.route.js";
 import desktopCommandsRouter from "./desktop-commands.route.js";
 import previewRouter from "./preview.route.js";
+import localModeRouter from "./local-mode.route.js";
 
 const router = new Hono();
 
@@ -66,6 +67,7 @@ router.route("/api/users", usersRouter);
 router.route("/api/references", referencesRouter);
 router.route("/api/desktop/commands", desktopCommandsRouter);
 router.route("/api/ui/commands", desktopCommandsRouter);
+router.route("/api/local-mode", localModeRouter);
 router.route("/", previewRouter);
 router.route("/internal", internalRouter);
 

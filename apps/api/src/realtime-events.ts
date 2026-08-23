@@ -44,6 +44,7 @@ export const toRealtimeSessionRecord = (session: SessionRecord | {
   source: string | null;
   status: string | null;
   externalSessionId: string | null;
+  agentHarness: SessionRecord["agentHarness"];
   latestMessageText?: string | null;
   lastMessageAt: Date | string | null;
   lastMessageId: string | null;
@@ -57,6 +58,7 @@ export const toRealtimeSessionRecord = (session: SessionRecord | {
   source: session.source,
   status: session.status,
   externalSessionId: session.externalSessionId,
+  agentHarness: session.agentHarness,
   latestMessageText: session.latestMessageText ?? null,
   lastMessageAt: toIsoOrNull(session.lastMessageAt),
   lastMessageId: session.lastMessageId,

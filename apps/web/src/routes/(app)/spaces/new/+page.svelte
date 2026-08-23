@@ -17,11 +17,16 @@ import { onMount } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { PUBLIC_COHUB_ENV } from "$env/static/public";
-import { ensureAuth } from "$lib/auth";
+import { ensureAuth, IS_COHUB_LOCAL_MODE } from "$lib/auth";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 import ChannelModelPicker from "$lib/components/ChannelModelPicker.svelte";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
-import { sdk } from "$lib/sdk";
+import { sdkForSpaceOrigin } from "$lib/sdk";
+import {
+	registerSpaceOrigin,
+	routeWithSpaceOrigin,
+	type SpaceOrigin,
+} from "$lib/space-origin";
 import { buildSpaceLandingRoute } from "$lib/space-routes";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
@@ -34,6 +39,11 @@ let isLoading = $state(true);
 let isSubmitting = $state(false);
 let loadError = $state("");
 let submitError = $state("");
+const initialOrigin: SpaceOrigin =
+	IS_COHUB_LOCAL_MODE && page.url.searchParams.get("origin") === "local"
+		? "local"
+		: "cloud";
+let selectedOrigin = $state<SpaceOrigin>(initialOrigin);
 
 let name = $state("");
 let slug = $state("");
@@ -50,8 +60,10 @@ let gitRepoUrl = $state("");
 let gitRepoRef = $state("");
 let gitToken = $state("");
 let checkpointId = $state(initialCheckpointId);
+const defaultCloudMods = () =>
+	getDefaultSpaceModsForEnv(normalizeCohubRuntimeEnv(PUBLIC_COHUB_ENV));
 let mods = $state<CreateSpaceModInput[]>(
-	getDefaultSpaceModsForEnv(normalizeCohubRuntimeEnv(PUBLIC_COHUB_ENV)),
+	initialOrigin === "local" ? [] : defaultCloudMods(),
 );
 let modSpaceId = $state("");
 let modName = $state("");
@@ -75,7 +87,8 @@ async function loadPage() {
 	loadError = "";
 
 	try {
-		const channelsData = await sdk.channels.list();
+		const channelsData =
+			await sdkForSpaceOrigin(selectedOrigin).channels.list();
 		channels = channelsData;
 		channelConfigById = Object.fromEntries(
 			channelsData.map((ch) => [ch.id, getDefaultChannelConfig(ch)]),
@@ -86,6 +99,14 @@ async function loadPage() {
 	} finally {
 		isLoading = false;
 	}
+}
+
+function selectOrigin(origin: SpaceOrigin) {
+	if (selectedOrigin === origin || isSubmitting) return;
+	selectedOrigin = origin;
+	selectedChannelIds = [];
+	mods = origin === "local" ? [] : defaultCloudMods();
+	void loadPage();
 }
 
 onMount(() => {
@@ -230,7 +251,7 @@ async function handleSubmit(event: SubmitEvent) {
 						}
 					: { type: "blank" as const };
 
-		const result = await sdk.spaces.create(
+		const result = await sdkForSpaceOrigin(selectedOrigin).spaces.create(
 			{
 				name: name.trim(),
 				slug: slug.trim() || null,
@@ -244,10 +265,17 @@ async function handleSubmit(event: SubmitEvent) {
 			gitToken.trim() ? { "X-Git-Token": gitToken.trim() } : undefined,
 		);
 
-		cacheSpaceRecordSoon(result.space);
+		const space = { ...result.space, origin: selectedOrigin };
+		registerSpaceOrigin(space);
+		cacheSpaceRecordSoon(space);
 		window.dispatchEvent(new CustomEvent("cohub:space-created"));
 
-		await goto(buildSpaceLandingRoute(result.space.id));
+		await goto(
+			routeWithSpaceOrigin(
+				buildSpaceLandingRoute(result.space.id),
+				selectedOrigin,
+			),
+		);
 	} catch (error) {
 		if (billingConversion.handleHttpError(error)) return;
 		if (error instanceof HttpError) {
@@ -289,6 +317,13 @@ async function handleSubmit(event: SubmitEvent) {
             <div class="text-[10px] uppercase tracking-wider text-text-placeholder font-medium">Space</div>
             <p class="text-[13px] text-text-tertiary mt-1">Create a new space. Sandbox provisioning and content bootstrap will run independently.</p>
           </div>
+
+		  {#if IS_COHUB_LOCAL_MODE}
+			<div class="inline-flex rounded-[5px] border border-border-subtle bg-bg-input p-0.5" role="group" aria-label="Space location">
+				<button type="button" class="rounded-[4px] px-3 py-1 text-[11px] font-medium {selectedOrigin === 'local' ? 'bg-bg-surface text-text-primary shadow-sm' : 'text-text-tertiary hover:text-text-secondary'}" aria-pressed={selectedOrigin === "local"} onclick={() => selectOrigin("local")}>Local</button>
+				<button type="button" class="rounded-[4px] px-3 py-1 text-[11px] font-medium {selectedOrigin === 'cloud' ? 'bg-bg-surface text-text-primary shadow-sm' : 'text-text-tertiary hover:text-text-secondary'}" aria-pressed={selectedOrigin === "cloud"} onclick={() => selectOrigin("cloud")}>Cloud</button>
+			</div>
+		  {/if}
 
           <div>
             <label class="block text-[10px] font-medium uppercase tracking-wider text-text-tertiary mb-1.5" for="space-name">Name</label>

@@ -182,6 +182,7 @@ export function createSessionServices(input: {
       source: options.source,
       status: "active",
       externalSessionId: null,
+      agentHarness: "pi",
       meta: sanitizePostgresJsonValue(initializeSessionParticipantsMeta({ createdBy: "cronjob" }, userUuid)),
       lastMessageAt: new Date(),
       lastMessageId: null,

@@ -1,5 +1,6 @@
 import type { SkillCatalogEntry } from "@neta-art/cohub";
-import { sdk } from "$lib/sdk";
+import { sdkForSpaceOrigin } from "$lib/sdk";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import { readCachedSkills, writeCachedSkills } from "$lib/skill-cache";
 
 export function createSkillController(options: { getSpaceId: () => string }) {
@@ -28,7 +29,9 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 		}
 		const run = (async () => {
 			try {
-				const response = await sdk.skills.list({ spaceId: targetSpaceId });
+				const response = await sdkForSpaceOrigin(
+					resolveSpaceOrigin(targetSpaceId),
+				).skills.list({ spaceId: targetSpaceId });
 				writeCachedSkills(targetSpaceId, response.skills);
 				if (options.getSpaceId() !== targetSpaceId) return;
 				items = response.skills;

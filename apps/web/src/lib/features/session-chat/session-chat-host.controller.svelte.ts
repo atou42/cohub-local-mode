@@ -16,6 +16,7 @@ import type {
 } from "@cohub/protocol/model";
 import type { ChannelEnvelope } from "@cohub/protocol/realtime";
 import {
+	type AgentHarness,
 	extractBillingPayload,
 	HttpError,
 	type SessionRecord,
@@ -60,10 +61,11 @@ import {
 	uploadChatAttachmentFile,
 	uploadChatAttachmentImage,
 } from "$lib/public-asset-images";
-import { sdk } from "$lib/sdk";
+import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
 import { sortSessionsByRecentActivity } from "$lib/session-sort";
 import type { TimelineItem } from "$lib/session-tree";
 import { buildTurnTimelineItems } from "$lib/session-turn-render";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import type { NewChatComposerApplyPayload } from "$lib/space-config";
 import { materializeSpaceEntries } from "$lib/space-upload";
 import { authStore } from "$lib/stores/auth.svelte";
@@ -209,6 +211,7 @@ export type SessionChatHostOptions = SessionChatEnvironment & {
 		| "error";
 	canManageSessionAccess?: () => boolean;
 	hasSpace?: () => boolean;
+	isLocalSpace?: () => boolean;
 };
 
 function taskRunSortTime(notice: SessionTaskNotice) {
@@ -299,6 +302,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		isNewSessionRoute && !resolvedNewSessionId,
 	);
 	let createSessionError = $state("");
+	let draftAgentHarness = $state<AgentHarness>("pi");
 	let forkingTurnId = $state<string | null>(null);
 
 	// Stable empty refs — fresh `{}` / `[]` each derived run re-triggers effects.
@@ -362,6 +366,18 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		model: null,
 	});
 	const composerMode = $derived(composerSelection.mode);
+	const showAgentHarnessSelector = $derived(
+		Boolean(options.isLocalSpace?.()) && composerMode === "agent",
+	);
+	const activeAgentHarness = $derived<AgentHarness>(
+		activeSessionState?.session?.agentHarness ?? draftAgentHarness,
+	);
+	const agentHarnessLocked = $derived(Boolean(activeSessionState?.session));
+
+	function setAgentHarness(next: AgentHarness) {
+		if (!showAgentHarnessSelector || agentHarnessLocked) return;
+		draftAgentHarness = next;
+	}
 	let createModelId = $state<string | null>(null);
 	let createModelPreferenceRequest = 0;
 	const activeSessionLastGenerationModelId = $derived.by(() => {
@@ -788,6 +804,16 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	// task notice mappers are defined among extracted methods; derived uses them.
 	// Place derived after methods via lazy $derived.by that calls functions hoisted as function decls.
 
+	$effect(() => {
+		const currentSpaceId = spaceId;
+		const origin = resolveSpaceOrigin(currentSpaceId);
+		untrack(() => {
+			if (!currentSpaceId) return;
+			void modelsCatalogStore.load({ origin }).catch((error) => {
+				console.error("Failed to load models catalog:", error);
+			});
+		});
+	});
 	$effect(() => {
 		const key = nextComposerDraftKey;
 		if (key === activeComposerDraftKey) return;
@@ -1297,7 +1323,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 
 	async function hydrateTaskRun(taskId: string) {
 		try {
-			const detail = await sdk.tasks.get(taskId);
+			const detail = await sdkForSpaceOrigin(
+				resolveSpaceOrigin(spaceId),
+			).tasks.get(taskId);
 			taskHydrateRetryCounts.delete(taskId);
 			const retryTimer = taskHydrateRetryTimers.get(taskId);
 			if (retryTimer) clearTimeout(retryTimer);
@@ -1342,7 +1370,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			cursor?: string | null;
 		},
 	) {
-		const { runs, pageInfo } = await sdk.tasks.list({
+		const { runs, pageInfo } = await sdkForSpaceOrigin(
+			resolveSpaceOrigin(spaceId),
+		).tasks.list({
 			spaceId,
 			sessionId,
 			taskType,
@@ -1456,7 +1486,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			return;
 		}
 		try {
-			const detail = await sdk.tasks.get(notice.id);
+			const detail = await sdkForSpaceOrigin(
+				resolveSpaceOrigin(spaceId),
+			).tasks.get(notice.id);
 			const mediaItems = extractGenerationMediaItems(detail.run.result);
 			if (mediaItems.length > 0) mediaLightbox.show(mediaItems);
 		} catch (error) {
@@ -1592,7 +1624,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 
 	async function loadModelsCatalog() {
 		try {
-			await modelsCatalogStore.load();
+			await modelsCatalogStore.load({
+				origin: resolveSpaceOrigin(spaceId),
+			});
 		} catch (error) {
 			console.error("Failed to load models catalog:", error);
 		}
@@ -3427,6 +3461,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			const sendResult = await sdk.space(opSpaceId).prompt({
 				// Omit sessionId for new chat — server creates it.
 				...(sessionId ? { sessionId } : {}),
+				...(!sessionId && showAgentHarnessSelector
+					? { agentHarness: draftAgentHarness }
+					: {}),
 				content,
 				model: model?.id,
 				provider: model?.provider,
@@ -4339,6 +4376,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (activeSessionId) captureCurrentScrollAnchor(activeSessionId);
 			if (spaceId) flushActiveComposerDraft();
 			spaceId = "";
+			draftAgentHarness = "pi";
 			resolvedNewSessionId = null;
 			createSessionError = "";
 			forkingTurnId = null;
@@ -4377,6 +4415,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		// Multi-host safe: host-local lease tracking; only last leaver resets store.
 		acquireGenerationLease(nextSpaceId);
 		spaceId = nextSpaceId;
+		draftAgentHarness = "pi";
 		resolvedNewSessionId = null;
 		createSessionError = "";
 		forkingTurnId = null;
@@ -4439,6 +4478,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		const prev = route;
 		if (!isSameRoute(route, input.route)) {
 			route = input.route;
+			if (input.route.kind === "new" && prev.kind !== "new") {
+				draftAgentHarness = "pi";
+			}
 		}
 
 		if (route.kind === "session") {
@@ -4715,6 +4757,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get composerMode() {
 			return composerMode;
 		},
+		get showAgentHarnessSelector() {
+			return showAgentHarnessSelector;
+		},
+		get activeAgentHarness() {
+			return activeAgentHarness;
+		},
+		get agentHarnessLocked() {
+			return agentHarnessLocked;
+		},
 		get generationModelsCatalog() {
 			return generationModelsCatalog;
 		},
@@ -4901,6 +4952,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		dispose,
 		handleSend,
 		setComposerMode,
+		setAgentHarness,
 		handleAbort,
 		handleForkTurn,
 		handleSteerFollowup,

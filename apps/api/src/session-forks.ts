@@ -251,6 +251,7 @@ export async function createSessionFork(input: {
       source: parent.source,
       status: "active",
       externalSessionId: null,
+      agentHarness: parent.agentHarness,
       meta: sanitizePostgresJsonValue(setSessionParticipantsMeta({
         ...((parent.meta && typeof parent.meta === "object" && !Array.isArray(parent.meta)) ? parent.meta as Record<string, unknown> : {}),
         fork: {

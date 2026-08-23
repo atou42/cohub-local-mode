@@ -8,6 +8,11 @@ import {
 	type SpaceRecordCacheRecord,
 } from "$lib/cache/db";
 import { getCacheUserKey } from "$lib/cache/keys";
+import {
+	getSpaceOrigin,
+	resolveSpaceOrigin,
+	routeWithSpaceOrigin,
+} from "$lib/space-origin";
 import { getSpacePublicProfile } from "$lib/space-profile";
 import { buildSpaceLandingRoute } from "$lib/space-routes";
 import { getRecentSpaces } from "$lib/stores/recent-space";
@@ -105,11 +110,15 @@ function spaceToDefaultItem(
 		spaceProfile: getSpacePublicProfile(space),
 		sessionTitle: null,
 		matchedField: "name",
-		href: buildSpaceLandingRoute(space.id),
+		href: routeWithSpaceOrigin(
+			buildSpaceLandingRoute(space.id),
+			getSpaceOrigin(space),
+		),
 		updatedAt,
 		source: "default",
 		localScore: score.score,
 		isPinned: space.isPinned ?? false,
+		spaceOrigin: getSpaceOrigin(space),
 		typePriorityScore: currentSpaceId === space.id ? 0.93 : 0.88,
 		...score,
 	};
@@ -136,7 +145,10 @@ function sessionToDefaultItem(
 		spaceName,
 		sessionTitle: title,
 		matchedField: "title",
-		href: `/spaces/${session.spaceId}/sessions/${session.id}`,
+		href: routeWithSpaceOrigin(
+			`/spaces/${session.spaceId}/sessions/${session.id}`,
+			resolveSpaceOrigin(session.spaceId),
+		),
 		updatedAt,
 		source: "default",
 		localScore: score.score,
@@ -169,7 +181,10 @@ function turnToDefaultItem(input: {
 		spaceName: input.spaceName,
 		sessionTitle: input.session?.title ?? null,
 		matchedField: "userText",
-		href: `/spaces/${input.spaceId}/sessions/${input.turn.sessionId}?turn=${input.turn.sequence}`,
+		href: routeWithSpaceOrigin(
+			`/spaces/${input.spaceId}/sessions/${input.turn.sessionId}?turn=${input.turn.sequence}`,
+			resolveSpaceOrigin(input.spaceId),
+		),
 		updatedAt,
 		source: "default",
 		localScore: score.score,
