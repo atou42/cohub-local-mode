@@ -423,6 +423,10 @@ async function handleDraftDrop(event: DragEvent) {
 					onmodechange={host.setComposerMode}
 					viewportContexts={host.viewportContexts}
 					currentModel={host.composerMode === "create" ? host.activeGenerationModel : host.activeSessionModel}
+					showAgentHarness={host.showAgentHarnessSelector}
+					agentHarness={host.activeAgentHarness}
+					agentHarnessLocked={host.agentHarnessLocked}
+					onAgentHarnessChange={host.setAgentHarness}
 					thinkingLevelLabel={host.composerMode === "agent" ? host.activeSessionThinkingLevelLabel : null}
 					generationPolicyLabel={host.composerMode === "agent" ? host.generationPolicyLabel : null}
 					placeholder={host.composerMode === "create"

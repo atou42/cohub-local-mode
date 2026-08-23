@@ -10,6 +10,7 @@ rendered/
 
 # Environment variables
 .env
+deploy/local-mode/.env
 
 # K8s secrets (do not commit)
 deploy/api/prod/secrets.yaml
