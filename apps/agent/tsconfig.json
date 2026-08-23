@@ -58,6 +58,9 @@
       "@cohub/infra/bullmq": [
         "../../packages/infra/src/bullmq/index.ts"
       ],
+      "@cohub/infra/agent-queue": [
+        "../../packages/infra/src/agent-queue/index.ts"
+      ],
       "@cohub/infra/space-hooks": [
         "../../packages/infra/src/space-hooks/index.ts"
       ],

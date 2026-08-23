@@ -1,0 +1,1 @@
+ALTER TABLE "v2"."space_sessions" ADD COLUMN "agent_harness" varchar(32) DEFAULT 'pi' NOT NULL;
