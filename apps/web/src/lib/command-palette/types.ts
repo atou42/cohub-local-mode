@@ -60,6 +60,7 @@ export type CommandPaletteItem = {
 	updatedAt: string | null;
 	source: CommandPaletteItemSource;
 	isPinned?: boolean;
+	spaceOrigin?: "cloud" | "local";
 	localScore?: number;
 	remoteScore?: number;
 };

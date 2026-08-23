@@ -2,7 +2,11 @@ import { createLogger } from "@cohub/infra/logging";
 import { createReadStream } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import type { Job } from "bullmq";
 import { config } from "../../../config.js";
 import { redisCommandClient } from "../../../redis.js";
@@ -22,22 +26,25 @@ import {
   shouldUseFsCdnCache,
 } from "./policy.js";
 
-
 const IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 const logger = createLogger({ serviceName: "cohub-worker" });
 let s3Client: S3Client | null = null;
 
 function getS3Client() {
-  if (!config.turnObjectS3Bucket) throw new Error("TURN_OBJECT_S3_BUCKET is required for FS CDN cache");
-  if (!config.turnObjectS3Endpoint) throw new Error("TURN_OBJECT_S3_ENDPOINT is required for FS CDN cache");
+  if (!config.turnObjectS3Bucket)
+    throw new Error("TURN_OBJECT_S3_BUCKET is required for FS CDN cache");
+  if (!config.turnObjectS3Endpoint)
+    throw new Error("TURN_OBJECT_S3_ENDPOINT is required for FS CDN cache");
   if (!config.turnObjectS3AccessKeyId || !config.turnObjectS3SecretAccessKey) {
-    throw new Error("TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for FS CDN cache");
+    throw new Error(
+      "TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for FS CDN cache",
+    );
   }
   s3Client ??= new S3Client({
     endpoint: config.turnObjectS3Endpoint,
     region: config.turnObjectS3Region,
-    forcePathStyle: false,
+    forcePathStyle: config.s3ForcePathStyle,
     requestChecksumCalculation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: config.turnObjectS3AccessKeyId,
@@ -48,7 +55,9 @@ function getS3Client() {
 }
 
 function getCdnBaseUrl() {
-  return (process.env.SPACE_FS_CDN_BASE_URL ?? config.turnObjectCdnBaseUrl).replace(/\/+$/, "");
+  return (
+    process.env.SPACE_FS_CDN_BASE_URL ?? config.turnObjectCdnBaseUrl
+  ).replace(/\/+$/, "");
 }
 
 function createCdnUrl(objectKey: string) {
@@ -62,14 +71,19 @@ function assertInsideRoot(target: string, root: string) {
 }
 
 function assertSafeRelativePath(input: string) {
-  const value = String(input ?? "").replace(/\\/g, "/").trim();
-  if (!value || value.startsWith("/") || value.includes("\0")) throw new Error("invalid path");
+  const value = String(input ?? "")
+    .replace(/\\/g, "/")
+    .trim();
+  if (!value || value.startsWith("/") || value.includes("\0"))
+    throw new Error("invalid path");
   return value;
 }
 
 async function resolveSpaceFile(spaceId: string, inputPath: string) {
   const safePath = assertSafeRelativePath(inputPath);
-  const root = await realpath(resolve(config.spaceStorageRoot, spaceId, "workspace"));
+  const root = await realpath(
+    resolve(config.spaceStorageRoot, spaceId, "workspace"),
+  );
   const target = resolve(root, safePath);
   assertInsideRoot(target, root);
   const realTarget = await realpath(target);
@@ -80,13 +94,23 @@ async function resolveSpaceFile(spaceId: string, inputPath: string) {
 async function processWarmFile(job: Job<FsCdnWarmFileJob>) {
   const payload = job.data;
   const startedAt = Date.now();
-  const { target, relativePath } = await resolveSpaceFile(payload.spaceId, payload.path);
+  const { target, relativePath } = await resolveSpaceFile(
+    payload.spaceId,
+    payload.path,
+  );
   const before = await lstat(target);
-  if (before.isSymbolicLink() || !before.isFile()) throw new Error("target is not a regular file");
+  if (before.isSymbolicLink() || !before.isFile())
+    throw new Error("target is not a regular file");
   if (before.size !== payload.size || before.mtimeMs !== payload.mtimeMs) {
     return { skipped: true, reason: "stale_payload" };
   }
-  if (!shouldUseFsCdnCache({ path: relativePath, mimeType: payload.mimeType, size: before.size })) {
+  if (
+    !shouldUseFsCdnCache({
+      path: relativePath,
+      mimeType: payload.mimeType,
+      size: before.size,
+    })
+  ) {
     return { skipped: true, reason: "policy_miss" };
   }
 
@@ -98,23 +122,32 @@ async function processWarmFile(job: Job<FsCdnWarmFileJob>) {
     mtimeMs: before.mtimeMs,
   });
 
-  await getS3Client().send(new PutObjectCommand({
-    Bucket: config.turnObjectS3Bucket,
-    Key: objectKey,
-    Body: createReadStream(target),
-    ContentType: payload.mimeType ?? "application/octet-stream",
-    ContentLength: before.size,
-    CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
-  }));
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: config.turnObjectS3Bucket,
+      Key: objectKey,
+      Body: createReadStream(target),
+      ContentType: payload.mimeType ?? "application/octet-stream",
+      ContentLength: before.size,
+      CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
+    }),
+  );
 
   const after = await lstat(target);
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
-    await getS3Client().send(new DeleteObjectCommand({
-      Bucket: config.turnObjectS3Bucket,
-      Key: objectKey,
-    })).catch((error) => {
-      logger.warn("[SystemWorker] failed to delete stale fs cdn object", error instanceof Error ? error.message : String(error));
-    });
+    await getS3Client()
+      .send(
+        new DeleteObjectCommand({
+          Bucket: config.turnObjectS3Bucket,
+          Key: objectKey,
+        }),
+      )
+      .catch((error) => {
+        logger.warn(
+          "[SystemWorker] failed to delete stale fs cdn object",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
     return { skipped: true, reason: "changed_during_upload" };
   }
 
@@ -130,20 +163,27 @@ async function processWarmFile(job: Job<FsCdnWarmFileJob>) {
     expiresAt: Date.now() + FS_CDN_MANIFEST_TTL_SECONDS * 1000,
   };
   await redisCommandClient.set(
-    buildFsCdnManifestKey({ env: config.env, spaceId: payload.spaceId, path: relativePath }),
+    buildFsCdnManifestKey({
+      env: config.env,
+      spaceId: payload.spaceId,
+      path: relativePath,
+    }),
     JSON.stringify(manifest),
     "EX",
     FS_CDN_MANIFEST_TTL_SECONDS,
   );
 
-  logger.info("[SystemWorker] fs cdn warmed", JSON.stringify({
-    spaceId: payload.spaceId,
-    pathHash: manifest.pathHash,
-    name: basename(relativePath),
-    size: manifest.size,
-    durationMs: Date.now() - startedAt,
-    reason: payload.reason,
-  }));
+  logger.info(
+    "[SystemWorker] fs cdn warmed",
+    JSON.stringify({
+      spaceId: payload.spaceId,
+      pathHash: manifest.pathHash,
+      name: basename(relativePath),
+      size: manifest.size,
+      durationMs: Date.now() - startedAt,
+      reason: payload.reason,
+    }),
+  );
   return { objectKey, size: manifest.size, durationMs: Date.now() - startedAt };
 }
 
@@ -152,12 +192,20 @@ registerSystemJob(FS_CDN_WARM_FILE_JOB, async (job: Job<FsCdnWarmFileJob>) => {
     return await processWarmFile(job);
   } catch (error) {
     const data = job.data;
-    await redisCommandClient.set(
-      buildFsCdnFailKey({ env: config.env, spaceId: data.spaceId, path: data.path, size: data.size, mtimeMs: data.mtimeMs }),
-      error instanceof Error ? error.message : String(error),
-      "EX",
-      FS_CDN_FAIL_TTL_SECONDS,
-    ).catch(() => undefined);
+    await redisCommandClient
+      .set(
+        buildFsCdnFailKey({
+          env: config.env,
+          spaceId: data.spaceId,
+          path: data.path,
+          size: data.size,
+          mtimeMs: data.mtimeMs,
+        }),
+        error instanceof Error ? error.message : String(error),
+        "EX",
+        FS_CDN_FAIL_TTL_SECONDS,
+      )
+      .catch(() => undefined);
     throw error;
   }
 });

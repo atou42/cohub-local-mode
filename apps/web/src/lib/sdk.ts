@@ -1,4 +1,10 @@
-import { type CohubClientOptions, createCohubClient } from "@neta-art/cohub";
+import {
+	type CohubClient,
+	type CohubClientOptions,
+	createCohubClient,
+	type SpaceRecord,
+} from "@neta-art/cohub";
+import { env } from "$env/dynamic/public";
 import { PUBLIC_API_ORIGIN, PUBLIC_GATEWAY_ORIGIN } from "$env/static/public";
 import {
 	clearAuthToken,
@@ -9,6 +15,11 @@ import {
 import { getCurrentRedirectPath, redirectToSignIn } from "$lib/auth-redirect";
 import { decideUnauthorizedRecovery } from "$lib/auth-unauthorized";
 import { getClientInstanceId } from "$lib/client-instance";
+import {
+	registerSpaceOrigins,
+	resolveSpaceOrigin,
+	type SpaceOrigin,
+} from "$lib/space-origin";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
 
 type UnauthorizedContext = Parameters<
@@ -127,5 +138,93 @@ const createWebSdk = (options: Partial<CohubClientOptions> = {}) => {
 	});
 };
 
-export const sdk = createWebSdk();
 export const createWebClient = createWebSdk;
+
+const localModeEnabled = env.PUBLIC_COHUB_LOCAL_MODE === "true";
+const localSdk = createWebSdk();
+const cloudSdk = localModeEnabled
+	? createWebSdk({
+			baseUrl: env.PUBLIC_CLOUD_API_ORIGIN?.trim() || "https://api.cohub.live",
+			websocket: {
+				url:
+					env.PUBLIC_CLOUD_GATEWAY_ORIGIN?.trim() ||
+					"wss://gateway.cohub.live/ws",
+			},
+			voice: {
+				url:
+					env.PUBLIC_CLOUD_GATEWAY_ORIGIN?.trim() ||
+					"wss://gateway.cohub.live/asr/ws",
+			},
+		})
+	: localSdk;
+
+function tagSpaces(spaces: SpaceRecord[], origin: SpaceOrigin) {
+	return spaces.map((space) => ({ ...space, origin }));
+}
+
+function createMergedSpacesApi() {
+	return new Proxy(cloudSdk.spaces, {
+		get(target, property, receiver) {
+			if (property === "list") {
+				return async (customFetch?: typeof fetch) => {
+					const [localSpaces, cloudSpaces] = await Promise.all([
+						localSdk.spaces.list(customFetch),
+						cloudSdk.spaces.list(customFetch),
+					]);
+					const merged = [
+						...tagSpaces(localSpaces, "local"),
+						...tagSpaces(cloudSpaces, "cloud"),
+					];
+					registerSpaceOrigins(merged);
+					return merged;
+				};
+			}
+			if (property === "get") {
+				return (spaceId: string, customFetch?: typeof fetch) =>
+					sdkForSpaceOrigin(resolveSpaceOrigin(spaceId))
+						.spaces.get(spaceId, customFetch)
+						.then((space) => {
+							const [tagged] = tagSpaces([space], resolveSpaceOrigin(spaceId));
+							if (!tagged) throw new Error(`Space not found: ${spaceId}`);
+							registerSpaceOrigins([tagged]);
+							return tagged;
+						});
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}
+
+const mergedSpaces = createMergedSpacesApi();
+
+function createLocalModeSdk(): CohubClient {
+	return new Proxy(cloudSdk, {
+		get(target, property, receiver) {
+			if (property === "spaces") return mergedSpaces;
+			if (property === "space") {
+				return (spaceId: string) =>
+					sdkForSpaceOrigin(resolveSpaceOrigin(spaceId)).space(spaceId);
+			}
+			if (property === "onUserEvent") {
+				return (handler: Parameters<CohubClient["onUserEvent"]>[0]) => {
+					const offLocal = localSdk.onUserEvent(handler);
+					const offCloud = cloudSdk.onUserEvent(handler);
+					return () => {
+						offLocal();
+						offCloud();
+					};
+				};
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}
+
+export function sdkForSpaceOrigin(origin: SpaceOrigin): CohubClient {
+	if (!localModeEnabled) return cloudSdk;
+	return origin === "local" ? localSdk : cloudSdk;
+}
+
+export const sdk = localModeEnabled ? createLocalModeSdk() : cloudSdk;
