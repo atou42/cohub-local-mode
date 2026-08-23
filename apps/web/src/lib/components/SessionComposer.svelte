@@ -1,13 +1,16 @@
 <script lang="ts">
 import type { ViewportContext } from "@cohub/protocol";
 import type {
+	AgentHarness,
 	PromptTemplateCatalogEntry,
 	SkillCatalogEntry,
 	VoiceInputClient,
 } from "@neta-art/cohub";
 import {
+	Bot,
 	Check,
 	ChevronDown,
+	LockKeyhole,
 	Maximize2,
 	Mic,
 	Minimize2,
@@ -113,6 +116,10 @@ type Props = {
 	onremoveattachment?: (id: string) => void;
 	onremoveviewport?: (id: string) => void;
 	onModelSelect?: () => void;
+	showAgentHarness?: boolean;
+	agentHarness?: AgentHarness;
+	agentHarnessLocked?: boolean;
+	onAgentHarnessChange?: (harness: AgentHarness) => void;
 };
 
 let {
@@ -145,6 +152,10 @@ let {
 	onremoveattachment,
 	onremoveviewport,
 	onModelSelect,
+	showAgentHarness = false,
+	agentHarness = "pi",
+	agentHarnessLocked = false,
+	onAgentHarnessChange,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -183,6 +194,7 @@ let selectionChangeBound = false;
 let isComposerExpanded = $state(false);
 let hasTextareaOverflow = $state(false);
 let showModeMenu = $state(false);
+let showAgentHarnessMenu = $state(false);
 let voiceClient: VoiceInputClient | null = null;
 let voicePrefix = "";
 let voiceSuffix = "";
@@ -200,6 +212,15 @@ const SLASH_COMMAND_QUERY_LIMIT = 80;
 const COMPOSER_MENTION_MIRROR_TEXT_LIMIT = 50_000;
 const BLUR_MENU_CLOSE_MS = 120;
 const LOCAL_MENTION_SEARCH_RETRY_MS = 80;
+const AGENT_HARNESS_OPTIONS: Array<{ value: AgentHarness; label: string }> = [
+	{ value: "pi", label: "Pi" },
+	{ value: "codex", label: "Codex" },
+	{ value: "grok_build", label: "Grok Build" },
+];
+const agentHarnessLabel = $derived(
+	AGENT_HARNESS_OPTIONS.find((option) => option.value === agentHarness)
+		?.label ?? agentHarness,
+);
 
 let isTextareaFocused = $state(false);
 let resizeFrame: number | null = null;
@@ -1505,6 +1526,47 @@ $effect(() => {
 												>
 													<span class="flex-1">{item === "agent" ? m.composer_agent({}, { locale }) : m.composer_create({}, { locale })}</span>
 													{#if mode === item}<Check class="h-3.5 w-3.5 text-brand" />{/if}
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/if}
+
+							{#if showAgentHarness && mode === "agent"}
+								<div class="relative shrink-0">
+									<button
+										type="button"
+										class="flex h-7 max-w-[10rem] items-center gap-1.5 rounded-full border border-border-subtle px-2 text-[11px] leading-none text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/40 disabled:cursor-default disabled:opacity-70"
+										disabled={disabled || sending || agentHarnessLocked}
+										aria-label={`Agent harness ${agentHarnessLabel}${agentHarnessLocked ? ", locked for this Session" : ""}`}
+										aria-expanded={showAgentHarnessMenu}
+										aria-haspopup="menu"
+										title={agentHarnessLocked ? `${agentHarnessLabel} is locked after the first turn` : "Choose agent harness"}
+										onclick={() => { showAgentHarnessMenu = !showAgentHarnessMenu; }}
+										onkeydown={(event) => { if (event.key === "Escape") showAgentHarnessMenu = false; }}
+									>
+										<Bot class="h-3 w-3 shrink-0" />
+										<span class="min-w-0 truncate">{agentHarnessLabel}</span>
+										{#if agentHarnessLocked}
+											<LockKeyhole class="h-3 w-3 shrink-0 opacity-55" />
+										{:else}
+											<ChevronDown class="h-3 w-3 shrink-0 opacity-45" />
+										{/if}
+									</button>
+									{#if showAgentHarnessMenu && !agentHarnessLocked}
+										<button type="button" class="fixed inset-0 z-30 cursor-default" aria-hidden="true" tabindex="-1" onclick={() => { showAgentHarnessMenu = false; }}></button>
+										<div class="absolute bottom-full left-0 z-40 mb-1.5 w-40 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg" role="menu" aria-label="Agent harness">
+											{#each AGENT_HARNESS_OPTIONS as option}
+												<button
+													type="button"
+													class={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors hover:bg-bg-hover ${agentHarness === option.value ? "text-text-primary" : "text-text-secondary"}`}
+													role="menuitemradio"
+													aria-checked={agentHarness === option.value}
+													onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
+												>
+													<span class="flex-1">{option.label}</span>
+													{#if agentHarness === option.value}<Check class="h-3.5 w-3.5 text-brand" />{/if}
 												</button>
 											{/each}
 										</div>
