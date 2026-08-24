@@ -46,7 +46,9 @@ import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
 import { extractSpaceMentionsFromText } from "$lib/mentions/space";
 import {
+	findModelCatalogItem,
 	formatThinkingLevelShort,
+	getModelDefaultThinkingLevel,
 	getRequestedThinkingLevel,
 	type ModelThinkingLevel,
 } from "$lib/model-catalog";
@@ -351,6 +353,16 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	function setAgentHarness(next: AgentHarness) {
 		if (!showAgentHarnessSelector || agentHarnessLocked) return;
 		draftAgentHarness = next;
+		draftSessionModel = null;
+		draftSessionModelManuallySelected = false;
+		draftThinkingLevel = null;
+		composerSelection = { mode: "agent", model: null };
+		void modelsCatalogStore.load({
+			origin: resolveSpaceOrigin(spaceId),
+			agentHarness: next,
+		}).catch((error) => {
+			console.error("Failed to load harness models catalog:", error);
+		});
 	}
 	let createModelId = $state<string | null>(null);
 	let createModelPreferenceRequest = 0;
@@ -448,18 +460,38 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	});
 	$effect(() => {
 		const sessionKey = activeSessionId ?? "new";
+		const catalog = visibleModelsCatalog;
 		const latestTurn = mergeComposerTurnSources(
 			activeSessionState?.turns ?? [],
 			activeTurnIndex,
 		).at(-1);
 		const modeKey = `${sessionKey}:${latestTurn?.id ?? "none"}:${latestTurn?.executionKind ?? "agent"}`;
-		if (restoredComposerModeKey === modeKey) return;
+		if (restoredComposerModeKey === modeKey) {
+			if (
+				activeSessionId &&
+				latestTurn &&
+				composerSelection.mode === "agent" &&
+				composerSelection.model &&
+				!composerSelection.model.name
+			) {
+				const hydrated = resolveComposerSelectionFromTurn(latestTurn, catalog);
+				if (
+					hydrated.mode === "agent" &&
+					hydrated.model?.name &&
+					hydrated.model.provider === composerSelection.model.provider &&
+					hydrated.model.id === composerSelection.model.id
+				) {
+					composerSelection = hydrated;
+				}
+			}
+			return;
+		}
 		untrack(() => {
 			restoredComposerModeKey = modeKey;
 			if (activeSessionId && latestTurn) {
 				composerSelection = resolveComposerSelectionFromTurn(
 					latestTurn,
-					visibleModelsCatalog,
+					catalog,
 				);
 			}
 		});
@@ -564,6 +596,14 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			return Object.hasOwn(sessionThinkingLevelById, activeSessionId)
 				? (sessionThinkingLevelById[activeSessionId] ?? null)
 				: activeSessionLastRequestedThinkingLevel;
+		},
+	);
+	const activeSessionPromptThinkingLevel = $derived.by<ModelThinkingLevel | null>(
+		() => {
+			if (activeSessionThinkingLevel) return activeSessionThinkingLevel;
+			if (activeAgentHarness === "pi" || !activeSessionModel) return null;
+			const entry = findModelCatalogItem(modelsCatalog, activeSessionModel);
+			return entry ? getModelDefaultThinkingLevel(entry) : null;
 		},
 	);
 	const activeGenerationState = $derived.by(() =>
@@ -767,9 +807,10 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	$effect(() => {
 		const currentSpaceId = spaceId;
 		const origin = resolveSpaceOrigin(currentSpaceId);
+		const agentHarness = activeAgentHarness;
 		untrack(() => {
 			if (!currentSpaceId) return;
-			void modelsCatalogStore.load({ origin }).catch((error) => {
+			void modelsCatalogStore.load({ origin, agentHarness }).catch((error) => {
 				console.error("Failed to load models catalog:", error);
 			});
 		});
@@ -1298,6 +1339,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		try {
 			await modelsCatalogStore.load({
 				origin: resolveSpaceOrigin(spaceId),
+				agentHarness: activeAgentHarness,
 			});
 		} catch (error) {
 			console.error("Failed to load models catalog:", error);
@@ -3132,8 +3174,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				content,
 				model: model?.id,
 				provider: model?.provider,
-				...(activeSessionThinkingLevel
-					? { thinkingLevel: activeSessionThinkingLevel }
+				...(activeSessionPromptThinkingLevel
+					? { thinkingLevel: activeSessionPromptThinkingLevel }
 					: {}),
 				clientMessageId,
 				generationPolicy: buildTurnGenerationPolicy(),
@@ -4387,8 +4429,14 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			return activeSessionThinkingLevel;
 		},
 		get activeSessionThinkingLevelLabel() {
-			if (!activeSessionThinkingLevel) return null;
-			return formatThinkingLevelShort(activeSessionThinkingLevel);
+			if (!activeSessionPromptThinkingLevel) return null;
+			return formatThinkingLevelShort(activeSessionPromptThinkingLevel);
+		},
+		get modelsCatalogLoading() {
+			return modelsCatalogStore.loading;
+		},
+		get modelsCatalogError() {
+			return modelsCatalogStore.error;
 		},
 		get generationPolicyLabel() {
 			return generationPolicyLabel;

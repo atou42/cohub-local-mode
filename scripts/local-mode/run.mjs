@@ -11,6 +11,10 @@ const envFile = resolve(
 );
 const composeFile = join(repoRoot, "deploy/local-mode/compose.yaml");
 const webProxyScript = join(repoRoot, "scripts/local-mode/web-proxy.mjs");
+const privateIngressScript = join(
+  repoRoot,
+  "scripts/local-mode/private-ingress.mjs",
+);
 const command = process.argv[2];
 const knownCommands = new Set([
   "infra",
@@ -241,6 +245,10 @@ async function status() {
     ["API", () => probeHttp("http://127.0.0.1:8787/healthz")],
     ["Gateway", () => probeHttp("http://127.0.0.1:8788/healthz")],
     ["Web", () => probeHttp("http://127.0.0.1:4173/robots.txt", 10_000)],
+    [
+      "Private ingress",
+      () => probeHttp("http://127.0.0.1:4180/api/local-mode/route-health"),
+    ],
   ];
   let failed = false;
   for (const [name, check] of checks) {
@@ -320,6 +328,12 @@ async function startServices(webMode = "development") {
           "--port",
           "4173",
         ];
+  if (webMode === "host" && process.env.PUBLIC_LOCAL_PRIVATE_ORIGIN?.trim()) {
+    webArgs.push(
+      "--var",
+      `PUBLIC_LOCAL_PRIVATE_ORIGIN:${process.env.PUBLIC_LOCAL_PRIVATE_ORIGIN.trim()}`,
+    );
+  }
   const definitions = [
     [
       "api",
@@ -349,6 +363,7 @@ async function startServices(webMode = "development") {
       { PORT: "8788" },
     ],
     ["web", webArgs, {}],
+    ["private-ingress", ["exec", "node", privateIngressScript], {}],
   ];
   if (webMode === "host") {
     definitions.push([
