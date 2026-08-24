@@ -3,6 +3,7 @@ export type LocalNodeRoute = "private" | "fallback";
 type RouteManagerOptions = {
 	privateOrigin?: string | null;
 	fallbackOrigin: string;
+	requestOrigins?: Array<string | null | undefined>;
 	fetcher?: typeof fetch;
 	probeTimeoutMs?: number;
 	probeTtlMs?: number;
@@ -20,18 +21,21 @@ function normalizeOrigin(value: string | null | undefined): string | null {
 }
 
 function inputMethod(input: RequestInfo | URL, init?: RequestInit) {
-	return (init?.method ?? (input instanceof Request ? input.method : "GET"))
-		.toUpperCase();
+	return (
+		init?.method ?? (input instanceof Request ? input.method : "GET")
+	).toUpperCase();
 }
 
 function rewriteOrigin(
 	input: RequestInfo | URL,
-	fromOrigin: string,
+	fromOrigins: ReadonlySet<string>,
 	toOrigin: string,
 ): RequestInfo | URL {
 	const raw = input instanceof Request ? input.url : input.toString();
-	const url = new URL(raw, fromOrigin);
-	if (url.origin !== fromOrigin) return input;
+	const baseOrigin = fromOrigins.values().next().value;
+	if (!baseOrigin) return input;
+	const url = new URL(raw, baseOrigin);
+	if (!fromOrigins.has(url.origin)) return input;
 	const target = new URL(toOrigin);
 	url.protocol = target.protocol;
 	url.host = target.host;
@@ -46,6 +50,7 @@ export class LocalNodeRouteManager {
 	readonly privateOrigin: string | null;
 	readonly fallbackOrigin: string;
 	private readonly fetcher: typeof fetch;
+	private readonly requestOrigins: ReadonlySet<string>;
 	private readonly probeTimeoutMs: number;
 	private readonly probeTtlMs: number;
 	private readonly now: () => number;
@@ -56,7 +61,13 @@ export class LocalNodeRouteManager {
 	constructor(options: RouteManagerOptions) {
 		this.privateOrigin = normalizeOrigin(options.privateOrigin);
 		this.fallbackOrigin = normalizeOrigin(options.fallbackOrigin) ?? "";
-		if (!this.fallbackOrigin) throw new Error("Local fallback origin is required");
+		if (!this.fallbackOrigin)
+			throw new Error("Local fallback origin is required");
+		this.requestOrigins = new Set(
+			[this.fallbackOrigin, ...(options.requestOrigins ?? [])]
+				.map((origin) => normalizeOrigin(origin))
+				.filter((origin): origin is string => origin !== null),
+		);
 		this.fetcher = options.fetcher ?? fetch;
 		this.probeTimeoutMs = options.probeTimeoutMs ?? 700;
 		this.probeTtlMs = options.probeTtlMs ?? 30_000;
@@ -120,7 +131,7 @@ export class LocalNodeRouteManager {
 		}
 		const privateInput = rewriteOrigin(
 			input,
-			this.fallbackOrigin,
+			this.requestOrigins,
 			this.privateOrigin,
 		);
 		try {
