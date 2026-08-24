@@ -8,8 +8,9 @@ Local Mode runs Cohub on one Mac while keeping the hosted Cohub account availabl
 - Node.js 25 and pnpm
 - `cohub`, `codex`, `grok`, and `pi` authenticated on the host as needed
 - A Cloudflare account, managed domain, Tunnel, and Access policy for public use
+- Optional: Tailscale on the Mac and client devices for a faster private route
 
-Do not expose ports 4173, 4174, 8787, 8788, 9000, 9001, 54329, or 6380 directly. Local Mode binds them to loopback and expects Cloudflare Tunnel to be the only public ingress.
+Do not expose ports 4173, 4174, 4180, 8787, 8788, 9000, 9001, 54329, or 6380 directly. Local Mode binds them to loopback. Cloudflare Tunnel provides the protected public entry, while Tailscale Serve may publish only port 4180 inside the tailnet.
 
 ## Local startup
 
@@ -75,6 +76,28 @@ pnpm local:tunnel:status
 
 The connector starts at login and restarts after an unexpected exit. Its LaunchAgent contains the Tunnel ID but not the token. `pnpm local:tunnel:restart` restarts the connector, and `pnpm local:tunnel:uninstall` removes only the service while preserving the Keychain token.
 
+## Optional private-first entry
+
+Local Mode includes a loopback ingress on port 4180 that combines the Web, API, realtime, and object routes needed by the client. Publish it only inside the tailnet:
+
+```bash
+tailscale serve --bg http://127.0.0.1:4180
+```
+
+Then configure the private HTTPS origin and the exact owner identity in `deploy/local-mode/.env`:
+
+```dotenv
+PUBLIC_LOCAL_PRIVATE_ORIGIN=https://mac-mini.example.ts.net
+COHUB_LOCAL_TAILSCALE_HOST=mac-mini.example.ts.net
+COHUB_LOCAL_OWNER_EMAIL=owner@example.com
+```
+
+Run `pnpm local:build` and `pnpm local:service:restart` after changing the private origin. The client probes the private node first and uses the Cloudflare hostname when it cannot be reached. Application errors are not hidden by the public route, and writes are never automatically repeated. Leave `PUBLIC_LOCAL_PRIVATE_ORIGIN` empty to use Cloudflare Tunnel only.
+
+Before treating Tailscale as the performance path, run `tailscale ping` from another active tailnet device and confirm that it reports a direct peer address rather than DERP relay traffic.
+
 ## Harness behavior
 
-Pi, Codex, and Grok Build are available only when starting a local agent Session. After the first Turn, the Session keeps that harness and rejects attempts to switch it. Codex and Grok Build run in the attached local workspace and keep their external conversation identity for follow-up Turns.
+Pi, Codex, and Grok Build are available only when starting a local agent Session. Each harness loads its own model and effort menu. Pi uses Local Mode's Cohub model configuration. Codex and Grok Build read the authenticated host CLI catalogs from `~/.codex/models_cache.json` and `~/.grok/models_cache.json`.
+
+External catalogs fail closed when they are missing, malformed, stale, or advertise unsupported values. They never substitute the Pi catalog or Sonnet. The selected model and effort are sent to the chosen CLI on the first Turn and every resumed Turn, then persisted on the completed Turn. After the first Turn, the Session keeps that harness and rejects attempts to switch it. Codex and Grok Build run in the attached local workspace and keep their external conversation identity for follow-up Turns.

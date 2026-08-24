@@ -92,6 +92,10 @@ import { billingBlockedResponse } from "../../lib/billing-blocked.js";
 import { applyRequestSourceToMeta, getRequestSource, resolveSessionSourceFromRequest } from "../../lib/request-source.js";
 import { validatePromptModel } from "../../llm/models.js";
 import {
+  HarnessCatalogError,
+  validateExternalHarnessSelection,
+} from "../../local-mode/harness-catalog.js";
+import {
   AgentHarnessLockedError,
   assertAgentHarnessLocked,
   InvalidAgentHarnessError,
@@ -142,7 +146,7 @@ const normalizeSpacePromptIntent = (value: unknown): SpacePromptIntent | null =>
   return value === "followup" || value === "steer" ? value : null;
 };
 
-const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 const normalizePromptThinkingLevel = (value: unknown): string | null | undefined => {
   if (value === undefined || value === null) return undefined;
@@ -1889,7 +1893,7 @@ router.post("/:id/prompt", async (c) => {
   const promptIntent = normalizeSpacePromptIntent(body.intent);
   if (!promptIntent) return c.json({ message: "intent must be one of: followup, steer" }, 400);
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
-  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
+  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   if (!(await hasPermission(user, promptPermission, { spaceId }))) return authzDenied(c);
 
@@ -1940,13 +1944,34 @@ router.post("/:id/prompt", async (c) => {
   }
 
   const requestedModel = body.model?.trim() || null;
-  const requestedProvider = body.provider?.trim() || (requestedModel ? "cohub" : null);
-  if (
-    requestedModel &&
-    requestedProvider &&
-    !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))
-  ) {
-    return c.json({ code: "model_unavailable", message: "requested model is not available" }, 422);
+  const requestedProvider = body.provider?.trim() || (
+    requestedModel ? (effectiveAgentHarness === "pi" ? "cohub" : effectiveAgentHarness) : null
+  );
+  if (effectiveAgentHarness === "pi") {
+    if (
+      requestedModel &&
+      requestedProvider &&
+      !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))
+    ) {
+      return c.json({ code: "model_unavailable", message: "requested model is not available" }, 422);
+    }
+  } else {
+    try {
+      const selection = await validateExternalHarnessSelection({
+        harness: effectiveAgentHarness,
+        provider: requestedProvider,
+        model: requestedModel,
+        thinkingLevel: promptThinkingLevel ?? null,
+      });
+      if (!selection.ok) {
+        return c.json({ code: selection.code, message: selection.message }, 422);
+      }
+    } catch (error) {
+      if (error instanceof HarnessCatalogError) {
+        return c.json({ code: error.code, message: error.message }, 503);
+      }
+      throw error;
+    }
   }
 
   let promptLabelIds: string[] = [];

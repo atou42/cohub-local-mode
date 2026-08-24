@@ -6,6 +6,7 @@ import {
 	type ClearBrokenSessionOptions,
 	createAuthRefreshCoordinator,
 } from "$lib/auth-refresh-coordinator";
+import { localNodeFetch } from "$lib/local-node-route";
 
 const IS_DEV =
 	(typeof location !== "undefined" && location.hostname.startsWith("dev")) ||
@@ -238,7 +239,7 @@ async function resolveLogtoAccessToken(forceRefresh: boolean) {
 async function resolveLocalModeAccessToken(forceRefresh: boolean) {
 	const baseUrl = (env.PUBLIC_API_ORIGIN ?? "").trim().replace(/\/+$/, "");
 	const query = forceRefresh ? "?refresh=1" : "";
-	const response = await fetch(`${baseUrl}/api/local-mode/auth${query}`, {
+	const response = await localNodeFetch(`${baseUrl}/api/local-mode/auth${query}`, {
 		method: "GET",
 		credentials: "include",
 		cache: "no-store",
