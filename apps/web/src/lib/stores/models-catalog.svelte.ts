@@ -1,7 +1,7 @@
+import type { AgentHarness } from "@cohub/protocol";
 import { isModelHidden, type ModelCatalogItem } from "$lib/model-catalog";
 import { sdkForSpaceOrigin } from "$lib/sdk";
 import type { SpaceOrigin } from "$lib/space-origin";
-import type { AgentHarness } from "@cohub/protocol";
 
 type CatalogKey = `${SpaceOrigin}:${AgentHarness}`;
 
@@ -13,6 +13,16 @@ class ModelsCatalogStore {
 	private loadPromise: Promise<ModelCatalogItem[]> | null = null;
 	private loadPromiseKey: CatalogKey | null = null;
 	private loadedKey: CatalogKey | null = null;
+
+	reset() {
+		this.items = null;
+		this.visibleItems = null;
+		this.loading = false;
+		this.error = null;
+		this.loadPromise = null;
+		this.loadPromiseKey = null;
+		this.loadedKey = null;
+	}
 
 	async load(
 		options: {
@@ -26,11 +36,7 @@ class ModelsCatalogStore {
 		const key: CatalogKey = `${origin}:${agentHarness}`;
 		if (this.items && this.loadedKey === key && !options.force)
 			return this.items;
-		if (
-			this.loadPromise &&
-			this.loadPromiseKey === key &&
-			!options.force
-		)
+		if (this.loadPromise && this.loadPromiseKey === key && !options.force)
 			return this.loadPromise;
 		if (this.loadedKey !== key) {
 			this.items = null;
@@ -39,8 +45,8 @@ class ModelsCatalogStore {
 
 		this.loading = true;
 		this.error = null;
-		const request = sdkForSpaceOrigin(origin).models
-			.list(agentHarness)
+		const request = sdkForSpaceOrigin(origin)
+			.models.list(agentHarness)
 			.then((catalog) => {
 				const items: ModelCatalogItem[] = [];
 				for (const entries of Object.values(catalog)) {
@@ -73,4 +79,8 @@ class ModelsCatalogStore {
 	}
 }
 
-export const modelsCatalogStore = new ModelsCatalogStore();
+export function createModelsCatalogStore() {
+	return new ModelsCatalogStore();
+}
+
+export const modelsCatalogStore = createModelsCatalogStore();
