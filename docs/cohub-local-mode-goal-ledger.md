@@ -28,8 +28,10 @@ Build and validate a fork-only Cohub Local Mode for a Mac mini. Reuse the existi
 - Local Sessions support Pi, Codex, and Grok Build. The selected harness is persisted, inherited by forks, retained across follow-up Turns, and rejected with HTTP 409 when a caller attempts to switch it.
 - Codex and Grok Build use argv-safe local sandbox process execution, retain their external conversation identity, preserve tool activity in the Cohub timeline, support abort, and fail on invalid or oversized machine output.
 - The Mac is authenticated to Cloudflare, the remotely managed `cohub-local-macmini` Tunnel exists, and proxied DNS for `cohub.atou.cc` points to it. The tunnel secret is stored in the macOS Keychain rather than the repository.
-- The remaining public deployment gate is Cloudflare Zero Trust plan activation. The Free plan costs $0, but its checkout asks the account owner to authorize charges if usage exceeds the free allowance, so activation is intentionally waiting for explicit owner consent.
+- Cloudflare Zero Trust Free is active. `cohub.atou.cc` is protected by a self-hosted Access application whose only allow policy matches the owner account, uses one-time PIN authentication, and keeps the Access session for one month.
+- The remotely managed Tunnel is running as the per-user macOS service `cc.atou.cohub-local-tunnel`. Its token stays in the macOS Keychain, and four QUIC connections are registered with Cloudflare.
 - The compiled Local Mode host is installed as the per-user macOS service `cc.atou.cohub-local-mode`. It starts at login, restarts after an unexpected exit, and keeps its logs and data under `~/.cohub-local-mode`.
+- The compiled host serves immutable browser assets directly on loopback before forwarding page rendering to the local Worker runtime. This removes the per-asset Worker startup cost that made the first protected public load unacceptably slow.
 
 ## Safety Gate
 
@@ -55,12 +57,16 @@ Blocked commands: release, deploy, rollout, global package installation, product
 - A real API attempt to switch an existing Codex Session to Grok Build returned HTTP 409.
 - Desktop and mobile browser checks show Local and Cloud groups in the existing Space switcher, all three harness choices for a new local Session, a locked harness on started Sessions, and the real Codex tool timeline. Local task traffic was captured against the local API rather than the hosted API.
 - `cloudflared tunnel --config deploy/local-mode/cloudflared.example.yml ingress validate` passes.
-- Cloudflare accepted the remote ingress configuration for browser, API, realtime, session objects, and assets. The `cohub.atou.cc` DNS route is active but the tunnel is not started before Access protection is enabled.
+- Cloudflare accepted the remote ingress configuration for browser, API, realtime, session objects, and assets. The proxied `cohub.atou.cc` DNS route and the Tunnel are active.
+- Unauthenticated requests to both `/` and `/api/local/bootstrap` receive the Cloudflare Access login redirect instead of origin data.
+- The owner completed one-time PIN authentication on the protected hostname. Authenticated Local Mode token exchange, model lookup, local sandbox lookup, and Session lookup all return HTTP 200. Warm authenticated API checks complete in 0.35 to 0.98 seconds, and realtime authentication completes over the public WebSocket in 0.71 seconds.
+- A cache-disabled warm public reload renders the local Space in 1.6 seconds; the first reload after restarting both host services completes in 4.6 seconds. Desktop and 390 px mobile screenshots show a usable client without overlap; the Space switcher separates the Mac mini under Local from hosted Spaces under Cloud.
+- Both macOS services report running. The host readiness check reports Postgres, Redis, object storage, API, Gateway, and Web ready. The Tunnel LaunchAgent is mode 0600, contains no token material, and `cloudflared` exposes no token in its process arguments.
 
 ## Open Work
 
-- With explicit owner consent, activate Cloudflare Zero Trust Free, add the owner-only Access policy, start the tunnel, and run the final public desktop/mobile acceptance check.
+- None for this goal.
 
 ## Next Action
 
-Obtain consent for the Cloudflare Zero Trust Free checkout authorization, then validate the real protected public URL. No code change is currently required for that step.
+Use `https://cohub.atou.cc` as the protected client entry point.

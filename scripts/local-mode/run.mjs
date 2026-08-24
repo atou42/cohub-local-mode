@@ -10,6 +10,7 @@ const envFile = resolve(
   process.env.COHUB_LOCAL_ENV_FILE ?? join(repoRoot, "deploy/local-mode/.env"),
 );
 const composeFile = join(repoRoot, "deploy/local-mode/compose.yaml");
+const webProxyScript = join(repoRoot, "scripts/local-mode/web-proxy.mjs");
 const command = process.argv[2];
 const knownCommands = new Set([
   "infra",
@@ -297,7 +298,7 @@ async function startServices(webMode = "development") {
           "--ip",
           "127.0.0.1",
           "--port",
-          "4173",
+          "4174",
           "--local",
           "--var",
           `PUBLIC_COHUB_LOCAL_MODE:${process.env.PUBLIC_COHUB_LOCAL_MODE}`,
@@ -349,6 +350,16 @@ async function startServices(webMode = "development") {
     ],
     ["web", webArgs, {}],
   ];
+  if (webMode === "host") {
+    definitions.push([
+      "web-proxy",
+      ["exec", "node", webProxyScript],
+      {
+        COHUB_LOCAL_WEB_PORT: "4173",
+        COHUB_LOCAL_WEB_WORKER_PORT: "4174",
+      },
+    ]);
+  }
   const children = [];
   let stopping = false;
   const terminate = (signal = "SIGTERM") => {
