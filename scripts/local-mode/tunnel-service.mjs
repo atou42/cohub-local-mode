@@ -15,8 +15,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const runScript = join(repoRoot, "scripts/local-mode/run.mjs");
-const label = "cc.atou.cohub-local-mode";
+const scriptPath = fileURLToPath(import.meta.url);
+const label = "cc.atou.cohub-local-tunnel";
+const keychainService = "Cohub Local Mode Cloudflare Tunnel";
 const domain = `gui/${userInfo().uid}`;
 const target = `${domain}/${label}`;
 const launchAgentsDir = join(homedir(), "Library/LaunchAgents");
@@ -26,15 +27,27 @@ const dataDir = resolve(
 );
 const logsDir = join(dataDir, "logs");
 const command = process.argv[2];
-const knownCommands = new Set(["install", "restart", "status", "uninstall"]);
+const tunnelId =
+  process.argv.slice(3).find((argument) => argument !== "--") ??
+  process.env.COHUB_LOCAL_TUNNEL_ID;
+const knownCommands = new Set([
+  "install",
+  "restart",
+  "run",
+  "status",
+  "uninstall",
+]);
 
 if (process.platform !== "darwin") {
-  throw new Error("The Local Mode service is supported only on macOS");
+  throw new Error("The Local Mode tunnel service is supported only on macOS");
 }
 if (!knownCommands.has(command)) {
   throw new Error(
-    "Usage: node scripts/local-mode/service.mjs <install|restart|status|uninstall>",
+    "Usage: node scripts/local-mode/tunnel-service.mjs <install|restart|status|uninstall> [tunnel-id]",
   );
+}
+if ((command === "install" || command === "run") && !tunnelId) {
+  throw new Error("A Cloudflare Tunnel ID is required");
 }
 
 function run(program, args, options = {}) {
@@ -72,6 +85,34 @@ function run(program, args, options = {}) {
   });
 }
 
+async function readTunnelToken(id) {
+  const { stdout } = await run(
+    "/usr/bin/security",
+    ["find-generic-password", "-s", keychainService, "-a", id, "-w"],
+    { capture: true },
+  );
+  const token = stdout.trim();
+  if (!token) throw new Error(`The tunnel token is empty for ${id}`);
+  return token;
+}
+
+async function findCloudflared() {
+  const candidates = [
+    process.env.COHUB_CLOUDFLARED_BIN,
+    "/opt/homebrew/bin/cloudflared",
+    "/usr/local/bin/cloudflared",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error("cloudflared is not installed");
+}
+
 async function isLoaded() {
   try {
     await run("launchctl", ["print", target], { capture: true });
@@ -87,14 +128,15 @@ async function stopLoadedService() {
   if (await isLoaded()) await run("launchctl", ["bootout", target]);
 }
 
-async function writePlist() {
+async function writePlist(id, cloudflaredPath) {
   await mkdir(launchAgentsDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
-  const tempDir = await mkdtemp(join(tmpdir(), "cohub-local-service-"));
+  const tempDir = await mkdtemp(join(tmpdir(), "cohub-local-tunnel-"));
   const jsonPath = join(tempDir, "service.json");
   const generatedPlistPath = join(tempDir, `${label}.plist`);
   const path = [
     dirname(process.execPath),
+    dirname(cloudflaredPath),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -104,15 +146,18 @@ async function writePlist() {
   ].join(":");
   const definition = {
     Label: label,
-    ProgramArguments: [process.execPath, runScript, "serve"],
+    ProgramArguments: [process.execPath, scriptPath, "run", id],
     WorkingDirectory: repoRoot,
-    EnvironmentVariables: { PATH: path },
+    EnvironmentVariables: {
+      COHUB_CLOUDFLARED_BIN: cloudflaredPath,
+      PATH: path,
+    },
     RunAtLoad: true,
     KeepAlive: true,
     ProcessType: "Background",
     ThrottleInterval: 10,
-    StandardOutPath: join(logsDir, "host.stdout.log"),
-    StandardErrorPath: join(logsDir, "host.stderr.log"),
+    StandardOutPath: join(logsDir, "tunnel.stdout.log"),
+    StandardErrorPath: join(logsDir, "tunnel.stderr.log"),
   };
   try {
     await writeFile(jsonPath, `${JSON.stringify(definition, null, 2)}\n`, {
@@ -127,54 +172,97 @@ async function writePlist() {
   }
 }
 
-async function waitForReady() {
-  let lastError;
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    try {
-      await run(process.execPath, [runScript, "status"], { capture: true });
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
-    }
-  }
-  throw new Error(
-    `Local Mode did not become ready: ${lastError?.stderr || lastError?.message}`,
-  );
-}
-
 async function install() {
-  await access(join(repoRoot, "deploy/local-mode/.env"));
-  await run(process.execPath, [runScript, "build"]);
+  await readTunnelToken(tunnelId);
+  const cloudflaredPath = await findCloudflared();
+  await run(cloudflaredPath, ["--version"], { capture: true });
   await stopLoadedService();
-  await writePlist();
+  await writePlist(tunnelId, cloudflaredPath);
   await run("launchctl", ["bootstrap", domain, plistPath]);
   await run("launchctl", ["enable", target]);
   await run("launchctl", ["kickstart", "-k", target]);
-  await waitForReady();
-  console.log(`Local Mode service is ready: ${label}`);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
+  await status();
+  console.log(`Local Mode tunnel service is ready: ${label}`);
 }
 
 async function restart() {
   if (!(await isLoaded())) {
-    throw new Error("Local Mode service is not installed");
+    throw new Error("Local Mode tunnel service is not installed");
   }
   await run("launchctl", ["kickstart", "-k", target]);
-  await waitForReady();
-  console.log(`Local Mode service restarted: ${label}`);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
+  await status();
+  console.log(`Local Mode tunnel service restarted: ${label}`);
 }
 
 async function status() {
   if (!(await isLoaded())) {
-    throw new Error("Local Mode service is not installed");
+    throw new Error("Local Mode tunnel service is not installed");
   }
   const { stdout } = await run("launchctl", ["print", target], {
     capture: true,
   });
   const state = stdout.match(/^\s*state = (.+)$/m)?.[1];
   const pid = stdout.match(/^\s*pid = (\d+)$/m)?.[1];
-  console.log(`Service: ${state ?? "unknown"}${pid ? ` (pid ${pid})` : ""}`);
-  await run(process.execPath, [runScript, "status"]);
+  if (state !== "running" || !pid) {
+    throw new Error(`Local Mode tunnel service is ${state ?? "not running"}`);
+  }
+  let connectorPid;
+  try {
+    const result = await run(
+      "/usr/bin/pgrep",
+      ["-P", pid, "-x", "cloudflared"],
+      { capture: true },
+    );
+    connectorPid = result.stdout.trim().split(/\s+/)[0];
+  } catch (error) {
+    if (error?.code !== 1) throw error;
+  }
+  if (!connectorPid) {
+    throw new Error("Local Mode tunnel connector is not running");
+  }
+  console.log(
+    `Tunnel service: ${state} (pid ${pid}, connector ${connectorPid})`,
+  );
+}
+
+async function runTunnel() {
+  const token = await readTunnelToken(tunnelId);
+  const cloudflaredPath = await findCloudflared();
+  const child = spawn(
+    cloudflaredPath,
+    ["tunnel", "--no-autoupdate", "run"],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, TUNNEL_TOKEN: token },
+      stdio: "inherit",
+      shell: false,
+    },
+  );
+  const forward = (signal) => {
+    if (!child.killed) child.kill(signal);
+  };
+  process.once("SIGINT", forward);
+  process.once("SIGTERM", forward);
+  await new Promise((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal === "SIGINT" || signal === "SIGTERM") {
+        resolvePromise();
+        return;
+      }
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      reject(
+        new Error(
+          `cloudflared exited with ${signal ? `signal ${signal}` : `code ${code}`}`,
+        ),
+      );
+    });
+  });
 }
 
 async function uninstall() {
@@ -189,10 +277,13 @@ async function uninstall() {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  console.log("Local Mode service removed. Local data was left unchanged.");
+  console.log(
+    "Local Mode tunnel service removed. The Keychain token was left unchanged.",
+  );
 }
 
 if (command === "install") await install();
 if (command === "restart") await restart();
+if (command === "run") await runTunnel();
 if (command === "status") await status();
 if (command === "uninstall") await uninstall();
