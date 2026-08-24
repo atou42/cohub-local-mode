@@ -84,6 +84,14 @@ Local Mode includes a loopback ingress on port 4180 that combines the Web, API, 
 tailscale serve --bg http://127.0.0.1:4180
 ```
 
+The macOS app bundle can run the same command when `tailscale` is not on `PATH`:
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg http://127.0.0.1:4180
+```
+
+If macOS uses a system HTTP proxy, add `100.64.0.0/10` and `*.ts.net` to that network service's proxy bypass list. Without those exceptions, a browser can send the private hostname to the public proxy and fail with `ERR_CONNECTION_CLOSED` even while `tailscale ping` and direct command-line requests work.
+
 Then configure the private HTTPS origin and the exact owner identity in `deploy/local-mode/.env`:
 
 ```dotenv
