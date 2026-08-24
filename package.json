@@ -38,7 +38,9 @@
     "local:setup": "node scripts/local-mode/setup.mjs",
     "local:infra": "node scripts/local-mode/run.mjs infra",
     "local:init": "node scripts/local-mode/run.mjs init",
+    "local:build": "node scripts/local-mode/run.mjs build",
     "local:up": "node scripts/local-mode/run.mjs up",
+    "local:host": "node scripts/local-mode/run.mjs host",
     "local:status": "node scripts/local-mode/run.mjs status"
   },
   "devDependencies": {
