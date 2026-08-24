@@ -14,8 +14,35 @@ export function hasTrustedLocalModeEntry(request: Request) {
     return true;
   }
   if (process.env.NODE_ENV !== "production") return true;
+  const tailscaleHostname = process.env.COHUB_LOCAL_TAILSCALE_HOST
+    ?.trim()
+    .toLowerCase();
+  const ownerEmail = process.env.COHUB_LOCAL_OWNER_EMAIL
+    ?.trim()
+    .toLowerCase();
+  const tailscaleUser = request.headers
+    .get("tailscale-user-login")
+    ?.trim()
+    .toLowerCase();
+  if (
+    tailscaleHostname &&
+    ownerEmail &&
+    hostname === tailscaleHostname &&
+    tailscaleUser === ownerEmail
+  ) {
+    return true;
+  }
   return Boolean(request.headers.get("cf-access-jwt-assertion")?.trim());
 }
+
+router.get("/route-health", (c) => {
+  if (config.nodeOrigin !== "local") {
+    return c.json({ message: "not found" }, 404);
+  }
+  c.header("Cache-Control", "no-store");
+  c.header("X-Cohub-Local-Node", "1");
+  return c.json({ status: "ready", origin: "local" });
+});
 
 router.get("/auth", async (c) => {
   if (config.nodeOrigin !== "local")

@@ -4,6 +4,7 @@ import type {
   ModelCatalogEntry,
   ModelStatusResponse,
 } from "../types.js";
+import type { AgentHarness } from "@cohub/protocol";
 
 export const MULTIMODAL_MODEL_TYPE = "multimodal";
 
@@ -12,9 +13,9 @@ export type ModelsCatalog = Record<string, ModelCatalogEntry[]>;
 export class ModelsApi {
   constructor(private readonly transport: HttpTransport) {}
 
-  async list() {
+  async list(harness: AgentHarness = "pi") {
     return this.transport.request<ModelsCatalog>(
-      "/api/models",
+      `/api/models?harness=${encodeURIComponent(harness)}`,
     );
   }
 

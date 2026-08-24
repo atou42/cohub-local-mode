@@ -18,6 +18,7 @@ export type ExternalHarnessResult = {
 	provider: string;
 	stopReason: string;
 	usage: Usage | null;
+	thinkingLevel: string;
 };
 
 export function splitExternalHarnessContent(content: ContentBlock[]): {
@@ -80,6 +81,8 @@ function toolResultContent(value: unknown): string {
 
 export class HarnessEventReducer {
 	readonly harness: Exclude<AgentHarness, "pi">;
+	readonly model: string;
+	readonly thinkingLevel: string;
 	private assistantText = "";
 	private thinkingText = "";
 	private tools = new Map<string, ToolSnapshot>();
@@ -89,8 +92,13 @@ export class HarnessEventReducer {
 	private sessionId: string | null = null;
 	private usage: Usage | null = null;
 
-	constructor(harness: Exclude<AgentHarness, "pi">) {
+	constructor(
+		harness: Exclude<AgentHarness, "pi">,
+		selection: { model: string; thinkingLevel: string },
+	) {
 		this.harness = harness;
+		this.model = selection.model;
+		this.thinkingLevel = selection.thinkingLevel;
 	}
 
 	get externalSessionId() {
@@ -250,10 +258,11 @@ export class HarnessEventReducer {
 		return {
 			content: blocks,
 			externalSessionId: this.sessionId,
-			provider: this.harness === "codex" ? "openai" : "xai",
-			model: this.harness,
+			provider: this.harness,
+			model: this.model,
 			stopReason: "stop",
 			usage: this.usage,
+			thinkingLevel: this.thinkingLevel,
 		};
 	}
 }
@@ -264,15 +273,25 @@ export function buildHarnessArgv(input: {
 	externalSessionId: string | null;
 	cohubSessionId: string;
 	accessMode: AccessMode;
+	model: string;
+	thinkingLevel: string;
 }): string[] {
+	if (!input.model.trim()) throw new Error("external harness model is required");
+	if (!input.thinkingLevel.trim()) {
+		throw new Error("external harness thinking level is required");
+	}
 	if (input.harness === "codex") {
 		if (input.externalSessionId) {
 			return [
 				"codex",
 				"exec",
 				"resume",
+				"-m",
+				input.model,
 				"-c",
 				`sandbox_mode="${input.accessMode === "read_only" ? "read-only" : "workspace-write"}"`,
+				"-c",
+				`model_reasoning_effort="${input.thinkingLevel}"`,
 				"--json",
 				"--skip-git-repo-check",
 				input.externalSessionId,
@@ -284,6 +303,10 @@ export function buildHarnessArgv(input: {
 			"exec",
 			"--json",
 			"--skip-git-repo-check",
+			"-m",
+			input.model,
+			"-c",
+			`model_reasoning_effort="${input.thinkingLevel}"`,
 			"--sandbox",
 			input.accessMode === "read_only" ? "read-only" : "workspace-write",
 			input.prompt,
@@ -292,6 +315,10 @@ export function buildHarnessArgv(input: {
 
 	const common = [
 		"grok",
+		"--model",
+		input.model,
+		"--reasoning-effort",
+		input.thinkingLevel,
 		"--output-format",
 		"streaming-json",
 		"--no-alt-screen",

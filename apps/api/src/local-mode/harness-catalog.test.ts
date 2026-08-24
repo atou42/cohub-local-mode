@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  HarnessCatalogError,
+  getCatalogEfforts,
+  parseCodexModelsCache,
+  parseGrokModelsCache,
+  validateExternalHarnessSelection,
+} from "./harness-catalog.js";
+
+const now = new Date("2026-08-24T04:00:00.000Z");
+
+test("Codex cache exposes only visible models with exact effort menus", () => {
+  const catalog = parseCodexModelsCache(JSON.stringify({
+    fetched_at: "2026-08-24T03:59:00.000Z",
+    client_version: "0.148.0",
+    models: [
+      {
+        slug: "hidden",
+        display_name: "Hidden",
+        visibility: "hide",
+        priority: 0,
+        default_reasoning_level: "medium",
+        supported_reasoning_levels: [{ effort: "medium" }],
+      },
+      {
+        slug: "gpt-5.6-sol",
+        display_name: "GPT-5.6-Sol",
+        visibility: "list",
+        priority: 1,
+        default_reasoning_level: "low",
+        supported_reasoning_levels: [
+          { effort: "low" },
+          { effort: "medium" },
+          { effort: "high" },
+          { effort: "xhigh" },
+          { effort: "max" },
+          { effort: "ultra" },
+        ],
+        input_modalities: ["text", "image"],
+      },
+    ],
+  }), { now });
+
+  assert.deepEqual(catalog.map((entry) => entry.id), ["gpt-5.6-sol"]);
+  const [sol] = catalog;
+  assert.ok(sol);
+  assert.equal(sol.provider, "codex");
+  assert.deepEqual(getCatalogEfforts(sol), [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+  ]);
+  assert.equal(catalog[0]?.model.defaultThinkingLevel, "low");
+});
+
+test("Grok cache preserves the per-model effort difference", () => {
+  const model = (id: string, efforts: string[]) => ({
+    info: {
+      id,
+      name: id === "grok-4.6" ? "Grok 4.6" : "Grok 4.5",
+      hidden: false,
+      supported_in_api: true,
+      supports_reasoning_effort: true,
+      reasoning_effort: "high",
+      reasoning_efforts: efforts.map((value) => ({ value })),
+    },
+  });
+  const catalog = parseGrokModelsCache(JSON.stringify({
+    fetched_at: "2026-08-24T03:59:00.000Z",
+    grok_version: "1.0.5",
+    models: {
+      "grok-4.6": model("grok-4.6", ["xhigh", "high", "medium", "low"]),
+      "grok-4.5": model("grok-4.5", ["high", "medium", "low"]),
+    },
+  }), { now });
+
+  const [grok46, grok45] = catalog;
+  assert.ok(grok46);
+  assert.ok(grok45);
+  assert.deepEqual(getCatalogEfforts(grok46), ["low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getCatalogEfforts(grok45), ["low", "medium", "high"]);
+});
+
+test("missing, malformed, stale, and unsupported catalog data fail closed", () => {
+  const valid = {
+    fetched_at: "2026-08-20T03:59:00.000Z",
+    client_version: "0.148.0",
+    models: [],
+  };
+  assert.throws(
+    () => parseCodexModelsCache("not-json", { now }),
+    HarnessCatalogError,
+  );
+  assert.throws(
+    () => parseCodexModelsCache(JSON.stringify(valid), { now, maxAgeMs: 60_000 }),
+    /stale/,
+  );
+  assert.throws(
+    () => parseCodexModelsCache(JSON.stringify({ ...valid, fetched_at: now.toISOString(), models: [{
+      slug: "future-model",
+      display_name: "Future",
+      visibility: "list",
+      default_reasoning_level: "warp",
+      supported_reasoning_levels: [{ effort: "warp" }],
+    }] }), { now }),
+    /unsupported: warp/,
+  );
+});
+
+test("external selection rejects cross-harness models and unsupported effort", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-grok-catalog-"));
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "models_cache.json"), JSON.stringify({
+    fetched_at: new Date().toISOString(),
+    grok_version: "1.0.5",
+    models: {
+      "grok-4.5": {
+        info: {
+          id: "grok-4.5",
+          name: "Grok 4.5",
+          hidden: false,
+          supported_in_api: true,
+          supports_reasoning_effort: true,
+          reasoning_effort: "high",
+          reasoning_efforts: ["low", "medium", "high"].map((value) => ({ value })),
+        },
+      },
+    },
+  }));
+  const previous = process.env.GROK_HOME;
+  process.env.GROK_HOME = root;
+  try {
+    const crossHarness = await validateExternalHarnessSelection({
+      harness: "grok_build",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "high",
+    });
+    assert.deepEqual(crossHarness, {
+      ok: false,
+      code: "model_unavailable",
+      message: "Select a model for the chosen agent",
+    });
+
+    const unsupported = await validateExternalHarnessSelection({
+      harness: "grok_build",
+      provider: "grok_build",
+      model: "grok-4.5",
+      thinkingLevel: "xhigh",
+    });
+    assert.equal(unsupported.ok, false);
+    assert.equal(unsupported.code, "effort_unavailable");
+
+    const supported = await validateExternalHarnessSelection({
+      harness: "grok_build",
+      provider: "grok_build",
+      model: "grok-4.5",
+      thinkingLevel: "medium",
+    });
+    assert.equal(supported.ok, true);
+  } finally {
+    if (previous === undefined) delete process.env.GROK_HOME;
+    else process.env.GROK_HOME = previous;
+  }
+});

@@ -22,6 +22,9 @@ type BooleanGenerationConstraint = {
 type Props = {
 	open: boolean;
 	models: ModelCatalogItem[];
+	loading?: boolean;
+	error?: string | null;
+	onRetry?: () => void;
 	currentModel: SelectedModel | null;
 	/** Model the session thinking level is bound to. Defaults to currentModel. */
 	thinkingLevelModel?: SelectedModel | null;
@@ -69,6 +72,9 @@ type Props = {
 let {
 	open,
 	models,
+	loading = false,
+	error = null,
+	onRetry,
 	currentModel,
 	thinkingLevelModel = null,
 	currentThinkingLevel = null,
@@ -95,6 +101,9 @@ let {
 	{onClose}
 	{onSelect}
 	{models}
+	{loading}
+	{error}
+	{onRetry}
 	{currentModel}
 	{thinkingLevelModel}
 	{currentThinkingLevel}
