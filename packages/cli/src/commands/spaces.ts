@@ -305,9 +305,9 @@ async function sendPrompt(command: Command, words: string[], opts: PromptOptions
   const thinkingLevel = opts.thinkingLevel?.trim() || undefined;
   if (
     thinkingLevel
-    && !new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(thinkingLevel)
+    && !new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).has(thinkingLevel)
   ) {
-    return error("Invalid thinking level", "Use off|minimal|low|medium|high|xhigh|max");
+    return error("Invalid thinking level", "Use off|minimal|low|medium|high|xhigh|max|ultra");
   }
 
   const spaceId = resolveSpace(command);
@@ -354,7 +354,7 @@ async function sendPrompt(command: Command, words: string[], opts: PromptOptions
       content: promptContent,
       model: opts.model,
       provider: opts.provider,
-      thinkingLevel: thinkingLevel as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | undefined,
+      thinkingLevel: thinkingLevel as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
       accessMode: opts.readOnly ? "read_only" : "full_access",
       intent: opts.steer ? "steer" : undefined,
       env: parseEnvOptions(opts.env),
@@ -396,9 +396,9 @@ async function runCompletionCommand(command: Command, words: string[], opts: Com
   const thinkingLevel = opts.thinkingLevel?.trim() || undefined;
   if (
     thinkingLevel
-    && !new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(thinkingLevel)
+    && !new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).has(thinkingLevel)
   ) {
-    return error("Invalid thinking level", "Use off|minimal|low|medium|high|xhigh|max");
+    return error("Invalid thinking level", "Use off|minimal|low|medium|high|xhigh|max|ultra");
   }
 
   const client = createClient();
@@ -409,7 +409,7 @@ async function runCompletionCommand(command: Command, words: string[], opts: Com
     messages: [{ role: "user" as const, content: [{ type: "text" as const, text }] }],
     temperature,
     maxTokens,
-    thinkingLevel: thinkingLevel as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | undefined,
+    thinkingLevel: thinkingLevel as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
   };
 
   try {
@@ -458,7 +458,7 @@ export function registerPrompt(program: Command): void {
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
     .option("-p, --provider <provider>", "Provider name")
-    .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max")
+    .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max|ultra")
     .option("--read-only", "Use read-only tools")
     .option("--steer", "Interrupt the current turn and run immediately")
     .option("--delay-ms <ms>", "Delay sending by milliseconds")
@@ -688,7 +688,7 @@ export function registerSpaces(program: Command): void {
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
     .option("-p, --provider <provider>", "Provider name")
-    .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max")
+    .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max|ultra")
     .option("--read-only", "Use read-only tools")
     .option("--steer", "Interrupt the current turn and run immediately")
     .option("--delay-ms <ms>", "Delay sending by milliseconds")

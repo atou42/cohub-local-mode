@@ -7,7 +7,10 @@ import {
 } from "../external-harness-protocol.js";
 
 test("Codex JSONL becomes Cohub text and tool blocks", () => {
-	const reducer = new HarnessEventReducer("codex");
+	const reducer = new HarnessEventReducer("codex", {
+		model: "gpt-5.6-sol",
+		thinkingLevel: "ultra",
+	});
 	reducer.push({ type: "thread.started", thread_id: "codex-thread" });
 	reducer.push({
 		type: "item.completed",
@@ -30,6 +33,9 @@ test("Codex JSONL becomes Cohub text and tool blocks", () => {
 
 	const result = reducer.result();
 	assert.equal(result.externalSessionId, "codex-thread");
+	assert.equal(result.model, "gpt-5.6-sol");
+	assert.equal(result.provider, "codex");
+	assert.equal(result.thinkingLevel, "ultra");
 	assert.deepEqual(result.content, [
 		{ type: "tool_use", id: "tool-1", name: "bash", input: { command: "pnpm test" } },
 		{ type: "tool_result", tool_use_id: "tool-1", content: "ok", is_error: false },
@@ -39,7 +45,10 @@ test("Codex JSONL becomes Cohub text and tool blocks", () => {
 });
 
 test("Grok ACP updates preserve thinking, tools, and final text", () => {
-	const reducer = new HarnessEventReducer("grok_build");
+	const reducer = new HarnessEventReducer("grok_build", {
+		model: "grok-4.6",
+		thinkingLevel: "xhigh",
+	});
 	reducer.push({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Checking" } });
 	reducer.push({
 		sessionUpdate: "tool_call",
@@ -58,6 +67,8 @@ test("Grok ACP updates preserve thinking, tools, and final text", () => {
 
 	const result = reducer.result();
 	assert.equal(result.externalSessionId, "grok-session");
+	assert.equal(result.model, "grok-4.6");
+	assert.equal(result.thinkingLevel, "xhigh");
 	assert.deepEqual(result.content, [
 		{ type: "thinking", thinking: "Checking" },
 		{ type: "tool_use", id: "call-1", name: "read_file", input: { path: "README.md" } },
@@ -75,14 +86,58 @@ test("harness argv keeps an adversarial prompt in one argument", () => {
 			externalSessionId: null,
 			cohubSessionId: "00000000-0000-4000-8000-000000000000",
 			accessMode: "full_access",
+			model: harness === "codex" ? "gpt-5.6-terra" : "grok-4.6",
+			thinkingLevel: "high",
 		});
 		assert.equal(argv.filter((part) => part === prompt).length, 1);
 		assert.equal(argv.includes("/workspace"), false);
+		assert.equal(
+			argv.includes(harness === "codex" ? "gpt-5.6-terra" : "grok-4.6"),
+			true,
+		);
+		assert.equal(argv.includes("high") || argv.includes('model_reasoning_effort="high"'), true);
 	}
 });
 
+test("resumed harness turns keep the selected model and effort", () => {
+	const codex = buildHarnessArgv({
+		harness: "codex",
+		prompt: "continue",
+		externalSessionId: "codex-thread",
+		cohubSessionId: "00000000-0000-4000-8000-000000000000",
+		accessMode: "read_only",
+		model: "gpt-5.6-luna",
+		thinkingLevel: "max",
+	});
+	assert.deepEqual(codex.slice(0, 6), [
+		"codex",
+		"exec",
+		"resume",
+		"-m",
+		"gpt-5.6-luna",
+		"-c",
+	]);
+	assert.equal(codex.includes('model_reasoning_effort="max"'), true);
+
+	const grok = buildHarnessArgv({
+		harness: "grok_build",
+		prompt: "continue",
+		externalSessionId: "grok-thread",
+		cohubSessionId: "00000000-0000-4000-8000-000000000000",
+		accessMode: "full_access",
+		model: "grok-4.5",
+		thinkingLevel: "medium",
+	});
+	assert.equal(grok.includes("--resume"), true);
+	assert.equal(grok.includes("grok-4.5"), true);
+	assert.equal(grok.includes("medium"), true);
+});
+
 test("fatal harness events cannot become successful empty turns", () => {
-	const reducer = new HarnessEventReducer("codex");
+	const reducer = new HarnessEventReducer("codex", {
+		model: "gpt-5.6-sol",
+		thinkingLevel: "high",
+	});
 	reducer.push({ type: "error", message: "authentication required" });
 	assert.throws(() => reducer.result(), /authentication required/);
 });
