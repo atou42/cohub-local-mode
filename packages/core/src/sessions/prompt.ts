@@ -6,7 +6,7 @@ import { isRequestSourceClientId } from "@cohub/protocol/provenance";
 import { normalizeContentBlocks } from "../content/normalize.js";
 import type { PromptEnv } from "./prompt-env.js";
 
-const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 export type PromptSource =
   | "web_app"

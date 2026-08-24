@@ -46,6 +46,9 @@ type Props = {
 		thinkingLevel?: ModelThinkingLevel;
 	}) => void;
 	models: ModelItem[];
+	loading?: boolean;
+	error?: string | null;
+	onRetry?: () => void;
 	currentModel?: { provider: string; id: string } | null;
 	/** Model the session thinking level is bound to. Defaults to currentModel. */
 	thinkingLevelModel?: { provider: string; id: string } | null;
@@ -89,6 +92,9 @@ const {
 	onClose,
 	onSelect,
 	models,
+	loading = false,
+	error = null,
+	onRetry,
 	currentModel = null,
 	thinkingLevelModel = null,
 	currentThinkingLevel = null,
@@ -936,7 +942,24 @@ const hoverCardPos = $derived.by(() => {
 		</div>
 
 		<div bind:this={containerEl} class="flex-1 overflow-y-auto py-1">
-			{#if filteredModels.length === 0}
+			{#if loading && models.length === 0}
+				<div class="px-4 py-8 text-center text-[13px] text-text-tertiary">
+					Loading models...
+				</div>
+			{:else if error && models.length === 0}
+				<div class="flex flex-col items-center gap-3 px-4 py-8 text-center text-[13px] text-text-tertiary">
+					<span>{error}</span>
+					{#if onRetry}
+						<button
+							type="button"
+							class="rounded-md border border-border-subtle bg-bg-surface px-3 py-1.5 font-medium text-text-primary hover:bg-bg-hover"
+							onclick={onRetry}
+						>
+							Retry
+						</button>
+					{/if}
+				</div>
+			{:else if filteredModels.length === 0}
 				<div class="px-4 py-8 text-center text-[13px] text-text-tertiary">
 					{searchQuery
 						? m.model_selector_no_matching({}, { locale })
