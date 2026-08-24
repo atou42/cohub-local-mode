@@ -89,7 +89,7 @@ export const wsClientEventSchema = z.discriminatedUnion("type", [
       content: z.array(contentBlockSchema).min(1),
       model: z.string().optional(),
       provider: z.string().optional(),
-      thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+      thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
     }),
   }),
   z.object({

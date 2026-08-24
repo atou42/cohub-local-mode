@@ -3,8 +3,11 @@ import { randomUUID as defaultRandomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { ContentBlock } from "@cohub/protocol/core";
-import type { SessionTurnIntent, SessionTurnRecord } from "@cohub/protocol/model";
-import type { ModelThinkingLevel } from "@cohub/protocol";
+import type {
+  ModelThinkingLevel,
+  SessionTurnIntent,
+  SessionTurnRecord,
+} from "@cohub/protocol";
 import { sessionTurnSegments, sessionTurns, spaceSessions, spaces } from "@cohub/db";
 import { sanitizePostgresJsonValue } from "../content/sanitize.js";
 import { addSessionParticipantMeta, initializeSessionParticipantsMeta } from "./session-meta.js";
@@ -51,7 +54,7 @@ const getAgentTurnAbortKey = (turnId: string) => `agent:turn:${turnId}:abort`;
 
 const imagePreviewLabel = (count: number) => (count === 1 ? "Image" : `${count} images`);
 
-const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 const toSessionTurnRecord = (row: typeof sessionTurns.$inferSelect): SessionTurnRecord => {
   const meta = row.meta && typeof row.meta === "object" && !Array.isArray(row.meta)

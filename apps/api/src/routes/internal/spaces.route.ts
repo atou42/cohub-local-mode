@@ -403,9 +403,9 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
   if (accessMode !== "read_only" && accessMode !== "full_access") {
     return c.json({ message: "accessMode must be one of: read_only, full_access" }, 400);
   }
-  const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
   const promptThinkingLevel = typeof body.thinkingLevel === "string" && body.thinkingLevel.trim() && VALID_THINKING_LEVELS.has(body.thinkingLevel.trim()) ? body.thinkingLevel.trim() : body.thinkingLevel === undefined || body.thinkingLevel === null ? undefined : null;
-  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
+  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   const appSession = body.authToken ? verifyAppSessionToken(body.authToken) : null;
   const permissionSubject = appSession && appSession.userUuid === userId
