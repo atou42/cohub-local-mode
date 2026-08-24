@@ -32,7 +32,34 @@ test("healthy private route rewrites local API requests", async () => {
 		`${privateOrigin}/api/local-mode/route-health`,
 		`${privateOrigin}/api/models`,
 	]);
-	assert.equal(manager.websocketUrl("wss://cohub.example.com/ws"), `${privateOrigin.replace("https:", "wss:")}/ws`);
+	assert.equal(
+		manager.websocketUrl("wss://cohub.example.com/ws"),
+		`${privateOrigin.replace("https:", "wss:")}/ws`,
+	);
+});
+
+test("healthy private route also rewrites the browser-facing local origin", async () => {
+	const browserOrigin = "https://cohub.example.com";
+	const urls: string[] = [];
+	const manager = new LocalNodeRouteManager({
+		privateOrigin,
+		fallbackOrigin: "http://127.0.0.1:8787",
+		requestOrigins: [browserOrigin],
+		fetcher: async (input) => {
+			const url = input.toString();
+			urls.push(url);
+			return url.endsWith("/route-health")
+				? healthResponse()
+				: new Response("private", { status: 200 });
+		},
+		now: () => 10_000,
+	});
+	const response = await manager.fetch(`${browserOrigin}/api/models`);
+	assert.equal(await response.text(), "private");
+	assert.deepEqual(urls, [
+		`${privateOrigin}/api/local-mode/route-health`,
+		`${privateOrigin}/api/models`,
+	]);
 });
 
 test("failed private probe selects the protected public fallback", async () => {
@@ -100,5 +127,9 @@ test("only idempotent requests retry after a private network failure", async () 
 		manager.fetch(`${fallbackOrigin}/api/spaces/id/prompt`, { method: "POST" }),
 		/connection lost/,
 	);
-	assert.equal(calls.filter((url) => url === `${fallbackOrigin}/api/spaces/id/prompt`).length, 0);
+	assert.equal(
+		calls.filter((url) => url === `${fallbackOrigin}/api/spaces/id/prompt`)
+			.length,
+		0,
+	);
 });
