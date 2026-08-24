@@ -27,7 +27,8 @@ Build and validate a fork-only Cohub Local Mode for a Mac mini. Reuse the existi
 - One Cohub client now merges local and hosted Spaces, labels their origin, and routes Space-scoped reads and writes to the correct API.
 - Local Sessions support Pi, Codex, and Grok Build. The selected harness is persisted, inherited by forks, retained across follow-up Turns, and rejected with HTTP 409 when a caller attempts to switch it.
 - Codex and Grok Build use argv-safe local sandbox process execution, retain their external conversation identity, preserve tool activity in the Cohub timeline, support abort, and fail on invalid or oversized machine output.
-- Cloudflare Tunnel and Access configuration is packaged and syntax-validated. Actual public deployment is blocked because this Mac has no Cloudflare origin certificate, tunnel credentials, or authenticated Cloudflare account session.
+- The Mac is authenticated to Cloudflare, the remotely managed `cohub-local-macmini` Tunnel exists, and proxied DNS for `cohub.atou.cc` points to it. The tunnel secret is stored in the macOS Keychain rather than the repository.
+- The remaining public deployment gate is Cloudflare Zero Trust plan activation. The Free plan costs $0, but its checkout asks the account owner to authorize charges if usage exceeds the free allowance, so activation is intentionally waiting for explicit owner consent.
 
 ## Safety Gate
 
@@ -45,17 +46,19 @@ Blocked commands: release, deploy, rollout, global package installation, product
 - `pnpm install --ignore-scripts --frozen-lockfile` completed without running lifecycle hooks.
 - Migration 0064 applied successfully to the live local database and object-store initialization created both required buckets.
 - `pnpm local:status` reports Postgres, Redis, object storage, API, Gateway, and Web ready.
+- `pnpm local:host` builds the production web client and serves the compiled Cloudflare Worker locally with all four Local Mode public bindings present.
 - Protocol build and 79 tests pass. Focused Local Mode tests pass for harness validation and locking, Cloudflare Access entry checks, local Git corruption handling, Space-origin routing, and external harness event reduction.
 - Web typecheck passes with zero errors and warnings. Lint passes across all changed source files. The Agent package typecheck reaches only pre-existing missing private `@talesofai-billing/sdk` imports; the running Agent and focused harness tests pass.
 - Real Pi, Codex, and Grok Build Turns completed on the Mac mini. Codex and Grok Build follow-up Turns reused their recorded external identities. A real Codex command produced one tool step and one final message, and the Turn finalized as completed.
 - A real API attempt to switch an existing Codex Session to Grok Build returned HTTP 409.
 - Desktop and mobile browser checks show Local and Cloud groups in the existing Space switcher, all three harness choices for a new local Session, a locked harness on started Sessions, and the real Codex tool timeline. Local task traffic was captured against the local API rather than the hosted API.
 - `cloudflared tunnel --config deploy/local-mode/cloudflared.example.yml ingress validate` passes.
+- Cloudflare accepted the remote ingress configuration for browser, API, realtime, session objects, and assets. The `cohub.atou.cc` DNS route is active but the tunnel is not started before Access protection is enabled.
 
 ## Open Work
 
-- Authenticate this Mac with the owner's Cloudflare account, create the named tunnel and DNS route, add the owner-only Access policy, apply the public hostname values documented in `docs/local-mode.md`, and run the final public desktop/mobile acceptance check.
+- With explicit owner consent, activate Cloudflare Zero Trust Free, add the owner-only Access policy, start the tunnel, and run the final public desktop/mobile acceptance check.
 
 ## Next Action
 
-Complete the Cloudflare account step, then validate the real protected public URL. No code change is currently required for that step.
+Obtain consent for the Cloudflare Zero Trust Free checkout authorization, then validate the real protected public URL. No code change is currently required for that step.

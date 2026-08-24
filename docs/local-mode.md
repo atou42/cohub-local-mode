@@ -30,13 +30,15 @@ pnpm --filter @neta-art/cohub-cli exec tsx src/index.ts sandbox up /absolute/wor
 
 Open `http://127.0.0.1:4173`. `pnpm local:status` checks the complete local service path.
 
+`pnpm local:up` keeps the web client in development mode. For an unattended Mac mini host, use `pnpm local:host`; it builds the client and serves the compiled Cloudflare Worker locally before accepting traffic.
+
 ## Pi model
 
 The first setup creates `~/.cohub-local-mode/configs/platform/.cohub/models.json`. Configure that file for a Pi-compatible provider and keep its credential in the host environment named by `apiKey`. Codex and Grok Build use their existing host CLI authentication instead.
 
 ## Public entry
 
-Create a named Cloudflare Tunnel, copy `deploy/local-mode/cloudflared.example.yml`, and replace the tunnel ID, credential path, and `cohub.example.com`. The single hostname routes browser, API, realtime, and local object traffic through the tunnel.
+Create a named Cloudflare Tunnel. It may use the checked-in configuration template with a credentials file or Cloudflare's remotely managed configuration with a tunnel token. Never commit either credential. The single hostname routes browser, API, realtime, and local object traffic through the tunnel.
 
 Before restarting Local Mode, change these values in `deploy/local-mode/.env`, replacing the example hostname:
 
@@ -53,7 +55,7 @@ APP_ASSET_CDN_BASE_URL=https://cohub.example.com/cohub-assets
 CHECKPOINT_ASSET_OSS_PUBLIC_ENDPOINT=https://cohub.example.com
 ```
 
-Run the tunnel with the copied config, then protect the entire hostname with a Cloudflare Access self-hosted application. The policy must admit only the owner because a successful Access request can obtain the host's Cohub account session. The API also rejects a production non-loopback Local Mode auth request when Cloudflare Access has not asserted identity.
+Restart with `pnpm local:host`. Protect the entire hostname with a Cloudflare Access self-hosted application before starting the tunnel. The policy must admit only the owner because a successful Access request can obtain the host's Cohub account session. The API also rejects a production non-loopback Local Mode auth request when Cloudflare Access has not asserted identity.
 
 ## Harness behavior
 
