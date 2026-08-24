@@ -11,11 +11,11 @@ const envFile = resolve(
 );
 const composeFile = join(repoRoot, "deploy/local-mode/compose.yaml");
 const command = process.argv[2];
-const knownCommands = new Set(["infra", "init", "up", "status"]);
+const knownCommands = new Set(["infra", "init", "build", "up", "host", "status"]);
 
 if (!knownCommands.has(command)) {
   throw new Error(
-    "Usage: node scripts/local-mode/run.mjs <infra|init|up|status>",
+    "Usage: node scripts/local-mode/run.mjs <infra|init|build|up|host|status>",
   );
 }
 
@@ -46,6 +46,10 @@ const required = [
   "SESSIONS_DIR",
   "PLATFORM_CONFIG_ROOT",
   "LOCAL_GIT_ROOT",
+  "PUBLIC_COHUB_LOCAL_MODE",
+  "PUBLIC_API_ORIGIN",
+  "PUBLIC_CLOUD_API_ORIGIN",
+  "PUBLIC_CLOUD_GATEWAY_ORIGIN",
 ];
 for (const name of required) {
   if (!process.env[name]?.trim())
@@ -166,6 +170,10 @@ async function initialize() {
   ]);
 }
 
+async function buildWeb() {
+  await run("pnpm", ["--filter", "web", "build"]);
+}
+
 function probeHttp(url, timeoutMs = 3000) {
   return fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
@@ -249,7 +257,45 @@ function prefixLines(name, color, chunk) {
     .join("\n");
 }
 
-async function startServices() {
+async function startServices(webMode = "development") {
+  if (webMode !== "development" && webMode !== "host") {
+    throw new Error(`Unknown Local Mode web runtime: ${webMode}`);
+  }
+  const webArgs =
+    webMode === "host"
+      ? [
+          "--filter",
+          "web",
+          "exec",
+          "wrangler",
+          "dev",
+          "--config",
+          "wrangler.prod.toml",
+          "--ip",
+          "127.0.0.1",
+          "--port",
+          "4173",
+          "--local",
+          "--var",
+          `PUBLIC_COHUB_LOCAL_MODE:${process.env.PUBLIC_COHUB_LOCAL_MODE}`,
+          "--var",
+          `PUBLIC_API_ORIGIN:${process.env.PUBLIC_API_ORIGIN}`,
+          "--var",
+          `PUBLIC_CLOUD_API_ORIGIN:${process.env.PUBLIC_CLOUD_API_ORIGIN}`,
+          "--var",
+          `PUBLIC_CLOUD_GATEWAY_ORIGIN:${process.env.PUBLIC_CLOUD_GATEWAY_ORIGIN}`,
+        ]
+      : [
+          "--filter",
+          "web",
+          "exec",
+          "vite",
+          "dev",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "4173",
+        ];
   const definitions = [
     [
       "api",
@@ -278,11 +324,7 @@ async function startServices() {
       ["--filter", "@cohub/gateway", "exec", "tsx", "src/index.ts"],
       { PORT: "8788" },
     ],
-    [
-      "web",
-      ["--filter", "web", "exec", "vite", "dev", "--host", "127.0.0.1", "--port", "4173"],
-      {},
-    ],
+    ["web", webArgs, {}],
   ];
   const children = [];
   let stopping = false;
@@ -345,9 +387,16 @@ async function startServices() {
 
 if (command === "infra") await startInfra();
 if (command === "init") await initialize();
+if (command === "build") await buildWeb();
 if (command === "status") await status();
 if (command === "up") {
   await startInfra();
   await initialize();
   await startServices();
+}
+if (command === "host") {
+  await startInfra();
+  await initialize();
+  await buildWeb();
+  await startServices("host");
 }
