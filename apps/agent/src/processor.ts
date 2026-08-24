@@ -1253,6 +1253,18 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
         const sessionHarness = await getSessionHarness(data.sessionId);
         if (sessionHarness.agentHarness !== "pi") {
           const harness = sessionHarness.agentHarness;
+          const requestedModel = resolveRequestedModel(ownerMeta);
+          const requestedThinkingLevel = resolveRequestedThinkingLevel(ownerMeta);
+          if (!requestedModel || requestedModel.provider !== harness) {
+            throw new UnrecoverableError(
+              `${harness} turn is missing its validated model selection`,
+            );
+          }
+          if (!requestedThinkingLevel) {
+            throw new UnrecoverableError(
+              `${harness} turn is missing its validated effort selection`,
+            );
+          }
           const sandbox = (await getSpaceSandbox({ spaceId: data.spaceId }))
             ?.sandbox;
           if (sandbox?.provider !== "local") {
@@ -1314,6 +1326,8 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               prompt,
               externalSessionId: sessionHarness.externalSessionId,
               accessMode,
+              model: requestedModel.id,
+              thinkingLevel: requestedThinkingLevel,
               abortSignal: abortController.signal,
               onExternalSessionId: (externalSessionId) => {
                 identityUpdate = identityUpdate.then(() =>
@@ -1331,6 +1345,8 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               turnId: batch.ownerTurn.id,
               agentHarness: harness,
               externalSessionId: result.externalSessionId,
+              requestedThinkingLevel,
+              effectiveThinkingLevel: result.thinkingLevel,
             };
             if (externalContent.intermediate.length > 0) {
               await persistAssistantMessage({
@@ -1342,6 +1358,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                 startedAt,
                 completedAt: new Date().toISOString(),
                 messageOrdinal: 0,
+                thinkingLevel: result.thinkingLevel,
                 event: {
                   type: "turn_end",
                   message: {
@@ -1365,6 +1382,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               startedAt,
               completedAt: new Date().toISOString(),
               messageOrdinal: externalContent.intermediate.length > 0 ? 1 : 0,
+              thinkingLevel: result.thinkingLevel,
               event: {
                 type: "turn_end",
                 message: {
