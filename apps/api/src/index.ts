@@ -74,7 +74,16 @@ app.use(
       "Baggage",
       "Sentry-Trace",
     ],
-    exposeHeaders: ["X-Request-Id", "X-Trace-Id", "X-Span-Id", "Traceparent", "Tracestate", "Baggage", "Sentry-Trace"],
+    exposeHeaders: [
+      "X-Request-Id",
+      "X-Trace-Id",
+      "X-Span-Id",
+      "X-Cohub-Local-Node",
+      "Traceparent",
+      "Tracestate",
+      "Baggage",
+      "Sentry-Trace",
+    ],
     credentials: true,
   }),
 );
