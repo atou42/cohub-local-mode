@@ -41,7 +41,12 @@
     "local:build": "node scripts/local-mode/run.mjs build",
     "local:up": "node scripts/local-mode/run.mjs up",
     "local:host": "node scripts/local-mode/run.mjs host",
-    "local:status": "node scripts/local-mode/run.mjs status"
+    "local:serve": "node scripts/local-mode/run.mjs serve",
+    "local:status": "node scripts/local-mode/run.mjs status",
+    "local:service:install": "node scripts/local-mode/service.mjs install",
+    "local:service:restart": "node scripts/local-mode/service.mjs restart",
+    "local:service:status": "node scripts/local-mode/service.mjs status",
+    "local:service:uninstall": "node scripts/local-mode/service.mjs uninstall"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
