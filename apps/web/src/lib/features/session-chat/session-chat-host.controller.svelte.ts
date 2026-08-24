@@ -54,8 +54,8 @@ import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
 import { sortSessionsByRecentActivity } from "$lib/session-sort";
 import type { TimelineItem } from "$lib/session-tree";
 import { buildTurnTimelineItems } from "$lib/session-turn-render";
-import { resolveSpaceOrigin } from "$lib/space-origin";
 import type { NewChatComposerApplyPayload } from "$lib/space-config";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import { materializeSpaceEntries } from "$lib/space-upload";
 import { authStore } from "$lib/stores/auth.svelte";
 import {
@@ -70,7 +70,7 @@ import {
 	readDraftSessionModel,
 	saveDraftSessionModel,
 } from "$lib/stores/draft-session-model";
-import { modelsCatalogStore } from "$lib/stores/models-catalog.svelte";
+import { createModelsCatalogStore } from "$lib/stores/models-catalog.svelte";
 import {
 	readSessionComposerDraftText,
 	removeSessionComposerDraftText,
@@ -225,6 +225,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const isNewSessionRoute = $derived(route.kind === "new");
 	const workspace = createSessionWorkspaceController();
 	const composer = createSessionComposerController();
+	const modelsCatalogStore = createModelsCatalogStore();
 	const viewport = createViewportContextController();
 	const scroll = createSessionScrollController();
 	let sessionScrollAnchorsLoaded = $state(false);
@@ -351,12 +352,14 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		draftSessionModelManuallySelected = false;
 		draftThinkingLevel = null;
 		composerSelection = { mode: "agent", model: null };
-		void modelsCatalogStore.load({
-			origin: resolveSpaceOrigin(spaceId),
-			agentHarness: next,
-		}).catch((error) => {
-			console.error("Failed to load harness models catalog:", error);
-		});
+		void modelsCatalogStore
+			.load({
+				origin: resolveSpaceOrigin(spaceId),
+				agentHarness: next,
+			})
+			.catch((error) => {
+				console.error("Failed to load harness models catalog:", error);
+			});
 	}
 	let createModelId = $state<string | null>(null);
 	let createModelPreferenceRequest = 0;
@@ -423,6 +426,18 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	let draftSessionModel = $state<SelectedModel | null>(null);
 	let draftSessionModelManuallySelected = $state(false);
 	let draftThinkingLevel = $state<ModelThinkingLevel | null>(null);
+
+	function resetDraftComposerState() {
+		draftAgentHarness = "pi";
+		composerSelection = { mode: "agent", model: null };
+		restoredComposerModeKey = null;
+		draftSessionModel = null;
+		draftSessionModelManuallySelected = false;
+		draftThinkingLevel = null;
+		showModelSelector = false;
+		composer.clearError();
+		modelsCatalogStore.reset();
+	}
 
 	$effect(() => {
 		const authIdentity = authStore.loaded
@@ -591,14 +606,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				: activeSessionLastRequestedThinkingLevel;
 		},
 	);
-	const activeSessionPromptThinkingLevel = $derived.by<ModelThinkingLevel | null>(
-		() => {
+	const activeSessionPromptThinkingLevel =
+		$derived.by<ModelThinkingLevel | null>(() => {
 			if (activeSessionThinkingLevel) return activeSessionThinkingLevel;
 			if (activeAgentHarness === "pi" || !activeSessionModel) return null;
 			const entry = findModelCatalogItem(modelsCatalog, activeSessionModel);
 			return entry ? getModelDefaultThinkingLevel(entry) : null;
-		},
-	);
+		});
 	const activeGenerationState = $derived.by(() =>
 		sessionGenerationStore.get(activeSessionId),
 	);
@@ -4024,7 +4038,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (activeSessionId) captureCurrentScrollAnchor(activeSessionId);
 			if (spaceId) flushActiveComposerDraft();
 			spaceId = "";
-			draftAgentHarness = "pi";
+			resetDraftComposerState();
 			resolvedNewSessionId = null;
 			createSessionError = "";
 			forkingTurnId = null;
@@ -4047,8 +4061,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			share.reset();
 			tasks.reset();
 			sessionModelById = {};
-			draftSessionModel = null;
-			draftSessionModelManuallySelected = false;
 			route = { kind: "none" };
 			composer.sending = false;
 			composer.aborting = false;
@@ -4063,7 +4075,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		// Multi-host safe: host-local lease tracking; only last leaver resets store.
 		acquireGenerationLease(nextSpaceId);
 		spaceId = nextSpaceId;
-		draftAgentHarness = "pi";
+		resetDraftComposerState();
 		resolvedNewSessionId = null;
 		createSessionError = "";
 		forkingTurnId = null;
@@ -4088,8 +4100,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		share.reset();
 		tasks.reset();
 		sessionModelById = {};
-		draftSessionModel = null;
-		draftSessionModelManuallySelected = false;
 		promptTemplatesCtrl.restore(nextSpaceId);
 		skillsCtrl.restore(nextSpaceId);
 		void loadPromptTemplates();
@@ -4126,8 +4136,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		const prev = route;
 		if (!isSameRoute(route, input.route)) {
 			route = input.route;
+			composer.clearError();
 			if (input.route.kind === "new" && prev.kind !== "new") {
-				draftAgentHarness = "pi";
+				resetDraftComposerState();
 			}
 		}
 
