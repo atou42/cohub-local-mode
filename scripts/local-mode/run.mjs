@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,10 @@ const webProxyScript = join(repoRoot, "scripts/local-mode/web-proxy.mjs");
 const privateIngressScript = join(
   repoRoot,
   "scripts/local-mode/private-ingress.mjs",
+);
+const sandboxSupervisorScript = join(
+  repoRoot,
+  "scripts/local-mode/sandbox-supervisor.mjs",
 );
 const command = process.argv[2];
 const knownCommands = new Set([
@@ -83,6 +88,12 @@ for (const name of [
 if (process.env.COHUB_NODE_ORIGIN !== "local") {
   throw new Error("COHUB_NODE_ORIGIN must be local for Local Mode");
 }
+process.env.LOCAL_SANDBOX_RELAY_TOKEN = createHmac(
+  "sha256",
+  process.env.WORKER_SECRET,
+)
+  .update("cohub-local-sandbox-relay-v1")
+  .digest("base64url");
 
 const composeArgs = ["compose", "--env-file", envFile, "-f", composeFile];
 
@@ -361,6 +372,11 @@ async function startServices(webMode = "development") {
       "gateway",
       ["--filter", "@cohub/gateway", "exec", "tsx", "src/index.ts"],
       { PORT: "8788" },
+    ],
+    [
+      "sandbox-supervisor",
+      ["exec", "node", sandboxSupervisorScript],
+      {},
     ],
     ["web", webArgs, {}],
     ["private-ingress", ["exec", "node", privateIngressScript], {}],
