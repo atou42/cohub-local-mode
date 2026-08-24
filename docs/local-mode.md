@@ -32,6 +32,15 @@ Open `http://127.0.0.1:4173`. `pnpm local:status` checks the complete local serv
 
 `pnpm local:up` keeps the web client in development mode. For an unattended Mac mini host, use `pnpm local:host`; it builds the client and serves the compiled Cloudflare Worker locally before accepting traffic.
 
+Install the compiled host as a per-user macOS service after its public values are configured:
+
+```bash
+pnpm local:service:install
+pnpm local:service:status
+```
+
+The service starts at login, restarts after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
+
 ## Pi model
 
 The first setup creates `~/.cohub-local-mode/configs/platform/.cohub/models.json`. Configure that file for a Pi-compatible provider and keep its credential in the host environment named by `apiKey`. Codex and Grok Build use their existing host CLI authentication instead.

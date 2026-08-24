@@ -11,11 +11,19 @@ const envFile = resolve(
 );
 const composeFile = join(repoRoot, "deploy/local-mode/compose.yaml");
 const command = process.argv[2];
-const knownCommands = new Set(["infra", "init", "build", "up", "host", "status"]);
+const knownCommands = new Set([
+  "infra",
+  "init",
+  "build",
+  "up",
+  "host",
+  "serve",
+  "status",
+]);
 
 if (!knownCommands.has(command)) {
   throw new Error(
-    "Usage: node scripts/local-mode/run.mjs <infra|init|build|up|host|status>",
+    "Usage: node scripts/local-mode/run.mjs <infra|init|build|up|host|serve|status>",
   );
 }
 
@@ -172,6 +180,21 @@ async function initialize() {
 
 async function buildWeb() {
   await run("pnpm", ["--filter", "web", "build"]);
+}
+
+async function requireWebBuild() {
+  const workerPath = join(
+    repoRoot,
+    "apps/web/.svelte-kit/cloudflare/_worker.js",
+  );
+  try {
+    await access(workerPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("Missing compiled web client. Run `pnpm local:build` first.");
+    }
+    throw error;
+  }
 }
 
 function probeHttp(url, timeoutMs = 3000) {
@@ -398,5 +421,11 @@ if (command === "host") {
   await startInfra();
   await initialize();
   await buildWeb();
+  await startServices("host");
+}
+if (command === "serve") {
+  await requireWebBuild();
+  await startInfra();
+  await initialize();
   await startServices("host");
 }

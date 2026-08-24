@@ -29,6 +29,7 @@ Build and validate a fork-only Cohub Local Mode for a Mac mini. Reuse the existi
 - Codex and Grok Build use argv-safe local sandbox process execution, retain their external conversation identity, preserve tool activity in the Cohub timeline, support abort, and fail on invalid or oversized machine output.
 - The Mac is authenticated to Cloudflare, the remotely managed `cohub-local-macmini` Tunnel exists, and proxied DNS for `cohub.atou.cc` points to it. The tunnel secret is stored in the macOS Keychain rather than the repository.
 - The remaining public deployment gate is Cloudflare Zero Trust plan activation. The Free plan costs $0, but its checkout asks the account owner to authorize charges if usage exceeds the free allowance, so activation is intentionally waiting for explicit owner consent.
+- The compiled Local Mode host is installed as the per-user macOS service `cc.atou.cohub-local-mode`. It starts at login, restarts after an unexpected exit, and keeps its logs and data under `~/.cohub-local-mode`.
 
 ## Safety Gate
 
@@ -47,6 +48,7 @@ Blocked commands: release, deploy, rollout, global package installation, product
 - Migration 0064 applied successfully to the live local database and object-store initialization created both required buckets.
 - `pnpm local:status` reports Postgres, Redis, object storage, API, Gateway, and Web ready.
 - `pnpm local:host` builds the production web client and serves the compiled Cloudflare Worker locally with all four Local Mode public bindings present.
+- `pnpm local:service:install` created and started the macOS service. A forced service restart changed the supervisor PID, all six readiness checks recovered, and the attached local sandbox re-registered without manual intervention.
 - Protocol build and 79 tests pass. Focused Local Mode tests pass for harness validation and locking, Cloudflare Access entry checks, local Git corruption handling, Space-origin routing, and external harness event reduction.
 - Web typecheck passes with zero errors and warnings. Lint passes across all changed source files. The Agent package typecheck reaches only pre-existing missing private `@talesofai-billing/sdk` imports; the running Agent and focused harness tests pass.
 - Real Pi, Codex, and Grok Build Turns completed on the Mac mini. Codex and Grok Build follow-up Turns reused their recorded external identities. A real Codex command produced one tool step and one final message, and the Turn finalized as completed.
