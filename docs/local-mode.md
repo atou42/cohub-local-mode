@@ -20,7 +20,9 @@ pnpm local:setup
 pnpm local:up
 ```
 
-In another terminal, attach a workspace to the local Space with the fork CLI source:
+Open `http://127.0.0.1:4173`. Each Local Space created there automatically gets an isolated workspace at `~/.cohub-local-mode/spaces/<space-id>/workspace` and a supervised local runner. No separate CLI command is required. `pnpm local:status` checks the complete local service path.
+
+An explicitly started CLI runner may still take over a Local Space when a different workspace is needed:
 
 ```bash
 COHUB_API_URL=http://127.0.0.1:8787 \
@@ -28,8 +30,6 @@ COHUB_WS_URL=ws://127.0.0.1:8788/ws \
 COHUB_WEB_URL=http://127.0.0.1:4173 \
 pnpm --filter @neta-art/cohub-cli exec tsx src/index.ts sandbox up /absolute/workspace/path --yes
 ```
-
-Open `http://127.0.0.1:4173`. `pnpm local:status` checks the complete local service path.
 
 `pnpm local:up` keeps the web client in development mode. For an unattended Mac mini host, use `pnpm local:host`; it builds the client and serves the compiled Cloudflare Worker locally before accepting traffic.
 
@@ -40,7 +40,7 @@ pnpm local:service:install
 pnpm local:service:status
 ```
 
-The service starts at login, restarts after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
+The service starts at login, supervises every Local Space runner, restarts them after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
 
 ## Pi model
 

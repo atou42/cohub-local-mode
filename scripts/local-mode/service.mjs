@@ -87,6 +87,21 @@ async function stopLoadedService() {
   if (await isLoaded()) await run("launchctl", ["bootout", target]);
 }
 
+async function bootstrapService() {
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await run("launchctl", ["bootstrap", domain, plistPath]);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== 5 || attempt === 4) throw error;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+    }
+  }
+  throw lastError;
+}
+
 async function writePlist() {
   await mkdir(launchAgentsDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
@@ -95,6 +110,7 @@ async function writePlist() {
   const generatedPlistPath = join(tempDir, `${label}.plist`);
   const path = [
     dirname(process.execPath),
+    join(homedir(), ".local", "bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -148,7 +164,7 @@ async function install() {
   await run(process.execPath, [runScript, "build"]);
   await stopLoadedService();
   await writePlist();
-  await run("launchctl", ["bootstrap", domain, plistPath]);
+  await bootstrapService();
   await run("launchctl", ["enable", target]);
   await run("launchctl", ["kickstart", "-k", target]);
   await waitForReady();
