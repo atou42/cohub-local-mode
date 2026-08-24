@@ -12,7 +12,7 @@ export type ModelCost = {
   cacheWrite?: number;
 };
 
-export type ModelThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ModelThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type ModelRequestProfile = "codex";
 export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
 

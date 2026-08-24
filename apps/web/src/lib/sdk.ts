@@ -21,6 +21,10 @@ import {
 	type SpaceOrigin,
 } from "$lib/space-origin";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
+import {
+	createLocalNodeWebSocket,
+	localNodeFetch,
+} from "$lib/local-node-route";
 
 type UnauthorizedContext = Parameters<
 	NonNullable<CohubClientOptions["onUnauthorized"]>
@@ -141,7 +145,19 @@ const createWebSdk = (options: Partial<CohubClientOptions> = {}) => {
 export const createWebClient = createWebSdk;
 
 const localModeEnabled = env.PUBLIC_COHUB_LOCAL_MODE === "true";
-const localSdk = createWebSdk();
+const localGatewayUrl = PUBLIC_GATEWAY_ORIGIN ?? "";
+const localSdk = localModeEnabled
+	? createWebSdk({
+			fetch: localNodeFetch,
+			websocket: {
+				url: localGatewayUrl || undefined,
+				WebSocketImpl:
+					typeof WebSocket === "undefined" || !localGatewayUrl
+						? undefined
+						: createLocalNodeWebSocket(localGatewayUrl),
+			},
+		})
+	: createWebSdk();
 const cloudSdk = localModeEnabled
 	? createWebSdk({
 			baseUrl: env.PUBLIC_CLOUD_API_ORIGIN?.trim() || "https://api.cohub.live",
