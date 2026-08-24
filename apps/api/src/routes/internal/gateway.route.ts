@@ -1,5 +1,5 @@
 import { context, trace, SpanStatusCode } from "@opentelemetry/api";
-import { boards, apps } from "@cohub/db";
+import { boards, apps, spaceSandboxes } from "@cohub/db";
 import { createLogger } from "@cohub/infra/logging";
 import { getTracer, extractTrace } from "@cohub/infra/tracing/propagator";
 import { GATEWAY_ATTACHMENT_MAX_BYTES, gatewayInboundEventSchema, type GatewayInboundEvent } from "@cohub/protocol/gateway";
@@ -39,6 +39,8 @@ import { enqueueSandboxUploadFilesJob } from "../../sandbox-bash-queue.js";
 import { db } from "../../db/index.js";
 import { eq } from "drizzle-orm";
 import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket } from "../../app-realtime-rooms.js";
+import { config } from "../../config.js";
+import { isManagedLocalSandboxRelayToken } from "../../local-sandbox-supervisor-auth.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const tracer = getTracer("cohub-api");
@@ -265,7 +267,18 @@ router.post("/local-sandbox/authorize", async (c) => {
   if (forbidden) return forbidden;
 
   const user = getOptionalAuth(c);
-  if (!user) return c.json({ ok: false, message: "authentication is required" }, 401);
+  const authorization = c.req.header("authorization")?.trim() ?? "";
+  const providedRelayToken = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : null;
+  const managedRelay = isManagedLocalSandboxRelayToken({
+    nodeOrigin: config.nodeOrigin,
+    expectedToken: config.localSandboxRelayToken,
+    providedToken: providedRelayToken,
+  });
+  if (!user && !managedRelay) {
+    return c.json({ ok: false, message: "authentication is required" }, 401);
+  }
 
   const body = await c.req.json<{ spaceId?: string }>().catch(() => null);
   const spaceId = typeof body?.spaceId === "string" ? body.spaceId.trim() : "";
@@ -274,18 +287,91 @@ router.post("/local-sandbox/authorize", async (c) => {
   const space = await getSpaceById(spaceId);
   if (!space) return c.json({ ok: false, message: "space not found" }, 404);
 
-  const allowed = await hasPermission(user, "sandbox.manage", { spaceId }).catch((error) => {
-    logger.warn("[LocalSandbox] failed to authorize connect", { spaceId, userId: user.uuid, error });
-    return false;
-  });
-  if (!allowed) return c.json({ ok: false, message: "missing sandbox.manage permission" }, 403);
+  if (user) {
+    const allowed = await hasPermission(user, "sandbox.manage", { spaceId }).catch((error) => {
+      logger.warn("[LocalSandbox] failed to authorize connect", { spaceId, userId: user.uuid, error });
+      return false;
+    });
+    if (!allowed) return c.json({ ok: false, message: "missing sandbox.manage permission" }, 403);
+  }
 
   const sandbox = await getSpaceSandboxBySpaceId(spaceId);
   if (sandbox?.provider !== "local") {
     return c.json({ ok: false, message: "space is not configured for a local sandbox" }, 409);
   }
 
-  return c.json({ ok: true, spaceId, userId: user.uuid });
+  return c.json({ ok: true, spaceId, userId: user?.uuid ?? space.userUuid });
+});
+
+// GET /internal/gateway/local-sandbox/managed
+// Local Mode supervisor uses this worker-authenticated inventory to ensure one
+// runner per local Space without depending on a browser or CLI login token.
+router.get("/local-sandbox/managed", async (c) => {
+  const forbidden = ensureInternalRequest(c);
+  if (forbidden) return forbidden;
+  if (config.nodeOrigin !== "local") {
+    return c.json({ message: "managed local sandboxes require a local node" }, 409);
+  }
+
+  const sandboxes = await db
+    .select({
+      spaceId: spaceSandboxes.spaceId,
+      status: spaceSandboxes.status,
+      reportedAt: spaceSandboxes.reportedAt,
+    })
+    .from(spaceSandboxes)
+    .where(eq(spaceSandboxes.provider, "local"));
+  return c.json({ sandboxes });
+});
+
+// POST /internal/gateway/local-sandbox/supervisor-status
+// Records startup progress and real runner failures. Gateway ready/stopped
+// reports remain authoritative once a relay control connection is established.
+router.post("/local-sandbox/supervisor-status", async (c) => {
+  const forbidden = ensureInternalRequest(c);
+  if (forbidden) return forbidden;
+  if (config.nodeOrigin !== "local") {
+    return c.json({ message: "managed local sandboxes require a local node" }, 409);
+  }
+
+  const body = await c.req
+    .json<{ spaceId?: string; status?: string; message?: string | null }>()
+    .catch(() => null);
+  const spaceId = typeof body?.spaceId === "string" ? body.spaceId.trim() : "";
+  if (!spaceId || !requireValidId(spaceId)) {
+    return c.json({ message: "spaceId is required" }, 400);
+  }
+  if (body?.status !== "provisioning" && body?.status !== "error") {
+    return c.json({ message: "status must be provisioning or error" }, 400);
+  }
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (message.length > 1_000) {
+    return c.json({ message: "message is too long" }, 400);
+  }
+
+  const sandbox = await getSpaceSandboxBySpaceId(spaceId);
+  if (sandbox?.provider !== "local") {
+    return c.json({ message: "local sandbox not found" }, 404);
+  }
+  const now = new Date();
+  const previousMeta = (sandbox.meta as Record<string, unknown> | null) ?? {};
+  await updateSpaceSandbox({
+    spaceId,
+    status: body.status,
+    runtimeStatus: body.status === "error" ? "unhealthy" : "starting",
+    reportedAt: now,
+    lastHeartbeatAt: now,
+    stoppedAt: body.status === "error" ? now : null,
+    stopReason: body.status === "error" ? "disconnected" : null,
+    meta: {
+      ...previousMeta,
+      kind: "local",
+      managedBy: "local-mode-supervisor",
+      lastError: body.status === "error" ? message || "local sandbox runner failed" : null,
+      supervisorStatus: body.status,
+    },
+  });
+  return c.json({ ok: true, spaceId, status: body.status });
 });
 
 // POST /internal/gateway/local-sandbox/status
@@ -329,6 +415,9 @@ router.post("/local-sandbox/status", async (c) => {
       meta: {
         ...prevMeta,
         kind: "local",
+        managedBy: prevMeta.managedBy ?? null,
+        lastError: null,
+        supervisorStatus: "ready",
         wsEndpoint: wsEndpoint || null,
         hostname: body?.hostname ?? null,
         gatewayNodeId: body?.gatewayNodeId ?? null,

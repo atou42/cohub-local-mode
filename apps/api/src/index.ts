@@ -20,6 +20,7 @@ import { recordAuthTrace } from "./auth-observability.js";
 import { verifyPreviewSessionToken, type PreviewSessionPrincipal } from "./preview-sessions.js";
 import { verifyAppSessionToken, type AppSessionPrincipal } from "./app-sessions.js";
 import { assertRequiredConfig, config } from "./config.js";
+import { isManagedLocalSandboxRelayToken } from "./local-sandbox-supervisor-auth.js";
 
 import router from "./routes/index.js";
 
@@ -115,6 +116,17 @@ app.use(async (c, next) => {
   c.set("principal", null);
 
   if (token) {
+    if (
+      c.req.path === "/internal/gateway/local-sandbox/authorize" &&
+      isManagedLocalSandboxRelayToken({
+        nodeOrigin: config.nodeOrigin,
+        expectedToken: config.localSandboxRelayToken,
+        providedToken: token,
+      })
+    ) {
+      await next();
+      return;
+    }
     const executionAuth = await consumeExecutionAuthFromToken(token).catch((error) => {
       logger.warn("[API] Failed to verify execution token:", error);
       return null;
