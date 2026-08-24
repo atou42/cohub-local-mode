@@ -9,7 +9,7 @@ Local Mode runs Cohub on one Mac while keeping the hosted Cohub account availabl
 - `cohub`, `codex`, `grok`, and `pi` authenticated on the host as needed
 - A Cloudflare account, managed domain, Tunnel, and Access policy for public use
 
-Do not expose ports 4173, 8787, 8788, 9000, 9001, 54329, or 6380 directly. Local Mode binds them to loopback and expects Cloudflare Tunnel to be the only public ingress.
+Do not expose ports 4173, 4174, 8787, 8788, 9000, 9001, 54329, or 6380 directly. Local Mode binds them to loopback and expects Cloudflare Tunnel to be the only public ingress.
 
 ## Local startup
 
@@ -39,7 +39,7 @@ pnpm local:service:install
 pnpm local:service:status
 ```
 
-The service starts at login, restarts after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
+The service starts at login, restarts after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
 
 ## Pi model
 
@@ -65,6 +65,15 @@ CHECKPOINT_ASSET_OSS_PUBLIC_ENDPOINT=https://cohub.example.com
 ```
 
 Restart with `pnpm local:host`. Protect the entire hostname with a Cloudflare Access self-hosted application before starting the tunnel. The policy must admit only the owner because a successful Access request can obtain the host's Cohub account session. The API also rejects a production non-loopback Local Mode auth request when Cloudflare Access has not asserted identity.
+
+For an unattended Mac mini, store the remotely managed Tunnel token in the login Keychain under service `Cohub Local Mode Cloudflare Tunnel` and use the Tunnel ID as the Keychain account. Install the persistent connector only after Access is active:
+
+```bash
+pnpm local:tunnel:install -- <tunnel-id>
+pnpm local:tunnel:status
+```
+
+The connector starts at login and restarts after an unexpected exit. Its LaunchAgent contains the Tunnel ID but not the token. `pnpm local:tunnel:restart` restarts the connector, and `pnpm local:tunnel:uninstall` removes only the service while preserving the Keychain token.
 
 ## Harness behavior
 
