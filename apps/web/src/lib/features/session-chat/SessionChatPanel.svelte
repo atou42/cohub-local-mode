@@ -579,6 +579,11 @@ async function handleDraftDrop(event: DragEvent) {
 			}}
 			onSelect={host.handleModelSelect}
 			models={modelsCatalog ?? []}
+			loading={host.modelsCatalogLoading}
+			error={host.modelsCatalogError}
+			onRetry={() => {
+				void host.loadModelsCatalog();
+			}}
 			currentModel={activeSessionModel}
 			thinkingLevelModel={host.activeSessionTurnModel ?? activeSessionModel}
 			currentThinkingLevel={host.activeSessionThinkingLevel}

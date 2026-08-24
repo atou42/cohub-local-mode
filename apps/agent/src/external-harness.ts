@@ -27,6 +27,8 @@ export async function runExternalHarness(input: {
 	prompt: string;
 	externalSessionId: string | null;
 	accessMode: AccessMode;
+	model: string;
+	thinkingLevel: string;
 	abortSignal: AbortSignal;
 	onExternalSessionId?: (sessionId: string) => void;
 }): Promise<ExternalHarnessResult> {
@@ -35,13 +37,18 @@ export async function runExternalHarness(input: {
 		throw new Error("Local sandbox must support argv process execution for external harnesses");
 	}
 
-	const reducer = new HarnessEventReducer(input.harness);
+	const reducer = new HarnessEventReducer(input.harness, {
+		model: input.model,
+		thinkingLevel: input.thinkingLevel,
+	});
 	const argv = buildHarnessArgv({
 		harness: input.harness,
 		prompt: input.prompt,
 		externalSessionId: input.externalSessionId,
 		cohubSessionId: input.sessionId,
 		accessMode: input.accessMode,
+		model: input.model,
+		thinkingLevel: input.thinkingLevel,
 	});
 	let buffered = "";
 	let stderr = "";

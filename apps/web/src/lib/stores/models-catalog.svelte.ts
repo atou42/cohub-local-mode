@@ -1,6 +1,9 @@
 import { isModelHidden, type ModelCatalogItem } from "$lib/model-catalog";
 import { sdkForSpaceOrigin } from "$lib/sdk";
 import type { SpaceOrigin } from "$lib/space-origin";
+import type { AgentHarness } from "@cohub/protocol";
+
+type CatalogKey = `${SpaceOrigin}:${AgentHarness}`;
 
 class ModelsCatalogStore {
 	items = $state<ModelCatalogItem[] | null>(null);
@@ -8,22 +11,28 @@ class ModelsCatalogStore {
 	loading = $state(false);
 	error = $state<string | null>(null);
 	private loadPromise: Promise<ModelCatalogItem[]> | null = null;
-	private loadPromiseOrigin: SpaceOrigin | null = null;
-	private loadedOrigin: SpaceOrigin | null = null;
+	private loadPromiseKey: CatalogKey | null = null;
+	private loadedKey: CatalogKey | null = null;
 
 	async load(
-		options: { force?: boolean; origin?: SpaceOrigin } = {},
+		options: {
+			force?: boolean;
+			origin?: SpaceOrigin;
+			agentHarness?: AgentHarness;
+		} = {},
 	) {
 		const origin = options.origin ?? "cloud";
-		if (this.items && this.loadedOrigin === origin && !options.force)
+		const agentHarness = options.agentHarness ?? "pi";
+		const key: CatalogKey = `${origin}:${agentHarness}`;
+		if (this.items && this.loadedKey === key && !options.force)
 			return this.items;
 		if (
 			this.loadPromise &&
-			this.loadPromiseOrigin === origin &&
+			this.loadPromiseKey === key &&
 			!options.force
 		)
 			return this.loadPromise;
-		if (this.loadedOrigin !== origin) {
+		if (this.loadedKey !== key) {
 			this.items = null;
 			this.visibleItems = null;
 		}
@@ -31,7 +40,7 @@ class ModelsCatalogStore {
 		this.loading = true;
 		this.error = null;
 		const request = sdkForSpaceOrigin(origin).models
-			.list()
+			.list(agentHarness)
 			.then((catalog) => {
 				const items: ModelCatalogItem[] = [];
 				for (const entries of Object.values(catalog)) {
@@ -40,7 +49,7 @@ class ModelsCatalogStore {
 				if (this.loadPromise !== request) return items;
 				this.items = items;
 				this.visibleItems = items.filter((item) => !isModelHidden(item));
-				this.loadedOrigin = origin;
+				this.loadedKey = key;
 				return items;
 			})
 			.catch((error) => {
@@ -55,10 +64,10 @@ class ModelsCatalogStore {
 				if (this.loadPromise !== request) return;
 				this.loading = false;
 				this.loadPromise = null;
-				this.loadPromiseOrigin = null;
+				this.loadPromiseKey = null;
 			});
 		this.loadPromise = request;
-		this.loadPromiseOrigin = origin;
+		this.loadPromiseKey = key;
 
 		return request;
 	}
