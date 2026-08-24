@@ -19,6 +19,7 @@ export type AppConfig = {
   sandboxTolerations: SandboxToleration[];
   bullmqRedisUrl: string;
   workerSecret: string;
+  localSandboxRelayToken?: string;
   spaceStorageRoot: string;
   spaceStoragePvc: string;
   checkpointCachePvc: string;
@@ -186,6 +187,8 @@ const parseSandboxTolerations = (
 
 export const config: AppConfig = {
   workerSecret: process.env.WORKER_SECRET ?? "",
+  localSandboxRelayToken:
+    process.env.LOCAL_SANDBOX_RELAY_TOKEN?.trim() || undefined,
   logtoEndpoint: resolveLogtoEndpoint({
     endpoint: process.env.LOGTO_ENDPOINT,
     env,

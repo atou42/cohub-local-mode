@@ -19,6 +19,7 @@ import { db } from "./db.js";
 import { env } from "./env.js";
 import { updateSpaceRuntime } from "./ownership.js";
 import { sendSpaceFsChanged, sendSpacePortsChanged } from "./redis.js";
+import { managedLocalSandboxError } from "./local-sandbox-status.js";
 
 
 const logger = createLogger({ serviceName: "cohub-agent" });
@@ -151,7 +152,11 @@ async function resolveSandboxWsUrl(spaceId: string): Promise<string> {
   }
 
   const endpoint = resolveSandboxWsEndpoint(sandbox?.meta);
-  if (!endpoint) throw missingSandboxEndpointError(spaceId);
+  if (!endpoint) {
+    const supervisorError = managedLocalSandboxError(sandbox);
+    if (supervisorError) throw supervisorError;
+    throw missingSandboxEndpointError(spaceId);
+  }
   return endpoint;
 }
 

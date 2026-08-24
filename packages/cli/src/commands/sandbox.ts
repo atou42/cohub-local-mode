@@ -100,12 +100,23 @@ export function registerSandbox(program: Command): void {
         throw err;
       }
       const relayUrl = resolveRelayUrl();
-      const token = await requireAccessToken();
-      const client = createClient();
+      const managedByLocalMode =
+        process.env.COHUB_LOCAL_SANDBOX_MANAGED === "1";
+      const token = managedByLocalMode
+        ? process.env.LOCAL_SANDBOX_RELAY_TOKEN?.trim()
+        : await requireAccessToken();
+      if (!token) {
+        throw new Error("Managed local sandbox relay token is missing");
+      }
+      const client = managedByLocalMode ? null : createClient();
 
       // Resolve or create the target space.
       let spaceId = opts.space?.trim() || (program.opts().space as string | undefined)?.trim();
       if (!spaceId) {
+        if (managedByLocalMode) {
+          throw new Error("Managed local sandbox requires an existing Space id");
+        }
+        if (!client) throw new Error("Cohub client is unavailable");
         if (!opts.yes) {
           const proceed = await confirm(consentMessage(rootDir, "a new local space"));
           if (!proceed) return error("Aborted", "No space was created");
@@ -120,16 +131,19 @@ export function registerSandbox(program: Command): void {
         // A local runner can only attach to a space whose sandbox provider is
         // "local" (provider is fixed at space creation). Fail early with a clear
         // message instead of letting the gateway reject the connection later.
-        const existing = await client.space(spaceId).sandbox.get().catch(() => null);
-        if (existing?.sandbox?.provider !== "local") {
-          return error(
-            "Not a local space",
-            `Space ${spaceId} is not configured for a local sandbox. Create one with 'cohub sandbox up' (without --space).`,
-          );
-        }
-        if (!opts.yes) {
-          const proceed = await confirm(consentMessage(rootDir, `space ${spaceId}`));
-          if (!proceed) return error("Aborted", "Sandbox was not started");
+        if (!managedByLocalMode) {
+          if (!client) throw new Error("Cohub client is unavailable");
+          const existing = await client.space(spaceId).sandbox.get().catch(() => null);
+          if (existing?.sandbox?.provider !== "local") {
+            return error(
+              "Not a local space",
+              `Space ${spaceId} is not configured for a local sandbox. Create one with 'cohub sandbox up' (without --space).`,
+            );
+          }
+          if (!opts.yes) {
+            const proceed = await confirm(consentMessage(rootDir, `space ${spaceId}`));
+            if (!proceed) return error("Aborted", "Sandbox was not started");
+          }
         }
       }
 
