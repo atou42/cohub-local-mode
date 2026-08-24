@@ -8,6 +8,7 @@ const fallbackOrigin =
 export const localNodeRouteManager = new LocalNodeRouteManager({
 	privateOrigin: env.PUBLIC_LOCAL_PRIVATE_ORIGIN,
 	fallbackOrigin,
+	requestOrigins: [typeof location !== "undefined" ? location.origin : null],
 });
 
 export const localNodeFetch: typeof fetch = (input, init) =>
