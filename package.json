@@ -46,7 +46,11 @@
     "local:service:install": "node scripts/local-mode/service.mjs install",
     "local:service:restart": "node scripts/local-mode/service.mjs restart",
     "local:service:status": "node scripts/local-mode/service.mjs status",
-    "local:service:uninstall": "node scripts/local-mode/service.mjs uninstall"
+    "local:service:uninstall": "node scripts/local-mode/service.mjs uninstall",
+    "local:tunnel:install": "node scripts/local-mode/tunnel-service.mjs install",
+    "local:tunnel:restart": "node scripts/local-mode/tunnel-service.mjs restart",
+    "local:tunnel:status": "node scripts/local-mode/tunnel-service.mjs status",
+    "local:tunnel:uninstall": "node scripts/local-mode/tunnel-service.mjs uninstall"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
