@@ -145,3 +145,21 @@ test("extractSpaceMentionsFromText keeps one mention per resource", () => {
 	assert.equal(mentions[1]?.spaceId, spaceId);
 	assert.equal(mentions[1]?.sessionId, sessionId);
 });
+
+test("extractSpaceMentionsFromText persists an authoritative origin", () => {
+	const uri = buildSpaceMentionUri(spaceId);
+	const mentions = extractSpaceMentionsFromText(`@[Core API](${uri})`, {
+		resolveOrigin: () => "cloud",
+	});
+
+	assert.equal(mentions[0]?.origin, "cloud");
+});
+
+test("extractSpaceMentionsFromText leaves legacy unknown origins explicit", () => {
+	const uri = buildSpaceMentionUri(spaceId);
+	const mentions = extractSpaceMentionsFromText(`@[Core API](${uri})`, {
+		resolveOrigin: () => null,
+	});
+
+	assert.equal("origin" in (mentions[0] ?? {}), false);
+});

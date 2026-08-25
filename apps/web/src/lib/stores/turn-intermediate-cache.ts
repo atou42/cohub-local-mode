@@ -48,14 +48,26 @@ export async function loadTurnIntermediate(input: {
 	turnId: string;
 	messagesObjectKey: string | null;
 }): Promise<StoredIntermediateMessage[]> {
-	if (!input.messagesObjectKey) return [];
+	const loadPersistedMessages = async () => {
+		const { messages } = await sdk
+			.space(input.spaceId)
+			.session(input.sessionId)
+			.turns.intermediate(input.turnId);
+		return messages;
+	};
+	if (!input.messagesObjectKey) return loadPersistedMessages();
 	const { urls } = await sdk
 		.space(input.spaceId)
 		.session(input.sessionId)
 		.turns.signedUrls(input.turnId, [input.messagesObjectKey]);
 	const url = urls[input.messagesObjectKey];
 	if (!url) throw new Error("Missing signed URL for intermediate messages");
-	const file = await fetchJson<TurnIntermediateMessagesFile>(url);
+	let file: TurnIntermediateMessagesFile;
+	try {
+		file = await fetchJson<TurnIntermediateMessagesFile>(url);
+	} catch {
+		return loadPersistedMessages();
+	}
 	return file.messages.map((message) => ({
 		...message,
 		durationMs:

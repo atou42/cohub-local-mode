@@ -15,7 +15,7 @@ import {
 } from "../space-sessions.js";
 import { markMessageAsFull, summarizeMessageForHistory } from "../session-content.js";
 import { createSignedTurnUrls, findLatestVisibleAgentEntryId, getSessionTurnById, getSessionTurnSequenceById, hydrateTurnAuthorProfiles, listSessionTurnIndex, listSessionTurns, listSessionTurnWindow } from "../session-turns.js";
-import { clearSessionStreamSnapshot, getSessionStreamSnapshot } from "../session-stream-snapshot.js";
+import { clearSessionStreamSnapshot, getSessionStreamSnapshot, listPersistedTurnIntermediateMessages } from "../session-stream-snapshot.js";
 import { createSessionFork, listSessionForksForSessions } from "../session-forks.js";
 import { dispatchLabelAssignmentsUpdated } from "../realtime-events.js";
 import { buildSessionTurnResponse } from "../session-turn-response.js";
@@ -266,6 +266,28 @@ router.get("/:id/turns/:turnId", async (c) => {
   const response = await buildSessionTurnResponse(session, turnId);
   if (!response) return c.json({ message: "turn not found" }, 404);
   return c.json(response);
+});
+
+router.get("/:id/turns/:turnId/intermediate", async (c) => {
+  const user = getOptionalAuth(c);
+  const sessionId = c.req.param("id");
+  const turnId = c.req.param("turnId");
+  if (!sessionId || !requireValidId(sessionId)) return c.json({ message: "session not found" }, 404);
+  if (!turnId || !requireValidId(turnId)) return c.json({ message: "turn not found" }, 404);
+
+  const session = await getSpaceSessionById(sessionId);
+  if (!session) return c.json({ message: "session not found" }, 404);
+  if (!(await hasPermission(user, "session.view", { spaceId: session.spaceId, sessionId: session.id }))) {
+    return authzDenied(c);
+  }
+  const turn = await getSessionTurnById(session.id, turnId);
+  if (!turn) return c.json({ message: "turn not found" }, 404);
+
+  const messages = await listPersistedTurnIntermediateMessages({
+    sessionId: turn.sourceSessionId ?? turn.sessionId,
+    turnId: turn.sourceTurnId ?? turn.id,
+  });
+  return c.json({ messages });
 });
 
 router.post("/:id/turns/:turnId/signed-urls", async (c) => {

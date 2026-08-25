@@ -456,6 +456,13 @@
       "when": 1787502255624,
       "tag": "0064_session_agent_harness",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1787621911796,
+      "tag": "0065_talented_epoch",
+      "breakpoints": true
     }
   ]
 }

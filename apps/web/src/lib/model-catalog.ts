@@ -14,6 +14,12 @@ export type ModelThinkingLevel =
 	| "max"
 	| "ultra";
 
+export type ModelServiceTier = {
+	id: string;
+	name: string;
+	description?: string;
+};
+
 const THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"off",
 	"minimal",
@@ -35,6 +41,61 @@ export function getRequestedThinkingLevel(
 		THINKING_LEVELS.has(value as ModelThinkingLevel)
 		? (value as ModelThinkingLevel)
 		: null;
+}
+
+/** Read an explicitly requested service tier. `null` means Standard. */
+export function getRequestedServiceTier(
+	meta: unknown,
+): string | null | undefined {
+	if (!meta || typeof meta !== "object" || Array.isArray(meta))
+		return undefined;
+	const record = meta as Record<string, unknown>;
+	if (!Object.hasOwn(record, "requestedServiceTier")) return undefined;
+	if (record.requestedServiceTier === null) return null;
+	return typeof record.requestedServiceTier === "string" &&
+		record.requestedServiceTier.trim()
+		? record.requestedServiceTier.trim()
+		: undefined;
+}
+
+export function getModelServiceTiers(
+	item: ModelCatalogItem,
+): ModelServiceTier[] {
+	const value = item.model.serviceTiers;
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((candidate) => {
+		if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+			return [];
+		const record = candidate as Record<string, unknown>;
+		if (
+			typeof record.id !== "string" ||
+			!record.id.trim() ||
+			typeof record.name !== "string" ||
+			!record.name.trim()
+		)
+			return [];
+		return [
+			{
+				id: record.id.trim(),
+				name: record.name.trim(),
+				...(typeof record.description === "string" && record.description.trim()
+					? { description: record.description.trim() }
+					: {}),
+			},
+		];
+	});
+}
+
+export function getFastServiceTier(
+	item: ModelCatalogItem,
+): ModelServiceTier | null {
+	return (
+		getModelServiceTiers(item).find(
+			(tier) =>
+				tier.id.toLowerCase() === "priority" ||
+				tier.name.toLowerCase() === "fast",
+		) ?? null
+	);
 }
 
 /** Compact labels for dense controls (composer, chips). */

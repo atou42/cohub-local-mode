@@ -415,6 +415,7 @@ async function handleDraftDrop(event: DragEvent) {
 					agentHarnessLocked={host.agentHarnessLocked}
 					onAgentHarnessChange={host.setAgentHarness}
 					thinkingLevelLabel={host.composerMode === "agent" ? host.activeSessionThinkingLevelLabel : null}
+					serviceTierLabel={host.composerMode === "agent" ? host.activeSessionServiceTierLabel : null}
 					generationPolicyLabel={host.composerMode === "agent" ? host.generationPolicyLabel : null}
 					placeholder={host.composerMode === "create" ? "Describe what to create..." : "Send a message..."}
 					currentSpaceId={host.spaceId}
@@ -572,6 +573,11 @@ async function handleDraftDrop(event: DragEvent) {
 			currentModel={activeSessionModel}
 			thinkingLevelModel={host.activeSessionTurnModel ?? activeSessionModel}
 			currentThinkingLevel={host.activeSessionThinkingLevel}
+			currentServiceTier={host.activeSessionServiceTier}
+			getModelParameterPreference={host.getModelParameterPreference}
+			preferenceNotice={host.parameterPreferenceNotice}
+			preferenceCanReset={host.parameterPreferencesInvalid}
+			onResetPreferences={host.resetSavedAgentParameterPreferences}
 			modelStatus={modelsStatus?.models ?? null}
 			generationModels={generationModelsCatalog ?? []}
 			{generationPolicyMode}

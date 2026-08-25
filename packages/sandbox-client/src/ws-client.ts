@@ -149,6 +149,7 @@ export class SandboxConnection {
     readonly identity: string,
     readonly connectionId: string,
     readonly capabilities: SandboxCapabilities | undefined,
+    readonly filesystem: SandboxHeartbeat["filesystem"] | undefined,
     private readonly socket: WebSocket,
     private readonly registration: SandboxClientRegistration,
   ) {}
@@ -589,7 +590,16 @@ async function connectOnce(registration: SandboxClientRegistration) {
           }
           attached = true;
           const attachedSandboxId = heartbeat.sandboxId;
-          connection = new SandboxConnection(registration.spaceId, attachedSandboxId, message.identity, message.connectionId, heartbeat.capabilities, socket, registration);
+          connection = new SandboxConnection(
+            registration.spaceId,
+            attachedSandboxId,
+            message.identity,
+            message.connectionId,
+            heartbeat.capabilities,
+            heartbeat.filesystem,
+            socket,
+            registration,
+          );
           setActiveConnection(registration.spaceId, connection);
           callHookSafely(registration.spaceId, "onAttached", () => registration.hooks?.onAttached?.({
             spaceId: registration.spaceId,

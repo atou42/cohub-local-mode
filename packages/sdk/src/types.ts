@@ -6,6 +6,7 @@ import type {
   SessionTurnIndexItem,
   SessionTurnRecord,
   SessionTurnSegmentRecord,
+  StoredIntermediateMessage,
   SpaceTurnAuthorFilter as ProtocolSpaceTurnAuthorFilter,
   SpaceTurnListItem as ProtocolSpaceTurnListItem,
   SpaceTurnsResponse as ProtocolSpaceTurnsResponse,
@@ -954,6 +955,10 @@ export type SessionTurnSignedUrlsResponse = {
   urls: Record<string, string>;
 };
 
+export type SessionTurnIntermediateResponse = {
+  messages: StoredIntermediateMessage[];
+};
+
 export type SessionTurnStreamSnapshotResponse = {
   snapshot: {
     version: 2;
@@ -1145,6 +1150,8 @@ export type CreateSpacePromptInput = {
     meta?: Record<string, unknown>;
   } | null;
   sessionId?: string | null;
+  /** Local relay only: materialize the caller-selected Session id if missing. */
+  createSession?: boolean;
   /** Agent harness for a new Session. Existing Sessions reject changes. */
   agentHarness?: AgentHarness;
   title?: string | null;
@@ -1155,6 +1162,8 @@ export type CreateSpacePromptInput = {
   provider?: string | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: ModelThinkingLevel | null;
+  /** External harness service tier. `null` explicitly selects Standard. */
+  serviceTier?: string | null;
   clientMessageId?: string | null;
   generationPolicy?: GenerationPolicy | null;
   intent?: "followup" | "steer" | "compact" | null;

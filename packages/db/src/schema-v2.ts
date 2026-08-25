@@ -944,6 +944,11 @@ export const sessionTurns = v2.table(
       table.userUuid,
       sql`(${table.meta}->>'clientMessageId')`,
     ).where(sql`${table.executionKind} = 'direct_generation' and ${table.meta}->>'clientMessageId' is not null`),
+    agentClientMessageUniqueIdx: uniqueIndex("v2_uq_session_turns_agent_client_message").on(
+      table.sessionId,
+      table.userUuid,
+      sql`(${table.meta}->>'clientMessageId')`,
+    ).where(sql`${table.executionKind} = 'agent' and ${table.meta}->>'clientMessageId' is not null`),
     directGenerationBarrierIdx: index("v2_idx_session_turns_direct_generation_barrier").on(table.sessionId, table.sequence, table.status).where(sql`${table.executionKind} = 'direct_generation'`),
     createdAtIdx: index("v2_idx_session_turns_created_at").on(table.createdAt),
     userTextSearchIdx: index("v2_idx_session_turns_user_text_trgm").using("gin", table.userText.op("gin_trgm_ops")),

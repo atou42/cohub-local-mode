@@ -8,6 +8,7 @@ import type { ContentBlock } from "@cohub/protocol/core";
 import type { MessageToolCallsFile } from "@cohub/protocol/model";
 import { page } from "$app/state";
 import MarkdownView from "$lib/components/MarkdownView.svelte";
+import RuntimeEventBlocks from "$lib/components/RuntimeEventBlocks.svelte";
 import AttachmentBlocks from "$lib/components/TextAttachmentBlocks.svelte";
 import ThinkingBlocks from "$lib/components/ThinkingBlocks.svelte";
 import ToolCallList from "$lib/components/ToolCallList.svelte";
@@ -22,6 +23,7 @@ type TextBlock = Extract<ContentBlock, { type: "text" }>;
 type ThinkingBlock = Extract<ContentBlock, { type: "thinking" }>;
 type ImageBlock = Extract<ContentBlock, { type: "image" }>;
 type ShellCommandBlock = Extract<ContentBlock, { type: "shell_command" }>;
+type RuntimeEventBlock = Extract<ContentBlock, { type: "system_note" }>;
 type AttachmentBlock = TextBlock | ImageBlock;
 
 type Props = {
@@ -42,7 +44,12 @@ type Segment =
 	| { type: "text"; blocks: TextBlock[] }
 	| { type: "thinking"; blocks: ThinkingBlock[] }
 	| { type: "image"; blocks: ImageBlock[] }
+	| { type: "runtime"; blocks: RuntimeEventBlock[] }
 	| { type: "tool"; blocks: ContentBlock[] };
+
+function isRuntimeEventBlock(block: ContentBlock): block is RuntimeEventBlock {
+	return block.type === "system_note" && Boolean(block._meta?.runtimeEvent);
+}
 
 const {
 	content,
@@ -198,6 +205,15 @@ const segments = $derived.by(() => {
 			result.push({ type: "image", blocks });
 			continue;
 		}
+		if (isRuntimeEventBlock(block)) {
+			const blocks: RuntimeEventBlock[] = [];
+			while (content[i] && isRuntimeEventBlock(content[i])) {
+				blocks.push(content[i] as RuntimeEventBlock);
+				i += 1;
+			}
+			result.push({ type: "runtime", blocks });
+			continue;
+		}
 		if (block.type === "tool_use") {
 			const blocks: ContentBlock[] = [block];
 			const next = content[i + 1];
@@ -269,9 +285,11 @@ const segments = $derived.by(() => {
 				{/if}
 			{:else if segment.type === 'thinking'}
 				<ThinkingBlocks blocks={segment.blocks} expanded={thinkingExpanded} {isStreaming} onToggle={onToggleThinking} />
-			{:else if segment.type === 'image'}
-				<AttachmentBlocks blocks={segment.blocks} />
-			{:else if segment.type === 'tool' && showToolCalls}
+				{:else if segment.type === 'image'}
+					<AttachmentBlocks blocks={segment.blocks} />
+				{:else if segment.type === 'runtime'}
+					<RuntimeEventBlocks blocks={segment.blocks} {isStreaming} />
+				{:else if segment.type === 'tool' && showToolCalls}
 				<ToolCallList content={segment.blocks} streaming={isStreaming} defaultExpanded={defaultExpandToolCalls} {onLoadToolCalls} flush {onOpenFile} />
 			{/if}
 		</div>

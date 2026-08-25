@@ -70,6 +70,7 @@ import {
 } from "$lib/mentions/space-trigger";
 import { m } from "$lib/paraglide/messages.js";
 import { sdk } from "$lib/sdk";
+import { registerSpaceOrigin } from "$lib/space-origin";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
 import { entriesFromFiles, type LocalUploadEntry } from "$lib/upload-entries";
 
@@ -95,6 +96,8 @@ type Props = {
 	currentModel?: SelectedModel | null;
 	/** Compact thinking level suffix; null/empty hides. */
 	thinkingLevelLabel?: string | null;
+	/** Compact service-tier suffix; null/empty hides Standard. */
+	serviceTierLabel?: string | null;
 	/** Compact generation-policy suffix; null/empty hides (Auto). */
 	generationPolicyLabel?: string | null;
 	promptTemplates?: PromptTemplateCatalogEntry[];
@@ -132,6 +135,7 @@ let {
 	viewportContexts = [],
 	currentModel = null,
 	thinkingLevelLabel = null,
+	serviceTierLabel = null,
 	generationPolicyLabel = null,
 	promptTemplates = [],
 	promptTemplatesLoaded = true,
@@ -232,6 +236,7 @@ const modelControlAriaLabel = $derived(
 		thinkingLevelLabel
 			? m.composer_thinking_label({ level: thinkingLevelLabel }, { locale })
 			: null,
+		serviceTierLabel ? `Speed ${serviceTierLabel}` : null,
 		generationPolicyLabel
 			? m.composer_generation_label(
 					{ policy: generationPolicyLabel },
@@ -926,6 +931,7 @@ function scheduleSpaceMentionSearch(
 function applySpaceMention(item: SpaceMentionSuggestion) {
 	const trigger = spaceMentionTrigger;
 	if (!trigger) return;
+	registerSpaceOrigin({ id: item.spaceId, origin: item.origin });
 	const snippet = `${buildSpaceMentionMarkdown({ spaceId: item.spaceId, label: item.name })} `;
 	value = value.slice(0, trigger.start) + snippet + value.slice(trigger.end);
 	showSpaceMentions = false;
@@ -1559,7 +1565,7 @@ $effect(() => {
 							{#if onModelSelect}
 								<ComposerModelTrigger
 									label={modelControlLabel}
-									meta={[thinkingLevelLabel, generationPolicyLabel].filter(
+									meta={[thinkingLevelLabel, serviceTierLabel, generationPolicyLabel].filter(
 										(value): value is string => Boolean(value),
 									)}
 									ariaLabel={modelControlAriaLabel}

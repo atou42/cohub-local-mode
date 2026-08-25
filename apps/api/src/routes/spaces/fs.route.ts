@@ -1,12 +1,16 @@
 // In production, /api/spaces/:id/fs/* is routed by the gateway to the
 // fs-api deployment. See deploy/fs-api/manifests/httproute.tmpl.yaml.
 import { createLogger } from "@cohub/infra/logging";
+import { resolveAccessToken } from "@neta-art/cohub-cli/auth";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { readFile } from "node:fs/promises";
 import { ensureFsCdnManifest, shouldUseFsCdnForMeta } from "../../space-fs-cdn-cache.js";
 import { FS_CDN_DOWNLOAD_WAIT_TIMEOUT_MS } from "../../space-fs-cdn-constants.js";
-import { getOptionalAuth, useAuth, requireValidId, authzDenied } from "../../lib/middleware.js";
+import { getExecutionPrincipal, getOptionalAuth, useAuth, requireValidId, authzDenied } from "../../lib/middleware.js";
+import { config } from "../../config.js";
+import { createCloudSpaceReadProxy } from "../../local-mode/cloud-space-read-proxy.js";
+import { listSessionTurns } from "../../session-turns.js";
 import { hasPermission } from "../../permissions.js";
 import { getSpacePendingDiffFile, getSpacePendingDiffSummary } from "../../checkpoint-pending-diff.js";
 import { checkpointFsJsonError } from "../../checkpoint-fs.js";
@@ -55,6 +59,14 @@ import type {
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
+const proxyCloudSpaceRead = createCloudSpaceReadProxy({
+  nodeOrigin: config.nodeOrigin,
+  cloudApiOrigin: config.cloudApiOrigin,
+  loadRecentSessionTurns: (sessionId) =>
+    listSessionTurns(sessionId, { limit: 100, direction: "older" }),
+  resolveAccessToken,
+  fetch,
+});
 
 /** Inline text writes are capped at the same limit as inline reads. */
 const MAX_INLINE_WRITE_BYTES = 10 * 1024 * 1024;
@@ -125,10 +137,20 @@ router.get("/tree", async (c) => {
   const user = getOptionalAuth(c);
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const path = c.req.query("path") ?? "";
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpaceRead({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "tree",
+      path,
+    });
+    if (cloudResponse) return cloudResponse;
+  }
   const visibility = await resolveFileViewVisibility(user, spaceId);
   if (!visibility) return authzDenied(c);
 
-  const path = c.req.query("path") ?? "";
   try {
     return c.json(await listSpaceDirectory(spaceId, path, { visibility }));
   } catch (error) {
@@ -141,10 +163,20 @@ router.get("/file", async (c) => {
   const user = getOptionalAuth(c);
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const path = c.req.query("path") ?? "";
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpaceRead({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "file",
+      path,
+    });
+    if (cloudResponse) return cloudResponse;
+  }
   const visibility = await resolveFileViewVisibility(user, spaceId);
   if (!visibility) return authzDenied(c);
 
-  const path = c.req.query("path") ?? "";
   try {
     const result = await readSpaceFile(spaceId, path, { visibility });
     if (!("content" in result)) return c.json(result, 202);

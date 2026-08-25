@@ -75,6 +75,11 @@ export function registerSpaceOrigins(
 	for (const space of spaces) registerSpaceOrigin(space);
 }
 
+export function getRegisteredSpaceOrigin(spaceId: string): SpaceOrigin | null {
+	hydrateOriginRegistry();
+	return originBySpaceId.get(spaceId) ?? null;
+}
+
 export function resolveSpaceOrigin(spaceId: string): SpaceOrigin {
 	hydrateOriginRegistry();
 	const registered = originBySpaceId.get(spaceId);

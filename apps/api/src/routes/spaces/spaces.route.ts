@@ -124,6 +124,27 @@ async function buildSpacePromptTurnResponse(session: SpaceRouteSessionRecord | n
   return response ? { mode: "immediate" as const, ...response } : null;
 }
 
+const RELAY_AGENT_CLIENT_MESSAGE_CONSTRAINT =
+  "v2_uq_session_turns_agent_client_message";
+
+async function findAgentTurnByClientMessageId(input: {
+  sessionId: string;
+  userUuid: string;
+  clientMessageId: string;
+}) {
+  const [turn] = await db
+    .select({ id: sessionTurns.id })
+    .from(sessionTurns)
+    .where(and(
+      eq(sessionTurns.sessionId, input.sessionId),
+      eq(sessionTurns.userUuid, input.userUuid),
+      eq(sessionTurns.executionKind, "agent"),
+      sql`${sessionTurns.meta}->>'clientMessageId' = ${input.clientMessageId}`,
+    ))
+    .limit(1);
+  return turn?.id ?? null;
+}
+
 type SpacePromptSchedule =
   | { mode?: "immediate" }
   | { mode: "delay"; delayMs?: number }
@@ -317,6 +338,7 @@ type SpacePromptInput = {
     meta?: Record<string, unknown>;
   } | null;
   sessionId?: string | null;
+  createSession?: boolean;
   agentHarness?: AgentHarness | null;
   title?: string | null;
   source?: string | null;
@@ -324,6 +346,7 @@ type SpacePromptInput = {
   model?: string | null;
   provider?: string | null;
   thinkingLevel?: string | null;
+  serviceTier?: string | null;
   clientMessageId?: string | null;
   generationPolicy?: unknown;
   intent?: SpacePromptIntent | null;
@@ -1850,8 +1873,14 @@ router.post("/:id/prompt", async (c) => {
 
   const body = await c.req.json<SpacePromptInput>().catch(() => null);
   if (body?.mode === "create") {
+    if (body.createSession !== undefined) {
+      return c.json({ message: "createSession is only valid for agent prompts" }, 400);
+    }
     if (body.agentHarness !== undefined && body.agentHarness !== null) {
       return c.json({ message: "agentHarness is only valid for agent prompts" }, 400);
+    }
+    if (body.serviceTier !== undefined) {
+      return c.json({ message: "serviceTier is only valid for agent prompts" }, 400);
     }
     const generation = body.generation;
     if (!generation?.model || !Array.isArray(generation.content) || generation.content.length === 0) {
@@ -1892,6 +1921,25 @@ router.post("/:id/prompt", async (c) => {
   if (!validatePromptContentBlocks(body?.content)) {
     return c.json({ message: "content must be a non-empty ContentBlock array" }, 400);
   }
+  if (body.createSession !== undefined && typeof body.createSession !== "boolean") {
+    return c.json({ message: "createSession must be a boolean" }, 400);
+  }
+  if (body.createSession !== undefined) {
+    const relayCommandId = c.req.header("x-cohub-relay-command-id")?.trim();
+    if (
+      config.nodeOrigin !== "local" ||
+      !relayCommandId ||
+      relayCommandId !== body.clientMessageId?.trim()
+    ) {
+      return c.json(
+        { message: "createSession requires an authenticated local relay command" },
+        403,
+      );
+    }
+    if (!body.sessionId?.trim()) {
+      return c.json({ message: "createSession requires sessionId" }, 400);
+    }
+  }
   let requestedAgentHarness: AgentHarness | null;
   try {
     requestedAgentHarness = resolveAgentHarness(body.agentHarness, null);
@@ -1905,6 +1953,16 @@ router.post("/:id/prompt", async (c) => {
   if (!promptIntent) return c.json({ message: "intent must be one of: followup, steer" }, 400);
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
   if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
+  const promptServiceTier = body.serviceTier === undefined
+    ? undefined
+    : body.serviceTier === null
+      ? null
+      : typeof body.serviceTier === "string" && body.serviceTier.trim()
+        ? body.serviceTier.trim()
+        : undefined;
+  if (body.serviceTier !== undefined && body.serviceTier !== null && promptServiceTier === undefined) {
+    return c.json({ message: "serviceTier must be a non-empty string or null" }, 400);
+  }
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   if (!(await hasPermission(user, promptPermission, { spaceId }))) return authzDenied(c);
 
@@ -1916,18 +1974,24 @@ router.post("/:id/prompt", async (c) => {
   let sessionId = body.sessionId?.trim() || null;
   let promptSession: SpaceRouteSessionRecord | null = null;
   let createdPromptSession: SpaceRouteSessionRecord | null = null;
+  let shouldCreatePromptSession = false;
   if (sessionId) {
     const session = await getSpaceSessionById(sessionId);
-    if (!session || session.spaceId !== spaceId) return c.json({ message: "session not found" }, 404);
-    if (!(await hasPermission(user, promptPermission, { spaceId, sessionId }))) {
-      return authzDenied(c);
-    }
-    promptSession = session;
-    try {
-      assertAgentHarnessLocked(session.agentHarness as AgentHarness, requestedAgentHarness);
-    } catch (error) {
-      if (error instanceof AgentHarnessLockedError) return c.json({ message: error.message }, 409);
-      throw error;
+    if (!session) {
+      if (body.createSession === true) shouldCreatePromptSession = true;
+      else return c.json({ message: "session not found" }, 404);
+    } else {
+      if (session.spaceId !== spaceId) return c.json({ message: "session not found" }, 404);
+      if (!(await hasPermission(user, promptPermission, { spaceId, sessionId }))) {
+        return authzDenied(c);
+      }
+      promptSession = session;
+      try {
+        assertAgentHarnessLocked(session.agentHarness as AgentHarness, requestedAgentHarness);
+      } catch (error) {
+        if (error instanceof AgentHarnessLockedError) return c.json({ message: error.message }, 409);
+        throw error;
+      }
     }
   }
 	const effectiveAgentHarness = promptSession?.agentHarness ?? requestedAgentHarness ?? "pi";
@@ -1942,6 +2006,9 @@ router.post("/:id/prompt", async (c) => {
   const mode = schedule.mode ?? "immediate";
   if (!["immediate", "delay", "at", "repeat"].includes(mode)) {
     return c.json({ message: "schedule.mode must be one of: immediate, delay, at, repeat" }, 400);
+  }
+  if (shouldCreatePromptSession && mode !== "immediate") {
+    return c.json({ message: "relay-created Sessions require an immediate prompt" }, 400);
   }
   if (mode !== "immediate" && !sessionId && requestedAgentHarness && requestedAgentHarness !== "pi") {
     return c.json({ message: "non-Pi harnesses require an immediate first prompt" }, 400);
@@ -1959,6 +2026,9 @@ router.post("/:id/prompt", async (c) => {
     requestedModel ? (effectiveAgentHarness === "pi" ? "cohub" : effectiveAgentHarness) : null
   );
   if (effectiveAgentHarness === "pi") {
+    if (promptServiceTier) {
+      return c.json({ code: "service_tier_unavailable", message: "Speed tiers are not available for Pi" }, 422);
+    }
     if (
       requestedModel &&
       requestedProvider &&
@@ -1973,6 +2043,7 @@ router.post("/:id/prompt", async (c) => {
         provider: requestedProvider,
         model: requestedModel,
         thinkingLevel: promptThinkingLevel ?? null,
+        serviceTier: promptServiceTier ?? null,
       });
       if (!selection.ok) {
         return c.json({ code: selection.code, message: selection.message }, 422);
@@ -2025,15 +2096,16 @@ router.post("/:id/prompt", async (c) => {
     ...(body.model ? { model: body.model } : {}),
     ...(body.provider ? { provider: body.provider } : {}),
     ...(promptThinkingLevel ? { thinkingLevel: promptThinkingLevel } : {}),
+    ...(promptServiceTier !== undefined ? { serviceTier: promptServiceTier } : {}),
     ...(promptLabelIds.length > 0 ? { labelIds: promptLabelIds } : {}),
     ...(scheduledAuth ? { auth: scheduledAuth } : {}),
   };
 
   if (mode === "immediate") {
-    if (!sessionId) {
+    if (!sessionId || shouldCreatePromptSession) {
       promptSession = await createInitialSpaceSession({
         spaceId,
-        sessionId: crypto.randomUUID(),
+        sessionId: sessionId ?? crypto.randomUUID(),
         userUuid: user.uuid,
         title: body.title ?? null,
         source,
@@ -2046,6 +2118,19 @@ router.post("/:id/prompt", async (c) => {
     }
 
     try {
+      const existingTurnId = await findAgentTurnByClientMessageId({
+        sessionId,
+        userUuid: user.uuid,
+        clientMessageId,
+      });
+      if (existingTurnId) {
+        const response = await buildSpacePromptTurnResponse(
+          await getSpaceSessionById(sessionId),
+          existingTurnId,
+        );
+        if (!response) return c.json({ message: "turn not found" }, 500);
+        return c.json(response);
+      }
       if (promptLabelIds.length > 0) {
         await assignLabelsToSession({ db, spaceId, sessionId, labelIds: promptLabelIds, userId: user.uuid });
       }
@@ -2068,6 +2153,7 @@ router.post("/:id/prompt", async (c) => {
         model: requestedModel,
         provider: requestedProvider,
         thinkingLevel: promptThinkingLevel ?? null,
+        serviceTier: promptServiceTier,
         generationPolicy,
         intent: promptIntent,
         accessMode,
@@ -2083,6 +2169,25 @@ router.post("/:id/prompt", async (c) => {
       // If we created the session for this request, surface its id so clients can retry
       // without spawning another empty session.
       const createdSessionId = createdPromptSession?.id ?? null;
+      if (
+        isPostgresUniqueViolation(
+          error,
+          RELAY_AGENT_CLIENT_MESSAGE_CONSTRAINT,
+        )
+      ) {
+        const existingTurnId = await findAgentTurnByClientMessageId({
+          sessionId,
+          userUuid: user.uuid,
+          clientMessageId,
+        });
+        const response = existingTurnId
+          ? await buildSpacePromptTurnResponse(
+              await getSpaceSessionById(sessionId),
+              existingTurnId,
+            )
+          : null;
+        if (response) return c.json(response);
+      }
       if (error instanceof BillingAccessBlockedError) {
         const res = billingBlockedResponse(c, error);
         if (createdSessionId) {
