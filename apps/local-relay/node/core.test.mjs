@@ -48,9 +48,10 @@ test("resolves host auth and forwards a prompt only to the loopback API", async 
     calls[1].init.headers["x-cohub-relay-command-id"],
     command.idempotencyKey,
   );
-  assert.equal(result.status, 202);
-  assert.equal(result.headers["content-type"], "application/json");
-  assert.deepEqual(JSON.parse(result.body), { mode: "immediate", ok: true });
+  assert.equal(result.result.status, 202);
+  assert.equal(result.result.headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(result.result.body), { mode: "immediate", ok: true });
+  assert.equal(result.watch, null);
 });
 
 test("rejects an arbitrary local API path before resolving credentials", async () => {
@@ -99,7 +100,7 @@ test("keeps a claimed command alive while the local API starts", async () => {
       return Response.json({ mode: "immediate", ok: true }, { status: 202 });
     },
   });
-  assert.equal(result.status, 202);
+  assert.equal(result.result.status, 202);
   assert.equal(authCalls, 3);
   assert.deepEqual(
     retries.map((retry) => [retry.code, retry.retryDelayMs]),
@@ -204,7 +205,7 @@ test("downloads declared relay attachments into the Space and rewrites prompt re
       return Response.json({ mode: "immediate", ok: true }, { status: 202 });
     },
   });
-  assert.equal(result.status, 202);
+  assert.equal(result.result.status, 202);
   const downloadCall = calls.find((item) => item.url.includes("/attachments/"));
   assert.equal(downloadCall.init.headers.authorization, "Bearer node-secret");
   assert.equal(downloadCall.init.headers["x-cohub-relay-node"], "1");
@@ -281,13 +282,14 @@ test("restores relay attachment references in the terminal result", async (t) =>
   });
 
   assert.match(
-    result.body,
+    result.result.body,
     new RegExp(`/relay/v1/nodes/[^/]+/attachments/${attachmentId}/content`),
   );
-  assert.doesNotMatch(result.body, /cohub-relay-node-/);
+  assert.doesNotMatch(result.result.body, /cohub-relay-node-/);
+  assert.equal(result.watch, null);
 });
 
-test("relays files explicitly linked by the assistant without exposing local paths", async (t) => {
+test("leaves assistant-linked files on the local workspace until the turn watcher finishes", async (t) => {
   const spaceStorageRoot = await mkdtemp(join(tmpdir(), "cohub-relay-node-"));
   t.after(() => rm(spaceStorageRoot, { recursive: true, force: true }));
   const workspaceRoot = join(
@@ -298,11 +300,8 @@ test("relays files explicitly linked by the assistant without exposing local pat
   const artifactPath = join(workspaceRoot, "output", "report.txt");
   await mkdir(join(workspaceRoot, "output"), { recursive: true });
   await writeFile(artifactPath, "returned artifact bytes", "utf8");
-  const attachmentId = "a6d6ae8f-205b-4e91-bdc4-e46f818ad505";
-  let uploaded = Buffer.alloc(0);
-  let persistedProjection = null;
   const calls = [];
-  const result = await executeRelayCommand(command, {
+  const { result, watch } = await executeRelayCommand(command, {
     relayNodeBaseUrl: "https://relay.example/v1/nodes/mac-mini",
     relayNodeToken: "node-secret",
     spaceStorageRoot,
@@ -327,50 +326,14 @@ test("relays files explicitly linked by the assistant without exposing local pat
           },
         });
       }
-      if (target.endsWith("/attachments")) {
-        const planned = JSON.parse(init.body);
-        assert.equal(planned.name, "report.txt");
-        assert.equal(planned.size, 23);
-        assert.equal(planned.contentType, "text/plain");
-        assert.match(planned.sha256, /^[0-9a-f]{64}$/);
-        assert.equal(init.headers.authorization, "Bearer node-secret");
-        assert.equal(init.headers["x-cohub-relay-node"], "1");
-        return Response.json({
-          attachment: { id: attachmentId, nodeId: "mac-mini" },
-          upload: {
-            url: `https://relay.example/v1/nodes/mac-mini/attachments/${attachmentId}/content?uploadToken=one-use`,
-          },
-        });
-      }
-      if (target.includes(`/attachments/${attachmentId}/content`)) {
-        const chunks = [];
-        for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
-        uploaded = Buffer.concat(chunks);
-        assert.equal(init.headers.authorization, "Bearer node-secret");
-        assert.equal(init.headers["x-cohub-relay-node"], "1");
-        return Response.json({ ok: true });
-      }
-      if (target.endsWith("/api/local-mode/relay-artifacts")) {
-        persistedProjection = JSON.parse(init.body);
-        assert.equal(init.headers.authorization, "Bearer host-access-token");
-        return Response.json({ ok: true });
-      }
       throw new Error(`Unexpected fetch ${target}`);
     },
   });
-  assert.equal(uploaded.toString("utf8"), "returned artifact bytes");
+  assert.equal(watch, null);
   const payload = JSON.parse(result.body);
-  const relayPath = `/relay/v1/nodes/mac-mini/attachments/${attachmentId}/content`;
-  assert.equal(payload.turn.assistantText, `Download [report](${relayPath})`);
-  assert.equal(payload.turn.assistantContent[0].text, `Download [report](${relayPath})`);
-  assert.equal(payload.turn.summary.text, `Download [report](${relayPath})`);
-  assert.deepEqual(persistedProjection, {
-    sessionId: "f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02",
-    turnId: "bd5bc93a-c1a4-45f8-8ba2-bc45fb87ce01",
-    replacements: [{ from: "output/report.txt", to: relayPath }],
-  });
-  assert.doesNotMatch(result.body, new RegExp(workspaceRoot));
-  assert.equal(calls.length, 5);
+  assert.equal(payload.turn.assistantText, "Download [report](output/report.txt)");
+  assert.equal(calls.length, 2);
+  assert.match(result.body, /output\/report\.txt/);
 });
 
 test("does not relay assistant links outside the Space workspace", async (t) => {
@@ -406,7 +369,8 @@ test("does not relay assistant links outside the Space workspace", async (t) => 
     },
   });
   assert.equal(calls, 2);
-  assert.match(result.body, /\[secret\]\(\/etc\/passwd\)/);
+  assert.match(result.result.body, /\[secret\]\(\/etc\/passwd\)/);
+  assert.equal(result.watch, null);
 });
 
 test("rejects an undeclared relay attachment before downloading it", async () => {
@@ -432,10 +396,10 @@ test("rejects an undeclared relay attachment before downloading it", async () =>
   assert.equal(calls, 1);
 });
 
-test("keeps the relay command running until the local turn is terminal", async () => {
+test("returns as soon as the prompt is accepted and exposes a turn watch", async () => {
   let promptCalls = 0;
   let pollCalls = 0;
-  const result = await executeRelayCommand(command, {
+  const { result, watch } = await executeRelayCommand(command, {
     fetcher: async (url) => {
       const path = String(url);
       if (path.endsWith("/api/local-mode/auth")) {
@@ -467,9 +431,12 @@ test("keeps the relay command running until the local turn is terminal", async (
     },
   });
   assert.equal(promptCalls, 1);
-  assert.equal(pollCalls, 1);
+  assert.equal(pollCalls, 0);
   const payload = JSON.parse(result.body);
   assert.equal(payload.mode, "immediate");
-  assert.equal(payload.turn.status, "completed");
-  assert.equal(payload.turn.assistantText, "done");
+  assert.equal(payload.turn.status, "running");
+  assert.equal(watch.spaceId, "2f4cb274-7f80-4a4b-b326-22d4af6a9873");
+  assert.equal(watch.sessionId, "f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02");
+  assert.equal(watch.turnId, "bd5bc93a-c1a4-45f8-8ba2-bc45fb87ce01");
+  assert.equal(watch.responseReplacements.size, 0);
 });

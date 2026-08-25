@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,8 +10,9 @@ import {
   executeRelayCommandUntilAvailable,
   RelayNodeError,
 } from "./core.mjs";
+import { createTurnWatcher } from "./turn-watch.mjs";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const nodeId = process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
 const relayUrl = process.env.COHUB_LOCAL_RELAY_URL?.trim();
 const localApiOrigin =
@@ -91,12 +93,31 @@ function readNodeToken() {
 
 const nodeToken = readNodeToken();
 
+const dataDir =
+  process.env.COHUB_LOCAL_DATA_DIR?.trim() ||
+  join(homedir(), ".cohub-local-mode");
+
 let socket = null;
 let stopping = false;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let current = null;
+let pendingOutcome = null;
 let statusWrite = Promise.resolve();
+
+const watcher = createTurnWatcher({
+  dataDir,
+  localApiOrigin,
+  spaceStorageRoot,
+  relayNodeBaseUrl,
+  relayNodeToken: nodeToken,
+  maxAttachmentBytes,
+  nodeId,
+  onEvent: (event) => {
+    send({ type: "turn-event", event });
+  },
+});
+void watcher.start();
 
 function writeStatus(state, details = {}) {
   const payload = {
@@ -129,10 +150,21 @@ function send(message) {
   return true;
 }
 
-function clearCurrent() {
+function clearCurrent({ abort = true } = {}) {
   if (current?.heartbeat) clearInterval(current.heartbeat);
-  current?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
+  if (abort) {
+    current?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
+  }
   current = null;
+}
+
+function sendOutcome(outcome) {
+  if (send(outcome)) {
+    pendingOutcome = null;
+    return true;
+  }
+  pendingOutcome = outcome;
+  return false;
 }
 
 async function runClaimedCommand(attempt) {
@@ -153,7 +185,7 @@ async function runClaimedCommand(attempt) {
     });
   }, heartbeatMs);
   try {
-    const result = await executeRelayCommandUntilAvailable(state.command, {
+    const { result, watch } = await executeRelayCommandUntilAvailable(state.command, {
       localApiOrigin,
       maxAttachmentBytes,
       maxResponseBytes,
@@ -174,12 +206,19 @@ async function runClaimedCommand(attempt) {
       },
     });
     if (state.abort.signal.aborted || current !== state) return;
-    send({
+    sendOutcome({
       type: "result",
       commandId: state.command.id,
       attempt,
       result,
     });
+    if (watch) {
+      void watcher.watch({
+        eventId: randomUUID(),
+        nodeId: state.command.nodeId ?? nodeId,
+        ...watch,
+      });
+    }
     writeStatus("connected", {
       lastCommandId: state.command.id,
       lastCommandStatus:
@@ -190,7 +229,7 @@ async function runClaimedCommand(attempt) {
     const code =
       error instanceof RelayNodeError ? error.code : "node_execution_failed";
     const message = error instanceof Error ? error.message : String(error);
-    send({
+    sendOutcome({
       type: "failed",
       commandId: state.command.id,
       attempt,
@@ -203,7 +242,7 @@ async function runClaimedCommand(attempt) {
       lastErrorCode: code,
     });
   } finally {
-    if (current === state) clearCurrent();
+    if (current === state) clearCurrent({ abort: false });
   }
 }
 
@@ -224,6 +263,12 @@ function handleMessage(raw) {
   if (message.type === "ready") {
     console.log(`[relay-node] connected as ${message.nodeId}`);
     writeStatus("connected");
+    if (pendingOutcome) sendOutcome(pendingOutcome);
+    watcher.flushPending();
+    return;
+  }
+  if (message.type === "turn-event-ack" && typeof message.eventId === "string") {
+    void watcher.ack(message.eventId);
     return;
   }
   if (message.type === "command") {
@@ -255,6 +300,13 @@ function handleMessage(raw) {
     console.error(
       `[relay-node] ${message.code ?? "relay_error"}: ${message.message ?? "unknown relay error"}`,
     );
+    if (message.code === "stale_attempt") {
+      if (pendingOutcome?.commandId === message.commandId) pendingOutcome = null;
+      if (message.commandId && current?.command.id === message.commandId) {
+        clearCurrent();
+      }
+      return;
+    }
     if (message.commandId && current?.command.id === message.commandId) {
       clearCurrent();
     }
@@ -288,7 +340,6 @@ function connect() {
   });
   next.on("close", (code, reason) => {
     if (socket === next) socket = null;
-    clearCurrent();
     console.error(
       `[relay-node] disconnected (${code}${reason.length ? `: ${reason.toString()}` : ""})`,
     );
@@ -302,6 +353,7 @@ function shutdown() {
   writeStatus("stopping");
   if (reconnectTimer) clearTimeout(reconnectTimer);
   clearCurrent();
+  void watcher.stop();
   socket?.close(1000, "node shutting down");
   setTimeout(() => process.exit(0), 250).unref();
 }

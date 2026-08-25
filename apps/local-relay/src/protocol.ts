@@ -1,4 +1,4 @@
-export const RELAY_PROTOCOL_VERSION = 1 as const;
+export const RELAY_PROTOCOL_VERSION = 2 as const;
 
 export function assertRelayAttachmentFresh(
 	expiresAt: string,
@@ -96,6 +96,17 @@ export type RelayWakeupMessage = {
 	commandId: string;
 };
 
+export type RelayTurnEvent = {
+	id: string;
+	kind: "turn.completed";
+	spaceId: string;
+	sessionId: string;
+	turnId: string;
+	completedAt: string;
+	turn: Record<string, unknown> | null;
+	truncated: boolean;
+};
+
 export type NodeToRelayMessage =
 	| {
 			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
@@ -128,6 +139,11 @@ export type NodeToRelayMessage =
 			type: "heartbeat";
 			commandId?: string;
 			attempt?: number;
+		}
+	| {
+			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			type: "turn-event";
+			event: RelayTurnEvent;
 		};
 
 export type RelayToNodeMessage =
@@ -160,13 +176,30 @@ export type RelayToNodeMessage =
 			code: string;
 			message: string;
 			commandId?: string;
+		}
+	| {
+			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			type: "turn-event-ack";
+			eventId: string;
 		};
 
-export type RelayBrowserEvent = {
-	protocolVersion: typeof RELAY_PROTOCOL_VERSION;
-	type: "command.updated";
-	command: RelayCommand;
-};
+export type RelayBrowserEvent =
+	| {
+			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			type: "command.updated";
+			command: RelayCommand;
+	  }
+	| {
+			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			type: "turn.event";
+			event: RelayTurnEvent;
+	  }
+	| {
+			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			type: "snapshot";
+			commands: RelayCommand[];
+			events: RelayTurnEvent[];
+	  };
 
 export class RelayProtocolError extends Error {
 	readonly code: string;
@@ -372,6 +405,58 @@ export function validateRelayCommandInput(
 	};
 }
 
+function parseTurnEvent(value: unknown): RelayTurnEvent {
+	if (!isRecord(value)) {
+		throw new RelayProtocolError("invalid_request", "event is required");
+	}
+	const id = requireString(value.id, "event.id", { maxLength: 36 });
+	if (!UUID_PATTERN.test(id)) {
+		throw new RelayProtocolError("invalid_request", "event.id must be a UUID");
+	}
+	if (value.kind !== "turn.completed") {
+		throw new RelayProtocolError(
+			"invalid_request",
+			"unsupported turn event kind",
+		);
+	}
+	const spaceId = requireString(value.spaceId, "event.spaceId", { maxLength: 36 });
+	const sessionId = requireString(value.sessionId, "event.sessionId", {
+		maxLength: 36,
+	});
+	const turnId = requireString(value.turnId, "event.turnId", { maxLength: 36 });
+	const completedAt = requireString(value.completedAt, "event.completedAt", {
+		maxLength: 64,
+	});
+	if (!Number.isFinite(Date.parse(completedAt))) {
+		throw new RelayProtocolError(
+			"invalid_request",
+			"event.completedAt must be an ISO timestamp",
+		);
+	}
+	if (typeof value.truncated !== "boolean") {
+		throw new RelayProtocolError(
+			"invalid_request",
+			"event.truncated must be boolean",
+		);
+	}
+	if (value.turn !== null && !isRecord(value.turn)) {
+		throw new RelayProtocolError(
+			"invalid_request",
+			"event.turn must be an object or null",
+		);
+	}
+	return {
+		id,
+		kind: "turn.completed",
+		spaceId,
+		sessionId,
+		turnId,
+		completedAt,
+		turn: value.turn,
+		truncated: value.truncated,
+	};
+}
+
 export function parseNodeMessage(value: unknown): NodeToRelayMessage {
 	if (!isRecord(value) || value.protocolVersion !== RELAY_PROTOCOL_VERSION) {
 		throw new RelayProtocolError(
@@ -388,6 +473,13 @@ export function parseNodeMessage(value: unknown): NodeToRelayMessage {
 				? { commandId: value.commandId }
 				: {}),
 			...(typeof value.attempt === "number" ? { attempt: value.attempt } : {}),
+		};
+	}
+	if (type === "turn-event") {
+		return {
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type,
+			event: parseTurnEvent(value.event),
 		};
 	}
 	const commandId = requireString(value.commandId, "commandId", {

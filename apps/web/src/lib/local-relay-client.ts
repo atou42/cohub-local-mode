@@ -1,4 +1,9 @@
 import { env } from "$env/dynamic/public";
+import {
+	connectLocalRelayEvents,
+	type LocalRelayEventHandlers,
+	resolveLocalRelayEventsUrl,
+} from "./local-relay-events";
 
 export type LocalRelayAttachment = {
 	id: string;
@@ -13,6 +18,7 @@ export type LocalRelayAttachment = {
 export type LocalRelayCommand = {
 	id: string;
 	status:
+		| "accepted"
 		| "queued"
 		| "claimed"
 		| "running"
@@ -27,6 +33,20 @@ export type LocalRelayCommand = {
 		body: string;
 	} | null;
 };
+
+export class LocalRelayRequestError extends Error {
+	readonly code: string;
+	readonly status: number;
+
+	constructor(message: string, code: string, status: number) {
+		super(message);
+		this.name = "LocalRelayRequestError";
+		this.code = code;
+		this.status = status;
+	}
+}
+
+export const LOCAL_RELAY_COMMAND_POLL_INTERVAL_MS = 2_000;
 
 export type PendingLocalRelayCommand = {
 	commandId: string;
@@ -140,7 +160,11 @@ async function responseError(response: Response, fallback: string) {
 		typeof payload?.message === "string" ? payload.message : fallback;
 	const code =
 		typeof payload?.code === "string" ? payload.code : "relay_request_failed";
-	return new Error(`${message} (${code})`);
+	return new LocalRelayRequestError(
+		`${message} (${code})`,
+		code,
+		response.status,
+	);
 }
 
 function bytesToHex(value: ArrayBuffer) {
@@ -270,11 +294,46 @@ export async function submitLocalRelayPrompt(input: {
 	return ((await response.json()) as { command: LocalRelayCommand }).command;
 }
 
+export function openLocalRelayEvents(
+	handlers: LocalRelayEventHandlers,
+	options: { signal?: AbortSignal } = {},
+) {
+	const path = relayNodePath("/events");
+	const url = resolveLocalRelayEventsUrl(
+		path,
+		typeof window === "undefined" ? null : window.location,
+	);
+	return connectLocalRelayEvents({
+		url,
+		handlers,
+		signal: options.signal,
+	});
+}
+
+export async function cancelLocalRelayCommand(
+	commandId: string,
+	signal?: AbortSignal,
+) {
+	const response = await fetch(
+		relayNodePath(`/commands/${encodeURIComponent(commandId)}/cancel`),
+		{
+			method: "POST",
+			credentials: "include",
+			cache: "no-store",
+			signal,
+		},
+	);
+	if (!response.ok) {
+		throw await responseError(response, "Relay command cancel failed");
+	}
+	return ((await response.json()) as { command: LocalRelayCommand }).command;
+}
+
 export async function waitForLocalRelayCommand(
 	commandId: string,
 	options: { signal?: AbortSignal; intervalMs?: number } = {},
 ) {
-	const intervalMs = options.intervalMs ?? 250;
+	const intervalMs = options.intervalMs ?? LOCAL_RELAY_COMMAND_POLL_INTERVAL_MS;
 	for (;;) {
 		if (options.signal?.aborted) throw options.signal.reason;
 		const response = await fetch(
