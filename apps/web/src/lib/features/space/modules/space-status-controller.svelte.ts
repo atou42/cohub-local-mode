@@ -12,6 +12,7 @@ import {
 	getCachedSpaceMembers,
 	getCachedSpaceUsage,
 } from "$lib/stores/space-profile-cache";
+import { getCachedSpaceRecord } from "$lib/stores/space-record-cache";
 import { createRequestDedupe } from "./request-dedupe";
 
 export type SpaceSandboxSnapshot = {
@@ -35,6 +36,7 @@ export function createSpaceStatusController(options: {
 	getPageVisible: () => boolean;
 	getPageOnline: () => boolean;
 	getPageMounted: () => boolean;
+	getIsLocalSpace?: () => boolean;
 	onSpaceLoaded: (space: SpaceRecord) => void;
 }) {
 	let loadError = $state("");
@@ -68,6 +70,11 @@ export function createSpaceStatusController(options: {
 	async function loadSpace() {
 		const currentSpaceId = options.getSpaceId();
 		loadError = "";
+		loadErrorStatus = null;
+		const cached = await getCachedSpaceRecord(currentSpaceId);
+		if (cached?.space && options.getSpaceId() === currentSpaceId) {
+			options.onSpaceLoaded(cached.space);
+		}
 		try {
 			const nextSpace = await requests.run(
 				`space:${currentSpaceId}:record`,
@@ -78,8 +85,13 @@ export function createSpaceStatusController(options: {
 			return true;
 		} catch (error) {
 			if (options.getSpaceId() !== currentSpaceId) return false;
+			if (cached?.space && options.getIsLocalSpace?.()) return true;
 			loadError =
-				error instanceof Error ? error.message : "Failed to load space";
+				options.getIsLocalSpace?.() && !(error instanceof HttpError)
+					? "Local Mac is offline"
+					: error instanceof Error
+						? error.message
+						: "Failed to load space";
 			loadErrorStatus = error instanceof HttpError ? error.status : null;
 			return false;
 		}

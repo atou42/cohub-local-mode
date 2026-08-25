@@ -35,6 +35,7 @@ import type {
   SessionMessageResponse,
   SessionMessagesPaginatedResponse,
   SessionMessagesResponse,
+  SessionTurnIntermediateResponse,
   SessionTurnResponse,
   SessionTurnRecord,
   SessionTurnStreamSnapshotResponse,
@@ -706,6 +707,13 @@ class SessionTurnsClient {
   get(turnId: string, customFetch?: Fetch) {
     return this.transport.request<SessionTurnResponse>(
       `/api/sessions/${this.sessionId}/turns/${turnId}`,
+      { fetch: customFetch },
+    );
+  }
+
+  intermediate(turnId: string, customFetch?: Fetch) {
+    return this.transport.request<SessionTurnIntermediateResponse>(
+      `/api/sessions/${this.sessionId}/turns/${turnId}/intermediate`,
       { fetch: customFetch },
     );
   }

@@ -1,0 +1,23 @@
+{
+  "name": "@cohub/local-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "dev": "wrangler dev --config wrangler.toml",
+    "lint": "biome lint src",
+    "test": "node ../../scripts/test/run.mjs --native-types --test-isolation=none 'src/**/*.test.ts'",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "jose": "^6.2.3",
+    "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260708.1",
+    "@types/node": "26.1.1",
+    "typescript": "^7.0.2",
+    "wrangler": "4.110.0"
+  }
+}

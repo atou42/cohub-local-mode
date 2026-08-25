@@ -21,6 +21,10 @@ import { ensureSessionTurnSegments, findSegmentForTurn, MAX_SESSION_TURN_SEGMENT
 import { fallbackPublicUserProfile, getProfilesByUuids } from "./user-profiles.js";
 import { buildTurnObjectPrefix, assertTurnObjectKeyForTurn, createTurnObjectCdnUrl, writeTurnObjectJson } from "./turn-object-storage.js";
 import { deriveMessagePreviewText } from "./session-content.js";
+import {
+  rewriteRelayArtifactProjection,
+  type RelayArtifactReplacement,
+} from "./local-mode/relay-artifacts.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -446,6 +450,57 @@ export const getSessionTurnById = async (sessionId: string, turnId: string) => {
   const [row] = await db.select().from(sessionTurns).where(and(inArray(sessionTurns.sessionId, sourceIds), eq(sessionTurns.id, turnId))).limit(1);
   if (!row || !findSegmentForTurn(segments, { sourceSessionId: row.sessionId, sequence: row.sequence })) return null;
   return withTimelineSource(toTurnRecord(row), sessionId);
+};
+
+export const persistCompletedTurnRelayArtifacts = async (input: {
+  sessionId: string;
+  turnId: string;
+  replacements: RelayArtifactReplacement[];
+}) => {
+  const existing = await getSessionTurnById(input.sessionId, input.turnId);
+  if (!existing) throw new Error("turn not found");
+  if (existing.status !== "completed") {
+    throw new Error("turn is not completed");
+  }
+  const rewritten = rewriteRelayArtifactProjection(
+    {
+      assistantContent: existing.assistantContent,
+      assistantText: existing.assistantText,
+      summary: existing.summary,
+    },
+    input.replacements,
+  );
+  if (!rewritten.changed) return existing;
+
+  const sourceSessionId = existing.sourceSessionId ?? existing.sessionId;
+  const [row] = await db
+    .update(sessionTurns)
+    .set({
+      assistantContent:
+        rewritten.assistantContent == null
+          ? null
+          : sanitizeContentBlocksForPostgresJson(
+              rewritten.assistantContent as ContentBlock[],
+            ),
+      assistantText: rewritten.assistantText,
+      summary:
+        rewritten.summary == null
+          ? null
+          : (sanitizePostgresJsonValue(
+              rewritten.summary,
+            ) as typeof existing.summary),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(sessionTurns.id, input.turnId),
+        eq(sessionTurns.sessionId, sourceSessionId),
+        eq(sessionTurns.status, "completed"),
+      ),
+    )
+    .returning();
+  if (!row) throw new Error("turn changed before artifact projection");
+  return withTimelineSource(toTurnRecord(row), input.sessionId);
 };
 
 export const findLatestVisibleAgentEntryId = async (sessionId: string, throughSequence: number) => {
