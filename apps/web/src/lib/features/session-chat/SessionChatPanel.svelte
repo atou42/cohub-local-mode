@@ -395,14 +395,29 @@ async function handleDraftDrop(event: DragEvent) {
 					</div>
 				</div>
 			{/if}
-			{#if host.quickPromptActions.length > 0}
-				<SessionChatQuickActions
-					actions={host.quickPromptActions}
-					disabled={host.sending || (!activeSessionState && !isNewSessionRoute)}
-					onsend={(action) => {
-						host.handleQuickPromptAction(action);
-					}}
-				/>
+			{#if host.queuedRelayCancels.length > 0}
+				<div
+					class="mx-auto w-full max-w-4xl px-4 pb-1 sm:px-6"
+					class:bg-chat-panel={!hasCustomPage}
+				>
+					{#each host.queuedRelayCancels as item (item.commandId)}
+						<div
+							class="mb-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-text-tertiary"
+						>
+							<span class="min-w-0 flex-1 truncate">Waiting in queue</span>
+							<button
+								type="button"
+								class="shrink-0 rounded px-1.5 py-1 text-text-secondary hover:bg-bg-surface hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+								disabled={Boolean(
+									host.cancellingRelayCommandIds[item.commandId],
+								)}
+								onclick={() => {
+									void host.cancelQueuedRelayCommand(item.commandId);
+								}}>Withdraw</button
+							>
+						</div>
+					{/each}
+				</div>
 			{/if}
 			<div
 				bind:this={composerHostEl}

@@ -229,11 +229,82 @@ test("parses claim, result, failure, and heartbeat node messages", () => {
 	);
 });
 
+test("parses a turn-event and rejects malformed ones", () => {
+	const event = {
+		id: clientMessageId,
+		kind: "turn.completed",
+		spaceId,
+		sessionId,
+		turnId: attachmentId,
+		completedAt: "2026-08-26T00:00:00.000Z",
+		turn: { status: "completed" },
+		truncated: false,
+	};
+	assert.deepEqual(
+		parseNodeMessage({
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event,
+		}),
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event,
+		},
+	);
+	assert.deepEqual(
+		parseNodeMessage({
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, turn: null, truncated: true },
+		}),
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, turn: null, truncated: true },
+		},
+	);
+	for (const invalid of [
+		{ protocolVersion: RELAY_PROTOCOL_VERSION, type: "turn-event" },
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, kind: "turn.failed" },
+		},
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, id: "not-a-uuid" },
+		},
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, completedAt: "soon" },
+		},
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, truncated: "yes" },
+		},
+		{
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event",
+			event: { ...event, turn: "done" },
+		},
+	]) {
+		assert.throws(
+			() => parseNodeMessage(invalid),
+			(error: unknown) =>
+				error instanceof RelayProtocolError && error.code === "invalid_request",
+		);
+	}
+});
+
 test("rejects stale protocol versions and invalid attempts", () => {
 	assert.throws(
 		() =>
 			parseNodeMessage({
-				protocolVersion: 2,
+				protocolVersion: 1,
 				type: "claim",
 				commandId: "command-1",
 			}),
