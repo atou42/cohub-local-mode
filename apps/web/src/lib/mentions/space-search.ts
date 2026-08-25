@@ -8,6 +8,7 @@ import {
 import { getCacheUserKey } from "$lib/cache/keys";
 import { recencyScore, textMatchScore } from "$lib/command-palette/score";
 import { sdk } from "$lib/sdk";
+import { getSpaceOrigin, registerSpaceOrigin } from "$lib/space-origin";
 import {
 	getSpacePublicProfile,
 	normalizeSpacePublicProfile,
@@ -81,6 +82,7 @@ function localSpaceToSuggestion(
 		spaceProfile: getSpacePublicProfile(space),
 		href: buildSpaceMentionHref(space.id),
 		uri: buildSpaceMentionUri(space.id),
+		origin: getSpaceOrigin(space),
 		activityAt: spaceActivityAt,
 		source: "local",
 		...scored,
@@ -103,6 +105,7 @@ function remoteSpaceToSuggestion(
 		spaceProfile: normalizeSpacePublicProfile(spaceProfile),
 		href: item.href || buildSpaceMentionHref(item.spaceId),
 		uri: buildSpaceMentionUri(item.spaceId),
+		origin: "cloud",
 		activityAt: item.updatedAt,
 		source: "remote",
 		score: item.score,
@@ -195,6 +198,11 @@ export function mergeSpaceMentionSuggestions(input: {
 			byId.set(item.spaceId, item);
 			continue;
 		}
+		if (existing.origin !== item.origin) {
+			throw new Error(
+				`Space ${item.spaceId} was returned by both local and cloud nodes`,
+			);
+		}
 		byId.set(item.spaceId, {
 			...existing,
 			...item,
@@ -285,6 +293,7 @@ export async function resolveSpaceMentionLabels(
 						fetch(input, { ...init, signal: options?.signal }),
 					);
 				cacheSpaceRecordSoon(space);
+				registerSpaceOrigin(space);
 				const name = space.name ?? space.title;
 				if (name) resolved.set(spaceId, name);
 			} catch (error) {
@@ -313,9 +322,13 @@ export async function searchRemoteSpaceMentions(
 		{ q, limit: options?.limit ?? REMOTE_LIMIT, types: ["space"] },
 		fetcher,
 	);
-	return result.items
+	const items = result.items
 		.map(remoteSpaceToSuggestion)
 		.filter((item): item is SpaceMentionSuggestion =>
 			Boolean(item && item.spaceId !== options?.currentSpaceId),
 		);
+	for (const item of items) {
+		registerSpaceOrigin({ id: item.spaceId, origin: item.origin });
+	}
+	return items;
 }

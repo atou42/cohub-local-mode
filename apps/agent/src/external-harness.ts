@@ -5,8 +5,11 @@ import {
 	buildHarnessArgv,
 	HarnessEventReducer,
 	type AccessMode,
+	type ExternalHarnessProgress,
 	type ExternalHarnessResult,
 } from "./external-harness-protocol.js";
+import { runCodexAppServerHarness } from "./external-harness-codex-runtime.js";
+import { runGrokAcpHarness } from "./external-harness-grok-runtime.js";
 
 export {
 	buildHarnessArgv,
@@ -25,22 +28,58 @@ export async function runExternalHarness(input: {
 	sessionId: string;
 	turnId: string;
 	prompt: string;
+	environment: Record<string, string>;
+	executionContextKey: string;
 	externalSessionId: string | null;
 	accessMode: AccessMode;
 	model: string;
 	thinkingLevel: string;
+	serviceTier?: string | null;
 	abortSignal: AbortSignal;
 	onExternalSessionId?: (sessionId: string) => void;
+	onProgress?: (progress: ExternalHarnessProgress) => void;
 }): Promise<ExternalHarnessResult> {
-	const connection = await ensureSandboxConnection(input.spaceId);
-	if (connection.capabilities?.processStartArgv !== true) {
-		throw new Error("Local sandbox must support argv process execution for external harnesses");
-	}
-
 	const reducer = new HarnessEventReducer(input.harness, {
 		model: input.model,
 		thinkingLevel: input.thinkingLevel,
 	});
+	const harnessLabel = input.harness === "codex" ? "Codex" : "Grok Build";
+	const emitProgress = (progress: ExternalHarnessProgress) => {
+		input.onProgress?.(progress);
+	};
+	emitProgress(
+		reducer.pushRuntimeEvent({
+			kind: "starting",
+			eventType: "runtime.preparing",
+			message: `Preparing ${harnessLabel}`,
+		}),
+	);
+
+	const connection = await ensureSandboxConnection(input.spaceId);
+	if (connection.capabilities?.processStartArgv !== true) {
+		throw new Error("Local sandbox must support argv process execution for external harnesses");
+	}
+	emitProgress(
+		reducer.pushRuntimeEvent({
+			kind: "status",
+			eventType: "runtime.sandbox_connected",
+			message: "Local sandbox connected",
+		}),
+	);
+	if (input.harness === "codex" && connection.capabilities?.processWrite === true) {
+		return runCodexAppServerHarness({
+			...input,
+			connection,
+			reducer,
+		});
+	}
+	if (input.harness === "grok_build" && connection.capabilities?.processWrite === true) {
+		return runGrokAcpHarness({
+			...input,
+			connection,
+			reducer,
+		});
+	}
 	const argv = buildHarnessArgv({
 		harness: input.harness,
 		prompt: input.prompt,
@@ -49,6 +88,7 @@ export async function runExternalHarness(input: {
 		accessMode: input.accessMode,
 		model: input.model,
 		thinkingLevel: input.thinkingLevel,
+		serviceTier: input.serviceTier,
 	});
 	let buffered = "";
 	let stderr = "";
@@ -78,8 +118,9 @@ export async function runExternalHarness(input: {
 			buffered = buffered.slice(newline + 1);
 			if (!line) continue;
 			try {
-				reducer.push(JSON.parse(line));
-				sawStructuredOutput = true;
+					const progress = reducer.push(JSON.parse(line));
+					if (progress) emitProgress(progress);
+					sawStructuredOutput = true;
 			} catch (error) {
 				if (error instanceof SyntaxError) {
 					throw new Error(`${input.harness} emitted invalid JSONL: ${line.slice(0, 200)}`);
@@ -110,12 +151,20 @@ export async function runExternalHarness(input: {
 		const result = await tracedRpc(
 			connection,
 			"process.start",
-			{ argv, cwd: SANDBOX_WORKSPACE, timeoutSecs: PROCESS_TIMEOUT_SECONDS },
+			{ argv, cwd: SANDBOX_WORKSPACE, env: input.environment, timeoutSecs: PROCESS_TIMEOUT_SECONDS },
 			{
 				context: { spaceId: input.spaceId, sessionId: input.sessionId, turnId: input.turnId },
 				onEvent(event) {
 					if (event.type === "started") {
 						processId = event.processId;
+						emitProgress(
+							reducer.pushRuntimeEvent({
+								kind: "status",
+								eventType: "runtime.process_started",
+								message: `${harnessLabel} process started`,
+								raw: { processId: event.processId },
+							}),
+						);
 						if (input.abortSignal.aborted) abortProcess();
 						return;
 					}
@@ -130,6 +179,17 @@ export async function runExternalHarness(input: {
 					}
 					if (event.type === "stderr") {
 						stderr = `${stderr}${event.chunk}`.slice(-4000);
+						const message = event.chunk.trim();
+						if (message) {
+							emitProgress(
+								reducer.pushRuntimeEvent({
+									kind: "stderr",
+									eventType: "runtime.stderr",
+									message,
+									raw: event.chunk,
+								}),
+							);
+						}
 					}
 				},
 			},
@@ -137,7 +197,8 @@ export async function runExternalHarness(input: {
 		if (streamError) throw streamError;
 		if (buffered.trim()) {
 			try {
-				reducer.push(JSON.parse(buffered.trim()));
+				const progress = reducer.push(JSON.parse(buffered.trim()));
+				if (progress) emitProgress(progress);
 				sawStructuredOutput = true;
 			} catch (error) {
 				throw new Error(

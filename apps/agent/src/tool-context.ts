@@ -3,6 +3,7 @@ import type { GenerationPolicy } from "@cohub/protocol/generation";
 import type { PromptEnv } from "@cohub/core/sessions";
 import type { Permission } from "@cohub/core/permissions";
 import type { AgentFileVisibility } from "./runtime/workspace-visibility.js";
+import type { AgentSpaceOrigin } from "./runtime/space-mention-origins.js";
 
 export type TurnTelemetryMetrics = {
   llmRoundCount: number;
@@ -15,6 +16,8 @@ export type AssistantMessageTimingContext = {
 
 export type ToolExecutionContext = {
   spaceId: string;
+  /** Original Space when a tool temporarily targets another Space. */
+  sourceSpaceId?: string;
   sessionId: string;
   turnId?: string;
   turnSeq?: number;
@@ -38,6 +41,8 @@ export type ToolExecutionContext = {
   spaceEnv?: Readonly<Record<string, string>>;
   env?: PromptEnv | null;
   fileVisibility?: AgentFileVisibility;
+  /** Authoritative origins persisted with Space mentions in this turn. */
+  spaceMentionOrigins?: Readonly<Record<string, AgentSpaceOrigin>>;
   abortSignal?: AbortSignal;
 };
 

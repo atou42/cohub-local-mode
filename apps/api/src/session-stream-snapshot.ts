@@ -118,7 +118,7 @@ const toSnapshotIntermediateMessage = (
   };
 };
 
-const listPersistedIntermediateMessages = async (input: { sessionId: string; turnId: string }) => {
+export const listPersistedTurnIntermediateMessages = async (input: { sessionId: string; turnId: string }) => {
   const rows = await db.select().from(sessionMessages).where(and(
     eq(sessionMessages.sessionId, input.sessionId),
     eq(sessionMessages.turnId, input.turnId),
@@ -134,7 +134,7 @@ const listPersistedIntermediateMessages = async (input: { sessionId: string; tur
 
 const enrichSessionStreamSnapshot = async (snapshot: SessionStreamSnapshot): Promise<SessionStreamSnapshot> => {
   if (!snapshot.turnId) return snapshot;
-  const persisted = await listPersistedIntermediateMessages({ sessionId: snapshot.sessionId, turnId: snapshot.turnId }).catch(() => []);
+  const persisted = await listPersistedTurnIntermediateMessages({ sessionId: snapshot.sessionId, turnId: snapshot.turnId }).catch(() => []);
 
   return {
     ...snapshot,

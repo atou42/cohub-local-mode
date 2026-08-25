@@ -16,6 +16,7 @@ import {
 	type FileViewMode,
 } from "$lib/components/file-diff-view";
 import { filePreviewModel } from "$lib/file-preview-model";
+import { localNodeErrorMessage } from "$lib/local-node-error";
 import { sdk } from "$lib/sdk";
 import {
 	isTextFileResponse,
@@ -84,6 +85,7 @@ type FileWorkspaceControllerOptions = {
 	getCanEditFiles: () => boolean;
 	getActiveFsReadonly: () => boolean;
 	getSpaceHasMinimalAccess: () => boolean;
+	getIsLocalSpace: () => boolean;
 	onOpenInlineFile: (path: string) => Promise<void>;
 	onOpenInlineBoard: (path: string) => Promise<void>;
 	onCloseInlineBoard: () => void;
@@ -648,8 +650,11 @@ export function createFileWorkspaceController(
 				return;
 			setInlineFileTab(path, (tab) => ({
 				...tab,
-				error:
-					error instanceof Error ? error.message : "Failed to refresh file",
+				error: localNodeErrorMessage(
+					error,
+					"Failed to refresh file",
+					options.getIsLocalSpace(),
+				),
 			}));
 		} finally {
 			if (inlineFileRefreshTokens.get(path) === refreshToken)
@@ -761,8 +766,11 @@ export function createFileWorkspaceController(
 				sourceKey !== options.getActiveFsSourceKey()
 			)
 				return;
-			fileTreeError =
-				error instanceof Error ? error.message : "Failed to load files";
+			fileTreeError = localNodeErrorMessage(
+				error,
+				"Failed to load files",
+				options.getIsLocalSpace(),
+			);
 		} finally {
 			if (
 				requestToken === fileTreeRequestToken &&
@@ -1046,7 +1054,11 @@ export function createFileWorkspaceController(
 					response: tab.response,
 					draft: tab.draft,
 					loading: false,
-					error: error instanceof Error ? error.message : "Failed to open file",
+					error: localNodeErrorMessage(
+						error,
+						"Failed to open file",
+						options.getIsLocalSpace(),
+					),
 					tooLarge: false,
 				}));
 			}

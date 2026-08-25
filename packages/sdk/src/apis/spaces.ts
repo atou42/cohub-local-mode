@@ -36,6 +36,7 @@ import type {
   SessionMessageResponse,
   SessionMessagesPaginatedResponse,
   SessionMessagesResponse,
+  SessionTurnIntermediateResponse,
   SessionTurnResponse,
   SessionTurnRecord,
   SessionTurnStreamSnapshotResponse,
@@ -679,15 +680,43 @@ class SessionTurnsClient {
     };
   }
 
+  private async getPersistedIntermediate(
+    turnId: string,
+    options?: { fetch?: Fetch; signal?: AbortSignal },
+  ): Promise<TurnIntermediateMessagesFile> {
+    const { messages } = await this.transport.request<SessionTurnIntermediateResponse>(
+      `/api/sessions/${this.sessionId}/turns/${turnId}/intermediate`,
+      { fetch: options?.fetch, signal: options?.signal },
+    );
+    return {
+      version: 1,
+      spaceId: this.spaceId,
+      sessionId: this.sessionId,
+      turnId,
+      summary: {
+        messageCount: messages.length,
+        toolCallCount: messages.reduce(
+          (count, message) => count + extractToolCalls(message.content).length,
+          0,
+        ),
+      },
+      messages,
+    };
+  }
+
   private async getIntermediate(turnId: string, messagesObjectKey?: string | null, options?: { fetch?: Fetch; signal?: AbortSignal }) {
     const objectKey = messagesObjectKey === undefined
       ? (await this.get(turnId, options?.fetch)).turn.intermediateIndex?.messagesObjectKey
       : messagesObjectKey;
-    if (!objectKey) return null;
-    const { urls } = await this.signedUrls(turnId, [objectKey], options?.fetch);
-    const url = urls[objectKey];
-    if (!url) throw new Error("Missing signed URL for intermediate messages");
-    return fetchTurnObject<TurnIntermediateMessagesFile>(url, options?.fetch, options?.signal);
+    if (!objectKey) return this.getPersistedIntermediate(turnId, options);
+    try {
+      const { urls } = await this.signedUrls(turnId, [objectKey], options?.fetch);
+      const url = urls[objectKey];
+      if (!url) throw new Error("Missing signed URL for intermediate messages");
+      return await fetchTurnObject<TurnIntermediateMessagesFile>(url, options?.fetch, options?.signal);
+    } catch {
+      return this.getPersistedIntermediate(turnId, options);
+    }
   }
 
   private async getToolCalls(turnId: string, message: StoredIntermediateMessage, options?: { fetch?: Fetch; signal?: AbortSignal }) {
