@@ -21,7 +21,7 @@ export class RelayNodeError extends Error {
   }
 }
 
-async function readLimitedResponseBody(response, maxBytes) {
+export async function readLimitedResponseBody(response, maxBytes) {
   if (!response.body) return "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -47,7 +47,7 @@ async function readLimitedResponseBody(response, maxBytes) {
   }
 }
 
-async function resolveLocalAccessToken(fetcher, localApiOrigin, signal) {
+export async function resolveLocalAccessToken(fetcher, localApiOrigin, signal) {
   let response;
   try {
     response = await fetcher(`${localApiOrigin}/api/local-mode/auth`, {
@@ -295,7 +295,7 @@ async function preparePromptBody(command, options) {
   };
 }
 
-function restoreRelayAttachmentUris(body, replacements) {
+export function restoreRelayAttachmentUris(body, replacements) {
   if (replacements.size === 0) return body;
   try {
     return JSON.stringify(replaceExactStrings(JSON.parse(body), replacements));
@@ -542,7 +542,7 @@ async function persistReturnedArtifactProjection(payload, replacements, options)
   }
 }
 
-async function relayReturnedArtifacts(body, command, options, workspaceRoot) {
+export async function relayReturnedArtifacts(body, command, options, workspaceRoot) {
   let payload;
   try {
     payload = JSON.parse(body);
@@ -579,7 +579,7 @@ async function relayReturnedArtifacts(body, command, options, workspaceRoot) {
   return JSON.stringify(payload);
 }
 
-const TERMINAL_TURN_STATUSES = new Set([
+export const TERMINAL_TURN_STATUSES = new Set([
   "completed",
   "failed",
   "interrupted",
@@ -587,7 +587,7 @@ const TERMINAL_TURN_STATUSES = new Set([
   "cancelled",
 ]);
 
-function delay(ms, signal) {
+export function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     const finish = () => {
       signal?.removeEventListener("abort", abort);
@@ -643,69 +643,27 @@ export async function executeRelayCommandUntilAvailable(command, {
   }
 }
 
-async function waitForTerminalPromptResult(initialBody, {
-  fetcher,
-  localApiOrigin,
-  localAccessToken,
-  maxResponseBytes,
-  signal,
-}) {
+export function parseWatchFromPromptResponse(body, requestPath) {
   let payload;
   try {
-    payload = JSON.parse(initialBody);
+    payload = JSON.parse(body);
   } catch {
-    return initialBody;
+    return null;
   }
   const sessionId = payload?.session?.id;
   const turnId = payload?.turn?.id;
-  if (
-    typeof sessionId !== "string" ||
-    typeof turnId !== "string" ||
-    typeof payload?.turn?.status !== "string" ||
-    TERMINAL_TURN_STATUSES.has(payload.turn.status)
-  ) {
-    return initialBody;
+  const turnStatus = payload?.turn?.status;
+  if (typeof sessionId !== "string" || typeof turnId !== "string") {
+    return null;
   }
-  for (;;) {
-    await delay(400, signal);
-    let response;
-    try {
-      response = await fetcher(
-        `${localApiOrigin}/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
-        {
-          method: "GET",
-          headers: { authorization: `Bearer ${localAccessToken}` },
-          cache: "no-store",
-          signal,
-        },
-      );
-    } catch (error) {
-      throw new RelayNodeError(
-        "local_turn_poll_failed",
-        `Local Cohub turn polling failed: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
-    }
-    if (!response.ok) {
-      throw new RelayNodeError(
-        "local_turn_poll_failed",
-        `Local Cohub turn polling returned HTTP ${response.status}`,
-      );
-    }
-    const body = await readLimitedResponseBody(response, maxResponseBytes);
-    let current;
-    try {
-      current = JSON.parse(body);
-    } catch {
-      throw new RelayNodeError(
-        "local_turn_poll_invalid",
-        "Local Cohub turn polling returned invalid JSON",
-      );
-    }
-    if (TERMINAL_TURN_STATUSES.has(current?.turn?.status)) {
-      return JSON.stringify({ mode: "immediate", ...current });
-    }
+  if (typeof turnStatus === "string" && TERMINAL_TURN_STATUSES.has(turnStatus)) {
+    return null;
   }
+  const spaceMatch =
+    typeof requestPath === "string" ? requestPath.match(PROMPT_PATH_PATTERN) : null;
+  const spaceId = spaceMatch?.[1];
+  if (!spaceId) return null;
+  return { spaceId, sessionId, turnId };
 }
 
 export async function executeRelayCommand(command, {
@@ -781,40 +739,25 @@ export async function executeRelayCommand(command, {
       { cause: error },
     );
   }
-	  let body = await readLimitedResponseBody(response, maxResponseBytes);
-	  if (response.status >= 200 && response.status < 300) {
-	    body = await waitForTerminalPromptResult(body, {
-	      fetcher,
-	      localApiOrigin,
-	      localAccessToken: accessToken,
-	      maxResponseBytes,
-	      signal,
-	    });
-	  }
-	  body = restoreRelayAttachmentUris(
-	    body,
-	    preparedPrompt.responseReplacements,
-	  );
-	  if (response.status >= 200 && response.status < 300 && spaceStorageRoot) {
-	    body = await relayReturnedArtifacts(
-	      body,
-	      command,
-	      {
-	        fetcher,
-	        maxAttachmentBytes,
-	        localAccessToken: accessToken,
-	        localApiOrigin,
-	        relayNodeBaseUrl,
-	        relayNodeToken,
-	        signal,
-	      },
-	      resolve(spaceStorageRoot, promptPathMatch[1], "workspace"),
-	    );
-	  }
+  let body = await readLimitedResponseBody(response, maxResponseBytes);
+  body = restoreRelayAttachmentUris(body, preparedPrompt.responseReplacements);
+  let watch = null;
+  if (response.status >= 200 && response.status < 300) {
+    const parsed = parseWatchFromPromptResponse(body, request.path);
+    if (parsed) {
+      watch = {
+        ...parsed,
+        responseReplacements: preparedPrompt.responseReplacements,
+      };
+    }
+  }
   const headers = {};
   for (const name of ["content-type", "retry-after", "x-request-id"]) {
     const value = response.headers.get(name);
     if (value) headers[name] = value;
   }
-  return { status: response.status, headers, body };
+  return {
+    result: { status: response.status, headers, body },
+    watch,
+  };
 }
