@@ -103,7 +103,18 @@ export const EnvSchema = z.object({
     })
     .default("/configs"),
   ENV: z.enum(["dev", "prod"]).default("dev"),
+  COHUB_NODE_ORIGIN: z.enum(["cloud", "local"]).default("cloud"),
+  CLOUD_API_BASE_URL: z.string().url().default(
+    process.env.PUBLIC_CLOUD_API_ORIGIN?.trim() || "https://api.cohub.live",
+  ),
   INTERNAL_API_BASE_URL: z.string().url().optional(),
+  LOCAL_COHUB_CLI_PATH: z
+    .string()
+    .min(1)
+    .refine((value) => value.startsWith("/"), {
+      message: "LOCAL_COHUB_CLI_PATH must be an absolute path",
+    })
+    .optional(),
   AGENT_VERSION: z.string().optional(),
   WORKER_SECRET: z.string().optional(),
   APP_ENCRYPTION_KEY: z.string().min(1),

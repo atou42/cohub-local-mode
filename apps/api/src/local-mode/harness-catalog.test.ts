@@ -40,6 +40,13 @@ test("Codex cache exposes only visible models with exact effort menus", () => {
           { effort: "max" },
           { effort: "ultra" },
         ],
+        additional_speed_tiers: ["fast"],
+        service_tiers: [{
+          id: "priority",
+          name: "Fast",
+          description: "1.5x speed, increased usage",
+        }],
+        default_service_tier: null,
         input_modalities: ["text", "image"],
       },
     ],
@@ -58,6 +65,12 @@ test("Codex cache exposes only visible models with exact effort menus", () => {
     "ultra",
   ]);
   assert.equal(catalog[0]?.model.defaultThinkingLevel, "low");
+  assert.deepEqual(catalog[0]?.model.serviceTiers, [{
+    id: "priority",
+    name: "Fast",
+    description: "1.5x speed, increased usage",
+  }]);
+  assert.equal(catalog[0]?.model.defaultServiceTier, null);
 });
 
 test("Grok cache preserves the per-model effort difference", () => {
@@ -142,6 +155,7 @@ test("external selection rejects cross-harness models and unsupported effort", a
       provider: "codex",
       model: "gpt-5.6-sol",
       thinkingLevel: "high",
+      serviceTier: null,
     });
     assert.deepEqual(crossHarness, {
       ok: false,
@@ -154,6 +168,7 @@ test("external selection rejects cross-harness models and unsupported effort", a
       provider: "grok_build",
       model: "grok-4.5",
       thinkingLevel: "xhigh",
+      serviceTier: null,
     });
     assert.equal(unsupported.ok, false);
     assert.equal(unsupported.code, "effort_unavailable");
@@ -163,10 +178,74 @@ test("external selection rejects cross-harness models and unsupported effort", a
       provider: "grok_build",
       model: "grok-4.5",
       thinkingLevel: "medium",
+      serviceTier: null,
     });
     assert.equal(supported.ok, true);
+
+    const syntheticFast = await validateExternalHarnessSelection({
+      harness: "grok_build",
+      provider: "grok_build",
+      model: "grok-4.5",
+      thinkingLevel: "low",
+      serviceTier: "priority",
+    });
+    assert.equal(syntheticFast.ok, false);
+    assert.equal(syntheticFast.code, "service_tier_unavailable");
   } finally {
     if (previous === undefined) delete process.env.GROK_HOME;
     else process.env.GROK_HOME = previous;
+  }
+});
+
+test("Codex selection accepts only service tiers declared by that model", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-codex-catalog-"));
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "models_cache.json"), JSON.stringify({
+    fetched_at: new Date().toISOString(),
+    client_version: "0.148.0",
+    models: [{
+      slug: "gpt-5.6-sol",
+      display_name: "GPT-5.6-Sol",
+      visibility: "list",
+      default_reasoning_level: "low",
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+      additional_speed_tiers: ["fast"],
+      service_tiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }],
+      default_service_tier: null,
+    }, {
+      slug: "gpt-5.4-mini",
+      display_name: "GPT-5.4-Mini",
+      visibility: "list",
+      default_reasoning_level: "medium",
+      supported_reasoning_levels: [{ effort: "medium" }],
+      additional_speed_tiers: [],
+      service_tiers: [],
+      default_service_tier: null,
+    }],
+  }));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = root;
+  try {
+    const fast = await validateExternalHarnessSelection({
+      harness: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "high",
+      serviceTier: "priority",
+    });
+    assert.equal(fast.ok, true);
+
+    const unsupported = await validateExternalHarnessSelection({
+      harness: "codex",
+      provider: "codex",
+      model: "gpt-5.4-mini",
+      thinkingLevel: "medium",
+      serviceTier: "priority",
+    });
+    assert.equal(unsupported.ok, false);
+    assert.equal(unsupported.code, "service_tier_unavailable");
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
   }
 });

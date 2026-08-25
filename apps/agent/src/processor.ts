@@ -48,6 +48,7 @@ import {
   setCurrentSessionExecutionAuth,
 } from "./runtime/session-execution-auth.js";
 import { resolveSpaceFileVisibility } from "./runtime/cross-space-query-access.js";
+import { mergeSpaceMentionOrigins } from "./runtime/space-mention-origins.js";
 import { normalizeGenerationPolicy } from "@cohub/protocol/generation";
 import { runWithToolExecutionContext } from "./tool-context.js";
 import {
@@ -85,6 +86,11 @@ import {
   runExternalHarness,
   splitExternalHarnessContent,
 } from "./external-harness.js";
+import {
+  appendCloudSpaceReadInstructions,
+  buildExternalHarnessEnvironment,
+} from "./external-harness-context.js";
+import { createExternalProgressPublisher } from "./external-progress-publisher.js";
 import {
   getPromptAuthScopes,
   parsePromptEnv,
@@ -928,6 +934,16 @@ function resolveRequestedThinkingLevel(
   return trimmed || null;
 }
 
+function resolveRequestedServiceTier(
+  ownerMeta: Record<string, unknown>,
+): string | null | undefined {
+  if (!Object.hasOwn(ownerMeta, "requestedServiceTier")) return undefined;
+  if (ownerMeta.requestedServiceTier === null) return null;
+  if (typeof ownerMeta.requestedServiceTier !== "string") return undefined;
+  const trimmed = ownerMeta.requestedServiceTier.trim();
+  return trimmed || undefined;
+}
+
 function resolveActorUserId(ownerMeta: Record<string, unknown>) {
   return typeof ownerMeta.userId === "string" && ownerMeta.userId.trim()
     ? ownerMeta.userId.trim()
@@ -1255,6 +1271,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
           const harness = sessionHarness.agentHarness;
           const requestedModel = resolveRequestedModel(ownerMeta);
           const requestedThinkingLevel = resolveRequestedThinkingLevel(ownerMeta);
+          const requestedServiceTier = resolveRequestedServiceTier(ownerMeta);
           if (!requestedModel || requestedModel.provider !== harness) {
             throw new UnrecoverableError(
               `${harness} turn is missing its validated model selection`,
@@ -1292,11 +1309,15 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               }),
             });
           }
-          const prompt = externalMessages
+          const rawPrompt = externalMessages
             .map((item) => externalPromptFromContent(item.content))
             .filter(Boolean)
             .join("\n\n");
-          if (!prompt) throw new Error(`${harness} requires a text prompt`);
+          if (!rawPrompt) throw new Error(`${harness} requires a text prompt`);
+          const prompt = appendCloudSpaceReadInstructions(
+            rawPrompt,
+            externalMessages.map((item) => item.content),
+          );
           const anchorUserMessageId =
             batch.executionBatch.anchorUserMessageId ??
             externalMessages.at(-1)?.userMessageId ??
@@ -1306,6 +1327,35 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               "External harness turn is missing an anchor user message",
             );
           }
+
+          const externalExecutionScopes = getPromptAuthScopes(
+            promptContext?.auth,
+            data.spaceId,
+          );
+          const externalExecutionToken = await createAgentExecutionToken({
+            actorUserId,
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            turnId: null,
+            source:
+              typeof ownerMeta.source === "string" && ownerMeta.source.trim()
+                ? ownerMeta.source.trim()
+                : "external_harness",
+            scopes: externalExecutionScopes,
+          });
+          const externalEnvironment = buildExternalHarnessEnvironment({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            actorUserId,
+            executionToken: externalExecutionToken,
+            apiBaseUrl: env.INTERNAL_API_BASE_URL ?? "",
+            cliPath: env.LOCAL_COHUB_CLI_PATH ?? "",
+          });
+          const externalExecutionContextKey = [
+            actorUserId,
+            [...externalExecutionScopes].sort().join(","),
+            Math.floor(Date.now() / (12 * 60 * 60_000)),
+          ].join(":");
 
           const abortController = new AbortController();
           activeTurn = { id: batch.ownerTurn.id, controller: abortController };
@@ -1317,6 +1367,45 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
           }
           let identityUpdate = Promise.resolve();
           const startedAt = new Date().toISOString();
+          const streamMessageId = `turn:${batch.ownerTurn.id}:assistant:0`;
+          let latestExternalProgress: ContentBlock[] = [];
+          const externalProgressPublisher = createExternalProgressPublisher({
+            publish: async ({ seq, baseSeq, content, turnEnd }) => {
+              await sendOutput({
+                  type: "stream_update",
+                  spaceId: data.spaceId,
+                  sessionId: data.sessionId,
+                  turnId: batch.ownerTurn.id,
+                  seq,
+                  baseSeq,
+                  content,
+                  snapshotContent: content,
+                  messageId: streamMessageId,
+                  messageOrdinal: 0,
+                  sourceMessageId: anchorUserMessageId,
+                  anchorUserMessageId,
+                  timestamp: Date.now(),
+                  ...(turnEnd ? { turnEnd: true } : {}),
+              });
+            },
+            onError: (error) => {
+              logger.warn(
+                `[ExternalHarness] failed to publish live progress harness=${harness} sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}`,
+                error,
+              );
+            },
+          });
+
+          const publishExternalProgress = (
+            content: ContentBlock[],
+            turnEnd = false,
+          ) => {
+            latestExternalProgress = externalProgressPublisher.enqueue(
+              content,
+              turnEnd,
+            );
+          };
+
           try {
             const result = await runExternalHarness({
               harness,
@@ -1324,10 +1413,13 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               sessionId: data.sessionId,
               turnId: batch.ownerTurn.id,
               prompt,
+              environment: externalEnvironment,
+              executionContextKey: externalExecutionContextKey,
               externalSessionId: sessionHarness.externalSessionId,
               accessMode,
               model: requestedModel.id,
               thinkingLevel: requestedThinkingLevel,
+              serviceTier: harness === "codex" ? requestedServiceTier : undefined,
               abortSignal: abortController.signal,
               onExternalSessionId: (externalSessionId) => {
                 identityUpdate = identityUpdate.then(() =>
@@ -1338,8 +1430,22 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                   }),
                 );
               },
+              onProgress: (progress) => {
+                publishExternalProgress(
+                  progress.content,
+                  progress.kind === "completed",
+                );
+              },
             });
-            await identityUpdate;
+            await Promise.all([identityUpdate, externalProgressPublisher.flush()]);
+            const externalProgressPublishError =
+              externalProgressPublisher.getLastError();
+            if (externalProgressPublishError) {
+              logger.warn(
+                `[ExternalHarness] completed with degraded live delivery harness=${harness} sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}`,
+                externalProgressPublishError,
+              );
+            }
             const externalContent = splitExternalHarnessContent(result.content);
             const assistantMeta = {
               turnId: batch.ownerTurn.id,
@@ -1347,6 +1453,12 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               externalSessionId: result.externalSessionId,
               requestedThinkingLevel,
               effectiveThinkingLevel: result.thinkingLevel,
+              ...(harness === "codex"
+                ? {
+                    requestedServiceTier: requestedServiceTier ?? null,
+                    effectiveServiceTier: requestedServiceTier ?? null,
+                  }
+                : {}),
             };
             if (externalContent.intermediate.length > 0) {
               await persistAssistantMessage({
@@ -1414,7 +1526,10 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               abortController.signal.aborted ||
               (error instanceof Error && error.message === "aborted")
             ) {
-              await identityUpdate;
+              await Promise.all([
+                identityUpdate,
+                externalProgressPublisher.flush(),
+              ]);
               await abortSessionTurn({
                 spaceId: data.spaceId,
                 sessionId: data.sessionId,
@@ -1428,6 +1543,45 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                 reason: "external_harness_aborted",
               };
               return { skipped: "abort_requested", turnId: batch.ownerTurn.id };
+            }
+            await Promise.all([identityUpdate, externalProgressPublisher.flush()]);
+            if (latestExternalProgress.length > 0) {
+              await persistAssistantMessage({
+                spaceId: data.spaceId,
+                spaceSessionId: data.sessionId,
+                userMessageId: anchorUserMessageId,
+                turnId: batch.ownerTurn.id,
+                userId: actorUserId,
+                startedAt,
+                completedAt: new Date().toISOString(),
+                messageOrdinal: 0,
+                thinkingLevel: requestedThinkingLevel,
+                event: {
+                  type: "turn_end",
+                  message: {
+                    role: "assistant",
+                    content: latestExternalProgress,
+                    provider: harness,
+                    model: requestedModel.id,
+                    stopReason: "tool_use",
+                    usage: null,
+                    meta: {
+                      turnId: batch.ownerTurn.id,
+                      agentHarness: harness,
+                      externalSessionId: sessionHarness.externalSessionId,
+                      requestedThinkingLevel,
+                      effectiveThinkingLevel: requestedThinkingLevel,
+                      ...(harness === "codex"
+                        ? {
+                            requestedServiceTier: requestedServiceTier ?? null,
+                            effectiveServiceTier: requestedServiceTier ?? null,
+                          }
+                        : {}),
+                      runtimeFailed: true,
+                    },
+                  },
+                },
+              });
             }
             throw error;
           }
@@ -1475,6 +1629,9 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               readUrlImage: readPublicAssetImageUrl,
             }),
           })),
+        );
+        const spaceMentionOrigins = mergeSpaceMentionOrigins(
+          turnUserMessages.map((item) => item.content),
         );
         for (const item of turnUserMessages) {
           const meta = normalizeTurnUserMeta(item);
@@ -1579,6 +1736,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                   executionScopes,
                   sourceClientId,
                   fileVisibility,
+                  spaceMentionOrigins,
                   requestId,
                   metrics: turnMetrics,
                   assistantMessageTiming,
@@ -1673,6 +1831,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                 executionScopes,
                 sourceClientId,
                 fileVisibility,
+                spaceMentionOrigins,
                 requestId,
                 metrics: turnMetrics,
                 assistantMessageTiming,
