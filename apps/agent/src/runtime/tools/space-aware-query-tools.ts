@@ -7,13 +7,14 @@ import { assertCrossSpaceQueryPathAllowed } from "./query-path-policy.js";
 
 const SPACE_ID_DESCRIPTION = "UUID of another space to query. Omit for the current space.";
 
-type AccessCheck = (spaceId: string) => Promise<AgentFileVisibility>;
+type AccessCheck = (spaceId: string, provider: SandboxProvider) => Promise<AgentFileVisibility>;
 type SandboxProvider = "cloud" | "local";
 type SandboxProviderResolver = (spaceId: string) => Promise<SandboxProvider>;
 
 type SpaceAwareToolOptions = {
   sandboxTool: AgentTool;
   crossSpaceTool: AgentTool;
+  remoteCloudTool?: AgentTool;
   checkAccess: AccessCheck;
   resolveSandboxProvider: SandboxProviderResolver;
 };
@@ -58,19 +59,20 @@ function routeExecute(options: SpaceAwareToolOptions) {
 
     if (isCrossSpace) {
       assertCrossSpaceQueryPathAllowed(getQueryPath(params));
-      visibility = await checkAccess(targetSpaceId);
       const provider = await options.resolveSandboxProvider(targetSpaceId);
+      visibility = await checkAccess(targetSpaceId, provider);
       if (provider === "local") {
         if (visibility === "filtered") {
           throw new Error("Filtered file access is not available for local sandboxes.");
         }
       } else {
-        tool = crossSpaceTool;
+        tool = options.remoteCloudTool ?? crossSpaceTool;
       }
     }
 
     return runWithToolExecutionContext({
       ...ctx,
+      sourceSpaceId: ctx.sourceSpaceId ?? ctx.spaceId,
       spaceId: targetSpaceId,
       ...(visibility ? { fileVisibility: visibility } : {}),
     }, () => tool.execute(toolCallId, withoutSpaceId(params), signal, onUpdate));

@@ -151,6 +151,7 @@ async function writePlist(id, cloudflaredPath) {
     EnvironmentVariables: {
       COHUB_CLOUDFLARED_BIN: cloudflaredPath,
       PATH: path,
+      TUNNEL_TRANSPORT_PROTOCOL: "http2",
     },
     RunAtLoad: true,
     KeepAlive: true,

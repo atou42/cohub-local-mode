@@ -55,6 +55,7 @@ type SandboxCapabilities struct {
 	FSGrep             bool `json:"fsGrep"`
 	ProcessStart       bool `json:"processStart"`
 	ProcessStartArgv   bool `json:"processStartArgv,omitempty"`
+	ProcessWrite       bool `json:"processWrite,omitempty"`
 	ProcessAbort       bool `json:"processAbort"`
 }
 
