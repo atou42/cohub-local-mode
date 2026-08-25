@@ -48,9 +48,11 @@ import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
 import { localRelayCommandFailure } from "$lib/local-node-error";
 import {
+	cancelLocalRelayCommand,
 	getLocalRelayNodeStatus,
 	isLocalRelayEnabled,
 	listPendingLocalRelayCommands,
+	openLocalRelayEvents,
 	type PendingLocalRelayCommand,
 	registerPendingLocalRelayCommand,
 	removePendingLocalRelayCommand,
@@ -58,6 +60,10 @@ import {
 	uploadLocalRelayAttachment,
 	waitForLocalRelayCommand,
 } from "$lib/local-relay-client";
+import type {
+	LocalRelayEventCommand,
+	LocalRelayTurnEvent,
+} from "$lib/local-relay-events";
 import { extractSpaceMentionsFromText } from "$lib/mentions/space";
 import {
 	formatThinkingLevelShort,
@@ -158,6 +164,13 @@ import { createSessionShareController } from "./session-share-controller.svelte"
 import { createSessionTaskController } from "./session-task-controller.svelte";
 import { createSessionTurnLoadingController } from "./session-turn-loading-controller.svelte";
 import {
+	decideRelayCommandReconcile,
+	decideRelayTurnEvent,
+	findOptimisticTurnForRelayCommand,
+	mergeRelayCommandStatuses,
+	queuedRelayCancelTargets,
+} from "./local-relay-event-plane";
+import {
 	adoptPromptSessionState,
 	areSessionTurnsEqual,
 	getTurnClientMessageId,
@@ -242,6 +255,14 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		"unknown",
 	);
 	const relayCommandWatches = new Map<string, AbortController>();
+	let relayEventsClose: (() => void) | null = null;
+	let relayEventsLive = false;
+	let relayCommandStatusById = $state<
+		Record<string, LocalRelayEventCommand["status"]>
+	>({});
+	let pendingRelayCommands = $state<PendingLocalRelayCommand[]>([]);
+	let cancellingRelayCommandIds = $state<Record<string, true>>({});
+	const seenRelayEventIds = new Set<string>();
 	/** Space id this host currently holds a generation lease for (null if none). */
 	let leasedSpaceId: string | null = null;
 
@@ -822,6 +843,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					? "Cloud relay is unavailable."
 					: ""),
 	);
+	const queuedRelayCancels = $derived.by(() =>
+		queuedRelayCancelTargets(pendingRelayCommands, relayCommandStatusById),
+	);
 	const composerShowsBillingAction = $derived(
 		isBillingAccessBlockedCode(activeStreamErrorCode) ||
 			isBillingAccessBlockedCode(composerErrorCode),
@@ -834,6 +858,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		);
 		if (!enabled) {
 			relayStatus = "unknown";
+			closeRelayEventConnection();
+			stopAllRelayCommandWatches();
 			return;
 		}
 		let stopped = false;
@@ -861,12 +887,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			}
 		};
 		void refresh();
-		untrack(() => resumePendingRelayCommands(currentSpaceId));
+		untrack(() => {
+			refreshPendingRelayCommands(currentSpaceId);
+			startRelayEventConnection(currentSpaceId);
+		});
 		const timer = setInterval(refresh, 3_000);
 		return () => {
 			stopped = true;
 			clearInterval(timer);
 			requestController?.abort();
+			closeRelayEventConnection();
+			stopAllRelayCommandWatches();
 		};
 	});
 	const activeSessionIsRunning = $derived.by(() =>
@@ -2841,44 +2872,91 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		});
 	}
 
-	async function reconcileRelayCommand(
-		pending: PendingLocalRelayCommand,
-		command: Awaited<ReturnType<typeof waitForLocalRelayCommand>>,
+	function refreshPendingRelayCommands(currentSpaceId = spaceId) {
+		try {
+			pendingRelayCommands = currentSpaceId
+				? listPendingLocalRelayCommands(currentSpaceId)
+				: [];
+		} catch (error) {
+			pendingRelayCommands = [];
+			setComposerError(
+				error instanceof Error
+					? error.message
+					: "Local relay recovery data could not be loaded",
+				"relay_recovery_failed",
+			);
+		}
+	}
+
+	function noteRelayCommandStatus(
+		command: Pick<LocalRelayEventCommand, "id" | "status">,
 	) {
-		if (command.status !== "succeeded" || !command.result) {
-			const failure = localRelayCommandFailure(command);
-			failGeneration(pending.sessionId, failure.message, {
-				errorCode: failure.code,
-			});
+		relayCommandStatusById = mergeRelayCommandStatuses(relayCommandStatusById, [
+			command,
+		]);
+	}
+
+	function closeRelayEventConnection() {
+		relayEventsClose?.();
+		relayEventsClose = null;
+		relayEventsLive = false;
+	}
+
+	function stopAllRelayCommandWatches() {
+		for (const controller of relayCommandWatches.values()) controller.abort();
+		relayCommandWatches.clear();
+	}
+
+	function stopRelayCommandWatch(commandId: string) {
+		const controller = relayCommandWatches.get(commandId);
+		if (!controller) return;
+		controller.abort();
+		relayCommandWatches.delete(commandId);
+	}
+
+	function applyCancelledRelayCommand(pending: PendingLocalRelayCommand) {
+		stopRelayCommandWatch(pending.commandId);
+		removePendingLocalRelayCommand(pending.commandId);
+		refreshPendingRelayCommands(pending.spaceId);
+		if (disposed || spaceId !== pending.spaceId) return;
+		const current = sessionStateById[pending.sessionId];
+		if (!current) {
+			const generation = sessionGenerationStore.get(pending.sessionId);
 			if (
-				!disposed &&
-				spaceId === pending.spaceId &&
-				activeSessionId === pending.sessionId
+				generation?.turnId &&
+				generation.turnId === pending.optimisticTurnId
 			) {
-				setComposerError(failure.message, failure.code);
+				completeGeneration(pending.sessionId);
 			}
-			removePendingLocalRelayCommand(pending.commandId);
 			return;
 		}
-		let payload: unknown;
-		try {
-			payload = JSON.parse(command.result.body);
-		} catch (error) {
-			throw new Error("Local node returned an invalid relay result", {
-				cause: error,
-			});
-		}
-		const record = payload as {
-			session?: SessionRecord;
-			turn?: SessionTurnRecord;
+		const optimistic = findOptimisticTurnForRelayCommand(current.turns, {
+			commandId: pending.commandId,
+			optimisticTurnId: pending.optimisticTurnId,
+		});
+		const removeId = optimistic?.id ?? pending.optimisticTurnId;
+		workspace.sessionStateById = {
+			...sessionStateById,
+			[pending.sessionId]: {
+				...current,
+				turns: current.turns.filter((turn) => turn.id !== removeId),
+			},
 		};
+		const generation = sessionGenerationStore.get(pending.sessionId);
 		if (
-			record.session?.id !== pending.sessionId ||
-			record.turn?.sessionId !== pending.sessionId ||
-			!record.turn.id
+			generation?.turnId &&
+			(generation.turnId === removeId ||
+				generation.turnId === pending.optimisticTurnId)
 		) {
-			throw new Error("Local node returned a mismatched Session result");
+			completeGeneration(pending.sessionId);
 		}
+	}
+
+	async function applySucceededRelayTurn(
+		pending: PendingLocalRelayCommand,
+		record: { session: SessionRecord; turn: SessionTurnRecord },
+		completeGenerationWhenTerminal: boolean,
+	) {
 		await sessionTurnsRepo.replaceTurnId(
 			pending.spaceId,
 			pending.sessionId,
@@ -2899,6 +2977,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			},
 		);
 		removePendingLocalRelayCommand(pending.commandId);
+		refreshPendingRelayCommands(pending.spaceId);
 		if (disposed || spaceId !== pending.spaceId) return;
 		applyAcceptedTurnId({
 			sessionId: pending.sessionId,
@@ -2925,15 +3004,194 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			},
 		};
 		upsertSessionRecord(record.session);
-		completeGenerationForTurn(pending.sessionId, record.turn.id);
+		if (completeGenerationWhenTerminal) {
+			completeGenerationForTurn(pending.sessionId, record.turn.id);
+		}
+	}
+
+	function applyRelayTerminalTurn(
+		sessionId: string,
+		turn: SessionTurnRecord,
+		session: SessionRecord | null,
+	) {
+		const state = sessionStateById[sessionId];
+		if (!state) {
+			completeGenerationForTurn(sessionId, turn.id);
+			return;
+		}
+		const clientMessageId = getTurnClientMessageId(turn);
+		const optimisticTurn = state.turns.find(
+			(item) =>
+				isOptimisticTurn(item) &&
+				isSameClientMessageTurn(item, clientMessageId),
+		);
+		if (optimisticTurn?.id && optimisticTurn.id !== turn.id) {
+			applyAcceptedTurnId({
+				sessionId,
+				previousTurnId: optimisticTurn.id,
+				nextTurnId: turn.id,
+				confirmedTurn: turn,
+			});
+		}
+		const current = sessionStateById[sessionId] ?? state;
+		workspace.sessionStateById = {
+			...sessionStateById,
+			[sessionId]: {
+				...current,
+				...(session ? { session } : {}),
+				turns: normalizeTurnDuplicates(
+					mergeTurnsById(current.turns, [turn], { preferIncoming: true }),
+				),
+			},
+		};
+		if (session) upsertSessionRecord(session);
+		clearIntermediateHandoffIfPersisted(sessionId, turn.id);
+		completeGenerationForTurn(sessionId, turn.id);
+	}
+
+	async function reconcileRelayCommand(
+		pending: PendingLocalRelayCommand,
+		command: LocalRelayEventCommand,
+	) {
+		noteRelayCommandStatus(command);
+		const decision = decideRelayCommandReconcile(pending, command);
+		if (decision.action === "ignore-nonterminal") return;
+		if (decision.action === "cancelled") {
+			applyCancelledRelayCommand(pending);
+			return;
+		}
+		if (decision.action === "failed") {
+			const failure = localRelayCommandFailure(command);
+			failGeneration(pending.sessionId, failure.message, {
+				errorCode: failure.code,
+			});
+			if (
+				!disposed &&
+				spaceId === pending.spaceId &&
+				activeSessionId === pending.sessionId
+			) {
+				setComposerError(failure.message, failure.code);
+			}
+			stopRelayCommandWatch(pending.commandId);
+			removePendingLocalRelayCommand(pending.commandId);
+			refreshPendingRelayCommands(pending.spaceId);
+			return;
+		}
+		if (decision.action === "succeeded-truncated") {
+			stopRelayCommandWatch(pending.commandId);
+			removePendingLocalRelayCommand(pending.commandId);
+			refreshPendingRelayCommands(pending.spaceId);
+			return;
+		}
+		if (decision.action === "invalid-payload") {
+			throw new Error(decision.error);
+		}
+		await applySucceededRelayTurn(
+			pending,
+			{
+				session: decision.session as unknown as SessionRecord,
+				turn: decision.turn as unknown as SessionTurnRecord,
+			},
+			decision.completeGeneration,
+		);
+		stopRelayCommandWatch(pending.commandId);
+	}
+
+	function handleRelayTurnEvent(event: LocalRelayTurnEvent) {
+		const decision = decideRelayTurnEvent(event, {
+			spaceId,
+			seenEventIds: seenRelayEventIds,
+		});
+		if (decision.action === "ignore") return;
+		if (decision.action === "hydrate-truncated") {
+			completeGenerationForTurn(decision.sessionId, decision.turnId);
+			void hydrateTurnOnce({
+				sessionId: decision.sessionId,
+				turnId: decision.turnId,
+				reason: "relay.turn.event",
+			});
+			return;
+		}
+		applyRelayTerminalTurn(
+			decision.sessionId,
+			decision.turn as unknown as SessionTurnRecord,
+			decision.session as SessionRecord | null,
+		);
+	}
+
+	function handleRelaySnapshot(input: {
+		commands: LocalRelayEventCommand[];
+		events: LocalRelayTurnEvent[];
+	}) {
+		relayCommandStatusById = mergeRelayCommandStatuses(
+			relayCommandStatusById,
+			input.commands,
+		);
+		refreshPendingRelayCommands();
+		const pendingById = new Map(
+			pendingRelayCommands.map((item) => [item.commandId, item]),
+		);
+		for (const command of input.commands) {
+			const pending = pendingById.get(command.id);
+			if (!pending) continue;
+			void reconcileRelayCommand(pending, command).catch((error) => {
+				console.warn("[local-relay] snapshot command reconcile failed", error);
+			});
+		}
+		for (const event of input.events) {
+			handleRelayTurnEvent(event);
+		}
+	}
+
+	function startRelayEventConnection(currentSpaceId: string) {
+		closeRelayEventConnection();
+		const controller = new AbortController();
+		const connection = openLocalRelayEvents(
+			{
+				onSnapshot: (message) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					handleRelaySnapshot(message);
+				},
+				onCommandUpdated: (command) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					noteRelayCommandStatus(command);
+					const pending = pendingRelayCommands.find(
+						(item) => item.commandId === command.id,
+					);
+					if (!pending) return;
+					void reconcileRelayCommand(pending, command).catch((error) => {
+						console.warn("[local-relay] command update reconcile failed", error);
+					});
+				},
+				onTurnEvent: (event) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					handleRelayTurnEvent(event);
+				},
+				onAvailable: () => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					relayEventsLive = true;
+					stopAllRelayCommandWatches();
+				},
+				onUnavailable: () => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					relayEventsLive = false;
+					resumePendingRelayCommandWatches(currentSpaceId);
+				},
+			},
+			{ signal: controller.signal },
+		);
+		relayEventsClose = () => {
+			controller.abort();
+			connection.close();
+		};
 	}
 
 	function watchPendingRelayCommand(pending: PendingLocalRelayCommand) {
-		if (relayCommandWatches.has(pending.commandId)) return;
+		if (relayEventsLive || relayCommandWatches.has(pending.commandId)) return;
 		const controller = new AbortController();
 		relayCommandWatches.set(pending.commandId, controller);
 		void (async () => {
-			while (!disposed && !controller.signal.aborted) {
+			while (!disposed && !controller.signal.aborted && !relayEventsLive) {
 				try {
 					const command = await waitForLocalRelayCommand(pending.commandId, {
 						signal: controller.signal,
@@ -2941,7 +3199,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					await reconcileRelayCommand(pending, command);
 					return;
 				} catch (error) {
-					if (controller.signal.aborted || disposed) return;
+					if (controller.signal.aborted || disposed || relayEventsLive) return;
 					console.warn("[local-relay] result recovery retry", error);
 					relayStatus = "cloud-error";
 					await waitForRelayRetry(controller.signal);
@@ -2952,18 +3210,51 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		});
 	}
 
-	function resumePendingRelayCommands(currentSpaceId: string) {
+	function resumePendingRelayCommandWatches(currentSpaceId: string) {
+		refreshPendingRelayCommands(currentSpaceId);
+		for (const pending of pendingRelayCommands) {
+			watchPendingRelayCommand(pending);
+		}
+	}
+
+	async function cancelQueuedRelayCommand(commandId: string) {
+		if (cancellingRelayCommandIds[commandId]) return;
+		const pending = pendingRelayCommands.find(
+			(item) => item.commandId === commandId,
+		);
+		if (!pending) return;
+		if (relayCommandStatusById[commandId] !== "queued") return;
+		cancellingRelayCommandIds = {
+			...cancellingRelayCommandIds,
+			[commandId]: true,
+		};
 		try {
-			for (const pending of listPendingLocalRelayCommands(currentSpaceId)) {
-				watchPendingRelayCommand(pending);
-			}
+			const command = await cancelLocalRelayCommand(commandId);
+			noteRelayCommandStatus(command);
+			await reconcileRelayCommand(pending, command);
 		} catch (error) {
+			const code =
+				error && typeof error === "object" && "code" in error
+					? String(error.code)
+					: "";
+			if (code === "command_active") {
+				noteRelayCommandStatus({ id: commandId, status: "claimed" });
+				setComposerError(
+					"Already being delivered — cannot withdraw.",
+					"command_active",
+				);
+				return;
+			}
 			setComposerError(
 				error instanceof Error
 					? error.message
-					: "Local relay recovery data could not be loaded",
-				"relay_recovery_failed",
+					: "Relay command could not be withdrawn",
+				code || "relay_cancel_failed",
 			);
+		} finally {
+			const next = { ...cancellingRelayCommandIds };
+			delete next[commandId];
+			cancellingRelayCommandIds = next;
 		}
 	}
 
@@ -3760,6 +4051,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 							? error.message
 							: "Relay recovery could not be saved";
 				}
+				noteRelayCommandStatus(relayCommand);
 				const now = new Date().toISOString();
 				const relaySession: SessionRecord = targetSessionState?.session ?? {
 					id: sessionId,
@@ -3778,39 +4070,47 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					createdAt: now,
 					updatedAt: now,
 				};
-				const relayTurn: SessionTurnRecord = optimisticTurn ?? {
-					id: optimisticTurnId,
-					sessionId,
-					userUuid: currentUser.uuid,
-					sequence: (targetSessionState?.turns.at(-1)?.sequence ?? 0) + 1,
-					status: "queued",
-					intent: "followup",
-					userContent: content,
-					userText: text,
-					assistantContent: null,
-					assistantText: null,
-					provider: model?.provider ?? null,
-					model: model?.id ?? null,
-					stopReason: null,
-					errorMessage: null,
-					finalUsage: null,
-					totalUsage: null,
-					summary: null,
-					intermediateIndex: null,
-					intermediateSummary: null,
-					meta: {
-						optimistic: true,
-						userId: currentUser.uuid,
-						clientMessageId,
-						relayCommandId,
-					},
-					authorProfile: currentUser.profile,
-					startedAt: now,
-					completedAt: null,
-					durationMs: null,
-					createdAt: now,
-					updatedAt: now,
-				};
+				const relayTurn: SessionTurnRecord = optimisticTurn
+					? {
+							...optimisticTurn,
+							meta: {
+								...(optimisticTurn.meta ?? {}),
+								relayCommandId,
+							},
+						}
+					: {
+							id: optimisticTurnId,
+							sessionId,
+							userUuid: currentUser.uuid,
+							sequence: (targetSessionState?.turns.at(-1)?.sequence ?? 0) + 1,
+							status: "queued",
+							intent: "followup",
+							userContent: content,
+							userText: text,
+							assistantContent: null,
+							assistantText: null,
+							provider: model?.provider ?? null,
+							model: model?.id ?? null,
+							stopReason: null,
+							errorMessage: null,
+							finalUsage: null,
+							totalUsage: null,
+							summary: null,
+							intermediateIndex: null,
+							intermediateSummary: null,
+							meta: {
+								optimistic: true,
+								userId: currentUser.uuid,
+								clientMessageId,
+								relayCommandId,
+							},
+							authorProfile: currentUser.profile,
+							startedAt: now,
+							completedAt: null,
+							durationMs: null,
+							createdAt: now,
+							updatedAt: now,
+						};
 				sendResult = {
 					mode: "immediate",
 					session: relaySession,
@@ -3898,7 +4198,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				}
 			}
 			if (pendingRelayCommand && sessionId) {
-				watchPendingRelayCommand(pendingRelayCommand);
+				refreshPendingRelayCommands(opSpaceId);
+				if (!relayEventsLive) watchPendingRelayCommand(pendingRelayCommand);
 				if (relayRecoveryPersistError) {
 					setComposerError(
 						relayRecoveryPersistError,
@@ -4997,8 +5298,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		scroll.clearPendingVimG();
 		scroll.cancelTurnMarkerMeasure();
 		clearAllPostSendRecovery();
-		for (const controller of relayCommandWatches.values()) controller.abort();
-		relayCommandWatches.clear();
+		closeRelayEventConnection();
+		stopAllRelayCommandWatches();
 		composer.sending = false;
 		composer.aborting = false;
 		// Release generation lease only if this host still holds it.
@@ -5187,6 +5488,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get composerNotice() {
 			return composerNotice;
 		},
+		get queuedRelayCancels() {
+			return queuedRelayCancels;
+		},
+		get cancellingRelayCommandIds() {
+			return cancellingRelayCommandIds;
+		},
+		cancelQueuedRelayCommand,
 		get composerShowsBillingAction() {
 			return composerShowsBillingAction;
 		},
