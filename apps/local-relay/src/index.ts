@@ -1,6 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
 import { authorizeNodeRequest, authorizeOwnerRequest } from "./auth";
 import {
+	GC_ALARM_MS,
+	TURN_EVENT_MAX_STORED,
+	decideCancel,
+	decideExpiredCommand,
+	guardResultSize,
+	isTerminalCommandStatus,
+	selectOldestKeysForGc,
+	selectSnapshotCommands,
+	selectSnapshotEvents,
+	selectTerminalCommandsForGc,
+} from "./lifecycle";
+import {
 	assertRelayAttachmentFresh,
 	parseNodeMessage,
 	RELAY_PROTOCOL_VERSION,
@@ -13,6 +25,7 @@ import {
 	type RelayHttpResult,
 	type NodeToRelayMessage,
 	type RelayToNodeMessage,
+	type RelayTurnEvent,
 	type RelayWakeupMessage,
 	validateRelayAttachmentCreateInput,
 	validateRelayCommandInput,
@@ -38,7 +51,10 @@ const COMMAND_KEY_PREFIX = "command:";
 const COMMAND_ID_PREFIX = "command-id:";
 const IDEMPOTENCY_PREFIX = "idempotency:";
 const NEXT_SEQUENCE_KEY = "meta:next-sequence";
+const NEXT_EVENT_SEQUENCE_KEY = "meta:next-event-sequence";
 const ATTACHMENT_KEY_PREFIX = "attachment:";
+const TURN_EVENT_KEY_PREFIX = "turnevent:";
+const TURN_EVENT_ID_PREFIX = "turnevent-id:";
 
 type StoredRelayAttachment = RelayAttachment & {
 	uploadTokenHash: string;
@@ -67,6 +83,10 @@ function errorResponse(error: unknown) {
 
 function commandStorageKey(sequence: number, commandId: string) {
 	return `${COMMAND_KEY_PREFIX}${String(sequence).padStart(20, "0")}:${commandId}`;
+}
+
+function turnEventStorageKey(sequence: number) {
+	return `${TURN_EVENT_KEY_PREFIX}${String(sequence).padStart(20, "0")}`;
 }
 
 function attachmentStorageKey(attachmentId: string) {
@@ -104,7 +124,7 @@ function parseJsonBody<T = unknown>(request: Request): Promise<T> {
 }
 
 function isTerminal(status: RelayCommandStatus) {
-	return status === "succeeded" || status === "failed" || status === "cancelled";
+	return isTerminalCommandStatus(status);
 }
 
 function parsePositiveInteger(value: string, label: string) {
@@ -160,7 +180,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				return this.connectNode(request);
 			}
 			if (request.method === "GET" && url.pathname === "/internal/events") {
-				return this.connectBrowser(request);
+				return await this.connectBrowser(request);
 			}
 			if (request.method === "POST" && url.pathname === "/internal/commands") {
 				return await this.createCommand(request);
@@ -174,6 +194,12 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (request.method === "POST" && url.pathname === "/internal/wake") {
 				await this.dispatchNext();
 				return json({ ok: true });
+			}
+			const commandCancelMatch = url.pathname.match(
+				/^\/internal\/commands\/([^/]+)\/cancel$/,
+			);
+			if (request.method === "POST" && commandCancelMatch?.[1]) {
+				return this.cancelCommand(decodeURIComponent(commandCancelMatch[1]));
 			}
 			const commandMatch = url.pathname.match(/^\/internal\/commands\/([^/]+)$/);
 			if (request.method === "GET" && commandMatch?.[1]) {
@@ -350,11 +376,13 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			type: "ready",
 			nodeId: this.env.NODE_ID,
 		});
-		this.ctx.waitUntil(this.dispatchNext());
+		this.ctx.waitUntil(
+			Promise.all([this.ensurePeriodicAlarm(), this.dispatchNext()]),
+		);
 		return websocketResponse(client);
 	}
 
-	private connectBrowser(request: Request) {
+	private async connectBrowser(request: Request) {
 		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
 			throw new RelayProtocolError(
 				"upgrade_required",
@@ -364,6 +392,12 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 		const { client, server } = websocketPair();
 		this.ctx.acceptWebSocket(server, ["browser"]);
+		sendSocket(server, {
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "snapshot",
+			commands: selectSnapshotCommands(await this.listCommands()),
+			events: selectSnapshotEvents(await this.listTurnEvents()),
+		});
 		return websocketResponse(client);
 	}
 
@@ -467,10 +501,13 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 						console.error("[relay] queue wakeup enqueue failed", error);
 					}),
 					this.dispatchNext(),
+					this.ensurePeriodicAlarm(),
 				]),
 			);
 		} else {
-			this.ctx.waitUntil(this.dispatchNext());
+			this.ctx.waitUntil(
+				Promise.all([this.dispatchNext(), this.ensurePeriodicAlarm()]),
+			);
 		}
 		return json(
 			{
@@ -513,14 +550,22 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	private async requeueExpired(nowMs = Date.now()) {
 		for (const command of await this.listCommands()) {
-			if (
-				(command.status !== "claimed" && command.status !== "running") ||
-				!command.leaseExpiresAt ||
-				new Date(command.leaseExpiresAt).getTime() > nowMs
-			) {
+			const decision = decideExpiredCommand(command, nowMs);
+			if (decision.action === "keep") continue;
+			const now = new Date(nowMs).toISOString();
+			if (decision.action === "fail") {
+				await this.putCommand({
+					...command,
+					status: "failed",
+					updatedAt: now,
+					completedAt: now,
+					leaseExpiresAt: null,
+					errorCode: decision.errorCode,
+					errorMessage: decision.errorMessage,
+				});
+				this.ctx.waitUntil(this.collectGarbage(nowMs));
 				continue;
 			}
-			const now = new Date(nowMs).toISOString();
 			await this.putCommand({
 				...command,
 				status: "queued",
@@ -574,6 +619,10 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (parsed.commandId && parsed.attempt) {
 				await this.extendLease(parsed.commandId, parsed.attempt);
 			}
+			return;
+		}
+		if (parsed.type === "turn-event") {
+			await this.acceptTurnEvent(socket, parsed.event);
 			return;
 		}
 		const command = await this.getCommandById(parsed.commandId);
@@ -637,23 +686,34 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				message: "Command attempt is no longer active",
 				commandId: command.id,
 			});
+			// The node drops its stale state on this error; redeliver whatever is
+			// queued so a requeued command is not stranded until the next alarm.
+			await this.dispatchNext();
 			return;
 		}
 		if (parsed.type === "started") {
-			if (command.status !== "claimed" && command.status !== "running") {
-				throw new RelayProtocolError(
-					"invalid_transition",
-					`Cannot start command in ${command.status} state`,
-					409,
-				);
+			if (isTerminal(command.status)) {
+				sendSocket(socket, {
+					protocolVersion: RELAY_PROTOCOL_VERSION,
+					type: "ack",
+					commandId: command.id,
+					status: command.status,
+				});
+				return;
 			}
+			// A matching attempt on a "queued" command means the lease expired while
+			// the node was disconnected but still executing; resume that lease
+			// instead of rejecting, so the in-flight work is not lost.
 			const nowMs = Date.now();
 			const running: RelayCommand = {
 				...command,
 				status: "running",
+				claimedAt: command.claimedAt ?? new Date(nowMs).toISOString(),
 				startedAt: command.startedAt ?? new Date(nowMs).toISOString(),
 				updatedAt: new Date(nowMs).toISOString(),
 				leaseExpiresAt: new Date(nowMs + this.leaseMs).toISOString(),
+				errorCode: null,
+				errorMessage: null,
 			};
 			await this.putCommand(running);
 			await this.ctx.storage.setAlarm(nowMs + this.leaseMs);
@@ -665,20 +725,26 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			});
 			return;
 		}
-		if (command.status !== "claimed" && command.status !== "running") {
-			throw new RelayProtocolError(
-				"invalid_transition",
-				`Cannot finish command in ${command.status} state`,
-				409,
-			);
+		if (isTerminal(command.status)) {
+			// Duplicate or post-cancellation outcome: acknowledge idempotently so
+			// the node stops resending instead of failing with a silent throw.
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "ack",
+				commandId: command.id,
+				status: command.status,
+			});
+			return;
 		}
+		// "queued" with a matching attempt is the disconnect-requeue race: the
+		// node finished the work it started under this attempt, so accept it.
 		const now = new Date().toISOString();
 		let result: RelayHttpResult | null = null;
 		let status: RelayCommandStatus;
 		let errorCode: string | null = null;
 		let errorMessage: string | null = null;
 		if (parsed.type === "result") {
-			result = parsed.result;
+			result = guardResultSize(parsed.result);
 			status = parsed.result.status >= 200 && parsed.result.status < 300 ? "succeeded" : "failed";
 			if (status === "failed") {
 				errorCode = "local_api_rejected";
@@ -706,7 +772,9 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			commandId: completed.id,
 			status: completed.status,
 		});
+		this.ctx.waitUntil(this.collectGarbage(Date.now()));
 		await this.dispatchNext();
+		await this.scheduleNextAlarm();
 	}
 
 	private async extendLease(commandId: string, attempt: number) {
@@ -737,13 +805,146 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	async alarm() {
-		await this.requeueExpired();
+		const nowMs = Date.now();
+		await this.requeueExpired(nowMs);
 		await this.dispatchNext();
-		const active = (await this.listCommands()).find(
-			(command) => command.status === "claimed" || command.status === "running",
+		await this.collectGarbage(nowMs);
+		await this.scheduleNextAlarm(nowMs);
+	}
+
+	private async cancelCommand(commandId: string) {
+		const command = await this.getCommandById(commandId);
+		if (!command) {
+			return json({ code: "command_not_found", message: "Command not found" }, 404);
+		}
+		const decision = decideCancel(command);
+		if (decision.action === "conflict") {
+			return json({ code: "command_active", message: "Command is actively leased" }, 409);
+		}
+		if (decision.action === "noop") {
+			return json({ command });
+		}
+		const now = new Date().toISOString();
+		const cancelled: RelayCommand = {
+			...command,
+			status: "cancelled",
+			completedAt: now,
+			updatedAt: now,
+			errorCode: "cancelled_by_user",
+			errorMessage: "Command cancelled by user",
+			leaseExpiresAt: null,
+		};
+		await this.putCommand(cancelled);
+		this.ctx.waitUntil(this.collectGarbage(Date.now()));
+		return json({ command: cancelled });
+	}
+
+	private async acceptTurnEvent(socket: WebSocket, event: RelayTurnEvent) {
+		const existingKey = await this.ctx.storage.get<string>(
+			`${TURN_EVENT_ID_PREFIX}${event.id}`,
 		);
-		if (active?.leaseExpiresAt) {
-			await this.ctx.storage.setAlarm(new Date(active.leaseExpiresAt).getTime());
+		if (existingKey) {
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "turn-event-ack",
+				eventId: event.id,
+			});
+			return;
+		}
+		const sequence = (await this.ctx.storage.get<number>(NEXT_EVENT_SEQUENCE_KEY)) ?? 1;
+		const key = turnEventStorageKey(sequence);
+		await this.ctx.storage.put({
+			[NEXT_EVENT_SEQUENCE_KEY]: sequence + 1,
+			[key]: event,
+			[`${TURN_EVENT_ID_PREFIX}${event.id}`]: key,
+		});
+		const browserEvent: RelayBrowserEvent = {
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn.event",
+			event,
+		};
+		for (const browserSocket of this.ctx.getWebSockets("browser")) {
+			sendSocket(browserSocket, browserEvent);
+		}
+		sendSocket(socket, {
+			protocolVersion: RELAY_PROTOCOL_VERSION,
+			type: "turn-event-ack",
+			eventId: event.id,
+		});
+		await this.gcTurnEvents();
+	}
+
+	private async listTurnEvents() {
+		const records = await this.ctx.storage.list<RelayTurnEvent>({
+			prefix: TURN_EVENT_KEY_PREFIX,
+		});
+		return [...records.values()];
+	}
+
+	private async ensurePeriodicAlarm() {
+		if ((await this.ctx.storage.getAlarm()) == null) {
+			await this.ctx.storage.setAlarm(Date.now() + GC_ALARM_MS);
+		}
+	}
+
+	private async scheduleNextAlarm(nowMs = Date.now()) {
+		let next = nowMs + GC_ALARM_MS;
+		for (const command of await this.listCommands()) {
+			if (
+				(command.status !== "claimed" && command.status !== "running") ||
+				!command.leaseExpiresAt
+			) {
+				continue;
+			}
+			const leaseMs = new Date(command.leaseExpiresAt).getTime();
+			if (Number.isFinite(leaseMs)) next = Math.min(next, leaseMs);
+		}
+		await this.ctx.storage.setAlarm(next);
+	}
+
+	private async collectGarbage(nowMs = Date.now()) {
+		const doomed = selectTerminalCommandsForGc(await this.listCommands(), nowMs);
+		for (const command of doomed) {
+			const key = await this.ctx.storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
+			const deletes = [
+				`${COMMAND_ID_PREFIX}${command.id}`,
+				`${IDEMPOTENCY_PREFIX}${command.idempotencyKey}`,
+			];
+			if (key) deletes.push(key);
+			await this.ctx.storage.delete(deletes);
+		}
+		await this.gcTurnEvents();
+		await this.gcExpiredAttachments(nowMs);
+	}
+
+	private async gcTurnEvents() {
+		const records = await this.ctx.storage.list<RelayTurnEvent>({
+			prefix: TURN_EVENT_KEY_PREFIX,
+		});
+		const keys = [...records.keys()];
+		for (const key of selectOldestKeysForGc(keys, TURN_EVENT_MAX_STORED)) {
+			const event = records.get(key);
+			const deletes = [key];
+			if (event?.id) deletes.push(`${TURN_EVENT_ID_PREFIX}${event.id}`);
+			await this.ctx.storage.delete(deletes);
+		}
+	}
+
+	private async gcExpiredAttachments(nowMs: number) {
+		const records = await this.ctx.storage.list<StoredRelayAttachment>({
+			prefix: ATTACHMENT_KEY_PREFIX,
+		});
+		for (const [key, attachment] of records) {
+			if (new Date(attachment.expiresAt).getTime() > nowMs) continue;
+			await this.ctx.storage.delete(key);
+			try {
+				await this.env.ATTACHMENTS.delete(attachment.objectKey);
+			} catch (error) {
+				console.error("[relay] failed to delete expired attachment object", {
+					attachmentId: attachment.id,
+					error,
+				});
+			}
 		}
 	}
 }
@@ -1064,6 +1265,15 @@ async function handleRequest(request: Request, env: RelayEnv) {
 	}
 	if (request.method === "POST" && suffix === "/commands") {
 		return stub.fetch(new Request("https://relay.internal/internal/commands", request));
+	}
+	const commandCancelMatch = suffix.match(/^\/commands\/([^/]+)\/cancel$/);
+	if (request.method === "POST" && commandCancelMatch?.[1]) {
+		return stub.fetch(
+			new Request(
+				`https://relay.internal/internal/commands/${encodeURIComponent(commandCancelMatch[1])}/cancel`,
+				request,
+			),
+		);
 	}
 	const commandMatch = suffix.match(/^\/commands\/([^/]+)$/);
 	if (request.method === "GET" && commandMatch?.[1]) {
