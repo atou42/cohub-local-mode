@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { PublicGenerationDeclaration } from "@cohub/protocol/generation";
 import type { ModelStatusEntry } from "@cohub/protocol/model/status";
-import { Brain, Check, ChevronDown, Image } from "lucide-svelte";
+import { Brain, Check, ChevronDown, Image, Zap } from "lucide-svelte";
 import Dialog from "$lib/components/Dialog.svelte";
 import { getGenerationModelPickerItems } from "$lib/generation-model-catalog";
 import { formatCurrency } from "$lib/i18n/format";
@@ -16,6 +16,7 @@ import {
 	clampThinkingLevel,
 	formatThinkingLevelFull,
 	formatThinkingLevelShort,
+	getFastServiceTier,
 	getModelDefaultThinkingLevel,
 	getSupportedThinkingLevels,
 	type ModelThinkingLevel,
@@ -44,6 +45,7 @@ type Props = {
 		provider: string;
 		id: string;
 		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
 	}) => void;
 	models: ModelItem[];
 	loading?: boolean;
@@ -53,6 +55,14 @@ type Props = {
 	/** Model the session thinking level is bound to. Defaults to currentModel. */
 	thinkingLevelModel?: { provider: string; id: string } | null;
 	currentThinkingLevel?: ModelThinkingLevel | null;
+	currentServiceTier?: string | null;
+	getModelParameterPreference?: (model: { provider: string; id: string }) => {
+		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
+	} | null;
+	preferenceNotice?: string | null;
+	preferenceCanReset?: boolean;
+	onResetPreferences?: () => void;
 	modelStatus?: Record<string, ModelStatusEntry> | null;
 	generationModels?: PublicGenerationDeclaration[];
 	generationPolicyMode?: "auto" | "limited";
@@ -98,6 +108,11 @@ const {
 	currentModel = null,
 	thinkingLevelModel = null,
 	currentThinkingLevel = null,
+	currentServiceTier = null,
+	getModelParameterPreference,
+	preferenceNotice = null,
+	preferenceCanReset = false,
+	onResetPreferences,
 	modelStatus = null,
 	generationModels = [],
 	generationPolicyMode = "auto",
@@ -239,8 +254,22 @@ function candidateThinkingLevel(item: ModelItem): ModelThinkingLevel {
 		item as never,
 		isBound
 			? (currentThinkingLevel ?? getModelDefaultThinkingLevel(item as never))
-			: getModelDefaultThinkingLevel(item as never),
+			: (getModelParameterPreference?.(item)?.thinkingLevel ??
+					getModelDefaultThinkingLevel(item as never)),
 	);
+}
+
+function candidateServiceTier(item: ModelItem): string | null | undefined {
+	const fastTier = getFastServiceTier(item as never);
+	if (!fastTier) return undefined;
+	const bound = thinkingLevelModel ?? currentModel;
+	const isBound =
+		bound !== null && item.provider === bound.provider && item.id === bound.id;
+	if (isBound) return currentServiceTier;
+	const preference = getModelParameterPreference?.(item);
+	return preference && Object.hasOwn(preference, "serviceTier")
+		? preference.serviceTier
+		: fastTier.id;
 }
 
 function isDefaultLevel(item: ModelItem, level: ModelThinkingLevel): boolean {
@@ -267,11 +296,35 @@ function toggleThinkingMenu(item: ModelItem, e: MouseEvent) {
 
 function selectThinkingLevel(item: ModelItem, level: ModelThinkingLevel) {
 	closeThinkingMenu();
-	onSelect({ provider: item.provider, id: item.id, thinkingLevel: level });
+	onSelect({
+		provider: item.provider,
+		id: item.id,
+		thinkingLevel: level,
+		serviceTier: candidateServiceTier(item),
+	});
 }
 
 function handleModelClick(item: ModelItem) {
-	onSelect({ provider: item.provider, id: item.id });
+	onSelect({
+		provider: item.provider,
+		id: item.id,
+		thinkingLevel: candidateThinkingLevel(item),
+		serviceTier: candidateServiceTier(item),
+	});
+}
+
+function toggleFast(item: ModelItem, event: MouseEvent) {
+	event.stopPropagation();
+	event.preventDefault();
+	const fastTier = getFastServiceTier(item as never);
+	if (!fastTier) return;
+	onSelect({
+		provider: item.provider,
+		id: item.id,
+		thinkingLevel: candidateThinkingLevel(item),
+		serviceTier:
+			candidateServiceTier(item) === fastTier.id ? null : fastTier.id,
+	});
 }
 
 function isHiddenModel(item: ModelItem): boolean {
@@ -940,6 +993,23 @@ const hoverCardPos = $derived.by(() => {
 				class="w-full rounded-md border-0 bg-bg-input px-3 py-2 text-[13px] text-text-primary outline-none ring-1 ring-border-subtle placeholder:text-text-placeholder transition-shadow duration-100 focus:ring-brand/45"
 			/>
 		</div>
+		{#if preferenceNotice}
+			<div
+				class="flex items-start gap-2 border-b border-warning-soft/20 bg-warning-bg px-3 py-2 text-[11px] leading-4 text-warning-soft"
+				role="status"
+			>
+				<span class="min-w-0 flex-1">{preferenceNotice}</span>
+				{#if preferenceCanReset && onResetPreferences}
+					<button
+						type="button"
+						class="shrink-0 rounded px-1.5 py-0.5 font-medium text-text-primary hover:bg-bg-hover"
+						onclick={onResetPreferences}
+					>
+						Reset
+					</button>
+				{/if}
+			</div>
+		{/if}
 
 		<div bind:this={containerEl} class="flex-1 overflow-y-auto py-1">
 			{#if loading && models.length === 0}
@@ -973,6 +1043,8 @@ const hoverCardPos = $derived.by(() => {
 					{@const tMenuKey = thinkingMenuKey(item)}
 					{@const activeLevel = candidateThinkingLevel(item)}
 					{@const thinkingOpen = thinkingMenuOpenFor === tMenuKey}
+					{@const fastTier = getFastServiceTier(item as never)}
+					{@const activeServiceTier = candidateServiceTier(item)}
 					<div
 						role="presentation"
 						class={`group relative px-4 py-2 transition-colors duration-100 ${
@@ -1025,8 +1097,26 @@ const hoverCardPos = $derived.by(() => {
 								<span class="max-w-[7.5rem] truncate text-right text-[11px] leading-4 text-text-tertiary/70">
 									{item.provider}
 								</span>
-								{#if showThinking}
-									<div class="relative self-end">
+								<div class="flex min-h-5 items-center justify-end gap-1 self-end">
+									{#if fastTier}
+										<button
+											type="button"
+											class={`inline-flex h-5 items-center gap-1 rounded border px-1 text-[10px] leading-none transition-colors ${
+												activeServiceTier === fastTier.id
+													? "border-brand/35 bg-brand/10 text-brand"
+													: "border-transparent text-text-tertiary hover:border-border-subtle/80 hover:bg-bg-surface hover:text-text-secondary"
+											}`}
+											title={fastTier.description ?? "Use the Fast service tier"}
+											aria-label={`Fast ${activeServiceTier === fastTier.id ? "on" : "off"} for ${getDisplayName(item)}`}
+											aria-pressed={activeServiceTier === fastTier.id}
+											onclick={(event) => toggleFast(item, event)}
+										>
+											<Zap class="h-3 w-3" />
+											<span>Fast</span>
+										</button>
+									{/if}
+									{#if showThinking}
+										<div class="relative">
 										<button
 											type="button"
 											class={`inline-flex h-5 items-center justify-end gap-1 rounded border px-1 text-[10px] leading-none transition-colors ${
@@ -1091,8 +1181,9 @@ const hoverCardPos = $derived.by(() => {
 												{/each}
 											</div>
 										{/if}
-									</div>
-								{/if}
+										</div>
+									{/if}
+								</div>
 							</div>
 						</div>
 					</div>

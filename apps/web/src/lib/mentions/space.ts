@@ -4,6 +4,7 @@ export type SpaceMention = {
 	type: "space";
 	spaceId: string;
 	sessionId?: string;
+	origin?: "cloud" | "local";
 	label: string;
 	uri: string;
 	href: string;
@@ -22,6 +23,7 @@ export type SpaceMentionSuggestion = {
 	spaceProfile: SpacePublicProfile;
 	href: string;
 	uri: string;
+	origin: "cloud" | "local";
 	activityAt: string | null;
 	source: "local" | "remote" | "local+remote";
 	score: number;
@@ -112,7 +114,12 @@ export function parseSpaceMentionUri(
 	return sessionId ? { spaceId, sessionId } : null;
 }
 
-export function extractSpaceMentionsFromText(text: string): SpaceMention[] {
+export function extractSpaceMentionsFromText(
+	text: string,
+	options?: {
+		resolveOrigin?: (spaceId: string) => "cloud" | "local" | null;
+	},
+): SpaceMention[] {
 	const mentions: SpaceMention[] = [];
 	const seen = new Set<string>();
 	for (const token of tokenizeSpaceMentionText(text)) {
@@ -122,11 +129,13 @@ export function extractSpaceMentionsFromText(text: string): SpaceMention[] {
 			: token.spaceId;
 		if (seen.has(key)) continue;
 		seen.add(key);
+		const origin = options?.resolveOrigin?.(token.spaceId) ?? null;
 		mentions.push({
 			type: "space",
 			spaceId: token.spaceId,
 			...(token.sessionId ? { sessionId: token.sessionId } : {}),
 			label: token.label,
+			...(origin ? { origin } : {}),
 			uri: token.uri,
 			href: token.href,
 		});

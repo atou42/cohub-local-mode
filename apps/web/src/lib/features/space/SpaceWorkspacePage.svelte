@@ -417,6 +417,7 @@ const spaceStatus = createSpaceStatusController({
 	getPageVisible: () => pageVisible,
 	getPageOnline: () => pageOnline,
 	getPageMounted: () => pageMounted,
+	getIsLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 	onSpaceLoaded: (nextSpace) => {
 		space = nextSpace;
 		portPreview.setEndpoints(extractPublicEndpoints(nextSpace));
@@ -466,6 +467,7 @@ const fileWorkspace = createFileWorkspaceController({
 	getCanEditFiles: () => canEditFiles,
 	getActiveFsReadonly: () => activeFsReadonly,
 	getSpaceHasMinimalAccess: () => spaceHasMinimalAccess,
+	getIsLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 	onOpenInlineFile: (path) => openInlineFile(path),
 	onOpenInlineBoard: (path) => openInlineBoard(path),
 	onCloseInlineBoard: () => closeInlineBoard(),

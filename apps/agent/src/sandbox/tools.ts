@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { spaces } from "@cohub/db";
 import {
   createBashTool,
   createToolFailure,
@@ -31,6 +33,12 @@ import {
   createLocalCrossSpaceLsTool,
   createLocalCrossSpaceReadTool,
 } from "../runtime/tools/local-cross-space-query-tools.js";
+import {
+  createCloudCrossSpaceFindTool,
+  createCloudCrossSpaceGrepTool,
+  createCloudCrossSpaceLsTool,
+  createCloudCrossSpaceReadTool,
+} from "../runtime/tools/cloud-cross-space-query-tools.js";
 import { formatRgJsonGrepResult } from "../runtime/tools/grep-json-format.js";
 
 
@@ -53,6 +61,7 @@ import {
 import { getCurrentSessionExecutionAuth } from "../runtime/session-execution-auth.js";
 import { getCurrentToolExecutionContext, runWithToolExecutionContext, type TurnTelemetryMetrics } from "../tool-context.js";
 import { resolveSpaceFileVisibility } from "../runtime/cross-space-query-access.js";
+import { env } from "../env.js";
 import { createWorkspaceVisibilityFilter, type AgentFileVisibility, type AgentWorkspaceVisibilityFilter } from "../runtime/workspace-visibility.js";
 import {
   createSpaceAwareFindTool,
@@ -76,10 +85,9 @@ import { logger } from "../logger.js";
 import { registerActiveAbortHandle } from "../active-turns.js";
 import { db } from "../db.js";
 import { dispatchTaskCreated } from "../realtime-events.js";
-import { env as agentEnv } from "../env.js";
 
 const taskQueue = createBullmqQueue(COHUB_TASKS_QUEUE, {
-  redisUrl: agentEnv.BULLMQ_REDIS_URL,
+  redisUrl: env.BULLMQ_REDIS_URL,
   telemetryServiceName: "cohub-agent-background-bash",
 });
 
@@ -1280,13 +1288,22 @@ async function assertSandboxPathVisible(sandboxPath: string, options?: { isDirec
   (await createCurrentWorkspaceVisibilityFilter(undefined, relativePath)).assertVisible(relativePath, options);
 }
 
-async function assertCurrentActorCanViewSpaceFiles(spaceId: string): Promise<AgentFileVisibility> {
+async function assertCurrentActorCanViewSpaceFiles(spaceId: string, origin: "cloud" | "local"): Promise<AgentFileVisibility> {
   const actorUserId = getCurrentActorUserId();
   if (!actorUserId?.trim()) throw new Error("Access denied: an authenticated user is required.");
-  return resolveSpaceFileVisibility({ actorUserId: actorUserId.trim(), spaceId });
+  return resolveSpaceFileVisibility({ actorUserId: actorUserId.trim(), spaceId, origin });
 }
 
 async function resolveSandboxProvider(spaceId: string): Promise<"cloud" | "local"> {
+  const declaredOrigin = getCurrentToolExecutionContext()?.spaceMentionOrigins?.[spaceId];
+  if (env.COHUB_NODE_ORIGIN === "local") {
+    if (declaredOrigin === "cloud") return "cloud";
+    const [localSpace] = await db.select({ id: spaces.id }).from(spaces).where(eq(spaces.id, spaceId)).limit(1);
+    if (declaredOrigin === "local" && !localSpace) {
+      throw new Error("Mentioned Local Space not found.");
+    }
+    return localSpace ? "local" : "cloud";
+  }
   const now = Date.now();
   const cached = sandboxProviderCache.get(spaceId);
   if (cached && cached.expiresAt > now) return cached.provider;
@@ -1344,11 +1361,16 @@ export function createSandboxCodingTools() {
   const crossSpaceLsTool = createLocalCrossSpaceLsTool();
   const crossSpaceFindTool = createLocalCrossSpaceFindTool();
   const crossSpaceGrepTool = createLocalCrossSpaceGrepTool();
+  const remoteCloudReadTool = env.COHUB_NODE_ORIGIN === "local" ? createCloudCrossSpaceReadTool() : undefined;
+  const remoteCloudLsTool = env.COHUB_NODE_ORIGIN === "local" ? createCloudCrossSpaceLsTool() : undefined;
+  const remoteCloudFindTool = env.COHUB_NODE_ORIGIN === "local" ? createCloudCrossSpaceFindTool() : undefined;
+  const remoteCloudGrepTool = env.COHUB_NODE_ORIGIN === "local" ? createCloudCrossSpaceGrepTool() : undefined;
 
   return [
     withSandboxFailureResult(createSpaceAwareReadTool({
       sandboxTool: sandboxReadTool,
       crossSpaceTool: crossSpaceReadTool,
+      remoteCloudTool: remoteCloudReadTool,
       checkAccess: assertCurrentActorCanViewSpaceFiles,
       resolveSandboxProvider,
     })),
@@ -1358,18 +1380,21 @@ export function createSandboxCodingTools() {
     withSandboxFailureResult(createSpaceAwareLsTool({
       sandboxTool: sandboxLsTool,
       crossSpaceTool: crossSpaceLsTool,
+      remoteCloudTool: remoteCloudLsTool,
       checkAccess: assertCurrentActorCanViewSpaceFiles,
       resolveSandboxProvider,
     })),
     withSandboxFailureResult(createSpaceAwareFindTool({
       sandboxTool: sandboxFindTool,
       crossSpaceTool: crossSpaceFindTool,
+      remoteCloudTool: remoteCloudFindTool,
       checkAccess: assertCurrentActorCanViewSpaceFiles,
       resolveSandboxProvider,
     })),
     withSandboxFailureResult(createSpaceAwareGrepTool({
       sandboxTool: sandboxGrepTool,
       crossSpaceTool: crossSpaceGrepTool,
+      remoteCloudTool: remoteCloudGrepTool,
       checkAccess: assertCurrentActorCanViewSpaceFiles,
       resolveSandboxProvider,
     })),

@@ -15,7 +15,10 @@ const createInput = (sourceClientId: string | null): SubmitSessionPromptInput =>
   sourceClientId,
 });
 
-const captureTurnMeta = async (sourceClientId: string | null) => {
+const captureTurnMeta = async (
+  sourceClientId: string | null,
+  overrides: Partial<SubmitSessionPromptInput> = {},
+) => {
   const turnMetas: Record<string, unknown>[] = [];
   const deps: SessionPromptDependencies = {
     randomUUID: () => "message-id",
@@ -28,7 +31,7 @@ const captureTurnMeta = async (sourceClientId: string | null) => {
     failSessionTurn: async () => undefined,
   };
 
-  await submitSessionPrompt(deps, createInput(sourceClientId));
+  await submitSessionPrompt(deps, { ...createInput(sourceClientId), ...overrides });
   return turnMetas[0];
 };
 
@@ -36,6 +39,14 @@ test("prompt meta keeps source and source client id as sibling fields", async ()
   const meta = await captureTurnMeta(` ${CLIENT_ID} `);
   assert.equal(meta?.source, "web");
   assert.equal(meta?.sourceClientId, CLIENT_ID);
+});
+
+test("prompt meta preserves an explicit Codex service tier including Standard", async () => {
+  const fast = await captureTurnMeta(null, { serviceTier: "priority" });
+  assert.equal(fast?.requestedServiceTier, "priority");
+
+  const standard = await captureTurnMeta(null, { serviceTier: null });
+  assert.equal(standard?.requestedServiceTier, null);
 });
 
 test("prompt meta rejects an invalid source client id", async () => {

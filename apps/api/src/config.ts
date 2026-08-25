@@ -10,6 +10,7 @@ export type AppConfig = {
   talesofaiBillingAdminApiKey?: string;
   env: "dev" | "prod";
   nodeOrigin: "cloud" | "local";
+  cloudApiOrigin: string;
   s3ForcePathStyle: boolean;
   appEncryptionKey: string;
   /** Optional checkpoint to bootstrap first-time Home spaces from; blank when unset. */
@@ -203,6 +204,10 @@ export const config: AppConfig = {
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
   nodeOrigin: parseNodeOrigin(process.env.COHUB_NODE_ORIGIN),
+  cloudApiOrigin:
+    process.env.CLOUD_API_BASE_URL?.trim() ||
+    process.env.PUBLIC_CLOUD_API_ORIGIN?.trim() ||
+    "https://api.cohub.live",
   s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
   homeBootstrapCheckpointId:
