@@ -1,6 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hasTrustedLocalModeEntry } from "./local-mode.route.js";
+import {
+  hasLoopbackLocalModeEntry,
+  hasTrustedLocalModeEntry,
+} from "../local-mode/access.js";
+
+test("relay artifact projection only accepts loopback entry", () => {
+  assert.equal(
+    hasLoopbackLocalModeEntry(
+      new Request("http://127.0.0.1:8787/api/local-mode/relay-artifacts"),
+    ),
+    true,
+  );
+  assert.equal(
+    hasLoopbackLocalModeEntry(
+      new Request("http://localhost:8787/api/local-mode/relay-artifacts"),
+    ),
+    true,
+  );
+  assert.equal(
+    hasLoopbackLocalModeEntry(
+      new Request("https://cohub.example.com/api/local-mode/relay-artifacts", {
+        headers: { "cf-access-jwt-assertion": "verified-at-the-edge" },
+      }),
+    ),
+    false,
+  );
+});
 
 test("production Local Mode auth accepts loopback, owner Tailscale, and Cloudflare Access only", () => {
   const previous = process.env.NODE_ENV;

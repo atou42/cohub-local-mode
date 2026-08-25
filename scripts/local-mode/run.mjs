@@ -20,6 +20,8 @@ const sandboxSupervisorScript = join(
   repoRoot,
   "scripts/local-mode/sandbox-supervisor.mjs",
 );
+const localToolPath = join(repoRoot, "scripts/local-mode/bin");
+process.env.LOCAL_COHUB_CLI_PATH = join(localToolPath, "cohub");
 const command = process.argv[2];
 const knownCommands = new Set([
   "infra",
@@ -261,6 +263,24 @@ async function status() {
       () => probeHttp("http://127.0.0.1:4180/api/local-mode/route-health"),
     ],
   ];
+  if (process.env.COHUB_LOCAL_RELAY_URL?.trim()) {
+    checks.push([
+      "Cloudflare relay node",
+      async () => {
+        const statusPath = join(
+          process.env.COHUB_LOCAL_DATA_DIR,
+          "relay-node-status.json",
+        );
+        const relayStatus = JSON.parse(await readFile(statusPath, "utf8"));
+        if (relayStatus.nodeId !== (process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini")) {
+          throw new Error("relay node identity does not match configuration");
+        }
+        if (relayStatus.state !== "connected" && relayStatus.state !== "executing") {
+          throw new Error(`relay node state is ${relayStatus.state ?? "unknown"}`);
+        }
+      },
+    ]);
+  }
   let failed = false;
   for (const [name, check] of checks) {
     try {
@@ -327,6 +347,12 @@ async function startServices(webMode = "development") {
           `PUBLIC_CLOUD_API_ORIGIN:${process.env.PUBLIC_CLOUD_API_ORIGIN}`,
           "--var",
           `PUBLIC_CLOUD_GATEWAY_ORIGIN:${process.env.PUBLIC_CLOUD_GATEWAY_ORIGIN}`,
+		  "--var",
+		  `PUBLIC_LOCAL_RELAY_ENABLED:${process.env.PUBLIC_LOCAL_RELAY_ENABLED ?? "false"}`,
+		  "--var",
+		  `PUBLIC_LOCAL_RELAY_BASE_PATH:${process.env.PUBLIC_LOCAL_RELAY_BASE_PATH ?? "/relay"}`,
+		  "--var",
+		  `PUBLIC_LOCAL_RELAY_NODE_ID:${process.env.PUBLIC_LOCAL_RELAY_NODE_ID ?? "mac-mini"}`,
         ]
       : [
           "--filter",
@@ -381,6 +407,19 @@ async function startServices(webMode = "development") {
     ["web", webArgs, {}],
     ["private-ingress", ["exec", "node", privateIngressScript], {}],
   ];
+  if (process.env.COHUB_LOCAL_RELAY_URL?.trim()) {
+    definitions.push([
+      "relay-node",
+      [
+        "--filter",
+        "@cohub/local-relay",
+        "exec",
+        "node",
+        "node/index.mjs",
+      ],
+      {},
+    ]);
+  }
   if (webMode === "host") {
     definitions.push([
       "web-proxy",
@@ -413,7 +452,11 @@ async function startServices(webMode = "development") {
       const color = colors[index % colors.length];
       const child = spawn("pnpm", args, {
         cwd: repoRoot,
-        env: { ...process.env, ...childEnv },
+        env: {
+          ...process.env,
+          PATH: `${localToolPath}:${process.env.PATH ?? ""}`,
+          ...childEnv,
+        },
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         detached: true,

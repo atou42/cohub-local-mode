@@ -144,6 +144,8 @@ export type SubmitSessionPromptInput = {
   provider?: string | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: string | null;
+  /** External harness service tier. `null` explicitly selects Standard. */
+  serviceTier?: string | null;
   generationPolicy?: GenerationPolicy | null;
   accessMode?: PromptAccessMode | null;
   env?: PromptEnv | null;
@@ -406,6 +408,11 @@ export const submitSessionPrompt = async (
   const turnIntent: SessionTurnIntent = isDirectShellCommand ? "steer" : (input.intent ?? "followup");
   const userMessageId = deps.randomUUID();
   const requestedThinkingLevel = typeof input.thinkingLevel === "string" && VALID_THINKING_LEVELS.has(input.thinkingLevel.trim()) ? input.thinkingLevel.trim() : undefined;
+  const requestedServiceTier = typeof input.serviceTier === "string" && input.serviceTier.trim()
+    ? input.serviceTier.trim()
+    : input.serviceTier === null
+      ? null
+      : undefined;
   const billingDecision: BillingAccessDecision | null = isDirectShellCommand
     ? null
     : (await deps.billingUsageGate?.evaluate({
@@ -432,6 +439,7 @@ export const submitSessionPrompt = async (
     model: modelProvider.model,
     provider: modelProvider.provider,
     requestedThinkingLevel,
+    ...(requestedServiceTier !== undefined ? { requestedServiceTier } : {}),
     promptTemplate,
     skillUsage,
     generationPolicy: input.generationPolicy ?? null,
