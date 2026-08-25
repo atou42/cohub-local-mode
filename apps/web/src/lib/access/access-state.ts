@@ -1,4 +1,5 @@
 import { HttpError } from "@neta-art/cohub";
+import { localNodeErrorMessage } from "$lib/local-node-error";
 
 /**
  * Unified access state derived from space/session loads and API errors.
@@ -17,6 +18,7 @@ export type AccessState =
 
 export type ClassifyOptions = {
 	isAuthenticated?: boolean;
+	isLocalSpace?: boolean;
 	resource?: string;
 };
 
@@ -30,17 +32,18 @@ export function classifyAccessError(
 	error: unknown,
 	options: ClassifyOptions = {},
 ): AccessState {
-	const { isAuthenticated = false, resource } = options;
+	const { isAuthenticated = false, isLocalSpace = false, resource } = options;
 	if (error instanceof HttpError) {
 		if (error.status === 401) return { kind: "unauthorized", resource };
 		if (error.status === 403)
 			return { kind: "forbidden", isAuthenticated, resource };
 		if (error.status === 404) return { kind: "not-found", resource };
 	}
-	const message =
-		error instanceof Error && error.message
-			? error.message
-			: "Something went wrong";
+	const message = localNodeErrorMessage(
+		error,
+		"Something went wrong",
+		isLocalSpace,
+	);
 	return { kind: "error", message, resource };
 }
 

@@ -417,6 +417,7 @@ async function handleDraftDrop(event: DragEvent) {
 					agentHarnessLocked={host.agentHarnessLocked}
 					onAgentHarnessChange={host.setAgentHarness}
 					thinkingLevelLabel={host.composerMode === "agent" ? host.activeSessionThinkingLevelLabel : null}
+					serviceTierLabel={host.composerMode === "agent" ? host.activeSessionServiceTierLabel : null}
 					generationPolicyLabel={host.composerMode === "agent" ? host.generationPolicyLabel : null}
 					quickActions={host.quickPromptActions}
 					onquickaction={(action) => {
@@ -580,6 +581,11 @@ async function handleDraftDrop(event: DragEvent) {
 			currentModel={activeSessionModel}
 			thinkingLevelModel={host.activeSessionTurnModel ?? activeSessionModel}
 			currentThinkingLevel={host.activeSessionThinkingLevel}
+			currentServiceTier={host.activeSessionServiceTier}
+			getModelParameterPreference={host.getModelParameterPreference}
+			preferenceNotice={host.parameterPreferenceNotice}
+			preferenceCanReset={host.parameterPreferencesInvalid}
+			onResetPreferences={host.resetSavedAgentParameterPreferences}
 			modelStatus={modelsStatus?.models ?? null}
 			generationModels={generationModelsCatalog ?? []}
 			{generationPolicyMode}

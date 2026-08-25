@@ -29,6 +29,14 @@ type Props = {
 	/** Model the session thinking level is bound to. Defaults to currentModel. */
 	thinkingLevelModel?: SelectedModel | null;
 	currentThinkingLevel?: ModelThinkingLevel | null;
+	currentServiceTier?: string | null;
+	getModelParameterPreference?: (model: { provider: string; id: string }) => {
+		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
+	} | null;
+	preferenceNotice?: string | null;
+	preferenceCanReset?: boolean;
+	onResetPreferences?: () => void;
 	modelStatus?: Record<string, ModelStatusEntry> | null;
 	generationModels: PublicGenerationDeclaration[];
 	generationPolicyMode: "auto" | "limited";
@@ -47,6 +55,7 @@ type Props = {
 		provider: string;
 		id: string;
 		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
 	}) => void;
 	onGenerationTabOpen: () => void | Promise<void>;
 	onGenerationPolicyModeChange: (mode: "auto" | "limited") => void;
@@ -78,6 +87,11 @@ let {
 	currentModel,
 	thinkingLevelModel = null,
 	currentThinkingLevel = null,
+	currentServiceTier = null,
+	getModelParameterPreference,
+	preferenceNotice = null,
+	preferenceCanReset = false,
+	onResetPreferences,
 	modelStatus = null,
 	generationModels,
 	generationPolicyMode,
@@ -107,6 +121,11 @@ let {
 	{currentModel}
 	{thinkingLevelModel}
 	{currentThinkingLevel}
+	{currentServiceTier}
+	{getModelParameterPreference}
+	{preferenceNotice}
+	{preferenceCanReset}
+	{onResetPreferences}
 	{modelStatus}
 	{generationModels}
 	{generationPolicyMode}

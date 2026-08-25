@@ -24,6 +24,7 @@ export const RPC_METHODS = [
   "fs.find",
   "fs.grep",
   "process.start",
+  "process.write",
   "process.abort",
 ] as const;
 
@@ -131,6 +132,8 @@ export type SandboxCapabilities = {
   processStart: boolean;
   /** process.start supports argv exec mode (no shell). */
   processStartArgv?: boolean;
+  /** Supports writing to stdin of a running managed process. */
+  processWrite?: boolean;
   processAbort: boolean;
 };
 
@@ -410,6 +413,18 @@ export type ProcessAbortResult = {
   aborted: boolean;
 };
 
+export type ProcessWriteParams = {
+  processId: string;
+  chunk: string;
+  close?: boolean;
+};
+
+export type ProcessWriteResult = {
+  processId: string;
+  writtenBytes: number;
+  closed: boolean;
+};
+
 export type RpcRequestMap = {
   "fs.read": {
     params: FsReadParams;
@@ -450,6 +465,10 @@ export type RpcRequestMap = {
   "process.start": {
     params: ProcessStartParams;
     result: ProcessStartResult;
+  };
+  "process.write": {
+    params: ProcessWriteParams;
+    result: ProcessWriteResult;
   };
   "process.abort": {
     params: ProcessAbortParams;

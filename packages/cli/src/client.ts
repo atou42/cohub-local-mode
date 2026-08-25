@@ -1,10 +1,19 @@
 import { CohubClient, CohubHttpClient, readRequestSourceFromEnv } from "@neta-art/cohub";
 import { clearAuthSession, resolveAccessToken } from "./auth.js";
 
+export function shouldClearHostAuthOnUnauthorized(
+  environment: Record<string, string | undefined>,
+) {
+  return !environment.COHUB_EXECUTION_TOKEN?.trim();
+}
+
 const clientOptions = () => ({
   baseUrl: process.env.COHUB_API_URL?.trim() || undefined,
   getAccessToken: resolveAccessToken,
-  onUnauthorized: clearAuthSession,
+  onUnauthorized: async () => {
+    if (!shouldClearHostAuthOnUnauthorized(process.env)) return;
+    await clearAuthSession();
+  },
   websocket: {
     url: process.env.COHUB_WS_URL?.trim() || undefined,
     getAccessToken: resolveAccessToken,
