@@ -1,0 +1,46 @@
+name = "cohub-local-web"
+main = ".svelte-kit/cloudflare/_worker.js"
+compatibility_date = "2025-03-05"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[assets]
+directory = ".svelte-kit/cloudflare/assets"
+binding = "ASSETS"
+
+[vars]
+PUBLIC_COHUB_LOCAL_MODE = "true"
+PUBLIC_API_ORIGIN = "https://cohub.atou.cc"
+PUBLIC_CLOUD_API_ORIGIN = "https://api.cohub.live"
+PUBLIC_CLOUD_GATEWAY_ORIGIN = "wss://gateway.cohub.live/ws"
+PUBLIC_LOCAL_RELAY_ENABLED = "true"
+PUBLIC_LOCAL_RELAY_BASE_PATH = "/relay"
+PUBLIC_LOCAL_RELAY_NODE_ID = "mac-mini"
+
+[[routes]]
+pattern = "cohub.atou.cc/_app/*"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/spaces/*"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/sessions/*"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/settings/*"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/sw.js"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/workbox-*"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/app.webmanifest"
+zone_name = "atou.cc"

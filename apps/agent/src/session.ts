@@ -45,6 +45,10 @@ import {
   shouldReplaceStreamFlushTimer,
   type StreamFlushUrgency,
 } from "./stream/flush-policy.js";
+import {
+  redactExternalHarnessText,
+  redactExternalHarnessValue,
+} from "./external-harness-redaction.js";
 
 
 export type PendingUserMessage = {
@@ -149,6 +153,7 @@ export type SessionHandle = {
   streamState: {
     assistantState: AssistantStreamState;
     content: ContentBlock[];
+    runtimeNotes: ContentBlock[];
     preferredDisplayMode: "full" | "compact" | "minimal";
     /** Snapshot of the content sent in the last stream_update, used for delta computation. */
     lastSent?: ContentBlock[];
@@ -162,6 +167,7 @@ export type SessionHandle = {
     flushDelayMs?: number | null;
     assistantContext?: AssistantMessageContext | null;
   };
+  piRetryRecoveryPending: boolean;
   interruptedSnapshotTurnIds: Set<string>;
   sessionFileSignature: SessionFileSignature | null;
 };
@@ -431,7 +437,10 @@ function buildStreamMessageId(handle: SessionHandle, ordinal: number) {
 
 function ensureProjectedStreamContent(handle: SessionHandle) {
   if (!handle.streamState.dirty) return;
-  handle.streamState.content = projectAssistantStreamState(handle.streamState.assistantState);
+  handle.streamState.content = [
+    ...handle.streamState.runtimeNotes,
+    ...projectAssistantStreamState(handle.streamState.assistantState),
+  ];
   handle.streamState.dirty = false;
 }
 
@@ -443,6 +452,7 @@ export function resetStreamState(handle: SessionHandle) {
   handle.streamState = {
     assistantState: createAssistantStreamState(),
     content: [],
+    runtimeNotes: [],
     preferredDisplayMode: handle.streamState.preferredDisplayMode,
     lastSent: [],
     patchSeq: 0,
@@ -469,12 +479,38 @@ function resolvePersistedAssistantContent(handle: SessionHandle, message: Record
   const stopReason = typeof message.stopReason === "string" ? message.stopReason : null;
   const rawContent = Array.isArray(message.content) ? message.content : [];
   if (stopReason === "error" || stopReason === "aborted") {
+    if (handle.streamState.content.length > 0) {
+      return mergeFinalAssistantContentWithStreamOrder(rawContent, handle.streamState.content);
+    }
     return rawContent;
   }
   if (handle.streamState.content.length > 0) {
     return mergeFinalAssistantContentWithStreamOrder(rawContent, handle.streamState.content);
   }
   return rawContent;
+}
+
+function piRuntimeNote(input: {
+  kind: "warning" | "recovery";
+  eventType: string;
+  message: string;
+  raw?: unknown;
+}): ContentBlock {
+  return {
+    type: "system_note",
+    note_type: "info",
+    text: redactExternalHarnessText(input.message),
+    _meta: {
+      runtimeEvent: {
+        kind: input.kind,
+        eventType: input.eventType,
+        at: new Date().toISOString(),
+        ...(input.raw === undefined
+          ? {}
+          : { raw: redactExternalHarnessValue(input.raw) }),
+      },
+    },
+  };
 }
 
 function interruptedToolResultContent(value: unknown): string | ContentBlock[] {
@@ -840,6 +876,17 @@ export function subscribeSessionEvents(handle: SessionHandle) {
         await drainStreamStateBeforeReset(handle);
         resetStreamState(handle);
         handle.streamState.assistantContext = handle.activeAssistantContext;
+        if (handle.piRetryRecoveryPending) {
+          handle.streamState.runtimeNotes.push(
+            piRuntimeNote({
+              kind: "recovery",
+              eventType: "pi.retry.resumed",
+              message: "Pi recovered and resumed the turn",
+            }),
+          );
+          handle.streamState.dirty = true;
+          handle.piRetryRecoveryPending = false;
+        }
         handle.streamState.pendingBoundary = true;
         flushProviderRenderUpdate(handle, "assistant_message_start");
       }
@@ -995,7 +1042,60 @@ export function subscribeSessionEvents(handle: SessionHandle) {
       }
 
       if (handle.session.shouldDeferErrorPersistence(rawMessage)) {
+        const errorMessage =
+          typeof rawMessage.errorMessage === "string"
+            ? rawMessage.errorMessage
+            : "Temporary provider error";
+        handle.streamState.runtimeNotes.push(
+          piRuntimeNote({
+            kind: "warning",
+            eventType: "pi.retry.scheduled",
+            message: `Pi hit a temporary provider error and is retrying: ${errorMessage}`,
+            raw: {
+              stopReason: rawMessage.stopReason,
+              errorMessage,
+              provider: rawMessage.provider,
+              model: rawMessage.model,
+            },
+          }),
+        );
+        handle.streamState.dirty = true;
+        flushProviderRenderUpdate(handle, "pi_retry_scheduled");
         await drainStreamStateBeforeReset(handle);
+        ensureProjectedStreamContent(handle);
+        const retryContent = structuredClone(handle.streamState.content);
+        const retryModel = handle.session.agent.state.model;
+        schedulePersistence(handle, `assistant-retry:${currentUserMessageId}`, async () => {
+          await persistAssistantMessage({
+            spaceId: handle.spaceId,
+            spaceSessionId: handle.sessionId,
+            userMessageId: currentUserMessageId,
+            event: {
+              type: "turn_end",
+              message: {
+                role: "assistant",
+                content: retryContent,
+                provider: retryModel.provider,
+                model: retryModel.id,
+                stopReason: "tool_use",
+                usage: null,
+                meta: {
+                  turnId: assistantContext.turnId,
+                  runtimeRetry: true,
+                },
+              },
+            },
+            userId:
+              ((assistantContext.userMeta as Record<string, unknown> | null | undefined)
+                ?.userId as string | null | undefined) ?? null,
+            turnId: assistantContext.turnId,
+            startedAt: assistantContext.startedAt,
+            completedAt: new Date().toISOString(),
+            messageOrdinal: assistantContext.assistantOrdinal,
+            thinkingLevel: handle.session.agent.state.thinkingLevel,
+          });
+        });
+        handle.piRetryRecoveryPending = true;
         resetStreamState(handle);
         if (handle.activeAssistantContext === assistantContext) handle.activeAssistantContext = null;
         clearAssistantMessageTiming();
@@ -1202,6 +1302,7 @@ export async function loadOrCreateSessionHandle(input: {
     streamState: {
       assistantState: createAssistantStreamState(),
       content: [],
+      runtimeNotes: [],
       preferredDisplayMode: "compact",
       lastSent: [],
       patchSeq: 0,
@@ -1213,6 +1314,7 @@ export async function loadOrCreateSessionHandle(input: {
       flushDelayMs: null,
       assistantContext: null,
     },
+    piRetryRecoveryPending: false,
     interruptedSnapshotTurnIds: new Set(),
     sessionFileSignature: fileSignature,
   };

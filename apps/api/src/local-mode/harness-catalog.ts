@@ -93,6 +93,36 @@ function thinkingLevelMap(levels: readonly ModelThinkingLevel[]) {
   );
 }
 
+type CatalogServiceTier = {
+  id: string;
+  name: string;
+  description?: string;
+};
+
+function parseServiceTiers(value: unknown, label: string): CatalogServiceTier[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new HarnessCatalogError(`${label} must be an array`);
+  }
+  const tiers = value.map((candidate, index) => {
+    const tier = record(candidate);
+    if (!tier) {
+      throw new HarnessCatalogError(`${label} ${index} is invalid`);
+    }
+    return {
+      id: requiredString(tier.id, `${label} ${index} id`),
+      name: requiredString(tier.name, `${label} ${index} name`),
+      ...(typeof tier.description === "string" && tier.description.trim()
+        ? { description: tier.description.trim() }
+        : {}),
+    };
+  });
+  if (new Set(tiers.map((tier) => tier.id)).size !== tiers.length) {
+    throw new HarnessCatalogError(`${label} contains duplicate ids`);
+  }
+  return tiers;
+}
+
 export function parseCodexModelsCache(
   rawText: string,
   options: ParseOptions = {},
@@ -146,6 +176,25 @@ export function parseCodexModelsCache(
         `Codex model ${id} default reasoning level is not supported`,
       );
     }
+    const serviceTiers = parseServiceTiers(
+      model.service_tiers,
+      `Codex model ${id} service tiers`,
+    );
+    const defaultServiceTier = model.default_service_tier === undefined ||
+        model.default_service_tier === null
+      ? null
+      : requiredString(
+          model.default_service_tier,
+          `Codex model ${id} default service tier`,
+        );
+    if (
+      defaultServiceTier &&
+      !serviceTiers.some((tier) => tier.id === defaultServiceTier)
+    ) {
+      throw new HarnessCatalogError(
+        `Codex model ${id} default service tier is not supported`,
+      );
+    }
     const priority =
       typeof model.priority === "number" && Number.isFinite(model.priority)
         ? model.priority
@@ -160,6 +209,8 @@ export function parseCodexModelsCache(
         reasoning: true,
         defaultThinkingLevel,
         thinkingLevelMap: thinkingLevelMap(efforts),
+        serviceTiers,
+        defaultServiceTier,
         input: Array.isArray(model.input_modalities)
           ? model.input_modalities.filter((item): item is string => typeof item === "string")
           : ["text"],
@@ -318,11 +369,16 @@ export function getCatalogEfforts(entry: ModelCatalogEntry): ModelThinkingLevel[
   return EFFORT_LEVELS.filter((level) => map[level] !== null && map[level] !== undefined);
 }
 
+export function getCatalogServiceTiers(entry: ModelCatalogEntry): CatalogServiceTier[] {
+  return parseServiceTiers(entry.model.serviceTiers, `Model ${entry.id} service tiers`);
+}
+
 export async function validateExternalHarnessSelection(input: {
   harness: Exclude<AgentHarness, "pi">;
   provider: string | null;
   model: string | null;
   thinkingLevel: string | null;
+  serviceTier: string | null;
 }) {
   if (input.provider !== input.harness || !input.model) {
     return { ok: false as const, code: "model_unavailable", message: "Select a model for the chosen agent" };
@@ -336,6 +392,18 @@ export async function validateExternalHarnessSelection(input: {
   }
   if (!input.thinkingLevel || !getCatalogEfforts(entry).includes(input.thinkingLevel as ModelThinkingLevel)) {
     return { ok: false as const, code: "effort_unavailable", message: "Requested effort is not available for the chosen model" };
+  }
+  const serviceTiers = getCatalogServiceTiers(entry);
+  if (
+    input.serviceTier &&
+    (input.harness !== "codex" ||
+      !serviceTiers.some((tier) => tier.id === input.serviceTier))
+  ) {
+    return {
+      ok: false as const,
+      code: "service_tier_unavailable",
+      message: "Requested speed is not available for the chosen model",
+    };
   }
   return { ok: true as const, entry };
 }
