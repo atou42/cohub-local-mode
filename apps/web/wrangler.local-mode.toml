@@ -1,5 +1,5 @@
 name = "cohub-local-web"
-main = ".svelte-kit/cloudflare/_worker.js"
+main = "worker.local-mode.js"
 compatibility_date = "2025-03-05"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
@@ -16,6 +16,10 @@ PUBLIC_CLOUD_GATEWAY_ORIGIN = "wss://gateway.cohub.live/ws"
 PUBLIC_LOCAL_RELAY_ENABLED = "true"
 PUBLIC_LOCAL_RELAY_BASE_PATH = "/relay"
 PUBLIC_LOCAL_RELAY_NODE_ID = "mac-mini"
+
+[[routes]]
+pattern = "cohub.atou.cc/"
+zone_name = "atou.cc"
 
 [[routes]]
 pattern = "cohub.atou.cc/_app/*"
@@ -43,4 +47,8 @@ zone_name = "atou.cc"
 
 [[routes]]
 pattern = "cohub.atou.cc/app.webmanifest"
+zone_name = "atou.cc"
+
+[[routes]]
+pattern = "cohub.atou.cc/manifest.webmanifest"
 zone_name = "atou.cc"
