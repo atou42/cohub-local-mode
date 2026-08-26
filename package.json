@@ -50,7 +50,11 @@
     "local:tunnel:install": "node scripts/local-mode/tunnel-service.mjs install",
     "local:tunnel:restart": "node scripts/local-mode/tunnel-service.mjs restart",
     "local:tunnel:status": "node scripts/local-mode/tunnel-service.mjs status",
-    "local:tunnel:uninstall": "node scripts/local-mode/tunnel-service.mjs uninstall"
+    "local:tunnel:uninstall": "node scripts/local-mode/tunnel-service.mjs uninstall",
+    "local:upstream:check": "node scripts/local-mode/upstream-watch.mjs",
+    "local:upstream:watch:install": "node scripts/local-mode/upstream-watch-service.mjs install",
+    "local:upstream:watch:status": "node scripts/local-mode/upstream-watch-service.mjs status",
+    "local:upstream:watch:uninstall": "node scripts/local-mode/upstream-watch-service.mjs uninstall"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
