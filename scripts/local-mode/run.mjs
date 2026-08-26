@@ -184,9 +184,20 @@ async function ensurePiCatalog() {
   });
 }
 
+async function syncPiCatalogCache() {
+  await run("pnpm", [
+    "--filter",
+    "@cohub/worker",
+    "exec",
+    "tsx",
+    "scripts/sync-local-model-cache.ts",
+  ]);
+}
+
 async function initialize() {
   await ensureDirectories();
   await ensurePiCatalog();
+  await syncPiCatalogCache();
   await run("pnpm", ["--filter", "@cohub/api", "db:migrate"]);
   await run("pnpm", [
     "--filter",
