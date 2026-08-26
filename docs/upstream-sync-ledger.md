@@ -22,7 +22,7 @@ Publish the verified rebased Local Mode history to the private remote with a rec
 
 ## Current Status
 
-The remote recovery branch exists. The watcher is installed in launchd for 10:00 Asia/Shanghai and has completed real success and failure notifications. Remote `main` has not yet been rewritten.
+Remote `main` was safely updated from `eec559e65` to `1f09a059` with an explicit lease after the recovery branch was verified. The watcher is installed in launchd for 10:00 Asia/Shanghai and has completed real success and failure notifications.
 
 ## Evidence, Decisions, And Failures
 
@@ -39,3 +39,9 @@ The remote recovery branch exists. The watcher is installed in launchd for 10:00
 - A malformed state file produced a non-zero exit and an explicit failure report without overwriting the corrupt file.
 - A dry-run force push with an intentionally wrong lease was rejected by the real remote as `stale info`, proving an unexpected remote `main` change blocks publication.
 - The installed plist contains only paths and non-secret settings. It targets thread `1540358055563100230`, runs daily at 10:00, and writes logs under `~/.cohub-upstream-watch/logs`.
+- Immediately before publication, both remote `main` and the recovery branch resolved to the expected pre-rebase hash. The actual push used `--force-with-lease=main:eec559e6550679fcb9e13d92449544c78a71ac38` and GitHub confirmed the forced update to `1f09a059`.
+- The repository-wide pre-commit typecheck remains unavailable because this machine lacks the upstream private billing SDK, as recorded in `docs/upstream-rebase-ledger.md`. The watcher commit was created with the hook disabled only after its focused tests, formatting check, dry run, real delivery, failure probes, and installed-service checks passed.
+
+## Completion Gate
+
+The goal is complete only after the final ledger commit is present on remote `main`, both remote refs are re-read from GitHub, the worktree is clean, launchd still reports the expected schedule and destination, and a final real watcher run records the published local head and an actual Discord message ID.
