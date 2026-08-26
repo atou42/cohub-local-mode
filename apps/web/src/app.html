@@ -17,7 +17,7 @@
         var href = isPublicWorkUrl
           ? `/app.webmanifest?start_url=${encodeURIComponent(location.pathname)}`
           : '/manifest.webmanifest';
-        document.write(`<link rel="manifest" href="${href}" />`);
+        document.write(`<link rel="manifest" href="${href}" crossorigin="use-credentials" />`);
       })();
     </script>
     <meta name="theme-color" content="#F8F8FA" />
