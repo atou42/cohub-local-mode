@@ -37,6 +37,7 @@ test("parseModelsConfig validates known provider and model fields", () => {
     { models: [{ id: "model", cost: { input: 1 } }] },
     { models: [{ id: "model", contextWindow: 0 }] },
     { models: [{ id: "model", maxTokens: 1.5 }] },
+    { models: [{ id: "model", thinkingLevelMap: { turbo: "turbo" } }] },
     { models: [{ id: "model", compat: [] }] },
   ];
 
@@ -59,6 +60,27 @@ test("parseModelsConfig keeps valid provider-specific extensions", () => {
     },
   }));
   assert.equal(parsed.providers.cohub?.models?.[0]?.routingTier, "fast");
+});
+
+test("parseModelsConfig accepts ultra thinking levels", () => {
+  const parsed = parseModelsConfig(JSON.stringify({
+    providers: {
+      cohub: {
+        api: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        models: [{
+          id: "reasoning-model",
+          defaultThinkingLevel: "ultra",
+          thinkingLevelMap: { high: "high", ultra: "ultra" },
+        }],
+      },
+    },
+  }));
+
+  assert.equal(
+    parsed.providers.cohub?.models?.[0]?.thinkingLevelMap?.ultra,
+    "ultra",
+  );
 });
 
 test("isRuntimeModelAvailable honors user model overrides", () => {
