@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
+import { publishWebBuild } from "./web-release.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const envFile = resolve(
@@ -197,7 +198,32 @@ async function initialize() {
 }
 
 async function buildWeb() {
-  await run("pnpm", ["--filter", "web", "build"]);
+  const webRoot = join(repoRoot, "apps/web");
+  const currentDir = join(webRoot, ".svelte-kit");
+  const stagedName = ".svelte-kit-local-build";
+  const stagedDir = join(webRoot, stagedName);
+  try {
+    await access(stagedDir);
+    const failedDir = join(webRoot, `.svelte-kit-failed-${Date.now()}`);
+    await rename(stagedDir, failedDir);
+    console.warn(`Archived the previous failed web build at ${failedDir}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  try {
+    await run("pnpm", ["--filter", "web", "build"], {
+      env: {
+        COHUB_WEB_BUILD_OUT_DIR: stagedName,
+        COHUB_WEB_WRANGLER_CONFIG: "wrangler.local-build.toml",
+      },
+    });
+    await publishWebBuild({ currentDir, stagedDir });
+  } catch (error) {
+    throw new Error(
+      `Web build was not published. The previous build is unchanged; staged evidence is at ${stagedDir}`,
+      { cause: error },
+    );
+  }
 }
 
 async function requireWebBuild() {
