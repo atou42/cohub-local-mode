@@ -6,7 +6,10 @@ import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const assetsRoot = resolve(repoRoot, "apps/web/.svelte-kit/cloudflare/assets");
+const assetsRoot = resolve(
+  process.env.COHUB_LOCAL_WEB_ASSETS_ROOT ??
+    resolve(repoRoot, "apps/web/.svelte-kit/cloudflare/assets"),
+);
 const listenPort = Number(process.env.COHUB_LOCAL_WEB_PORT ?? "4173");
 const workerPort = Number(process.env.COHUB_LOCAL_WEB_WORKER_PORT ?? "4174");
 const contentTypes = new Map([
@@ -105,6 +108,13 @@ const server = createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
     if (await serveAsset(request, response, pathname)) return;
+    if (pathname.startsWith("/_app/immutable/")) {
+      response.statusCode = 404;
+      response.setHeader("Cache-Control", "no-store");
+      response.setHeader("Content-Type", "text/plain; charset=utf-8");
+      response.end("Immutable asset not found\n");
+      return;
+    }
     await proxyToWorker(request, response);
   } catch (error) {
     if (!response.headersSent) {
