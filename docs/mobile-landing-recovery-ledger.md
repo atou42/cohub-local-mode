@@ -27,9 +27,9 @@
 
 本地静态资源代理和线上 Web Worker 都会把缺失 immutable 资源明确返回为不可缓存的 404。Manifest 请求会携带同源凭据，两个 Manifest 路径都由同一份线上静态资源版本提供。
 
-公网首页现在与 `/_app` 静态资源由同一个 Cloudflare Worker 版本返回。本地下一次构建不会在部署前改变公网首页，也不会再产生新 HTML 配旧静态资源的窗口。
+公网首页保持由 Tunnel 返回，`/_app` 静态资源由 Cloudflare Worker 返回。本地构建已改为完整验证后原子切换，避免在线服务读到构建中的半成品。
 
-修复后的 Web 版本已部署到 Cloudflare，版本 ID 为 `92671f0e-f49b-46a4-bbe7-05c9269ebfcf`。
+曾将根路径加入 Cloudflare Worker，但用户实机随后收到 `500 Internal Error`。根路径变更已回退，没有用默认页或其他降级内容掩盖故障。回退后的 Cloudflare 版本 ID 为 `4aacadf1-a831-4777-9585-2f97d77e0534`。已登录的浏览器再次请求根页返回 200，内容是完整 Cohub 首页，不再是错误页。
 
 ## 验收记录
 
