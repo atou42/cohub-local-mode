@@ -2,6 +2,7 @@
 import type { ViewportContext } from "@cohub/protocol";
 import type {
 	AgentHarness,
+	HarnessCapabilityCatalog,
 	PromptTemplateCatalogEntry,
 	SkillCatalogEntry,
 	VoiceInputClient,
@@ -104,6 +105,9 @@ type Props = {
 	promptTemplatesLoaded?: boolean;
 	skills?: SkillCatalogEntry[];
 	skillsLoaded?: boolean;
+	harnessCapabilities?: HarnessCapabilityCatalog | null;
+	harnessCapabilitiesLoaded?: boolean;
+	slashCatalogError?: string | null;
 	currentSpaceId?: string | null;
 	mobileAutoFocusOnMount?: boolean;
 	onsubmit: () => void;
@@ -141,6 +145,9 @@ let {
 	promptTemplatesLoaded = true,
 	skills = [],
 	skillsLoaded = true,
+	harnessCapabilities = null,
+	harnessCapabilitiesLoaded = true,
+	slashCatalogError = null,
 	currentSpaceId = null,
 	mobileAutoFocusOnMount = false,
 	onsubmit,
@@ -317,7 +324,7 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 		});
 	}
 
-	for (const item of skills) {
+	for (const item of agentHarness === "pi" ? skills : []) {
 		const label = `skill:${item.name}`;
 		const name = item.name.toLowerCase();
 		const labelLower = label.toLowerCase();
@@ -342,6 +349,49 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 		});
 	}
 
+	for (const item of harnessCapabilities?.commands ?? []) {
+		const name = item.name.toLowerCase();
+		const description = item.description.toLowerCase();
+		const category = item.category.toLowerCase();
+		let matchScore = 0;
+		if (!query) matchScore = 11;
+		else if (name.startsWith(query)) matchScore = 100;
+		else if (name.includes(query)) matchScore = 80;
+		else if (category.includes(query)) matchScore = 64;
+		else if (description.includes(query)) matchScore = 48;
+		else continue;
+		scored.push({
+			kind: "native_command",
+			name: item.name,
+			description: item.description,
+			scope: "harness",
+			argumentHint: item.argumentHint,
+			category: item.category,
+			insertionText: item.insertionText,
+			matchScore,
+		});
+	}
+
+	for (const item of harnessCapabilities?.skills ?? []) {
+		const name = item.name.toLowerCase();
+		const description = item.description.toLowerCase();
+		let matchScore = 0;
+		if (!query) matchScore = 10;
+		else if (name.startsWith(query)) matchScore = 100;
+		else if (name.includes(query)) matchScore = 80;
+		else if (description.includes(query)) matchScore = 48;
+		else continue;
+		scored.push({
+			kind: "native_skill",
+			name: item.name,
+			description: item.description,
+			scope: item.scope,
+			category: "Codex Skills",
+			insertionText: item.insertionText,
+			matchScore,
+		});
+	}
+
 	return scored.sort((a, b) => {
 		const scoreDelta = (b.matchScore ?? 0) - (a.matchScore ?? 0);
 		if (scoreDelta !== 0) return scoreDelta;
@@ -358,7 +408,10 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 const slashCommandQuery = $derived(slashCommandToken?.query ?? "");
 const slashCommandActive = $derived(slashCommandToken !== null);
 const slashCommandLoading = $derived(
-	slashCommandActive && (!promptTemplatesLoaded || !skillsLoaded),
+	slashCommandActive &&
+		(!promptTemplatesLoaded ||
+			(agentHarness === "pi" && !skillsLoaded) ||
+			!harnessCapabilitiesLoaded),
 );
 
 const spaceMentionItems = $derived(
@@ -660,7 +713,8 @@ function applyPromptTemplate(item: SlashCommandMenuItem) {
 	const firstSpace = trimmedStart.indexOf(" ");
 	const suffix = firstSpace === -1 ? "" : trimmedStart.slice(firstSpace);
 	const command =
-		item.kind === "skill" ? `/skill:${item.name}` : `/${item.name}`;
+		item.insertionText?.trimEnd() ??
+		(item.kind === "skill" ? `/skill:${item.name}` : `/${item.name}`);
 	value = `${leadingWhitespace}${command}${suffix || " "}`;
 	showPromptSuggestions = false;
 	selectedPromptIndex = 0;
@@ -1437,6 +1491,7 @@ $effect(() => {
 						query={slashCommandQuery}
 						selectedIndex={selectedPromptIndex}
 						loading={slashCommandLoading}
+						error={slashCatalogError}
 						onhighlight={(index) => {
 							selectedPromptIndex = index;
 						}}

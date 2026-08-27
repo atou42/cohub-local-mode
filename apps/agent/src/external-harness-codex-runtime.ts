@@ -7,6 +7,7 @@ import type {
 	ExternalHarnessResult,
 } from "./external-harness-protocol.js";
 import { buildCodexAppServerArgv } from "./external-harness-codex-config.js";
+import { parseCodexGoalCommand } from "./codex-goal-command.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
@@ -72,6 +73,45 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function text(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+function integer(value: unknown): number | null {
+	return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function formatGoalStatus(value: unknown) {
+	const goal = record(value);
+	if (!goal) return "No active Codex goal.";
+	const objective = text(goal.objective);
+	const status = text(goal.status) || "unknown";
+	const tokensUsed = integer(goal.tokensUsed);
+	const tokenBudget = integer(goal.tokenBudget);
+	const usage = tokensUsed === null
+		? ""
+		: `\nTokens: ${tokensUsed}${tokenBudget === null ? "" : ` / ${tokenBudget}`}`;
+	return `Codex goal · ${status}\n\n${objective}${usage}`;
+}
+
+function completeLocalGoalCommand(input: {
+	entry: RuntimeEntry;
+	threadId: string;
+	message: string;
+	reducer: HarnessEventReducer;
+	onProgress?: (progress: ExternalHarnessProgress) => void;
+}) {
+	const events = [
+		{ type: "thread.started", thread_id: input.threadId },
+		{ type: "turn.started", turn_id: `goal-command-${Date.now()}` },
+		{ type: "assistant.message.delta", text: input.message },
+		{ type: "turn.completed", usage: null },
+	];
+	for (const event of events) {
+		const progress = input.reducer.push(event);
+		if (progress) input.onProgress?.(progress);
+	}
+	input.entry.lastUsedAt = Date.now();
+	scheduleIdleClose(input.entry);
+	return input.reducer.result();
 }
 
 function normalizedItemType(value: unknown) {
@@ -648,6 +688,60 @@ export async function runCodexAppServerHarness(input: {
 	const reducer = input.reducer;
 	const threadId = await ensureThread(entry, input);
 	input.onExternalSessionId?.(threadId);
+	const goalCommand = parseCodexGoalCommand(input.prompt);
+	let effectivePrompt = input.prompt;
+	if (goalCommand) {
+		if (goalCommand.action === "get") {
+			const result = await request(entry, "thread/goal/get", { threadId });
+			return completeLocalGoalCommand({
+				entry,
+				threadId,
+				message: formatGoalStatus(result.goal),
+				reducer,
+				onProgress: input.onProgress,
+			});
+		}
+		if (goalCommand.action === "clear") {
+			await request(entry, "thread/goal/clear", { threadId });
+			return completeLocalGoalCommand({
+				entry,
+				threadId,
+				message: "Codex goal cleared.",
+				reducer,
+				onProgress: input.onProgress,
+			});
+		}
+		if (goalCommand.action === "pause" || goalCommand.action === "resume") {
+			const result = await request(entry, "thread/goal/set", {
+				threadId,
+				status: goalCommand.action === "pause" ? "paused" : "active",
+			});
+			return completeLocalGoalCommand({
+				entry,
+				threadId,
+				message: formatGoalStatus(result.goal),
+				reducer,
+				onProgress: input.onProgress,
+			});
+		}
+		if (goalCommand.action !== "set") {
+			throw new Error(`Unsupported Codex goal action: ${goalCommand.action}`);
+		}
+		await request(entry, "thread/goal/set", {
+			threadId,
+			objective: goalCommand.objective,
+			status: "active",
+		});
+		input.onProgress?.(
+			reducer.pushRuntimeEvent({
+				kind: "status",
+				eventType: "thread.goal.set",
+				message: "Codex goal saved; starting work",
+			}),
+		);
+		effectivePrompt =
+			"Continue working toward the active Codex goal for this thread. Use the persisted goal state as the source of truth. Begin executing it now.";
+	}
 	input.onProgress?.(
 		reducer.pushRuntimeEvent({
 			kind: "status",
@@ -694,7 +788,7 @@ export async function runCodexAppServerHarness(input: {
 
 		void request(entry, "turn/start", {
 			threadId,
-			input: [{ type: "text", text: input.prompt, text_elements: [] }],
+			input: [{ type: "text", text: effectivePrompt, text_elements: [] }],
 			model: input.model,
 			effort: input.thinkingLevel,
 			...(input.serviceTier !== undefined

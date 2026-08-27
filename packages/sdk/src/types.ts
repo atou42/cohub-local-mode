@@ -1,5 +1,5 @@
 import type {
-  AgentHarness,
+	AgentHarness,
   SessionBindingRecord as ProtocolSessionBindingRecord,
   SessionRecord as ProtocolSessionRecord,
   SessionForkRecord,
@@ -11,6 +11,11 @@ import type {
   SpaceTurnListItem as ProtocolSpaceTurnListItem,
   SpaceTurnsResponse as ProtocolSpaceTurnsResponse,
 } from "@cohub/protocol/model";
+export type {
+	HarnessCapabilityCatalog,
+	HarnessCapabilityCommand,
+	HarnessCapabilitySkill,
+} from "@cohub/protocol";
 
 export type { AgentHarness } from "@cohub/protocol/model";
 import type {

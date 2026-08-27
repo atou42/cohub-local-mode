@@ -21,6 +21,7 @@ import {
 	type CreateSpacePromptInput,
 	type CreateSpacePromptResponse,
 	extractBillingPayload,
+	type HarnessCapabilityCatalog,
 	HttpError,
 	type SessionRecord,
 } from "@neta-art/cohub";
@@ -37,10 +38,8 @@ import {
 	type ComposerImageAttachment,
 	type ComposerTextAttachment,
 } from "$lib/composer-attachments";
-import {
-	createPromptTemplateController,
-	type PromptQuickAction,
-} from "$lib/features/space/modules/prompt-template-controller.svelte";
+import { createHarnessCapabilityController } from "$lib/features/space/modules/harness-capability-controller.svelte";
+import { createPromptTemplateController } from "$lib/features/space/modules/prompt-template-controller.svelte";
 import { createKeyedRouteRequestGuard } from "$lib/features/space/modules/route-request-guard";
 import { createSkillController } from "$lib/features/space/modules/skill-controller.svelte";
 import { asRecord } from "$lib/features/space/space-utils";
@@ -77,7 +76,7 @@ import {
 	uploadChatAttachmentFile,
 	uploadChatAttachmentImage,
 } from "$lib/public-asset-images";
-import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
+import { sdk } from "$lib/sdk";
 import { sortSessionsByRecentActivity } from "$lib/session-sort";
 import type { TimelineItem } from "$lib/session-tree";
 import { buildTurnTimelineItems } from "$lib/session-turn-render";
@@ -141,6 +140,13 @@ import { turnRecordToIndexItem } from "$lib/turn-nav-preview";
 import type { LocalUploadEntry } from "$lib/upload-entries";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import {
+	decideRelayCommandReconcile,
+	decideRelayTurnEvent,
+	findOptimisticTurnForRelayCommand,
+	mergeRelayCommandStatuses,
+	queuedRelayCancelTargets,
+} from "./local-relay-event-plane";
+import {
 	shouldClearActiveSessionForNewDraft,
 	shouldClearResolvedNewSessionOnRoute,
 } from "./new-chat-draft-isolation";
@@ -163,13 +169,6 @@ import {
 import { createSessionShareController } from "./session-share-controller.svelte";
 import { createSessionTaskController } from "./session-task-controller.svelte";
 import { createSessionTurnLoadingController } from "./session-turn-loading-controller.svelte";
-import {
-	decideRelayCommandReconcile,
-	decideRelayTurnEvent,
-	findOptimisticTurnForRelayCommand,
-	mergeRelayCommandStatuses,
-	queuedRelayCancelTargets,
-} from "./local-relay-event-plane";
 import {
 	adoptPromptSessionState,
 	areSessionTurnsEqual,
@@ -312,6 +311,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const skillsCtrl = createSkillController({
 		getSpaceId: () => spaceId,
 	});
+	const harnessCapabilitiesCtrl = createHarnessCapabilityController();
 	const share = createSessionShareController({
 		getSpaceId: () => spaceId,
 		canManageAccess: () => options.canManageSessionAccess?.() ?? false,
@@ -475,6 +475,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const quickPromptActions = $derived(promptTemplatesCtrl.quickActions);
 	const skills = $derived(skillsCtrl.items);
 	const skillsLoaded = $derived(skillsCtrl.loaded);
+	const harnessCapabilities = $derived<HarnessCapabilityCatalog | null>(
+		harnessCapabilitiesCtrl.catalog,
+	);
+	const harnessCapabilitiesLoaded = $derived(harnessCapabilitiesCtrl.loaded);
+	const slashCatalogError = $derived(
+		harnessCapabilitiesCtrl.refreshError ??
+			skillsCtrl.refreshError ??
+			promptTemplatesCtrl.refreshError,
+	);
 	let showModelSelector = $state(false);
 	let restoredComposerModeKey: string | null = null;
 	let generationDraftSessionId = $state<string | null>(null);
@@ -1675,12 +1684,25 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		generationPolicy.setBooleanConstraint(modelId, parameter, constraint);
 	}
 
-	async function loadPromptTemplates(options: { ensureFresh?: boolean } = {}) {
-		await Promise.all([
-			promptTemplatesCtrl.load(options),
-			skillsCtrl.load(options),
-		]);
+	async function loadPromptTemplates() {
+		await Promise.all([promptTemplatesCtrl.load(), skillsCtrl.load()]);
 	}
+
+	$effect(() => {
+		const targetSpaceId = spaceId;
+		const targetHarness = activeAgentHarness;
+		const isLocal = Boolean(options.isLocalSpace?.());
+		untrack(() => {
+			if (!targetSpaceId || !isLocal) {
+				harnessCapabilitiesCtrl.reset();
+				return;
+			}
+			void harnessCapabilitiesCtrl.load({
+				spaceId: targetSpaceId,
+				harness: targetHarness,
+			});
+		});
+	});
 
 	function getModelParameterPreference(model: {
 		provider: string;
@@ -3160,7 +3182,10 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					);
 					if (!pending) return;
 					void reconcileRelayCommand(pending, command).catch((error) => {
-						console.warn("[local-relay] command update reconcile failed", error);
+						console.warn(
+							"[local-relay] command update reconcile failed",
+							error,
+						);
 					});
 				},
 				onTurnEvent: (event) => {
@@ -5469,6 +5494,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		},
 		get skillsLoaded() {
 			return skillsLoaded;
+		},
+		get harnessCapabilities() {
+			return harnessCapabilities;
+		},
+		get harnessCapabilitiesLoaded() {
+			return harnessCapabilitiesLoaded;
+		},
+		get slashCatalogError() {
+			return slashCatalogError;
 		},
 		get input() {
 			return composer.input;

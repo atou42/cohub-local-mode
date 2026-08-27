@@ -122,11 +122,16 @@ async function loadModSkills(mod: SpaceModListItem): Promise<Skill[]> {
 
 async function loadMergedSkills(cwd: string, userId?: string | null, spaceMods: SpaceModListItem[] = [], options: { includeUserSkills?: boolean } = {}): Promise<Skill[]> {
   const modSkillGroups = await Promise.all(spaceMods.map(loadModSkills));
+  const platformSkillsPath = process.env.COHUB_NODE_ORIGIN === "local"
+    ? process.env.LOCAL_AGENT_SKILLS_PATH?.trim() || getAgentPlatformSkillsPath()
+    : getAgentPlatformSkillsPath();
 
   const [platformSkills, userSkills, workspaceSkills] = await Promise.all([
     loadSkillsFromDir({
-      agentDir: getAgentPlatformSkillsPath(),
-      sandboxDir: SANDBOX_PLATFORM_SKILLS_PATH,
+      agentDir: platformSkillsPath,
+      sandboxDir: process.env.COHUB_NODE_ORIGIN === "local"
+        ? platformSkillsPath
+        : SANDBOX_PLATFORM_SKILLS_PATH,
       scope: "platform",
     }),
     userId && options.includeUserSkills !== false
@@ -199,7 +204,11 @@ export async function buildCohubSystemPrompt(options: BuildCohubSystemPromptOpti
     readTextIfExists(join(workspaceAgentDir, "APPEND_SYSTEM.md")),
   ])).filter((value): value is string => Boolean(value));
 
-  const [userContextFiles, modContextGroups, projectContextFiles, skills] = await Promise.all([
+  const machineUserContextRoot = process.env.COHUB_NODE_ORIGIN === "local"
+    ? process.env.LOCAL_USER_AGENTS_PATH?.trim()
+    : undefined;
+  const [machineUserContext, userContextFiles, modContextGroups, projectContextFiles, skills] = await Promise.all([
+    machineUserContextRoot ? readTextIfExists(machineUserContextRoot) : Promise.resolve(undefined),
     userId ? loadContextFilesFromRoot(getAgentUserConfigPath(userId), SANDBOX_USER_CONFIG_PATH) : Promise.resolve([]),
     Promise.all(spaceMods.map((mod) => loadContextFilesFromRoot(getAgentModSnapshotPath(mod.modSpaceId), mod.mountPath))),
     loadContextFilesFromRoot(cwd, SANDBOX_WORKSPACE_PATH),
@@ -208,8 +217,9 @@ export async function buildCohubSystemPrompt(options: BuildCohubSystemPromptOpti
 
   const sections: string[] = [systemPrompt, ...appendSystemPrompts];
 
-  if (userContextFiles.length > 0) {
+  if (machineUserContext || userContextFiles.length > 0) {
     let userContext = "# User Context\n\nThe following are user-specific preferences and instructions. Follow them when they do not conflict with platform, safety, or project-specific instructions:";
+    if (machineUserContext) userContext += `\n\n${machineUserContext}`;
     for (const file of userContextFiles) {
       userContext += `\n\n${file.content}`;
     }
@@ -238,6 +248,12 @@ export async function buildCohubSystemPrompt(options: BuildCohubSystemPromptOpti
 
   if (skills.length > 0) {
     sections.push(formatSkillsForPrompt(skills));
+  }
+
+  if (process.env.COHUB_NODE_ORIGIN === "local" && selectedTools.includes("bash")) {
+    sections.push(
+      '[Cohub generation]\nWhen the user asks for an image, video, audio, or another multimodal asset, use the host Cohub CLI instead of calling a provider directly. First inspect available models with `cohub models ls --model-type multimodal`, then run `cohub generate <prompt> -m <model>` with the required parameters and inputs. The command submits through the local node and returns the generated asset; expose any failure and preserve the returned URL or saved file path.',
+    );
   }
 
   const visibleTools = selectedTools.filter((name) => toolSnippets[name]);

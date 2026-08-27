@@ -106,6 +106,8 @@ const values = {
   CHECKPOINT_CACHE_ROOT: join(dataDir, "checkpoints"),
   SESSIONS_DIR: join(dataDir, "sessions"),
   PLATFORM_CONFIG_ROOT: join(dataDir, "configs"),
+  LOCAL_USER_AGENTS_PATH: join(homedir(), ".codex", "AGENTS.md"),
+  LOCAL_AGENT_SKILLS_PATH: join(homedir(), ".agents", "skills"),
   LOCAL_GIT_ROOT: join(dataDir, "git"),
   SPACE_STORAGE_SUBPATH: "spaces",
   CHECKPOINT_CACHE_SUBPATH: "checkpoints",
