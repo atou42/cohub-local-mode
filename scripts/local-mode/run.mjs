@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
@@ -20,6 +21,10 @@ const privateIngressScript = join(
 const sandboxSupervisorScript = join(
   repoRoot,
   "scripts/local-mode/sandbox-supervisor.mjs",
+);
+const localSandboxBinary = join(
+  repoRoot,
+  "apps/sandbox/.local-build/cohub-sandboxd",
 );
 const localToolPath = join(repoRoot, "scripts/local-mode/bin");
 process.env.LOCAL_COHUB_CLI_PATH = join(localToolPath, "cohub");
@@ -49,6 +54,8 @@ try {
   throw error;
 }
 process.loadEnvFile(envFile);
+process.env.LOCAL_USER_AGENTS_PATH ??= join(homedir(), ".codex", "AGENTS.md");
+process.env.LOCAL_AGENT_SKILLS_PATH ??= join(homedir(), ".agents", "skills");
 
 const required = [
   "COHUB_LOCAL_DATA_DIR",
@@ -184,6 +191,20 @@ async function ensurePiCatalog() {
   });
 }
 
+async function ensureLocalAgentContext() {
+  const source = process.env.LOCAL_AGENT_SKILLS_PATH;
+  try {
+    await access(source);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      console.warn(`Local machine skills are unavailable: ${source}`);
+      return;
+    }
+    throw error;
+  }
+  console.log(`Using Local Mode skills directory: ${source}`);
+}
+
 async function syncPiCatalogCache() {
   await run("pnpm", [
     "--filter",
@@ -194,10 +215,22 @@ async function syncPiCatalogCache() {
   ]);
 }
 
+async function syncSkillsCatalogCache() {
+  await run("pnpm", [
+    "--filter",
+    "@cohub/worker",
+    "exec",
+    "tsx",
+    "scripts/sync-local-skills-cache.ts",
+  ]);
+}
+
 async function initialize() {
   await ensureDirectories();
   await ensurePiCatalog();
+  await ensureLocalAgentContext();
   await syncPiCatalogCache();
+  await syncSkillsCatalogCache();
   await run("pnpm", ["--filter", "@cohub/api", "db:migrate"]);
   await run("pnpm", [
     "--filter",
@@ -235,6 +268,42 @@ async function buildWeb() {
       { cause: error },
     );
   }
+}
+
+async function buildLocalSandbox() {
+  const outputDir = dirname(localSandboxBinary);
+  const staged = join(outputDir, `cohub-sandboxd.${process.pid}.next`);
+  await mkdir(outputDir, { recursive: true });
+  try {
+    await run(
+      "go",
+      [
+        "build",
+        "-ldflags",
+        "-X main.buildVersion=local-dev",
+        "-o",
+        staged,
+        ".",
+      ],
+      { cwd: join(repoRoot, "apps/sandbox") },
+    );
+    await rename(staged, localSandboxBinary);
+  } finally {
+    await rm(staged, { force: true });
+  }
+  process.env.COHUB_SANDBOXD_BIN = localSandboxBinary;
+}
+
+async function requireLocalSandboxBuild() {
+  try {
+    await access(localSandboxBinary);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("Missing compiled local sandbox. Run `pnpm local:build` first.");
+    }
+    throw error;
+  }
+  process.env.COHUB_SANDBOXD_BIN = localSandboxBinary;
 }
 
 async function requireWebBuild() {
@@ -532,21 +601,27 @@ async function startServices(webMode = "development") {
 
 if (command === "infra") await startInfra();
 if (command === "init") await initialize();
-if (command === "build") await buildWeb();
+if (command === "build") {
+  await buildLocalSandbox();
+  await buildWeb();
+}
 if (command === "status") await status();
 if (command === "up") {
   await startInfra();
   await initialize();
+  await buildLocalSandbox();
   await startServices();
 }
 if (command === "host") {
   await startInfra();
   await initialize();
+  await buildLocalSandbox();
   await buildWeb();
   await startServices("host");
 }
 if (command === "serve") {
   await requireWebBuild();
+  await requireLocalSandboxBuild();
   await startInfra();
   await initialize();
   await startServices("host");
