@@ -41,6 +41,8 @@ export interface WorkerConfig {
   env: "dev" | "prod";
   /** Author email for checkpoint git commits. */
   checkpointGitAuthorEmail: string;
+  nodeOrigin: "cloud" | "local";
+  cloudApiOrigin: string;
 }
 
 const env = (process.env.ENV === "prod" ? "prod" : "dev") as "dev" | "prod";
@@ -126,6 +128,11 @@ export const config: WorkerConfig = {
   env,
   checkpointGitAuthorEmail:
     process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",
+  nodeOrigin: process.env.COHUB_NODE_ORIGIN === "local" ? "local" : "cloud",
+  cloudApiOrigin:
+    process.env.CLOUD_API_BASE_URL?.trim() ||
+    process.env.PUBLIC_CLOUD_API_ORIGIN?.trim() ||
+    "https://api.cohub.live",
 };
 
 export const assertRequiredConfig = () => {

@@ -5,6 +5,8 @@ import type {
 	ExternalHarnessResult,
 	HarnessEventReducer,
 } from "./external-harness-protocol.js";
+import { normalizeGrokAcpPrompt } from "./grok-native-command.js";
+import { buildGrokAppServerArgv } from "./external-harness-grok-config.js";
 import { tracedRpc } from "./sandbox/tools.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
@@ -346,14 +348,6 @@ function consumeStdout(entry: RuntimeEntry, chunk: string) {
 	}
 }
 
-function processArgv(accessMode: AccessMode) {
-	const argv = ["grok"];
-	if (accessMode === "full_access") argv.push("--always-approve");
-	else argv.push("--tools", "read_file,grep,list_dir,web_search,web_fetch");
-	argv.push("agent", "stdio");
-	return argv;
-}
-
 function createRuntime(input: {
 	key: string;
 	spaceId: string;
@@ -403,7 +397,7 @@ function createRuntime(input: {
 		input.connection,
 		"process.start",
 		{
-			argv: processArgv(input.accessMode),
+			argv: buildGrokAppServerArgv(input.accessMode),
 			cwd: input.connection.filesystem?.defaultCwd?.trim() || SANDBOX_WORKSPACE,
 			env: input.environment,
 			timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -606,7 +600,7 @@ export async function runGrokAcpHarness(input: {
 			"session/prompt",
 			{
 				sessionId: externalSessionId,
-				prompt: [{ type: "text", text: input.prompt }],
+				prompt: [{ type: "text", text: normalizeGrokAcpPrompt(input.prompt) }],
 			},
 			PROMPT_TIMEOUT_MS,
 		).then(

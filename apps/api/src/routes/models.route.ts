@@ -20,6 +20,7 @@ import { loadPublicGenerationModels } from "../generations/declarations.js";
 import { config } from "../config.js";
 import { useAuth } from "../lib/middleware.js";
 import { redisCommandClient } from "../redis.js";
+import { loadCloudGenerationModels } from "../local-mode/cloud-generation.js";
 import {
   HarnessCatalogError,
   loadExternalHarnessCatalog,
@@ -128,6 +129,9 @@ router.get("/", async (c) => {
   try {
     const modelType = c.req.query("modelType");
     if (modelType === MULTIMODAL_MODEL_TYPE) {
+      if (config.nodeOrigin === "local") {
+        return c.json({ models: await loadCloudGenerationModels(user.uuid) });
+      }
       return c.json(await loadPublicGenerationModels(user.uuid));
     }
 

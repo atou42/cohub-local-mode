@@ -1,19 +1,36 @@
 import type { SkillCatalogEntry } from "@neta-art/cohub";
 import { sdkForSpaceOrigin } from "$lib/sdk";
-import { resolveSpaceOrigin } from "$lib/space-origin";
 import { readCachedSkills, writeCachedSkills } from "$lib/skill-cache";
-import {
-	type CatalogRefreshOptions,
-	createCatalogRefreshCoordinator,
-} from "./catalog-refresh-coordinator";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 
 export function createSkillController(options: { getSpaceId: () => string }) {
 	let items = $state<SkillCatalogEntry[]>([]);
 	let loaded = $state(false);
 	let loadedFor = $state<string | null>(null);
-	const refreshCoordinator = createCatalogRefreshCoordinator({
-		getSpaceId: options.getSpaceId,
-		refresh: async (targetSpaceId) => {
+	let refreshError = $state<string | null>(null);
+	let refreshInFlight: Promise<void> | null = null;
+	let refreshInFlightFor: string | null = null;
+
+	function restore(targetSpaceId: string) {
+		const cached = readCachedSkills(targetSpaceId);
+		if (!cached) {
+			items = [];
+			loaded = false;
+			loadedFor = null;
+			refreshError = null;
+			return;
+		}
+		items = cached;
+		loaded = true;
+		loadedFor = targetSpaceId;
+		refreshError = null;
+	}
+
+	async function refresh(targetSpaceId: string) {
+		if (refreshInFlight && refreshInFlightFor === targetSpaceId) {
+			return refreshInFlight;
+		}
+		const run = (async () => {
 			try {
 				const response = await sdkForSpaceOrigin(
 					resolveSpaceOrigin(targetSpaceId),
@@ -23,12 +40,15 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 				items = response.skills;
 				loaded = true;
 				loadedFor = targetSpaceId;
+				refreshError = null;
 			} catch (error) {
 				console.error("Failed to load skills:", error);
 				if (options.getSpaceId() !== targetSpaceId) return;
 				// Keep any restored cache; mark loaded so slash menu is not stuck.
 				loaded = true;
 				loadedFor = targetSpaceId;
+				refreshError =
+					error instanceof Error ? error.message : "Failed to refresh skills";
 			}
 		},
 	});
@@ -61,6 +81,9 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 		},
 		get loadedFor() {
 			return loadedFor;
+		},
+		get refreshError() {
+			return refreshError;
 		},
 		load,
 		restore,
