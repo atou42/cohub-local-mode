@@ -17,6 +17,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { getPostgresErrorConstraint, isPostgresUniqueViolation } from "./db/postgres-error.js";
 import { createSessionTurn, setGenerationTurnAssistantProjection } from "./session-turns.js";
 import { loadGenerationDeclaration } from "./generations/declarations.js";
+import { loadCloudGenerationModel } from "./local-mode/cloud-generation.js";
+import { config } from "./config.js";
 import { enqueueTask } from "./tasks.js";
 import { defaultJobRetention } from "@cohub/infra/bullmq";
 
@@ -55,6 +57,7 @@ export async function createGenerationSessionExecution(input: {
 }) {
   const requestedSessionId = input.sessionId?.trim() || null;
   const requestedClientMessageId = input.clientMessageId?.trim() || null;
+  const relayToCloud = config.nodeOrigin === "local";
   if (requestedSessionId && requestedClientMessageId) {
     const existingSession = await getSpaceSessionById(requestedSessionId);
     if (existingSession && existingSession.spaceId !== input.spaceId) throw new GenerationSessionExecutionError(404, "generation_session_not_found", "Generation session not found in this space.");
@@ -70,34 +73,45 @@ export async function createGenerationSessionExecution(input: {
     }
   }
 
-  const declaration = await loadGenerationDeclaration(input.userId, input.model);
+  const localDeclaration = relayToCloud ? null : await loadGenerationDeclaration(input.userId, input.model);
+  const declaration = relayToCloud
+    ? await loadCloudGenerationModel(input.userId, input.model)
+    : localDeclaration;
   if (!declaration) throw new GenerationSessionExecutionError(404, "generation_model_not_found", `Generation model not found: ${input.model}`);
   let parameters: Record<string, unknown> | undefined;
   try {
-    parameters = createGenerationClient({ models: [declaration], includeBuiltinModels: false }).validate({
-      model: input.model,
-      content: input.content,
-      parameters: input.parameters,
-      meta: input.meta,
-    }).parameters;
+    if (relayToCloud) {
+      parameters = input.parameters;
+    } else {
+      if (!localDeclaration) throw new GenerationSessionExecutionError(404, "generation_model_not_found", `Generation model not found: ${input.model}`);
+      parameters = createGenerationClient({ models: [localDeclaration], includeBuiltinModels: false }).validate({
+          model: input.model,
+          content: input.content,
+          parameters: input.parameters,
+          meta: input.meta,
+        }).parameters;
+    }
   } catch (error) {
     if (error instanceof GenerationValidationError) throw new GenerationSessionExecutionError(400, "invalid_generation_input", error.message);
     throw error;
   }
-  const usageType = resolveGenerationUsageType({ adapterType: declaration.adapter?.type, contentTypes: contentTypesFromBlocks(input.content) });
-  const discount = await billingOperations.getGenerationModelDiscount({ userId: input.userId, model: input.model }).catch(() => {
-    throw new GenerationSessionExecutionError(503, "generation_pricing_unavailable", "Generation pricing is temporarily unavailable.");
-  });
-  let billingDecision: Awaited<ReturnType<typeof billingUsageGate.evaluate>>;
-  try {
-    billingDecision = isGenerationModelDiscountFree(discount)
-      ? { status: "allowed" as const, balanceState: "zero" as const, netUsd: 0 }
-      : await billingUsageGate.evaluate({ userId: input.userId, usageKind: generationUsageKind(usageType), source: "generation_task", model: input.model, spaceId: input.spaceId, sessionId: input.sessionId ?? null });
-  } catch (error) {
-    if (isBillingUsageGateUnavailableError(error)) throw new GenerationSessionExecutionError(503, "generation_balance_unavailable", error.message);
-    throw error;
+  let discount: Awaited<ReturnType<typeof billingOperations.getGenerationModelDiscount>> | null = null;
+  let billingDecision: Awaited<ReturnType<typeof billingUsageGate.evaluate>> | null = null;
+  if (!relayToCloud) {
+    const usageType = resolveGenerationUsageType({ adapterType: localDeclaration?.adapter?.type, contentTypes: contentTypesFromBlocks(input.content) });
+    discount = await billingOperations.getGenerationModelDiscount({ userId: input.userId, model: input.model }).catch(() => {
+      throw new GenerationSessionExecutionError(503, "generation_pricing_unavailable", "Generation pricing is temporarily unavailable.");
+    });
+    try {
+      billingDecision = isGenerationModelDiscountFree(discount)
+        ? { status: "allowed" as const, balanceState: "zero" as const, netUsd: 0 }
+        : await billingUsageGate.evaluate({ userId: input.userId, usageKind: generationUsageKind(usageType), source: "generation_task", model: input.model, spaceId: input.spaceId, sessionId: input.sessionId ?? null });
+    } catch (error) {
+      if (isBillingUsageGateUnavailableError(error)) throw new GenerationSessionExecutionError(503, "generation_balance_unavailable", error.message);
+      throw error;
+    }
+    if (billingDecision.status === "blocked") throw new BillingAccessBlockedError(billingDecision);
   }
-  if (billingDecision.status === "blocked") throw new BillingAccessBlockedError(billingDecision);
 
   const taskRunId = crypto.randomUUID();
   let sessionId = input.sessionId?.trim() || null;
@@ -117,7 +131,7 @@ export async function createGenerationSessionExecution(input: {
       const session = await createInitialSpaceSession({ spaceId: input.spaceId, sessionId: crypto.randomUUID(), userUuid: input.userId, title: null, source: input.source ?? "web", externalSessionId: null, meta: { createdBy: "direct_generation" } });
       sessionId = session.id;
     }
-    const request = buildGenerationRequestMessage({ taskId: taskRunId, model: input.model, provider: declaration.adapter?.type ?? null, parameters, content: input.content });
+    const request = buildGenerationRequestMessage({ taskId: taskRunId, model: input.model, provider: localDeclaration?.adapter?.type ?? null, parameters, content: input.content });
     let turn: Awaited<ReturnType<typeof createSessionTurn>>;
     try {
       turn = await createSessionTurn({ id: crypto.randomUUID(), sessionId, userUuid: input.userId, userContent: request.content, executionKind: "direct_generation", intent: "followup", meta: { ...(input.meta ?? {}), executionKind: "direct_generation", generationTaskId: taskRunId, clientMessageId: input.clientMessageId ?? null } });
@@ -134,11 +148,17 @@ export async function createGenerationSessionExecution(input: {
     }
     turnId = turn.id;
     await persistMessageNode({ spaceId: input.spaceId, sessionId, userId: input.userId, idempotencyKey: `generation:${taskRunId}:request`, message: { role: "user", content: request.content, meta: { ...request.meta, messageKind: "generation_request", turnId, generationTaskId: taskRunId } } });
-    const placeholder = buildGenerationResultMessage({ taskId: taskRunId, model: input.model, provider: declaration.adapter?.type ?? null, parameters, status: "queued" });
+    const placeholder = buildGenerationResultMessage({ taskId: taskRunId, model: input.model, provider: localDeclaration?.adapter?.type ?? null, parameters, status: "queued" });
     const placeholderText = placeholder.content.find((block) => block.type === "text")?.text ?? null;
     await persistMessageNode({ spaceId: input.spaceId, sessionId, userId: input.userId, idempotencyKey: `generation:${taskRunId}:result`, message: { role: "assistant", content: placeholder.content, text: placeholderText, model: input.model, meta: { ...placeholder.meta, messageKind: "generation_result", turnId, generationTaskId: taskRunId, generationStatus: "queued" } } });
     await setGenerationTurnAssistantProjection({ sessionId, turnId, content: placeholder.content, text: placeholderText, model: input.model, taskId: taskRunId });
-    await enqueueTask({ type: "generation", spaceId: input.spaceId, sessionId, turnId, userId: input.userId, data: { model: input.model, content: input.content, parameters, meta: input.meta, requestSource: null, modelDiscount: { multiplier: discount.multiplier, resolvedAt: discount.resolvedAt } } }, { taskRunId, attempts: 1, ...defaultJobRetention }).catch(() => {
+    const taskData = relayToCloud
+      ? { model: input.model, content: input.content, parameters, meta: input.meta, requestSource: null, relayToCloud: true }
+      : (() => {
+          if (!discount) throw new GenerationSessionExecutionError(503, "generation_pricing_unavailable", "Generation pricing is temporarily unavailable.");
+          return { model: input.model, content: input.content, parameters, meta: input.meta, requestSource: null, modelDiscount: { multiplier: discount.multiplier, resolvedAt: discount.resolvedAt } };
+        })();
+    await enqueueTask({ type: "generation", spaceId: input.spaceId, sessionId, turnId, userId: input.userId, data: taskData }, { taskRunId, attempts: 1, ...defaultJobRetention }).catch(() => {
       throw new GenerationSessionExecutionError(503, "generation_queue_unavailable", "Generation queue is temporarily unavailable.");
     });
     return { taskRunId, sessionId, turnId, billing: billingDecision };

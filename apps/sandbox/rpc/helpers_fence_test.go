@@ -88,6 +88,40 @@ func TestResolveSandboxPathVirtualWorkspaceAlias(t *testing.T) {
 	}
 }
 
+func TestResolveSandboxPathAllowsReadOnlyAgentRoots(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("eval workspace: %v", err)
+	}
+	agentRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("eval agents: %v", err)
+	}
+	skillPath := filepath.Join(agentRoot, "skills", "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("demo"), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+
+	cfg := env.Config{
+		WorkspaceDir:     workspace,
+		PlatformAgentsDir: agentRoot,
+		Fence:            true,
+	}
+	resolved, err := resolveSandboxPath(cfg, skillPath, workspace)
+	if err != nil {
+		t.Fatalf("agent root should be readable: %v", err)
+	}
+	if resolved.path != skillPath {
+		t.Fatalf("path mismatch: got %q want %q", resolved.path, skillPath)
+	}
+	if !isReadOnlyPath(cfg, skillPath) {
+		t.Fatal("agent root must remain read-only")
+	}
+}
+
 func TestResolveSandboxPathSymlinkEscape(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

@@ -36,6 +36,7 @@ import { redisCommandClient } from "../redis.js";
 import { enqueueTask } from "./enqueue.js";
 import { registerTask } from "./registry.js";
 import { finalizeGenerationSession, markGenerationSessionRunning } from "./generation-session.js";
+import { runCloudGeneration } from "../local-mode/cloud-generation.js";
 
 const loader = createGenerationDeclarationLoader({
   platformConfigRoot: config.platformConfigRoot,
@@ -93,6 +94,7 @@ function parseGenerationTaskData(data: unknown): GenerationTaskData {
     model: data.model,
     content: data.content as GenerationTaskData["content"],
     parameters: data.parameters,
+    relayToCloud: data.relayToCloud === true,
     meta: data.meta,
     ...(data.modelDiscount === undefined
       ? {}
@@ -344,6 +346,17 @@ registerTask(GENERATION_TASK_TYPE, async (job: Job, context) => {
   });
 
   try {
+    if (config.nodeOrigin === "local" && data.relayToCloud) {
+      const result = await runCloudGeneration({
+        userId,
+        model: data.model,
+        content: data.content,
+        parameters: data.parameters,
+        meta: data.meta,
+      });
+      await finalizeGenerationSession({ taskRunId, payload, result });
+      return result;
+    }
     const declaration = await loader.loadGenerationDeclaration(userId, data.model);
     if (!declaration) throw new Error(`Generation model is unavailable: ${data.model}`);
 
