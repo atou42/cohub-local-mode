@@ -30,6 +30,7 @@ import referencesRouter from "./references.route.js";
 import desktopCommandsRouter from "./desktop-commands.route.js";
 import previewRouter from "./preview.route.js";
 import localModeRouter from "./local-mode.route.js";
+import harnessCapabilitiesRouter from "./harness-capabilities.route.js";
 
 const router = new Hono();
 
@@ -70,6 +71,7 @@ router.route("/api/references", referencesRouter);
 router.route("/api/desktop/commands", desktopCommandsRouter);
 router.route("/api/ui/commands", desktopCommandsRouter);
 router.route("/api/local-mode", localModeRouter);
+router.route("/api/harness-capabilities", harnessCapabilitiesRouter);
 router.route("/", previewRouter);
 router.route("/internal", internalRouter);
 

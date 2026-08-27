@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	buildHarnessArgv,
 	HarnessEventReducer,
@@ -7,9 +10,11 @@ import {
 } from "../external-harness-protocol.js";
 import {
 	appendCloudSpaceReadInstructions,
+	appendLocalGenerationInstructions,
 	buildExternalHarnessEnvironment,
 } from "../external-harness-context.js";
 import { buildCodexAppServerArgv } from "../external-harness-codex-config.js";
+import { buildGrokAppServerArgv } from "../external-harness-grok-config.js";
 import { createExternalProgressPublisher } from "../external-progress-publisher.js";
 
 function semanticContent(
@@ -388,6 +393,13 @@ test("external harness prompt is unchanged for local and legacy mentions", () =>
 	}
 });
 
+test("external harness prompt exposes the local generation CLI", () => {
+	const prompt = appendLocalGenerationInstructions("create an image");
+	assert.match(prompt, /\$COHUB_LOCAL_CLI.*models ls --model-type multimodal/);
+	assert.match(prompt, /\$COHUB_LOCAL_CLI.*generate/);
+	assert.match(prompt, /expose any failure/);
+});
+
 test("resumed harness turns keep the selected model and effort", () => {
 	const codex = buildHarnessArgv({
 		harness: "codex",
@@ -470,6 +482,32 @@ test("Codex recoverable stream errors do not override a later successful complet
 			"Codex completed",
 		],
 	);
+});
+
+test("Codex app-server uses the configured context and native compaction limits", () => {
+	const argv = buildCodexAppServerArgv();
+	assert.equal(argv.includes("model_context_window=1050000"), true);
+	assert.equal(
+		argv.includes("model_auto_compact_token_limit=400000"),
+		true,
+	);
+});
+
+test("Grok Build app-server receives the local Codex user rules", async () => {
+	const previousCodexHome = process.env.CODEX_HOME;
+	const codexHome = await mkdtemp(join(tmpdir(), "cohub-codex-home-"));
+	await writeFile(join(codexHome, "AGENTS.md"), "Codex Skills Source-of-Truth Rule");
+	process.env.CODEX_HOME = codexHome;
+	try {
+		const argv = buildGrokAppServerArgv("read_only");
+		const rulesIndex = argv.indexOf("--rules");
+		assert.notEqual(rulesIndex, -1);
+		assert.match(argv[rulesIndex + 1] ?? "", /Codex Skills Source-of-Truth Rule/);
+		assert.deepEqual(argv.slice(-2), ["agent", "stdio"]);
+	} finally {
+		if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+		else process.env.CODEX_HOME = previousCodexHome;
+	}
 });
 
 test("external progress snapshots expose running tools and redact credentials", () => {

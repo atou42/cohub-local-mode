@@ -12,12 +12,19 @@ const CODEX_SHELL_ENVIRONMENT_INCLUDE_ONLY = [
 	"COHUB_*",
 ];
 
+const CODEX_MODEL_CONTEXT_WINDOW = 1_050_000;
+const CODEX_AUTO_COMPACT_TOKEN_LIMIT = 400_000;
+
 export function buildCodexAppServerArgv() {
 	return [
 		"codex",
 		"app-server",
 		"--listen",
 		"stdio://",
+		"-c",
+		`model_context_window=${CODEX_MODEL_CONTEXT_WINDOW}`,
+		"-c",
+		`model_auto_compact_token_limit=${CODEX_AUTO_COMPACT_TOKEN_LIMIT}`,
 		"-c",
 		"shell_environment_policy.inherit=all",
 		"-c",

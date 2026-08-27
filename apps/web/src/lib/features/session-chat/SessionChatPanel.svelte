@@ -456,6 +456,9 @@ async function handleDraftDrop(event: DragEvent) {
 					promptTemplatesLoaded={host.promptTemplatesLoaded}
 					skills={host.skills}
 					skillsLoaded={host.skillsLoaded}
+					harnessCapabilities={host.harnessCapabilities}
+					harnessCapabilitiesLoaded={host.harnessCapabilitiesLoaded}
+					slashCatalogError={host.slashCatalogError}
 					onpickattachment={host.handlePickAttachments}
 					onremoveattachment={host.handleRemoveAttachment}
 					onremoveviewport={host.handleRemoveViewportContext}
