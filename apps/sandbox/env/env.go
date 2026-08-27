@@ -155,6 +155,10 @@ func LoadLocal(opts LocalOptions) (Config, error) {
 		return Config{}, fmt.Errorf("resolve home dir: %w", err)
 	}
 	cacheDir := filepath.Join(homeDir, ".cache", "cohub", "spaces", opts.SpaceID)
+	platformAgentsDir := filepath.Join(cacheDir, "platform-agents")
+	if localSkillsDir := strings.TrimSpace(os.Getenv("LOCAL_AGENT_SKILLS_PATH")); localSkillsDir != "" {
+		platformAgentsDir = filepath.Dir(localSkillsDir)
+	}
 
 	imageVersion := ResolveSandboxVersion("sandboxd:dev")
 
@@ -162,7 +166,7 @@ func LoadLocal(opts LocalOptions) (Config, error) {
 		SpaceID:           opts.SpaceID,
 		Mode:              ModeLocal,
 		WorkspaceDir:      resolvedRoot,
-		PlatformAgentsDir: filepath.Join(cacheDir, "platform-agents"),
+		PlatformAgentsDir: platformAgentsDir,
 		UserAgentsDir:     filepath.Join(cacheDir, "user-agents"),
 		ImageVersion:      imageVersion,
 		PublicPorts:       parsePortsEnv("COHUB_PUBLIC_PORTS", []int{3000, 5173}),

@@ -901,6 +901,7 @@
 	"slash_filtering": "筛选 /{q}",
 	"slash_narrow": "输入以缩小范围 · 使用 ↑↓ 移动",
 	"slash_tap_insert": "点按插入，然后添加参数",
+	"slash_refresh_failed": "命令刷新失败",
 	"slash_tab": "Tab",
 	"slash_or": "或",
 	"slash_loading": "正在加载命令…",

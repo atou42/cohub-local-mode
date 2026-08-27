@@ -19,6 +19,10 @@ export function appendCloudSpaceReadInstructions(
   return `${prompt}\n\n[Cohub context]\nThe explicitly mentioned Cloud Spaces are available read-only through the host-authorized Cohub CLI. Read them when the request requires their context; do not treat cohub:// links as local paths.\n${commands}`;
 }
 
+export function appendLocalGenerationInstructions(prompt: string): string {
+	return `${prompt}\n\n[Cohub generation]\nWhen the user asks for an image, video, audio, or another multimodal asset, use the host Cohub CLI instead of calling a provider directly. First inspect available models with \`"$COHUB_LOCAL_CLI" models ls --model-type multimodal\`, then run \`"$COHUB_LOCAL_CLI" generate <prompt> -m <model>\` with the required parameters and inputs. The command submits through the local node and returns the generated asset; expose any failure and preserve the returned URL or saved file path.`;
+}
+
 export function buildExternalHarnessEnvironment(input: {
 	spaceId: string;
 	sessionId: string;
