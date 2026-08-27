@@ -22,6 +22,7 @@ import WorkspaceWindowsPane from "$lib/components/WorkspaceWindowsPane.svelte";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
 import { DURATION_PANEL, svelteEaseIn } from "$lib/motion.svelte";
 import type { SpaceFsNode } from "$lib/space-fs";
+import type { SpaceUploadedFile } from "$lib/space-upload";
 import { patchCachedSpaceList } from "$lib/stores/space-list-cache";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
 import type { LocalUploadEntry } from "$lib/upload-entries";
@@ -178,6 +179,7 @@ export type SpaceFileDomainProps = {
 	onBeginPreviewPanelResize: (event: PointerEvent) => void;
 	onTogglePreviewFocusMode: () => void | Promise<void>;
 	onTogglePreviewImmersiveMode: () => void | Promise<void>;
+	onTogglePreviewFullCanvas: () => void | Promise<void>;
 	onBeginRightSidebarResize: (event: PointerEvent) => void;
 	treeVisible?: boolean;
 	onToggleTree?: () => void;
@@ -188,7 +190,7 @@ export type SpaceFileDomainProps = {
 	) => void | Promise<void>;
 	onInsertFilePathReference: (path: string) => void;
 	onGetFileActionNode: (path: string) => SpaceFsNode;
-	onUploadComplete: () => void | Promise<void>;
+	onUploadComplete: (uploaded: SpaceUploadedFile[]) => void | Promise<void>;
 	onOpenAppPublish: (type: "file" | "directory" | "port", ref: string) => void;
 	onCloseAppPublish: () => void;
 	onVisibleLinesChange?: (
@@ -322,6 +324,7 @@ let {
 	onBeginPreviewPanelResize,
 	onTogglePreviewFocusMode,
 	onTogglePreviewImmersiveMode,
+	onTogglePreviewFullCanvas,
 	onBeginRightSidebarResize,
 	treeVisible = true,
 	onToggleTree,
@@ -444,6 +447,7 @@ function previewContentOut(node: Element) {
 							size="sm"
 							onToggleFocus={onTogglePreviewFocusMode}
 							onToggleImmersive={onTogglePreviewImmersiveMode}
+							onToggleFullCanvas={onTogglePreviewFullCanvas}
 						/>
 					{/snippet}
 				</WindowTabs>

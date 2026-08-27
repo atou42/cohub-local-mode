@@ -1765,6 +1765,9 @@ async function togglePreviewFocusMode() {
 async function togglePreviewImmersiveMode() {
 	await previewLayout.toggleImmersive();
 }
+async function togglePreviewFullCanvas() {
+	await previewLayout.toggleFullCanvas();
+}
 function closePreviewFocusMode() {
 	previewLayout.exitPresentation();
 }
@@ -2782,6 +2785,7 @@ const spaceFileDomainProps = $derived.by<
 	onBeginPreviewPanelResize: beginPreviewPanelResize,
 	onTogglePreviewFocusMode: togglePreviewFocusMode,
 	onTogglePreviewImmersiveMode: togglePreviewImmersiveMode,
+	onTogglePreviewFullCanvas: togglePreviewFullCanvas,
 	onBeginRightSidebarResize: beginRightSidebarResize,
 	treeVisible: !effectiveRightSidebarCollapsed,
 	onToggleTree: rightSidebarAvailable
