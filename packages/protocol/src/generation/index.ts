@@ -40,6 +40,8 @@ export type GenerationTaskData = {
   model: string;
   content: GenerationContentBlock[];
   parameters?: Record<string, unknown>;
+  /** Local Mode only: execute through the authenticated cloud generation provider. */
+  relayToCloud?: boolean;
   /** Model-owned request metadata validated against the generation declaration. */
   meta?: Record<string, unknown>;
   /** Server-derived request provenance. Never forwarded to the generation provider. */

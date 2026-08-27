@@ -1,12 +1,13 @@
 import type { SkillCatalogEntry } from "@neta-art/cohub";
 import { sdkForSpaceOrigin } from "$lib/sdk";
-import { resolveSpaceOrigin } from "$lib/space-origin";
 import { readCachedSkills, writeCachedSkills } from "$lib/skill-cache";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 
 export function createSkillController(options: { getSpaceId: () => string }) {
 	let items = $state<SkillCatalogEntry[]>([]);
 	let loaded = $state(false);
 	let loadedFor = $state<string | null>(null);
+	let refreshError = $state<string | null>(null);
 	let refreshInFlight: Promise<void> | null = null;
 	let refreshInFlightFor: string | null = null;
 
@@ -16,11 +17,13 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 			items = [];
 			loaded = false;
 			loadedFor = null;
+			refreshError = null;
 			return;
 		}
 		items = cached;
 		loaded = true;
 		loadedFor = targetSpaceId;
+		refreshError = null;
 	}
 
 	async function refresh(targetSpaceId: string) {
@@ -37,12 +40,15 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 				items = response.skills;
 				loaded = true;
 				loadedFor = targetSpaceId;
+				refreshError = null;
 			} catch (error) {
 				console.error("Failed to load skills:", error);
 				if (options.getSpaceId() !== targetSpaceId) return;
 				// Keep any restored cache; mark loaded so slash menu is not stuck.
 				loaded = true;
 				loadedFor = targetSpaceId;
+				refreshError =
+					error instanceof Error ? error.message : "Failed to refresh skills";
 			}
 		})();
 		const trackedRun = run.finally(() => {
@@ -71,6 +77,9 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 		},
 		get loadedFor() {
 			return loadedFor;
+		},
+		get refreshError() {
+			return refreshError;
 		},
 		load,
 		restore,

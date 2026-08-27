@@ -1,9 +1,14 @@
 import type { PromptTemplateCatalogEntry } from "@neta-art/cohub";
+import {
+	canUseUserScopedCache,
+	encodeKeyPart,
+	getCacheUserKey,
+} from "$lib/cache/keys";
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
-function getCacheKey(spaceId: string) {
-	return `cohub:space-prompt-templates:${spaceId}:v${CACHE_VERSION}`;
+function getCacheKey(spaceId: string, userKey: string) {
+	return `cohub:space-prompt-templates:${encodeKeyPart(userKey)}:${encodeKeyPart(spaceId)}:v${CACHE_VERSION}`;
 }
 
 function isPromptTemplate(value: unknown): value is PromptTemplateCatalogEntry {
@@ -24,8 +29,10 @@ function isPromptTemplate(value: unknown): value is PromptTemplateCatalogEntry {
 
 export function readCachedPromptTemplates(spaceId: string) {
 	if (typeof localStorage === "undefined") return null;
+	const userKey = getCacheUserKey();
+	if (!canUseUserScopedCache(userKey)) return null;
 	try {
-		const raw = localStorage.getItem(getCacheKey(spaceId));
+		const raw = localStorage.getItem(getCacheKey(spaceId, userKey));
 		if (!raw) return null;
 		const parsed = JSON.parse(raw) as unknown;
 		if (!parsed || typeof parsed !== "object") return null;
@@ -45,9 +52,11 @@ export function writeCachedPromptTemplates(
 	prompts: PromptTemplateCatalogEntry[],
 ) {
 	if (typeof localStorage === "undefined") return;
+	const userKey = getCacheUserKey();
+	if (!canUseUserScopedCache(userKey)) return;
 	try {
 		localStorage.setItem(
-			getCacheKey(spaceId),
+			getCacheKey(spaceId, userKey),
 			JSON.stringify({ version: CACHE_VERSION, prompts }),
 		);
 	} catch {

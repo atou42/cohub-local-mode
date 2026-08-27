@@ -4,6 +4,7 @@ dist/
 configs/
 .idea/
 output/
+apps/sandbox/.local-build/
 
 # Local rendered manifests (do not commit)
 rendered/

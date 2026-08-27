@@ -894,6 +894,7 @@
 	"slash_filtering": "Filtering /{q}",
 	"slash_narrow": "Type to narrow · use ↑↓ to move",
 	"slash_tap_insert": "Tap to insert, then add arguments",
+	"slash_refresh_failed": "Command refresh failed",
 	"slash_tab": "Tab",
 	"slash_or": "or",
 	"slash_loading": "Loading commands…",
