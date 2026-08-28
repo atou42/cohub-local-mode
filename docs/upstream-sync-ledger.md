@@ -24,6 +24,8 @@ Publish the verified rebased Local Mode history to the private remote with a rec
 
 Remote `main` was safely updated from `eec559e65` to `1f09a059` with an explicit lease after the recovery branch was verified. The watcher is installed in launchd for 10:00 Asia/Shanghai and has completed real success and failure notifications.
 
+The 2026-08-28 rebase publish created `backup/pre-rebase-main-20260828` at the prior remote tip `981cb678` and force-updated remote `main` to `2e375ebe` with `--force-with-lease`. Both remote refs were read back successfully.
+
 ## Evidence, Decisions, And Failures
 
 - The fixed notification destination is Discord thread `1540358055563100230` using the existing Codex bot sender in `/Users/atou/agents-in-discord`.
