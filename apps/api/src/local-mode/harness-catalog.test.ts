@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,9 @@ import {
   getCatalogEfforts,
   parseCodexModelsCache,
   parseGrokModelsCache,
+  parseCursorAcpModels,
+  clearCursorModelCatalogCacheForTests,
+  loadExternalHarnessCatalog,
   validateExternalHarnessSelection,
 } from "./harness-catalog.js";
 
@@ -99,6 +102,68 @@ test("Grok cache preserves the per-model effort difference", () => {
   assert.ok(grok45);
   assert.deepEqual(getCatalogEfforts(grok46), ["low", "medium", "high", "xhigh"]);
   assert.deepEqual(getCatalogEfforts(grok45), ["low", "medium", "high"]);
+});
+
+test("Cursor catalog exposes only the selected models with exact ACP ids and real effort variants", () => {
+  const catalog = parseCursorAcpModels({
+    models: {
+      availableModels: [
+        { modelId: "grok-4.6[effort=high,fast=true]", name: "grok-4.6" },
+        { modelId: "claude-fable-5[thinking=true,context=300k,effort=high]", name: "claude-fable-5" },
+        { modelId: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "GPT-5.6-Sol" },
+      ],
+    },
+  }, now);
+  assert.deepEqual(catalog.map((entry) => entry.id), [
+    "grok-4.6[effort=high,fast=true]",
+    "claude-fable-5[thinking=true,context=300k,effort=high]",
+  ]);
+  const [grok, fable] = catalog;
+  assert.ok(grok);
+  assert.ok(fable);
+  assert.deepEqual(getCatalogEfforts(grok), ["low", "medium", "high", "xhigh"]);
+  assert.deepEqual(getCatalogEfforts(fable), ["low", "medium", "high", "xhigh", "max"]);
+});
+
+test("Cursor catalog survives an API restart through the local disk cache", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-cursor-catalog-cache-"));
+  const executable = join(root, "fake-agent.mjs");
+  await writeFile(executable, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+const output = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const request = JSON.parse(line);
+  if (request.id === 1) output({ jsonrpc: "2.0", id: 1, result: {} });
+  else if (request.id === 2) output({ jsonrpc: "2.0", id: 2, result: {} });
+  else if (request.id === 3) output({ jsonrpc: "2.0", id: 3, result: { models: { availableModels: [
+    { modelId: "grok-4.6[effort=high,fast=true]", name: "grok-4.6" },
+    { modelId: "claude-fable-5[thinking=true,context=300k,effort=high]", name: "claude-fable-5" },
+  ] } } });
+});
+`, { encoding: "utf8", mode: 0o700 });
+  await chmod(executable, 0o700);
+  const previousCacheDir = process.env.LOCAL_HARNESS_CATALOG_CACHE_DIR;
+  const previousCommand = process.env.CURSOR_AGENT_COMMAND;
+  process.env.LOCAL_HARNESS_CATALOG_CACHE_DIR = root;
+  process.env.CURSOR_AGENT_COMMAND = executable;
+  clearCursorModelCatalogCacheForTests();
+  try {
+    const first = await loadExternalHarnessCatalog("cursor");
+    assert.deepEqual(first.map((entry) => entry.model.name), ["grok-4.6", "claude-fable-5"]);
+    const persisted = await readFile(join(root, "cache", "cursor-models.v2.json"), "utf8");
+    assert.match(persisted, /"version":3/);
+
+    clearCursorModelCatalogCacheForTests();
+    process.env.CURSOR_AGENT_COMMAND = join(root, "missing-agent");
+    const restored = await loadExternalHarnessCatalog("cursor");
+    assert.deepEqual(restored.map((entry) => entry.id), first.map((entry) => entry.id));
+  } finally {
+    clearCursorModelCatalogCacheForTests();
+    if (previousCacheDir === undefined) delete process.env.LOCAL_HARNESS_CATALOG_CACHE_DIR;
+    else process.env.LOCAL_HARNESS_CATALOG_CACHE_DIR = previousCacheDir;
+    if (previousCommand === undefined) delete process.env.CURSOR_AGENT_COMMAND;
+    else process.env.CURSOR_AGENT_COMMAND = previousCommand;
+  }
 });
 
 test("missing, malformed, stale, and unsupported catalog data fail closed", () => {

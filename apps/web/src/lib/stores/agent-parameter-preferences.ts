@@ -204,7 +204,9 @@ function parseLegacyPreference(raw: string): AgentParameterPreferences {
 			? "codex"
 			: model.provider === "grok_build"
 				? "grok_build"
-				: "pi";
+				: model.provider === "cursor"
+					? "cursor"
+					: "pi";
 	return {
 		...createEmptyAgentParameterPreferences(),
 		lastModelByHarness: { [harness]: model },

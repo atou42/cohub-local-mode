@@ -39,7 +39,10 @@ import {
 	type ComposerTextAttachment,
 } from "$lib/composer-attachments";
 import { createHarnessCapabilityController } from "$lib/features/space/modules/harness-capability-controller.svelte";
-import { createPromptTemplateController } from "$lib/features/space/modules/prompt-template-controller.svelte";
+import {
+	createPromptTemplateController,
+	type PromptQuickAction,
+} from "$lib/features/space/modules/prompt-template-controller.svelte";
 import { createKeyedRouteRequestGuard } from "$lib/features/space/modules/route-request-guard";
 import { createSkillController } from "$lib/features/space/modules/skill-controller.svelte";
 import { asRecord } from "$lib/features/space/space-utils";
@@ -4800,7 +4803,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (payload.type === "space.fs.changed") {
 				const eventPayload = payload.payload as SpaceFsChangedPayload;
 				if (shouldRefreshAgentCatalogs(eventPayload))
-					await loadPromptTemplates({ ensureFresh: true });
+					await loadPromptTemplates();
 				return;
 			}
 			// Shell owns ports and labels; chat only consumes session events.

@@ -10,12 +10,14 @@ import {
 } from "../external-harness-protocol.js";
 import {
 	appendCloudSpaceReadInstructions,
+	appendCursorLocalContextInstructions,
 	appendLocalGenerationInstructions,
 	buildExternalHarnessEnvironment,
 } from "../external-harness-context.js";
 import { buildCodexAppServerArgv } from "../external-harness-codex-config.js";
 import { buildGrokAppServerArgv } from "../external-harness-grok-config.js";
 import { createExternalProgressPublisher } from "../external-progress-publisher.js";
+import { cursorCliModelId } from "../external-harness-cursor-runtime.js";
 
 function semanticContent(
 	content: ReturnType<HarnessEventReducer["result"]>["content"],
@@ -27,6 +29,29 @@ function semanticContent(
 			return semantic;
 		});
 }
+
+test("Cursor pins the selected effort through the CLI startup model", () => {
+	assert.equal(
+		cursorCliModelId("grok-4.6[effort=high,fast=true]", "low"),
+		"cursor-grok-4.6-low-fast",
+	);
+	assert.equal(
+		cursorCliModelId("grok-4.6[effort=high,fast=true]", "xhigh"),
+		"cursor-grok-4.6-xhigh-fast",
+	);
+	assert.equal(
+		cursorCliModelId("claude-fable-5[thinking=true,context=300k,effort=high]", "medium"),
+		"claude-fable-5-thinking-medium",
+	);
+	assert.equal(
+		cursorCliModelId("claude-fable-5[thinking=true,context=300k,effort=high]", "max"),
+		"claude-fable-5-thinking-max",
+	);
+	assert.throws(
+		() => cursorCliModelId("grok-4.6[effort=high,fast=true]", "off"),
+		/unsupported/,
+	);
+});
 
 test("Codex JSONL becomes Cohub text and tool blocks", () => {
 	const reducer = new HarnessEventReducer("codex", {
@@ -136,6 +161,28 @@ test("Grok ACP updates preserve thinking, tools, and final text", () => {
 		{ type: "thinking", thinking: "Checking" },
 		{ type: "tool_use", id: "call-1", name: "read_file", input: { path: "README.md" } },
 		{ type: "tool_result", tool_use_id: "call-1", content: "contents", is_error: false },
+		{ type: "text", text: "Ready" },
+	]);
+});
+
+test("Cursor ACP updates preserve live thinking, tools, and final text", () => {
+	const reducer = new HarnessEventReducer("cursor", {
+		model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+		thinkingLevel: "medium",
+	});
+	reducer.push({ method: "session/update", params: { sessionId: "cursor-session", update: { sessionUpdate: "session_info_update" } } });
+	reducer.push({ method: "session/update", params: { sessionId: "cursor-session", update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Checking" } } } });
+	reducer.push({ method: "session/update", params: { sessionId: "cursor-session", update: { sessionUpdate: "tool_call", toolCallId: "call-1", title: "read_file", rawInput: { path: "README.md" } } } });
+	reducer.push({ method: "session/update", params: { sessionId: "cursor-session", update: { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "completed", rawInput: { path: "README.md", line: 1 }, rawOutput: { text: "contents" } } } });
+	reducer.push({ method: "session/update", params: { sessionId: "cursor-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ready" } } } });
+	reducer.push({ type: "end", sessionId: "cursor-session" });
+	const result = reducer.result();
+	assert.equal(result.externalSessionId, "cursor-session");
+	assert.equal(result.provider, "cursor");
+	assert.deepEqual(semanticContent(result.content), [
+		{ type: "thinking", thinking: "Checking" },
+		{ type: "tool_use", id: "call-1", name: "read_file", input: { path: "README.md", line: 1 } },
+		{ type: "tool_result", tool_use_id: "call-1", content: '{\n  "text": "contents"\n}', is_error: false },
 		{ type: "text", text: "Ready" },
 	]);
 });
@@ -398,6 +445,13 @@ test("external harness prompt exposes the local generation CLI", () => {
 	assert.match(prompt, /\$COHUB_LOCAL_CLI.*models ls --model-type multimodal/);
 	assert.match(prompt, /\$COHUB_LOCAL_CLI.*generate/);
 	assert.match(prompt, /expose any failure/);
+});
+
+test("Cursor prompt points at the host rules and skills without embedding them", () => {
+	const prompt = appendCursorLocalContextInstructions("inspect the workspace");
+	assert.match(prompt, /AGENTS\.md/);
+	assert.match(prompt, /SKILL\.md/);
+	assert.doesNotMatch(prompt, /execution-token|api-key/i);
 });
 
 test("resumed harness turns keep the selected model and effort", () => {
