@@ -87,8 +87,9 @@ import {
   splitExternalHarnessContent,
 } from "./external-harness.js";
 import {
-  appendCloudSpaceReadInstructions,
-  appendLocalGenerationInstructions,
+	appendCloudSpaceReadInstructions,
+	appendCursorLocalContextInstructions,
+	appendLocalGenerationInstructions,
   buildExternalHarnessEnvironment,
 } from "./external-harness-context.js";
 import { createExternalProgressPublisher } from "./external-progress-publisher.js";
@@ -1315,12 +1316,15 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
             .filter(Boolean)
             .join("\n\n");
           if (!rawPrompt) throw new Error(`${harness} requires a text prompt`);
-          const prompt = appendLocalGenerationInstructions(
+          const promptWithContext = appendLocalGenerationInstructions(
             appendCloudSpaceReadInstructions(
               rawPrompt,
               externalMessages.map((item) => item.content),
             ),
           );
+          const prompt = harness === "cursor"
+            ? appendCursorLocalContextInstructions(promptWithContext)
+            : promptWithContext;
           const anchorUserMessageId =
             batch.executionBatch.anchorUserMessageId ??
             externalMessages.at(-1)?.userMessageId ??

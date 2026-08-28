@@ -18,7 +18,7 @@ router.get("/", async (c) => {
   if (!spaceId) return c.json({ message: "spaceId is required" }, 400);
   if (!isUuid(spaceId)) return c.json({ message: "spaceId must be a valid UUID" }, 400);
   if (!harness) {
-    return c.json({ message: "harness must be one of: pi, codex, grok_build" }, 400);
+    return c.json({ message: "harness must be one of: pi, codex, grok_build, cursor" }, 400);
   }
   const user = getOptionalAuth(c);
   if (!(await hasPermission(user, "space.view", { spaceId }))) return authzDenied(c);

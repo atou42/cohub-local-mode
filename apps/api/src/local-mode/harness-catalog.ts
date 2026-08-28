@@ -1,8 +1,10 @@
 import type { AgentHarness, ModelThinkingLevel } from "@cohub/protocol";
 import type { ModelCatalogEntry } from "@cohub/infra/config-runtime/models";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const EFFORT_LEVELS: readonly ModelThinkingLevel[] = [
@@ -16,6 +18,18 @@ const EFFORT_LEVELS: readonly ModelThinkingLevel[] = [
   "ultra",
 ];
 const EFFORT_LEVEL_SET = new Set<string>(EFFORT_LEVELS);
+const CURSOR_CATALOG_CACHE_VERSION = 3;
+const CURSOR_CATALOG_TTL_MS = 5 * 60_000;
+const CURSOR_CATALOG_STALE_MAX_MS = 7 * 24 * 60 * 60_000;
+const CURSOR_CATALOG_TIMEOUT_MS = 15_000;
+const CURSOR_ALLOWED_MODELS = new Set(["grok-4.6", "claude-fable-5"]);
+const CURSOR_EFFORTS: Record<string, readonly ModelThinkingLevel[]> = {
+  "grok-4.6": ["low", "medium", "high", "xhigh"],
+  "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
+};
+let cursorCatalogCache: { fetchedAt: number; entries: ModelCatalogEntry[] } | null = null;
+let cursorCatalogCacheHydrated = false;
+let cursorCatalogInflight: Promise<ModelCatalogEntry[]> | null = null;
 
 export class HarnessCatalogError extends Error {
   readonly code = "harness_catalog_unavailable";
@@ -334,16 +348,229 @@ function configuredMaxAgeMs() {
   return parsed;
 }
 
-function cachePath(harness: Exclude<AgentHarness, "pi">) {
+function cachePath(harness: Exclude<AgentHarness, "pi" | "cursor">) {
   if (harness === "codex") {
     return join(process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"), "models_cache.json");
   }
   return join(process.env.GROK_HOME?.trim() || join(homedir(), ".grok"), "models_cache.json");
 }
 
+function cursorThinkingLevel(modelId: string): ModelThinkingLevel {
+  const match = modelId.match(/(?:reasoning|effort)=([^,\]]+)/i);
+  const value = match?.[1]?.trim().toLowerCase();
+  if (value === "none" || value === "false") return "off";
+  return value && EFFORT_LEVEL_SET.has(value) ? value as ModelThinkingLevel : "off";
+}
+
+export function parseCursorAcpModels(result: Record<string, unknown>, now = new Date()): ModelCatalogEntry[] {
+  const models = record(result.models);
+  const available = Array.isArray(models?.availableModels) ? models.availableModels : [];
+  const entries = available.flatMap((value, index) => {
+    const model = record(value);
+    const id = typeof model?.modelId === "string" ? model.modelId.trim() : "";
+    const name = typeof model?.name === "string" && model.name.trim() ? model.name.trim() : id;
+    // ACP advertises Auto as default[], but that sentinel is not accepted by
+    // session/set_config_option. Keep the catalog executable rather than
+    // exposing a selection that always fails at runtime.
+    const baseId = id.split("[", 1)[0]?.trim() ?? id;
+    if (!id || !name || id === "default[]" || !CURSOR_ALLOWED_MODELS.has(baseId)) return [];
+    const thinkingLevel = cursorThinkingLevel(id);
+    const efforts = CURSOR_EFFORTS[baseId] ?? [thinkingLevel];
+    return [{
+      provider: "cursor",
+      id,
+      model: {
+        name,
+        reasoning: thinkingLevel !== "off",
+        defaultThinkingLevel: thinkingLevel,
+        thinkingLevelMap: Object.fromEntries(
+          EFFORT_LEVELS.map((level) => [
+            level,
+            efforts.includes(level) ? level : null,
+          ]),
+        ),
+        serviceTiers: [],
+        defaultServiceTier: null,
+        input: ["text", "image"],
+        priority: index,
+        catalogFetchedAt: now.toISOString(),
+        harness: "cursor",
+      },
+    } satisfies ModelCatalogEntry];
+  });
+  if (entries.length === 0) throw new HarnessCatalogError("Cursor ACP model catalog has no visible models");
+  return entries;
+}
+
+async function loadCursorAcpModels(): Promise<Record<string, unknown>> {
+  const command = process.env.CURSOR_AGENT_COMMAND?.trim() || "agent";
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, ["acp"], { env: process.env, stdio: ["pipe", "pipe", "pipe"], shell: false });
+    const stdout = createInterface({ input: child.stdout });
+    let settled = false;
+    let stderr = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error: Error | null, result?: Record<string, unknown>) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      stdout.close();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      error ? reject(error) : resolve(result ?? {});
+    };
+    const send = (payload: Record<string, unknown>) => child.stdin.write(`${JSON.stringify(payload)}\n`);
+    timer = setTimeout(() => finish(new HarnessCatalogError("Cursor ACP model discovery timed out")), CURSOR_CATALOG_TIMEOUT_MS);
+    child.stderr.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
+    child.once("error", (error) => finish(new HarnessCatalogError(`Cursor ACP model discovery failed: ${error.message}`, { cause: error })));
+    child.once("exit", (code, signal) => {
+      if (!settled) finish(new HarnessCatalogError(`Cursor ACP model discovery exited with ${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+    });
+    stdout.on("line", (line) => {
+      if (settled || !line.trim()) return;
+      let payload: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(line);
+        payload = record(parsed) ?? (() => { throw new Error("response is not an object"); })();
+      } catch (error) {
+        finish(new HarnessCatalogError(`Cursor ACP emitted invalid JSON: ${error instanceof Error ? error.message : String(error)}`));
+        return;
+      }
+      const errorPayload = record(payload.error);
+      if (errorPayload && payload.id !== undefined) {
+        finish(new HarnessCatalogError(`Cursor ACP model discovery failed: ${String(errorPayload.message ?? JSON.stringify(errorPayload))}`));
+        return;
+      }
+      if (payload.id === 1 && record(payload.result)) {
+        send({ jsonrpc: "2.0", method: "initialized", params: {} });
+        send({ jsonrpc: "2.0", id: 2, method: "authenticate", params: { methodId: "cursor_login" } });
+      } else if (payload.id === 2 && record(payload.result)) {
+        send({ jsonrpc: "2.0", id: 3, method: "session/new", params: { cwd: process.cwd(), mcpServers: [] } });
+      } else if (payload.id === 3 && record(payload.result)) {
+        finish(null, payload.result as Record<string, unknown>);
+      }
+    });
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientInfo: { name: "cohub-local-capabilities", version: "1" },
+    } });
+  });
+}
+
+function cursorCatalogCachePath() {
+  const root = process.env.LOCAL_HARNESS_CATALOG_CACHE_DIR?.trim()
+    || process.env.COHUB_LOCAL_DATA_DIR?.trim()
+    || join(homedir(), ".cohub-local-mode");
+  return join(root, "cache", "cursor-models.v2.json");
+}
+
+function parsePersistedCursorCatalog(value: unknown) {
+  const root = record(value);
+  if (!root || root.version !== CURSOR_CATALOG_CACHE_VERSION) return null;
+  const fetchedAt = typeof root.fetchedAt === "number" && Number.isFinite(root.fetchedAt)
+    ? root.fetchedAt
+    : null;
+  if (fetchedAt === null || !Array.isArray(root.entries) || root.entries.length === 0) return null;
+  const entries = root.entries.filter((entry): entry is ModelCatalogEntry => {
+    const candidate = record(entry);
+    const model = record(candidate?.model);
+    const id = typeof candidate?.id === "string" ? candidate.id.trim() : "";
+    const baseId = id.split("[", 1)[0]?.trim() ?? id;
+    return candidate?.provider === "cursor"
+      && Boolean(id)
+      && CURSOR_ALLOWED_MODELS.has(baseId)
+      && model !== null
+      && typeof model.name === "string"
+      && Boolean(model.name.trim());
+  });
+  return entries.length === root.entries.length ? { fetchedAt, entries } : null;
+}
+
+async function hydrateCursorCatalogCache() {
+  if (cursorCatalogCacheHydrated) return;
+  cursorCatalogCacheHydrated = true;
+  try {
+    const raw = await readFile(cursorCatalogCachePath(), "utf8");
+    const parsed = parsePersistedCursorCatalog(JSON.parse(raw));
+    if (!parsed) {
+      console.warn("[models] ignoring invalid Cursor catalog cache");
+      return;
+    }
+    if (Date.now() - parsed.fetchedAt > CURSOR_CATALOG_STALE_MAX_MS) return;
+    cursorCatalogCache = parsed;
+  } catch (error) {
+    const code = record(error)?.code;
+    if (code !== "ENOENT") {
+      console.warn("[models] unable to read Cursor catalog cache", error);
+    }
+  }
+}
+
+async function persistCursorCatalogCache(value: { fetchedAt: number; entries: ModelCatalogEntry[] }) {
+  const path = cursorCatalogCachePath();
+  const tempPath = `${path}.${process.pid}.tmp`;
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(tempPath, `${JSON.stringify({
+      version: CURSOR_CATALOG_CACHE_VERSION,
+      ...value,
+    })}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    console.warn("[models] unable to persist Cursor catalog cache", error);
+  }
+}
+
+async function refreshCursorModelsCatalog() {
+  if (cursorCatalogInflight) return cursorCatalogInflight;
+  cursorCatalogInflight = (async () => {
+    try {
+      const result = await loadCursorAcpModels();
+      const entries = parseCursorAcpModels(result);
+      const value = { fetchedAt: Date.now(), entries };
+      cursorCatalogCache = value;
+      await persistCursorCatalogCache(value);
+      return entries;
+    } catch (error) {
+      throw new HarnessCatalogError(
+        `Cursor model catalog cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    } finally {
+      cursorCatalogInflight = null;
+    }
+  })();
+  return cursorCatalogInflight;
+}
+
+async function loadCursorModelsCatalog(): Promise<ModelCatalogEntry[]> {
+  await hydrateCursorCatalogCache();
+  const now = Date.now();
+  if (cursorCatalogCache) {
+    if (cursorCatalogCache.fetchedAt + CURSOR_CATALOG_TTL_MS > now) {
+      return cursorCatalogCache.entries;
+    }
+    if (cursorCatalogCache.fetchedAt + CURSOR_CATALOG_STALE_MAX_MS > now) {
+      void refreshCursorModelsCatalog().catch((error) => {
+        console.warn("[models] Cursor catalog background refresh failed", error);
+      });
+      return cursorCatalogCache.entries;
+    }
+  }
+  return refreshCursorModelsCatalog();
+}
+
+export function clearCursorModelCatalogCacheForTests() {
+  cursorCatalogCache = null;
+  cursorCatalogCacheHydrated = false;
+  cursorCatalogInflight = null;
+}
+
 export async function loadExternalHarnessCatalog(
   harness: Exclude<AgentHarness, "pi">,
 ): Promise<ModelCatalogEntry[]> {
+  if (harness === "cursor") return loadCursorModelsCatalog();
   const path = cachePath(harness);
   let rawText: string;
   try {
