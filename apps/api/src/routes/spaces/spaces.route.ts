@@ -1987,7 +1987,7 @@ router.post("/:id/prompt", async (c) => {
 	if (effectiveAgentHarness !== "pi") {
 		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
 		if (sandbox?.provider !== "local") {
-			return c.json({ message: "Codex and Grok Build require a local Space" }, 422);
+			return c.json({ message: "Codex, Grok Build, and Cursor require a local Space" }, 422);
 		}
 	}
 
@@ -2343,7 +2343,7 @@ router.post("/:id/sessions", async (c) => {
 	if (agentHarness !== "pi") {
 		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
 		if (sandbox?.provider !== "local") {
-			return c.json({ message: "Codex and Grok Build require a local Space" }, 422);
+			return c.json({ message: "Codex, Grok Build, and Cursor require a local Space" }, 422);
 		}
 	}
 
