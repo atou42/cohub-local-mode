@@ -6,6 +6,13 @@ import {
 import { sdkForSpaceOrigin } from "$lib/sdk";
 import { resolveSpaceOrigin } from "$lib/space-origin";
 
+export type PromptQuickAction = {
+	name: string;
+	label: string;
+	description: string;
+	argumentHint: string | null;
+};
+
 export function createPromptTemplateController(options: {
 	getSpaceId: () => string;
 }) {
@@ -69,7 +76,7 @@ export function createPromptTemplateController(options: {
 	async function load() {
 		const targetSpaceId = options.getSpaceId();
 		if (loadedFor !== targetSpaceId) restore(targetSpaceId);
-		await refreshCoordinator.refresh(targetSpaceId, loadOptions);
+		await refresh(targetSpaceId);
 	}
 
 	const quickActions = $derived<PromptQuickAction[]>(
@@ -107,6 +114,6 @@ export function createPromptTemplateController(options: {
 		},
 		load,
 		restore,
-		refresh: refreshCoordinator.refresh,
+		refresh,
 	};
 }

@@ -138,7 +138,7 @@ router.get("/", async (c) => {
     const rawHarness = c.req.query("harness");
     const harness = rawHarness === undefined ? "pi" : parseAgentHarness(rawHarness);
     if (!harness) {
-      return c.json({ message: "harness must be one of: pi, codex, grok_build" }, 400);
+      return c.json({ message: "harness must be one of: pi, codex, grok_build, cursor" }, 400);
     }
     if (harness !== "pi" && config.nodeOrigin !== "local") {
       return c.json({ message: "external harness catalogs are only available on a local node" }, 404);

@@ -227,6 +227,7 @@ const AGENT_HARNESS_OPTIONS: Array<{ value: AgentHarness; label: string }> = [
 	{ value: "pi", label: "Pi" },
 	{ value: "codex", label: "Codex" },
 	{ value: "grok_build", label: "Grok Build" },
+	{ value: "cursor", label: "Cursor" },
 ];
 const agentHarnessLabel = $derived(
 	AGENT_HARNESS_OPTIONS.find((option) => option.value === agentHarness)

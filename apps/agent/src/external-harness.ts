@@ -10,6 +10,7 @@ import {
 } from "./external-harness-protocol.js";
 import { runCodexAppServerHarness } from "./external-harness-codex-runtime.js";
 import { runGrokAcpHarness } from "./external-harness-grok-runtime.js";
+import { runCursorAcpHarness } from "./external-harness-cursor-runtime.js";
 
 export {
 	buildHarnessArgv,
@@ -43,7 +44,7 @@ export async function runExternalHarness(input: {
 		model: input.model,
 		thinkingLevel: input.thinkingLevel,
 	});
-	const harnessLabel = input.harness === "codex" ? "Codex" : "Grok Build";
+	const harnessLabel = input.harness === "codex" ? "Codex" : input.harness === "grok_build" ? "Grok Build" : "Cursor";
 	const emitProgress = (progress: ExternalHarnessProgress) => {
 		input.onProgress?.(progress);
 	};
@@ -79,6 +80,16 @@ export async function runExternalHarness(input: {
 			connection,
 			reducer,
 		});
+	}
+	if (input.harness === "cursor" && connection.capabilities?.processWrite === true) {
+		return runCursorAcpHarness({
+			...input,
+			connection,
+			reducer,
+		});
+	}
+	if (input.harness === "cursor") {
+		throw new Error("Local sandbox must support process write for Cursor ACP");
 	}
 	const argv = buildHarnessArgv({
 		harness: input.harness,
