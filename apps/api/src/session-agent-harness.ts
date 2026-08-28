@@ -2,7 +2,7 @@ import { parseAgentHarness, type AgentHarness } from "@cohub/protocol";
 
 export class InvalidAgentHarnessError extends Error {
   constructor() {
-    super("agentHarness must be one of: pi, codex, grok_build");
+    super("agentHarness must be one of: pi, codex, grok_build, cursor");
     this.name = "InvalidAgentHarnessError";
   }
 }

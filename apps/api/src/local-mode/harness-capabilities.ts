@@ -19,6 +19,19 @@ const GROK_ACP_EXECUTABLE_COMMANDS = new Set([
   "workflow",
   "goal",
 ]);
+const CURSOR_BUILTIN_COMMANDS: HarnessCapabilityCommand[] = [
+  ["goal", "Set a goal that Cursor will pursue to completion", "<objective>"],
+  ["loop", "Run a prompt or skill repeatedly", "<interval> <prompt>"],
+  ["create-plan", "Create an implementation plan before editing", ""],
+  ["create-rule", "Create persistent Cursor rules", ""],
+  ["create-skill", "Create a Cursor Agent Skill", ""],
+].map(([name, description, argumentHint]): HarnessCapabilityCommand => ({
+  name,
+  description,
+  ...(argumentHint ? { argumentHint } : {}),
+  category: "Cursor",
+  insertionText: `/${name}${argumentHint ? " " : ""}`,
+}));
 const cache = new Map<string, { expiresAt: number; value: HarnessCapabilityCatalog }>();
 const inFlight = new Map<string, Promise<HarnessCapabilityCatalog>>();
 
@@ -44,6 +57,8 @@ function runJsonRpcProbe(input: {
   cwd: string;
   initializeParams: JsonObject;
   afterInitialize?: (send: (payload: JsonObject) => void) => void;
+  afterResponse?: (payload: JsonObject, send: (payload: JsonObject) => void) => void;
+  acceptDelayMs?: number;
   accept: (payload: JsonObject) => JsonObject | null;
 }): Promise<JsonObject> {
   return new Promise((resolve, reject) => {
@@ -116,8 +131,13 @@ function runJsonRpcProbe(input: {
         initialized = true;
         input.afterInitialize?.(send);
       }
+      input.afterResponse?.(payload, send);
       const accepted = input.accept(payload);
-      if (accepted) finish(null, accepted);
+      if (accepted) {
+        const delay = input.acceptDelayMs ?? 0;
+        if (delay > 0) setTimeout(() => finish(null, accepted), delay).unref?.();
+        else finish(null, accepted);
+      }
     });
 
     send({
@@ -215,6 +235,25 @@ export function parseGrokCommands(result: JsonObject): HarnessCapabilityCommand[
   }).sort((left, right) => left.name.localeCompare(right.name));
 }
 
+export function parseCursorCommands(result: JsonObject): HarnessCapabilityCommand[] {
+  const updates = Array.isArray(result.availableCommands) ? result.availableCommands : [];
+  return updates.flatMap((value) => {
+    const command = record(value);
+    const name = text(command?.name);
+    const description = text(command?.description);
+    if (!name || !description) return [];
+    const input = record(command?.input);
+    const argumentHint = text(input?.hint);
+    return [{
+      name,
+      description,
+      ...(argumentHint ? { argumentHint } : {}),
+      category: "Cursor",
+      insertionText: `/${name}${argumentHint ? " " : ""}`,
+    } satisfies HarnessCapabilityCommand];
+  }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
 async function discoverGrok(spaceId: string): Promise<HarnessCapabilityCatalog> {
   const result = await runJsonRpcProbe({
     command: "grok",
@@ -241,6 +280,21 @@ async function discoverGrok(spaceId: string): Promise<HarnessCapabilityCatalog> 
   };
 }
 
+async function discoverCursor(_spaceId: string): Promise<HarnessCapabilityCatalog> {
+  // Cursor advertises its builtin slash commands asynchronously, after the
+  // session/new response. Returning the stable builtin subset here keeps the
+  // composer instant; the runtime still forwards any newly advertised commands
+  // as visible session events.
+  const commands: HarnessCapabilityCommand[] = [...CURSOR_BUILTIN_COMMANDS];
+  return {
+    version: 1,
+    harness: "cursor",
+    fetchedAt: new Date().toISOString(),
+    commands,
+    skills: [],
+  };
+}
+
 async function discover(spaceId: string, harness: AgentHarness, forceReload: boolean) {
   if (harness === "pi") {
     return {
@@ -252,7 +306,8 @@ async function discover(spaceId: string, harness: AgentHarness, forceReload: boo
     } satisfies HarnessCapabilityCatalog;
   }
   if (harness === "codex") return discoverCodex(spaceId, forceReload);
-  return discoverGrok(spaceId);
+  if (harness === "grok_build") return discoverGrok(spaceId);
+  return discoverCursor(spaceId);
 }
 
 export async function loadHarnessCapabilities(input: {
