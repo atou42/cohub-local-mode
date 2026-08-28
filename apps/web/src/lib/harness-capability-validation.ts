@@ -16,7 +16,8 @@ export function isHarnessCapabilityCatalog(
 		!isString(record.fetchedAt) ||
 		(record.harness !== "pi" &&
 			record.harness !== "codex" &&
-			record.harness !== "grok_build") ||
+			record.harness !== "grok_build" &&
+			record.harness !== "cursor") ||
 		!Array.isArray(record.commands) ||
 		!Array.isArray(record.skills)
 	)

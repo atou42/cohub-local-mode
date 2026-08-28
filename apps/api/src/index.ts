@@ -21,6 +21,7 @@ import { verifyPreviewSessionToken, type PreviewSessionPrincipal } from "./previ
 import { verifyAppSessionToken, type AppSessionPrincipal } from "./app-sessions.js";
 import { assertRequiredConfig, config } from "./config.js";
 import { isManagedLocalSandboxRelayToken } from "./local-sandbox-supervisor-auth.js";
+import { loadExternalHarnessCatalog } from "./local-mode/harness-catalog.js";
 
 import router from "./routes/index.js";
 
@@ -281,3 +282,14 @@ const server = serve({
 });
 server.setTimeout(0);
 logger.info(`@cohub/api listening on :${port}`);
+
+// Warm the expensive Cursor ACP catalog while the local node is starting. The
+// disk cache makes later restarts instant, while this first probe no longer
+// blocks the HTTP listener or the Space bootstrap path.
+if (config.nodeOrigin === "local") {
+  void loadExternalHarnessCatalog("cursor").catch((error) => {
+    logger.warn("[models] Cursor catalog prewarm failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}

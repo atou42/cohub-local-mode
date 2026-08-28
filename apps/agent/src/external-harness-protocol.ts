@@ -192,7 +192,8 @@ export class HarnessEventReducer {
 		if (!event) return null;
 		this.latestProgress = null;
 		if (this.harness === "codex") this.pushCodex(event);
-		else this.pushGrok(event);
+		else if (this.harness === "grok_build") this.pushGrok(event);
+		else this.pushCursor(event);
 		if (!this.latestProgress) {
 			const eventType = text(event.type) || text(event.method) || "event";
 			const message = `Received ${eventType}`;
@@ -672,6 +673,66 @@ export class HarnessEventReducer {
 		}
 	}
 
+	private pushCursor(event: Record<string, unknown>) {
+		const params = record(event.params);
+		const update = record(params?.update) ?? record(event.update) ?? event;
+		const eventType = text(update.sessionUpdate) || text(update.type) || text(event.method) || text(event.type);
+		const content = record(update.content);
+		const chunk = text(content?.text) || text(update.text) || text(update.data);
+		const observedSessionId = text(params?.sessionId) || text(update.sessionId) || text(event.sessionId);
+		if (observedSessionId) this.sessionId = observedSessionId;
+		if (eventType === "agent_message_chunk" || eventType === "text") {
+			this.assistantText = mergeStreamText(this.assistantText, chunk);
+			this.ensureStreamIndex(this.assistantStreamKey());
+			this.assistantRuntimeEvent = this.runtimeEvent("assistant", eventType, event);
+			this.setProgress("assistant", eventType, chunk || null, event);
+			return;
+		}
+		if (eventType === "agent_thought_chunk" || eventType === "thought") {
+			this.thinkingText = mergeStreamText(this.thinkingText, chunk);
+			this.ensureStreamIndex("thinking");
+			this.thinkingRuntimeEvent = this.runtimeEvent("thinking", eventType, event);
+			this.setProgress("thinking", eventType, chunk || null, event);
+			return;
+		}
+		if (eventType === "tool_call" || eventType === "tool_call_update") {
+			this.archiveAssistantSegment(event);
+			const id = text(update.toolCallId) || text(update.tool_call_id) || `cursor-${this.toolOrder.length + 1}`;
+			const failed = update.status === "failed" || Boolean(update.error);
+			this.upsertTool({
+				id,
+				name: this.tools.get(id)?.name || text(update.toolName) || text(update.name) || text(update.title) || "tool",
+				input: record(update.rawInput) ?? record(update.input) ?? record(update.arguments) ?? this.tools.get(id)?.input ?? {},
+				...(eventType === "tool_call_update" ? { result: update.result ?? update.output ?? update.rawOutput ?? update.content ?? "" } : {}),
+				isError: failed,
+				status: failed ? "failed" : update.status === "completed" ? "done" : "running",
+				runtimeEvent: this.runtimeEvent("tool", eventType, event),
+			});
+			this.setProgress("tool", eventType, text(update.toolName) || text(update.title) || "Cursor tool", event);
+			return;
+		}
+		if (eventType === "session_info_update" || eventType === "available_commands_update" || eventType === "current_mode_update" || eventType === "config_option_update") {
+			const message = eventType === "available_commands_update" ? "Cursor commands loaded" : `Cursor ${eventType.replaceAll("_", " ")}`;
+			this.addRuntimeNote("status", eventType, message, event);
+			this.setProgress("status", eventType, message, event);
+			return;
+		}
+		if (eventType === "error" || update.error) {
+			const message = text(update.message) || text(record(update.error)?.message) || "Cursor failed";
+			this.streamError = message;
+			this.addRuntimeNote("warning", eventType || "error", message, event);
+			this.setProgress("warning", eventType || "error", message, event);
+			return;
+		}
+		if (eventType === "end" || eventType === "turn_completed") {
+			this.completed = true;
+			this.usage = normalizedUsage(update.usage);
+			const message = "Cursor completed";
+			this.addRuntimeNote("completed", eventType, message, event);
+			this.setProgress("completed", eventType, message, event);
+		}
+	}
+
 	snapshotContent(): ContentBlock[] {
 		const blocks: ContentBlock[] = this.runtimeNotes.map((block) => ({
 			...block,
@@ -818,6 +879,10 @@ export function buildHarnessArgv(input: {
 			input.accessMode === "read_only" ? "read-only" : "workspace-write",
 			input.prompt,
 		];
+	}
+	if (input.harness === "cursor") {
+		if (input.serviceTier) throw new Error("Cursor does not support a service tier");
+		return ["agent", "acp"];
 	}
 	if (input.serviceTier) {
 		throw new Error("Grok Build does not support a service tier");

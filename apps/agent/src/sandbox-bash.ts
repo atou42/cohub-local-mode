@@ -8,6 +8,7 @@ import { runWithToolExecutionContext } from "./tool-context.js";
 import { logger } from "./logger.js";
 import type { AgentSandboxBashUploadJobData } from "./queue.js";
 import { loadSpaceEnvSnapshot } from "./runtime/env-cache.js";
+import { getAgentWorkspacePath } from "./runtime/paths.js";
 
 const SCRIPT_PATH = new URL("./jobs/sandbox-bash/upload-files.sh", import.meta.url);
 const tools = createSandboxCodingTools();
@@ -31,6 +32,16 @@ function buildManifest(data: AgentSandboxBashUploadJobData) {
     .join("\n");
 }
 
+function resolveUploadDestinationRoot(data: AgentSandboxBashUploadJobData) {
+  // Local sandboxes map the virtual /workspace path only at the RPC boundary.
+  // The upload helper itself runs as a host process, so give it the real
+  // workspace path instead of an absolute path that does not exist on macOS.
+  if (process.env.COHUB_NODE_ORIGIN === "local" && data.destinationRoot === "/workspace") {
+    return getAgentWorkspacePath(data.spaceId);
+  }
+  return data.destinationRoot;
+}
+
 async function buildUploadCommand(data: AgentSandboxBashUploadJobData) {
   const script = await loadScript();
   const manifest = buildManifest(data);
@@ -42,7 +53,7 @@ async function buildUploadCommand(data: AgentSandboxBashUploadJobData) {
     script.trimEnd(),
     "COHUB_UPLOAD_SCRIPT",
     "chmod +x \"$script_path\"",
-    `UPLOAD_ROOT=${shellSingleQuote(data.destinationRoot)} bash "$script_path" <<'COHUB_UPLOAD_MANIFEST'`,
+    `UPLOAD_ROOT=${shellSingleQuote(resolveUploadDestinationRoot(data))} bash "$script_path" <<'COHUB_UPLOAD_MANIFEST'`,
     manifest,
     "COHUB_UPLOAD_MANIFEST",
   ].join("\n");

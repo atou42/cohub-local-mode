@@ -3,7 +3,7 @@ import test from "node:test";
 import { AGENT_HARNESSES, parseAgentHarness } from "./src/model/session.js";
 
 test("agent harness protocol exposes the supported immutable choices", () => {
-  assert.deepEqual(AGENT_HARNESSES, ["pi", "codex", "grok_build"]);
+  assert.deepEqual(AGENT_HARNESSES, ["pi", "codex", "grok_build", "cursor"]);
   assert.equal(parseAgentHarness("pi"), "pi");
   assert.equal(parseAgentHarness("codex"), "codex");
   assert.equal(parseAgentHarness("grok_build"), "grok_build");

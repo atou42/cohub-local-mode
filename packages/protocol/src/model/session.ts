@@ -78,7 +78,7 @@ export type RegisterSessionInput = {
   meta?: Record<string, unknown> | null;
 };
 
-export const AGENT_HARNESSES = ["pi", "codex", "grok_build"] as const;
+export const AGENT_HARNESSES = ["pi", "codex", "grok_build", "cursor"] as const;
 export type AgentHarness = (typeof AGENT_HARNESSES)[number];
 
 export const parseAgentHarness = (value: unknown): AgentHarness | null =>

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	parseCodexSkills,
 	parseGrokCommands,
+	parseCursorCommands,
 } from "./harness-capabilities.js";
 
 test("Codex discovery keeps only enabled skills and preserves their native invocation", () => {
@@ -72,4 +73,17 @@ test("Grok discovery uses only commands advertised by ACP", () => {
 		}],
 	);
 	assert.deepEqual(parseGrokCommands({}), []);
+});
+
+test("Cursor discovery preserves ACP slash commands", () => {
+	assert.deepEqual(parseCursorCommands({
+		availableCommands: [
+			{ name: "goal", description: "Set a goal", input: { hint: "<objective>" } },
+			{ name: "create-plan", description: "Create a plan" },
+			{ name: "", description: "invalid" },
+		],
+	}), [
+		{ name: "create-plan", description: "Create a plan", category: "Cursor", insertionText: "/create-plan" },
+		{ name: "goal", description: "Set a goal", argumentHint: "<objective>", category: "Cursor", insertionText: "/goal " },
+	]);
 });
