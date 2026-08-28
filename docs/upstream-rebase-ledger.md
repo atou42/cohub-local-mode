@@ -4,6 +4,17 @@
 
 Rebase the local-mode work onto the latest `upstream/main` without losing local capabilities, adding features, redesigning, or pushing remote history.
 
+## 2026-08-28 Rebase
+
+- Local baseline: `981cb67814a93427af14e2b48ab0e23224cb4866`.
+- Upstream target: `0222a34ae4122f46b889a659454f979b730532b4`.
+- Rebase completed locally with `upstream/main` as an ancestor of `HEAD`.
+- All 20 local commits were replayed. Recovery branch: `backup/pre-upstream-rebase-20260828`.
+- The uncommitted Cursor effort work was stashed, restored after the rebase, and remains in the worktree.
+- The first rebuilt web bundle exposed two stale merge artifacts in the skill and prompt controllers; both were repaired before publication. The final bundle built successfully and the public browser loaded without runtime exceptions after clearing the old service-worker cache.
+- API, Agent, and Web focused suites passed 149, 75, and 388 tests. Local Mode service and Cloudflare Tunnel both report ready.
+- Remote `origin/main` was not changed. The rebased local branch is currently 58 commits ahead of and 20 commits behind the old remote tip; pushing requires a separate explicit authorization.
+
 ## 2026-08-26 Baseline
 
 - Local head: `4718799c8927e5ac89810932899e3225ccadf2b2`

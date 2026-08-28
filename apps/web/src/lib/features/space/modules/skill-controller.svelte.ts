@@ -50,26 +50,22 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 				refreshError =
 					error instanceof Error ? error.message : "Failed to refresh skills";
 			}
-		},
-	});
-
-	function restore(targetSpaceId: string) {
-		const cached = readCachedSkills(targetSpaceId);
-		if (!cached) {
-			items = [];
-			loaded = false;
-			loadedFor = null;
-			return;
-		}
-		items = cached;
-		loaded = true;
-		loadedFor = targetSpaceId;
+		})();
+		const trackedRun = run.finally(() => {
+			if (refreshInFlight === trackedRun) {
+				refreshInFlight = null;
+				refreshInFlightFor = null;
+			}
+		});
+		refreshInFlight = trackedRun;
+		refreshInFlightFor = targetSpaceId;
+		return trackedRun;
 	}
 
-	async function load(loadOptions: CatalogRefreshOptions = {}) {
+	async function load() {
 		const targetSpaceId = options.getSpaceId();
 		if (loadedFor !== targetSpaceId) restore(targetSpaceId);
-		await refreshCoordinator.refresh(targetSpaceId, loadOptions);
+		await refresh(targetSpaceId);
 	}
 
 	return {
@@ -87,6 +83,6 @@ export function createSkillController(options: { getSpaceId: () => string }) {
 		},
 		load,
 		restore,
-		refresh: refreshCoordinator.refresh,
+		refresh,
 	};
 }

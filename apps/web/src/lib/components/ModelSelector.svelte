@@ -1040,7 +1040,7 @@ const hoverCardPos = $derived.by(() => {
 				{#each filteredModels as item, index (item.provider + "/" + item.id)}
 					{@const costText = formatModelCost(item, locale)}
 					{@const tLevels = thinkingLevels(item)}
-					{@const showThinking = tLevels.length > 1}
+					{@const showThinking = tLevels.length > 1 || (item.provider === "cursor" && item.model.reasoning === true && tLevels.length === 1)}
 					{@const tMenuKey = thinkingMenuKey(item)}
 					{@const activeLevel = candidateThinkingLevel(item)}
 					{@const thinkingOpen = thinkingMenuOpenFor === tMenuKey}
