@@ -40,16 +40,54 @@ body {
 	--motion-panel-fade-collapse-duration: 120ms;
 	--motion-panel-ease: cubic-bezier(0.16, 1, 0.3, 1);
 	--motion-panel-collapse-ease: cubic-bezier(0.4, 0, 0.6, 1);
+	--cohub-safe-area-top: env(safe-area-inset-top, 0px);
+	--cohub-safe-area-right: env(safe-area-inset-right, 0px);
+	--cohub-safe-area-left: env(safe-area-inset-left, 0px);
 }
 
 /* App shell background — themes can layer an image / texture / overlay
    via the --app-bg-* tokens without any JS involvement. */
 .app-shell {
+	position: relative;
+	box-sizing: border-box;
+	padding-top: var(--cohub-safe-area-top);
+	padding-right: var(--cohub-safe-area-right);
+	padding-left: var(--cohub-safe-area-left);
 	background-color: var(--bg-primary);
 	background-image: var(--app-bg-overlay), var(--app-bg-image);
 	background-size: cover, var(--app-bg-size);
 	background-position: center, var(--app-bg-position);
 	background-repeat: no-repeat, var(--app-bg-repeat);
+}
+
+/* Optional Space override for the status-bar strip. Transparent keeps the
+   app-shell's single full-viewport background image perfectly continuous. */
+.app-shell::before {
+	position: absolute;
+	z-index: 1;
+	top: 0;
+	right: 0;
+	left: 0;
+	height: var(--cohub-safe-area-top);
+	pointer-events: none;
+	background: var(--cohub-safe-area-background, transparent);
+	content: "";
+}
+
+/* Fixed mobile drawers sit outside `.app-shell`, so they need their own
+   content-safe padding after the viewport becomes full bleed. */
+.mobile-safe-area-panel {
+	box-sizing: border-box;
+	padding-top: var(--cohub-safe-area-top);
+	padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.mobile-safe-area-panel--left {
+	padding-left: var(--cohub-safe-area-left);
+}
+
+.mobile-safe-area-panel--right {
+	padding-right: var(--cohub-safe-area-right);
 }
 
 body.sidebar-resizing {
