@@ -73,3 +73,11 @@ fork 当前 Web 全量测试共 394 项通过，受影响文件 lint 通过，Lo
 未认证访问 `https://cohub.atou.cc` 会按预期进入 Cloudflare Access。使用现有认证会话访问真实 Local Space 成功，桌面 1440×900 和移动 430×932 均无控制台错误、额外页面滚动或明显布局错位。线上文档已包含 `viewport-fit=cover` 和 iOS 状态栏 meta，Space chrome 合同已进入实际构建。
 
 VERDICT: PASS
+
+## 2026-08-29 实机回归修复
+
+真实 iPhone 截图暴露了两个模拟视口没有覆盖到的问题。首屏脚本会按全局浅色主题把 `apple-mobile-web-app-status-bar-style` 改回 `default`，导致 iOS 在 Space 样式加载前就把页面放到状态栏下方；同时 `viewport-fit=cover` 让 `safe-area-inset-bottom` 开始生效，Session Composer 原有的底部公式因此比旧版多出一整段安全区留白。
+
+修复后，standalone 状态栏模式从首屏起固定为 `black-translucent`，后加载的 Space 主题只同步浏览器主题色，不再改变页面是否进入顶部安全区。Session Composer 恢复固定的移动端底部间距，不再叠加底部 inset。验收要求是顶部背景连续、导航内容避开顶部安全区、输入框底部位置与启用 `viewport-fit=cover` 前一致。
+
+回归测试先稳定复现了首屏脚本覆盖 full-bleed 模式和 Composer 多出底部 inset 两个失败，修复后定向 6 项与 Web 全量 394 项测试通过，格式检查和生产构建通过。Playwright 在 430×932、59px 顶部安全区下确认外壳覆盖完整 viewport、导航从 59px 开始、Composer 底部间距为 12px；1440×900 桌面视口下安全区为 0、Composer 保持原有 16px 间距。全量 typecheck 仍被仓库现有的两个测试夹具类型错误阻断，分别是 `models-status-cache.test.ts` 的 `samples1h` 旧字段，以及 `palette-overview-local.test.ts` 缺少 `agentHarness`，均不在本次改动文件和行为范围内。
