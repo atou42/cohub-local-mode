@@ -37,7 +37,7 @@ test("normalizeSpaceStatusBarStyle accepts light and dark but restores auto and 
 	assert.equal(normalizeSpaceStatusBarStyle("sideways", "light"), "light");
 });
 
-test("syncSpaceChromeTheme applies the Space color and restores the resolved theme fallback", () => {
+test("syncSpaceChromeTheme applies Space color without leaving full-bleed mode", () => {
 	const attributes = new Map<string, string>([["data-theme", "light"]]);
 	const root = {
 		getAttribute: (name: string) => attributes.get(name) ?? null,
@@ -102,7 +102,7 @@ test("syncSpaceChromeTheme applies the Space color and restores the resolved the
 		},
 	);
 	assert.equal(metaColor, "#F8F8FA");
-	assert.equal(appleStatusBarStyle, "default");
+	assert.equal(appleStatusBarStyle, "black-translucent");
 	assert.equal(attributes.has("data-cohub-status-bar-color-source"), false);
 	assert.equal(attributes.get("data-cohub-status-bar-style"), "dark");
 	assert.equal(attributes.has("data-cohub-status-bar-style-source"), false);
@@ -135,11 +135,19 @@ test("syncSpaceChromeTheme still resolves state when optional meta tags are abse
 test("the app shell opts into full-bleed viewport layout and protects its content", () => {
 	const appHtml = readFileSync(new URL("../app.html", import.meta.url), "utf8");
 	const appCss = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+	const sessionComposer = readFileSync(
+		new URL("../lib/components/SessionComposer.svelte", import.meta.url),
+		"utf8",
+	);
 
 	assert.match(appHtml, /viewport-fit=cover/);
 	assert.match(
 		appHtml,
 		/<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" \/>/,
+	);
+	assert.doesNotMatch(
+		appHtml,
+		/querySelector\('meta\[name="apple-mobile-web-app-status-bar-style"\]'\)/,
 	);
 	assert.match(
 		appCss,
@@ -149,5 +157,10 @@ test("the app shell opts into full-bleed viewport layout and protects its conten
 	assert.match(
 		appCss,
 		/background:\s*var\(--cohub-safe-area-background, transparent\)/,
+	);
+	assert.match(sessionComposer, /class="px-2 pb-3 pt-2 sm:px-4 sm:pb-4"/);
+	assert.doesNotMatch(
+		sessionComposer,
+		/pb-\[calc\(0\.75rem\+env\(safe-area-inset-bottom\)\)\]/,
 	);
 });
