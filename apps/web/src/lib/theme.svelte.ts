@@ -1,9 +1,9 @@
+import { syncSpaceChromeTheme } from "$lib/space-chrome-theme";
 import {
 	getSystemTheme,
 	isThemeMode,
 	type ResolvedTheme,
 	resolveThemeMode,
-	THEME_COLOR,
 	THEME_STORAGE_KEY,
 	type ThemeMode,
 } from "$lib/theme-registry";
@@ -21,9 +21,7 @@ function applyTheme(mode: ThemeMode, skipDom = false) {
 	_resolved = resolved;
 	if (!skipDom && typeof document !== "undefined") {
 		document.documentElement.setAttribute("data-theme", resolved);
-		document
-			.querySelector('meta[name="theme-color"]')
-			?.setAttribute("content", THEME_COLOR[resolved]);
+		syncSpaceChromeTheme();
 	}
 }
 
