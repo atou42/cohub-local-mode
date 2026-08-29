@@ -116,10 +116,10 @@ export function syncSpaceChromeTheme(
 	);
 
 	meta?.setAttribute("content", color);
-	statusBarMeta?.setAttribute(
-		"content",
-		statusBarStyle === "light" ? "black-translucent" : "default",
-	);
+	// iOS uses this value to decide whether web content occupies the status-bar
+	// area. Keep the shell full bleed; switching to `default` moves the entire
+	// viewport below the status bar and cannot be repaired by later Space CSS.
+	statusBarMeta?.setAttribute("content", "black-translucent");
 	root.setAttribute(STATUS_BAR_STYLE_ATTR, statusBarStyle);
 	if (candidate) {
 		root.setAttribute(STATUS_BAR_COLOR_SOURCE_ATTR, "space");
