@@ -16,6 +16,10 @@
 	--board-background-image-url: "";
 	--board-background-tile-width: 0;
 	--board-background-tile-height: 0;
+	/* Space chrome. `.cohub/theme.css` may override these without a new DOM surface. */
+	--cohub-safe-area-background: transparent;
+	--cohub-status-bar-color: auto;
+	--cohub-status-bar-style: auto;
 }
 
 :root,
