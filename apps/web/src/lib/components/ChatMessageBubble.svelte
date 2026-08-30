@@ -200,7 +200,9 @@ const defaultExpandToolCalls = $derived(
 const metaActionButtonClass =
 	"shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50";
 
-const forkState = $derived(getChatMessageForkState(message, Boolean(onForkTurn)));
+const forkState = $derived(
+	getChatMessageForkState(message, Boolean(onForkTurn)),
+);
 let forkHintVisible = $state(false);
 let forkHintTimer: ReturnType<typeof setTimeout> | null = null;
 
