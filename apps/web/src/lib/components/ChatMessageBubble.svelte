@@ -1,6 +1,9 @@
 <script lang="ts">
 import type { ContentBlock } from "@cohub/protocol/core";
 import { Check, Copy, GitFork, Loader2 } from "lucide-svelte";
+import { onDestroy } from "svelte";
+import { getChatMessageForkState } from "$lib/chat-message-fork";
+import { formatCompactModelLabel } from "$lib/compact-control-labels";
 import MessageContentFlow from "$lib/components/MessageContentFlow.svelte";
 import UserIdentity from "$lib/components/UserIdentity.svelte";
 import {
@@ -197,37 +200,27 @@ const defaultExpandToolCalls = $derived(
 const metaActionButtonClass =
 	"shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50";
 
-const hasForkCheckpoint = $derived(
-	Boolean(
-		message.meta?.turn &&
-			(typeof message.meta.turn.meta?.agentSessionEntryId === "string" ||
-				(message.meta.turn.meta?.agent &&
-					typeof message.meta.turn.meta.agent === "object" &&
-					!Array.isArray(message.meta.turn.meta.agent) &&
-					typeof (message.meta.turn.meta.agent as Record<string, unknown>)
-						.leafEntryId === "string")),
-	),
-);
+const forkState = $derived(getChatMessageForkState(message, Boolean(onForkTurn)));
+let forkHintVisible = $state(false);
+let forkHintTimer: ReturnType<typeof setTimeout> | null = null;
 
-const isTerminalDirectGeneration = $derived(
-	message.meta?.turn?.executionKind === "direct_generation" &&
-		["completed", "failed", "interrupted", "cancelled"].includes(
-			message.meta.turn.status,
-		),
-);
+function handleForkClick() {
+	if (forkDisabled) return;
+	if (forkState.available) {
+		onForkTurn?.();
+		return;
+	}
+	forkHintVisible = true;
+	if (forkHintTimer) clearTimeout(forkHintTimer);
+	forkHintTimer = setTimeout(() => {
+		forkHintVisible = false;
+		forkHintTimer = null;
+	}, 2400);
+}
 
-const canFork = $derived(
-	Boolean(
-		onForkTurn &&
-			(hasForkCheckpoint || isTerminalDirectGeneration) &&
-			message.role === "assistant" &&
-			message.meta?.messageKind &&
-			["assistant_final", "assistant_error", "assistant_interrupted"].includes(
-				message.meta.messageKind,
-			) &&
-			message.meta?.streaming !== true,
-	),
-);
+onDestroy(() => {
+	if (forkHintTimer) clearTimeout(forkHintTimer);
+});
 
 function fallbackUserName(uuid?: string | null): string {
 	if (!uuid) return m.common_user({}, { locale });
@@ -268,6 +261,9 @@ const modelName = $derived(
 );
 
 const modelDisplayName = $derived(message.meta?.model ? modelName : "");
+const compactModelDisplayName = $derived(
+	formatCompactModelLabel(modelDisplayName),
+);
 
 const modelHoverText = $derived(
 	message.meta?.provider && message.meta?.model
@@ -535,20 +531,30 @@ function handleCopy() {
           {/if}
         </button>
 
-        {#if canFork}
-          <button
-            type="button"
-            class={metaActionButtonClass}
-            onclick={(e) => { e.stopPropagation(); if (!forkDisabled) onForkTurn?.(); }}
-            title={m.chat_fork_here({}, { locale })}
-            disabled={forkDisabled}
-          >
-            {#if forking}
-              <Loader2 class="w-3.5 h-3.5 animate-spin" />
-            {:else}
-              <GitFork class="w-3.5 h-3.5" />
+        {#if forkState.visible}
+          <span class="relative shrink-0">
+            <button
+              type="button"
+              class={metaActionButtonClass}
+              class:opacity-35={!forkState.available && !forkDisabled}
+              onclick={(e) => { e.stopPropagation(); handleForkClick(); }}
+              title={forkState.available ? m.chat_fork_here({}, { locale }) : m.chat_fork_unavailable({}, { locale })}
+              aria-label={forkState.available ? m.chat_fork_here({}, { locale }) : m.chat_fork_unavailable({}, { locale })}
+              aria-disabled={!forkState.available || forkDisabled}
+              disabled={forkDisabled}
+            >
+              {#if forking}
+                <Loader2 class="w-3.5 h-3.5 animate-spin" />
+              {:else}
+                <GitFork class="w-3.5 h-3.5" />
+              {/if}
+            </button>
+            {#if forkHintVisible}
+              <span role="status" class="absolute bottom-full left-0 z-20 mb-1 whitespace-nowrap rounded border border-border-subtle bg-bg-primary px-2 py-1 text-[11px] text-text-secondary shadow-md">
+                {m.chat_fork_unavailable({}, { locale })}
+              </span>
             {/if}
-          </button>
+          </span>
         {/if}
 
         {#if message.role === 'user'}
@@ -583,7 +589,8 @@ function handleCopy() {
               <!-- Model (truncates when space is tight) -->
               {#if modelDisplayName}
                 <span class="min-w-0 truncate cursor-default" title={modelHoverText}>
-                  {modelDisplayName}
+                  <span class="sm:hidden">{compactModelDisplayName}</span>
+                  <span class="hidden sm:inline">{modelDisplayName}</span>
                 </span>
               {/if}
 
