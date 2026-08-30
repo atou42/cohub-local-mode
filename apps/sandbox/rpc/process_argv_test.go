@@ -2,9 +2,12 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +94,19 @@ func argvRequest(t *testing.T, argv []string) protocol.RPCRequest {
 	}
 }
 
+func commandRequest(t *testing.T, command string) protocol.RPCRequest {
+	t.Helper()
+	raw, err := json.Marshal(processStartParams{Command: command})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	return protocol.RPCRequest{
+		RequestScopedMessage: protocol.RequestScopedMessage{RequestID: "req-command"},
+		Method:               "process.start",
+		Params:               raw,
+	}
+}
+
 // runArgv mirrors what the API's remote backend does: fire process.start with
 // an argv command and wait for the async exit code.
 func runArgv(t *testing.T, d *Dispatcher, router *collectRouter, argv []string) int {
@@ -139,6 +155,16 @@ func TestProcessArgvEventOrder(t *testing.T) {
 	if !seenStdout || !seenStderr {
 		t.Fatalf("event order = %v, want stdout and stderr before exit", events)
 	}
+}
+
+func runCommand(t *testing.T, d *Dispatcher, router *collectRouter, command string) int {
+	t.Helper()
+	accepted := protocol.RPCAccepted{OpID: "op-command"}
+	sync := d.handleProcessStart(commandRequest(t, command), accepted.OpID, "api-test")
+	if failed, ok := sync.(protocol.RPCFailed); ok {
+		t.Fatalf("unexpected synchronous failure: %s %s", failed.Error.Code, failed.Error.Message)
+	}
+	return router.waitExitCode(t)
 }
 
 func TestProcessArgvMkdir(t *testing.T) {
@@ -229,6 +255,70 @@ func TestProcessArgvCwdFenced(t *testing.T) {
 	}
 	if failed.Error.Code != "ACCESS_DENIED" {
 		t.Fatalf("expected ACCESS_DENIED, got %s", failed.Error.Code)
+	}
+}
+
+func TestProcessArgvAcceptsHarnessRulesArgument(t *testing.T) {
+	rules := strings.Repeat("r", 20*1024)
+	if err := validateProcessArgv([]string{"grok", "--rules", rules}); err != nil {
+		t.Fatalf("expected a 20 KiB harness rules argument to be accepted: %v", err)
+	}
+	tooLarge := strings.Repeat("r", 32*1024+1)
+	if err := validateProcessArgv([]string{"grok", "--rules", tooLarge}); err == nil {
+		t.Fatal("expected an argument above 32 KiB to be rejected")
+	}
+}
+
+func TestLocalCommandSandboxHonorsPerSpaceWritableRoots(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("local command sandbox is enforced with Seatbelt on macOS")
+	}
+	workspace := setupProcRoot(t)
+	allowed := setupProcRoot(t)
+	allowedFile := filepath.Join(allowed, "allowed.txt")
+	insideFile := filepath.Join(workspace, "inside.txt")
+	cfg := env.Config{
+		Mode:          env.ModeLocal,
+		WorkspaceDir:  workspace,
+		WritableRoots: []string{allowed},
+		Fence:         true,
+	}
+	d := NewDispatcher(cfg, process.NewManager(slog.Default()), slog.Default())
+	router := newCollectRouter()
+	d.SetRouter(router)
+	command := fmt.Sprintf("printf allowed > %q && printf inside > %q", allowedFile, insideFile)
+	if code := runCommand(t, d, router, command); code != 0 {
+		t.Fatalf("allowed command exit code = %d, want 0", code)
+	}
+	if _, err := os.Stat(allowedFile); err != nil {
+		t.Fatalf("expected allowed root write: %v", err)
+	}
+	if _, err := os.Stat(insideFile); err != nil {
+		t.Fatalf("expected workspace write: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := os.MkdirTemp(home, ".cohub-sandbox-rpc-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(denied) })
+	deniedFile := filepath.Join(denied, "denied.txt")
+	d = NewDispatcher(env.Config{
+		Mode:         env.ModeLocal,
+		WorkspaceDir: workspace,
+		Fence:        true,
+	}, process.NewManager(slog.Default()), slog.Default())
+	router = newCollectRouter()
+	d.SetRouter(router)
+	if code := runCommand(t, d, router, fmt.Sprintf("printf denied > %q", deniedFile)); code == 0 {
+		t.Fatal("expected a write outside the workspace to be denied")
+	}
+	if _, err := os.Stat(deniedFile); !os.IsNotExist(err) {
+		t.Fatalf("denied file should not exist: %v", err)
 	}
 }
 

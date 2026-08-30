@@ -17,7 +17,14 @@ import {
 import { buildCodexAppServerArgv } from "../external-harness-codex-config.js";
 import { buildGrokAppServerArgv } from "../external-harness-grok-config.js";
 import { createExternalProgressPublisher } from "../external-progress-publisher.js";
-import { cursorCliModelId } from "../external-harness-cursor-runtime.js";
+import {
+	buildCursorAppServerArgv,
+	cursorCliModelId,
+} from "../external-harness-cursor-runtime.js";
+import {
+	parseLocalSpaceWritableRoots,
+	resolveGrokSandboxProfile,
+} from "../local-space-access.js";
 
 function semanticContent(
 	content: ReturnType<HarnessEventReducer["result"]>["content"],
@@ -364,6 +371,91 @@ test("harness argv keeps an adversarial prompt in one argument", () => {
 		);
 		assert.equal(argv.includes("high") || argv.includes('model_reasoning_effort="high"'), true);
 	}
+});
+
+test("local Space writable roots are host-scoped and fail closed", () => {
+	const home = process.env.HOME;
+	assert.ok(home);
+	const spaceId = "11111111-1111-4111-8111-111111111111";
+	const roots = parseLocalSpaceWritableRoots(
+		JSON.stringify({ [spaceId]: [home] }),
+		spaceId,
+		home,
+	);
+	assert.deepEqual(roots, [home]);
+	assert.deepEqual(
+		parseLocalSpaceWritableRoots(
+			JSON.stringify({ [spaceId]: [home] }),
+			"22222222-2222-4222-8222-222222222222",
+			home,
+		),
+		[],
+	);
+	assert.throws(
+		() => parseLocalSpaceWritableRoots("{", spaceId, home),
+		/valid JSON/,
+	);
+	assert.throws(
+		() =>
+			parseLocalSpaceWritableRoots(
+				JSON.stringify({ [spaceId]: ["/"] }),
+				spaceId,
+				home,
+			),
+		/outside the local user's home directory/,
+	);
+});
+
+test("external harnesses receive only their Space writable roots", () => {
+	const home = process.env.HOME;
+	assert.ok(home);
+	const roots = [home];
+	const codexArgv = buildCodexAppServerArgv(roots);
+	assert.equal(
+		codexArgv.includes(
+			`sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`,
+		),
+		true,
+	);
+	assert.deepEqual(
+		buildCursorAppServerArgv("cursor-grok-4.6-high-fast", roots),
+		[
+			"agent",
+			"--model",
+			"cursor-grok-4.6-high-fast",
+			"--sandbox",
+			"enabled",
+			"--add-dir",
+			roots[0],
+			"acp",
+		],
+	);
+	assert.equal(
+		resolveGrokSandboxProfile(
+			"11111111-1111-4111-8111-111111111111",
+			roots,
+		),
+		"cohub-local-11111111-1111-4111-8111-111111111111",
+	);
+	assert.equal(
+		resolveGrokSandboxProfile(
+			"22222222-2222-4222-8222-222222222222",
+			[],
+		),
+		"workspace",
+	);
+	assert.deepEqual(
+		buildGrokAppServerArgv(
+			"full_access",
+			"cohub-local-11111111-1111-4111-8111-111111111111",
+		).slice(0, 4),
+		[
+			"grok",
+			"--sandbox",
+			"cohub-local-11111111-1111-4111-8111-111111111111",
+			"--always-approve",
+		],
+	);
 });
 
 test("Codex command shells inherit only the scoped Cohub bridge environment", () => {

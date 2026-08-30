@@ -1,6 +1,7 @@
 package env
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ type Config struct {
 	WorkspaceDir                   string
 	PlatformAgentsDir              string
 	UserAgentsDir                  string
+	WritableRoots                  []string
 	ImageVersion                   string
 	InternalAPIBaseURL             string
 	SandboxReportToken             string
@@ -154,6 +156,10 @@ func LoadLocal(opts LocalOptions) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve home dir: %w", err)
 	}
+	writableRoots, err := parseLocalSpaceWritableRoots(opts.SpaceID, homeDir)
+	if err != nil {
+		return Config{}, err
+	}
 	cacheDir := filepath.Join(homeDir, ".cache", "cohub", "spaces", opts.SpaceID)
 	platformAgentsDir := filepath.Join(cacheDir, "platform-agents")
 	if localSkillsDir := strings.TrimSpace(os.Getenv("LOCAL_AGENT_SKILLS_PATH")); localSkillsDir != "" {
@@ -168,12 +174,57 @@ func LoadLocal(opts LocalOptions) (Config, error) {
 		WorkspaceDir:      resolvedRoot,
 		PlatformAgentsDir: platformAgentsDir,
 		UserAgentsDir:     filepath.Join(cacheDir, "user-agents"),
+		WritableRoots:     writableRoots,
 		ImageVersion:      imageVersion,
 		PublicPorts:       parsePortsEnv("COHUB_PUBLIC_PORTS", []int{3000, 5173}),
 		RelayURL:          strings.TrimSpace(opts.RelayURL),
 		RelayToken:        strings.TrimSpace(opts.RelayToken),
 		Fence:             true,
 	}, nil
+}
+
+func parseLocalSpaceWritableRoots(spaceID string, homeDir string) ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	var configured map[string][]string
+	if err := json.Unmarshal([]byte(raw), &configured); err != nil {
+		return nil, fmt.Errorf("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON must be valid JSON: %w", err)
+	}
+	home, err := filepath.EvalSymlinks(homeDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	seen := map[string]struct{}{}
+	roots := []string{}
+	for configuredSpaceID, values := range configured {
+		if strings.TrimSpace(configuredSpaceID) == "" || values == nil {
+			return nil, fmt.Errorf("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON entries must map a Space id to an array")
+		}
+		for _, value := range values {
+			if !filepath.IsAbs(value) {
+				return nil, fmt.Errorf("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON roots must be absolute paths")
+			}
+			root, err := filepath.EvalSymlinks(filepath.Clean(value))
+			if err != nil {
+				return nil, fmt.Errorf("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON root does not exist: %s", value)
+			}
+			relative, err := filepath.Rel(home, root)
+			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON root is outside the local user's home directory: %s", value)
+			}
+			if configuredSpaceID != spaceID {
+				continue
+			}
+			if _, exists := seen[root]; exists {
+				continue
+			}
+			seen[root] = struct{}{}
+			roots = append(roots, root)
+		}
+	}
+	return roots, nil
 }
 
 func parseIntEnv(name string, defaultValue int) int {
@@ -216,11 +267,15 @@ func parsePortsEnv(name string, defaultValue []int) []int {
 }
 
 func (c Config) FilesystemRoots() []FilesystemRoot {
-	return []FilesystemRoot{
+	roots := []FilesystemRoot{
 		{Path: c.WorkspaceDir, Writable: true, Label: "cwd"},
 		{Path: c.PlatformAgentsDir, Writable: false, Label: "platform-agents"},
 		{Path: c.UserAgentsDir, Writable: false, Label: "user-agents"},
 		{Path: "/sessions", Writable: false, Label: "sessions"},
 		{Path: "/tmp", Writable: true, Label: "tmp"},
 	}
+	for _, root := range c.WritableRoots {
+		roots = append(roots, FilesystemRoot{Path: root, Writable: true, Label: "host-root"})
+	}
+	return roots
 }

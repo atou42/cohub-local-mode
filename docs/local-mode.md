@@ -42,6 +42,8 @@ pnpm local:service:status
 
 The service starts at login, supervises every Local Space runner, restarts them after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
 
+Local Space host access is opt-in and remains machine-owned. Set `COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON` to a JSON object keyed by Space ID, with existing absolute paths under the local user's home directory as values. Pi receives those roots through the local sandbox filesystem and command policy. Codex and Cursor receive them as additional workspace roots. Grok uses the matching `cohub-local-<space-id>` custom sandbox profile from `~/.grok/sandbox.toml`. Spaces absent from the map remain restricted to their managed workspace. Restart the service and start a new agent session after changing this policy.
+
 ## Pi model
 
 The first setup creates `~/.cohub-local-mode/configs/platform/.cohub/models.json`. Configure that file for a Pi-compatible provider and keep its credential in the host environment named by `apiKey`. Codex and Grok Build use their existing host CLI authentication instead.
