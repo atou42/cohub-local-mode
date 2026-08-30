@@ -14,12 +14,34 @@ test("assistant message metadata stays inside the message width", () => {
 	);
 	assert.match(
 		chatMessageBubble,
-		/class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden"/,
+		/data-chat-meta-group="model"[\s\S]*?class="inline-flex min-w-0 shrink-\[3\] items-center gap-0\.5 overflow-hidden"/,
 	);
 	assert.match(
 		chatMessageBubble,
-		/class="min-w-0 flex-1 truncate cursor-default"/,
+		/data-chat-meta-group="usage"[\s\S]*?class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden"/,
 	);
+});
+
+test("model and effort share one compact frame while usage and duration share another", () => {
+	const modelGroup = chatMessageBubble.slice(
+		chatMessageBubble.indexOf('data-chat-meta-group="model"'),
+		chatMessageBubble.indexOf(
+			'data-chat-meta-group="usage"',
+			chatMessageBubble.indexOf('data-chat-meta-group="model"'),
+		),
+	);
+	assert.match(modelGroup, /modelDisplayName/);
+	assert.match(modelGroup, /requestedThinkingLevelShort/);
+
+	const usageGroup = chatMessageBubble.slice(
+		chatMessageBubble.indexOf('data-chat-meta-group="usage"'),
+		chatMessageBubble.indexOf(
+			"{#if assistantAbortMessage}",
+			chatMessageBubble.indexOf('data-chat-meta-group="usage"'),
+		),
+	);
+	assert.match(usageGroup, /tokenDisplay/);
+	assert.match(usageGroup, /durationDisplay/);
 });
 
 test("copy and fork keep one shared icon-button presentation", () => {
