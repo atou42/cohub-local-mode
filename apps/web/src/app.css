@@ -55,6 +55,10 @@ body {
 	background-repeat: no-repeat, var(--app-bg-repeat);
 }
 
+.app-shell-viewport {
+	height: var(--cohub-app-shell-height, 100dvh);
+}
+
 /* Optional Space override for the status-bar strip. Transparent keeps the
    app-shell's single full-viewport background image perfectly continuous. */
 .app-shell::before {
