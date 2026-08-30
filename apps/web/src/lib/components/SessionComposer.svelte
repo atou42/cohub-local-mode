@@ -8,7 +8,6 @@ import type {
 	VoiceInputClient,
 } from "@neta-art/cohub";
 import {
-	Bot,
 	Check,
 	ChevronDown,
 	LockKeyhole,
@@ -19,6 +18,7 @@ import {
 	X,
 } from "lucide-svelte";
 import { onMount } from "svelte";
+import AgentHarnessLogo from "$lib/components/AgentHarnessLogo.svelte";
 import ComposerModelTrigger from "$lib/components/composer/ComposerModelTrigger.svelte";
 import ComposerSubmitButton from "$lib/components/composer/ComposerSubmitButton.svelte";
 import ComposerSurface from "$lib/components/composer/ComposerSurface.svelte";
@@ -1581,7 +1581,7 @@ $effect(() => {
 								<div class="relative shrink-0">
 									<button
 										type="button"
-										class="flex h-7 max-w-[10rem] items-center gap-1.5 rounded-full border border-border-subtle px-2 text-[11px] leading-none text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/40 disabled:cursor-default disabled:opacity-70"
+										class="flex h-7 w-7 items-center justify-center rounded-full border border-border-subtle text-[11px] leading-none text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/40 disabled:cursor-default disabled:opacity-70 sm:w-auto sm:max-w-[10rem] sm:justify-start sm:gap-1.5 sm:px-2"
 										disabled={disabled || sending || agentHarnessLocked}
 										aria-label={`Agent harness ${agentHarnessLabel}${agentHarnessLocked ? ", locked for this Session" : ""}`}
 										aria-expanded={showAgentHarnessMenu}
@@ -1590,12 +1590,17 @@ $effect(() => {
 										onclick={() => { showAgentHarnessMenu = !showAgentHarnessMenu; }}
 										onkeydown={(event) => { if (event.key === "Escape") showAgentHarnessMenu = false; }}
 									>
-										<Bot class="h-3 w-3 shrink-0" />
-										<span class="min-w-0 truncate">{agentHarnessLabel}</span>
+										<span class="relative inline-flex shrink-0">
+											<AgentHarnessLogo harness={agentHarness} class="h-6 w-6 sm:h-5 sm:w-5" />
+											{#if agentHarnessLocked}
+												<LockKeyhole class="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-bg-input p-px opacity-80 sm:hidden" />
+											{/if}
+										</span>
+										<span class="hidden min-w-0 truncate sm:inline">{agentHarnessLabel}</span>
 										{#if agentHarnessLocked}
-											<LockKeyhole class="h-3 w-3 shrink-0 opacity-55" />
+											<LockKeyhole class="hidden h-3 w-3 shrink-0 opacity-55 sm:block" />
 										{:else}
-											<ChevronDown class="h-3 w-3 shrink-0 opacity-45" />
+											<ChevronDown class="hidden h-3 w-3 shrink-0 opacity-45 sm:block" />
 										{/if}
 									</button>
 									{#if showAgentHarnessMenu && !agentHarnessLocked}
@@ -1609,6 +1614,7 @@ $effect(() => {
 													aria-checked={agentHarness === option.value}
 													onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
 												>
+													<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
 													<span class="flex-1">{option.label}</span>
 													{#if agentHarness === option.value}<Check class="h-3.5 w-3.5 text-brand" />{/if}
 												</button>
