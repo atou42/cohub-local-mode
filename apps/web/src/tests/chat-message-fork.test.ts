@@ -42,6 +42,19 @@ test("terminal assistant messages with a checkpoint can be forked", () => {
 	);
 });
 
+test("terminal external-harness messages can be forked without legacy Pi checkpoints", () => {
+	for (const harness of ["codex", "cursor", "grok_build"] as const) {
+		assert.deepEqual(
+			getChatMessageForkState(
+				message("assistant", { messageKind: "assistant_final" }),
+				true,
+				harness,
+			),
+			{ visible: true, available: true },
+		);
+	}
+});
+
 test("streaming and user messages do not expose Fork", () => {
 	assert.deepEqual(
 		getChatMessageForkState(

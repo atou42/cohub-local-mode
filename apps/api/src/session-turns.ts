@@ -536,6 +536,35 @@ export const findLatestVisibleAgentEntryId = async (sessionId: string, throughSe
   return entryId || null;
 };
 
+export const findLatestVisibleAgentRuntime = async (sessionId: string, throughSequence: number) => {
+  const segments = await ensureSessionTurnSegments(sessionId);
+  if (segments.length > MAX_SESSION_TURN_SEGMENTS) throw new Error("Fork chain is too deep");
+  const rangePredicates = segments.flatMap((segment) => {
+    const toSequence = Math.min(segment.toSequence ?? throughSequence, throughSequence);
+    if (toSequence < segment.fromSequence) return [];
+    return [and(
+      eq(sessionTurns.sessionId, segment.sourceSessionId),
+      gte(sessionTurns.sequence, segment.fromSequence),
+      lte(sessionTurns.sequence, toSequence),
+    )];
+  });
+  const visibleRange = or(...rangePredicates);
+  if (!visibleRange) return null;
+  const [row] = await db.select({
+    model: sessionTurns.model,
+    meta: sessionTurns.meta,
+  }).from(sessionTurns).where(and(
+    eq(sessionTurns.executionKind, "agent"),
+    visibleRange,
+  )).orderBy(desc(sessionTurns.sequence)).limit(1);
+  if (!row) return null;
+  return {
+    model: row.model ?? null,
+    thinkingLevel: extractThinkingLevel(row.meta),
+    meta: normalizeRecord(row.meta),
+  };
+};
+
 export const buildIntermediateObjectsForTurn = async (input: { spaceId: string; sessionId: string; turnId: string }) => {
   const rows = await db.select().from(sessionMessages).where(and(
     eq(sessionMessages.sessionId, input.sessionId),

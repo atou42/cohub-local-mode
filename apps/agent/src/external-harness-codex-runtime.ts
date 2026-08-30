@@ -6,7 +6,10 @@ import type {
 	ExternalHarnessProgress,
 	ExternalHarnessResult,
 } from "./external-harness-protocol.js";
-import { buildCodexAppServerArgv } from "./external-harness-codex-config.js";
+import {
+	buildCodexAppServerArgv,
+	buildCodexThreadForkParams,
+} from "./external-harness-codex-config.js";
 import { parseCodexGoalCommand } from "./codex-goal-command.js";
 import { localSpaceAccessKey } from "./local-space-access.js";
 
@@ -336,7 +339,10 @@ function finishTurn(entry: RuntimeEntry, payload: Record<string, unknown>) {
 			usage: flattenUsage(active.usage),
 		});
 		try {
-			active.resolve(active.reducer.result());
+			active.resolve({
+				...active.reducer.result(),
+				externalTurnId: active.turnId,
+			});
 		} catch (error) {
 			active.reject(error instanceof Error ? error : new Error(String(error)));
 		}
@@ -668,6 +674,51 @@ async function ensureThread(
 	if (!threadId) throw new Error("Codex app-server did not return a thread id");
 	entry.threadId = threadId;
 	return threadId;
+}
+
+export async function prepareCodexForkSession(input: {
+	spaceId: string;
+	sessionId: string;
+	parentThreadId: string;
+	lastTurnId: string;
+	environment: Record<string, string>;
+	executionContextKey: string;
+	writableRoots: readonly string[];
+	accessMode: AccessMode;
+	model: string;
+	serviceTier?: string | null;
+	connection: SandboxConnection;
+}) {
+	const { entry } = getOrCreateRuntime({
+		...input,
+		externalSessionId: input.parentThreadId,
+	});
+	try {
+		await entry.readyPromise;
+		const parentThreadId = input.parentThreadId.trim();
+		const lastTurnId = input.lastTurnId.trim();
+		if (!parentThreadId || !lastTurnId) {
+			throw new Error("Codex native fork requires parent thread and turn ids");
+		}
+		const result = await request(
+			entry,
+			"thread/fork",
+			buildCodexThreadForkParams({
+				threadId: parentThreadId,
+				lastTurnId,
+				cwd: entry.workspaceCwd,
+				accessMode: input.accessMode,
+				writableRoots: input.writableRoots,
+			}),
+		);
+		const thread = record(result.thread);
+		const threadId = text(thread?.id) || text(result.threadId);
+		if (!threadId) throw new Error("Codex app-server did not return a forked thread id");
+		entry.threadId = threadId;
+		return threadId;
+	} finally {
+		closeEntry(entry, "Codex fork preparation complete");
+	}
 }
 
 export async function runCodexAppServerHarness(input: {
