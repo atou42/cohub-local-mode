@@ -1027,6 +1027,7 @@
 	"chat_error_header": "错误",
 	"chat_copy_message": "复制消息",
 	"chat_fork_here": "从此处派生",
+	"chat_fork_unavailable": "此消息没有可用的派生存档点",
 	"chat_cancelled": "已取消",
 	"chat_cancelled_by": "由 {name} 取消。未发送给 Agent。",
 	"chat_not_sent_to_agent": "未发送给 Agent。",
