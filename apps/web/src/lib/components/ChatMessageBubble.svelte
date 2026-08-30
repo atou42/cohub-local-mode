@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { AgentHarness } from "@cohub/protocol";
 import type { ContentBlock } from "@cohub/protocol/core";
 import { Check, Copy, GitFork, Loader2 } from "lucide-svelte";
 import { onDestroy } from "svelte";
@@ -45,6 +46,7 @@ type Props = {
 	onForkTurn?: () => void;
 	forkDisabled?: boolean;
 	forking?: boolean;
+	agentHarness?: AgentHarness | null;
 };
 
 const {
@@ -58,6 +60,7 @@ const {
 	onForkTurn,
 	forkDisabled = false,
 	forking = false,
+	agentHarness = null,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -201,7 +204,7 @@ const metaActionButtonClass =
 	"shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50";
 
 const forkState = $derived(
-	getChatMessageForkState(message, Boolean(onForkTurn)),
+	getChatMessageForkState(message, Boolean(onForkTurn), agentHarness),
 );
 let forkHintVisible = $state(false);
 let forkHintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -551,11 +554,6 @@ function handleCopy() {
                 <GitFork class="w-3.5 h-3.5" />
               {/if}
             </button>
-            {#if forkHintVisible}
-              <span role="status" class="absolute bottom-full left-0 z-20 mb-1 whitespace-nowrap rounded border border-border-subtle bg-bg-primary px-2 py-1 text-[11px] text-text-secondary shadow-md">
-                {m.chat_fork_unavailable({}, { locale })}
-              </span>
-            {/if}
           </span>
         {/if}
 
@@ -642,6 +640,11 @@ function handleCopy() {
           </time>
         {/if}
       </div>
+      {#if forkHintVisible}
+        <div role="status" class="mt-1 px-2 text-[11px] text-text-secondary">
+          {m.chat_fork_unavailable({}, { locale })}
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}

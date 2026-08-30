@@ -336,6 +336,7 @@ async function handleDraftDrop(event: DragEvent) {
 					onMarkdownRendered={host.handleTimelineMarkdownRendered}
 					onForkTurn={host.handleForkTurn}
 					forkingTurnId={host.forkingTurnId}
+					agentHarness={host.activeAgentHarness}
 					loading={host.activeSessionInitialLoadingVisible}
 					loadingOlder={activeSessionState?.loadingOlder ?? false}
 					onOpenFile={(target) => {

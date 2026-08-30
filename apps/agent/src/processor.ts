@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { UnrecoverableError, type Job } from "bullmq";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, gte, lte, or, sql } from "drizzle-orm";
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { AgentHarness } from "@cohub/protocol";
-import { spaceSessions } from "@cohub/db";
+import { sessionTurns, sessionTurnSegments, spaceSessions } from "@cohub/db";
 import { ModelUnavailableError } from "@cohub/core/sessions";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { readPublicAssetImageUrl } from "./public-asset-storage.js";
@@ -94,6 +94,10 @@ import {
 } from "./external-harness-context.js";
 import { createExternalProgressPublisher } from "./external-progress-publisher.js";
 import {
+  buildExternalForkBootstrapPrompt,
+  parsePendingExternalForkBootstrap,
+} from "./external-fork-context.js";
+import {
   getPromptAuthScopes,
   parsePromptEnv,
   type PromptAccessMode,
@@ -114,12 +118,48 @@ async function getSessionHarness(sessionId: string) {
     .select({
       agentHarness: spaceSessions.agentHarness,
       externalSessionId: spaceSessions.externalSessionId,
+      meta: spaceSessions.meta,
     })
     .from(spaceSessions)
     .where(eq(spaceSessions.id, sessionId))
     .limit(1);
   if (!session) throw new Error(`Session not found: ${sessionId}`);
   return session;
+}
+
+async function loadExternalForkTranscript(sessionId: string, anchorSequence: number) {
+  const persistedSegments = await db.select().from(sessionTurnSegments)
+    .where(eq(sessionTurnSegments.sessionId, sessionId))
+    .orderBy(asc(sessionTurnSegments.ordinal));
+  if (persistedSegments.length === 0) {
+    throw new Error("External fork transcript segments are missing");
+  }
+  const ranges = persistedSegments.flatMap((segment) => {
+    const toSequence = Math.min(segment.toSequence ?? anchorSequence, anchorSequence);
+    if (toSequence < segment.fromSequence) return [];
+    return [and(
+      eq(sessionTurns.sessionId, segment.sourceSessionId),
+      gte(sessionTurns.sequence, segment.fromSequence),
+      lte(sessionTurns.sequence, toSequence),
+    )];
+  });
+  const visible = or(...ranges);
+  if (!visible) throw new Error("External fork transcript range is empty");
+  return db.select({
+    sequence: sessionTurns.sequence,
+    userText: sessionTurns.userText,
+    assistantText: sessionTurns.assistantText,
+  }).from(sessionTurns).where(visible).orderBy(asc(sessionTurns.sequence));
+}
+
+async function completeExternalForkBootstrap(sessionId: string) {
+  await db.update(spaceSessions).set({
+    meta: sql`jsonb_set(${spaceSessions.meta}, '{agentFork,bootstrapPending}', 'false'::jsonb, false)`,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(spaceSessions.id, sessionId),
+    sql`${spaceSessions.meta}->'agentFork'->>'bootstrapPending' = 'true'`,
+  ));
 }
 
 async function persistExternalHarnessSessionId(input: {
@@ -1322,9 +1362,20 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               externalMessages.map((item) => item.content),
             ),
           );
-          const prompt = harness === "cursor"
+          let prompt = harness === "cursor"
             ? appendCursorLocalContextInstructions(promptWithContext)
             : promptWithContext;
+          const pendingForkBootstrap = parsePendingExternalForkBootstrap(sessionHarness.meta);
+          if (pendingForkBootstrap) {
+            prompt = buildExternalForkBootstrapPrompt({
+              harness,
+              turns: await loadExternalForkTranscript(
+                data.sessionId,
+                pendingForkBootstrap.anchorSequence,
+              ),
+              prompt,
+            });
+          }
           const anchorUserMessageId =
             batch.executionBatch.anchorUserMessageId ??
             externalMessages.at(-1)?.userMessageId ??
@@ -1460,6 +1511,16 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
               externalSessionId: result.externalSessionId,
               requestedThinkingLevel,
               effectiveThinkingLevel: result.thinkingLevel,
+              ...(harness === "codex" && result.externalSessionId && result.externalTurnId
+                ? {
+                    forkCheckpoint: {
+                      version: 1,
+                      harness: "codex",
+                      externalSessionId: result.externalSessionId,
+                      externalTurnId: result.externalTurnId,
+                    },
+                  }
+                : {}),
               ...(harness === "codex"
                 ? {
                     requestedServiceTier: requestedServiceTier ?? null,
@@ -1515,6 +1576,9 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
                 },
               },
             });
+            if (pendingForkBootstrap) {
+              await completeExternalForkBootstrap(data.sessionId);
+            }
             terminalHandled = true;
             drainAfterRelease = {
               spaceId: data.spaceId,

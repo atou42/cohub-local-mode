@@ -15,6 +15,26 @@ const CODEX_SHELL_ENVIRONMENT_INCLUDE_ONLY = [
 const CODEX_MODEL_CONTEXT_WINDOW = 1_050_000;
 const CODEX_AUTO_COMPACT_TOKEN_LIMIT = 400_000;
 
+export function buildCodexThreadForkParams(input: {
+	threadId: string;
+	lastTurnId: string;
+	cwd: string;
+	accessMode: "full_access" | "read_only";
+	writableRoots: readonly string[];
+}) {
+	return {
+		threadId: input.threadId,
+		lastTurnId: input.lastTurnId,
+		cwd: input.cwd,
+		approvalPolicy: "never",
+		approvalsReviewer: "user",
+		sandbox: input.accessMode === "read_only" ? "read-only" : "workspace-write",
+		runtimeWorkspaceRoots: [...input.writableRoots],
+		excludeTurns: true,
+		deferGoalContinuation: true,
+	};
+}
+
 export function buildCodexAppServerArgv(
 	writableRoots: readonly string[] = [],
 ) {

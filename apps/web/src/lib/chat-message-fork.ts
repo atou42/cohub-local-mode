@@ -1,3 +1,4 @@
+import type { AgentHarness } from "@cohub/protocol";
 import type { ChatMessage } from "$lib/session-tree";
 
 const TERMINAL_ASSISTANT_KINDS = new Set([
@@ -42,6 +43,7 @@ function isTerminalDirectGeneration(message: ChatMessage): boolean {
 export function getChatMessageForkState(
 	message: ChatMessage,
 	hasForkHandler: boolean,
+	agentHarness?: AgentHarness | null,
 ): { visible: boolean; available: boolean } {
 	const visible = Boolean(
 		message.role === "assistant" &&
@@ -54,6 +56,10 @@ export function getChatMessageForkState(
 		available:
 			visible &&
 			hasForkHandler &&
-			(hasForkCheckpoint(message) || isTerminalDirectGeneration(message)),
+			(hasForkCheckpoint(message) ||
+				isTerminalDirectGeneration(message) ||
+				agentHarness === "codex" ||
+				agentHarness === "cursor" ||
+				agentHarness === "grok_build"),
 	};
 }
