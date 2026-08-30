@@ -1630,10 +1630,10 @@ $effect(() => {
 													class={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors hover:bg-bg-hover ${agentHarness === option.value ? "text-text-primary" : "text-text-secondary"}`}
 													role="menuitemradio"
 													aria-checked={agentHarness === option.value}
-													onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
-												>
-													<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
-													<span class="flex-1">{option.label}</span>
+												onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
+											>
+												<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
+												<span class="flex-1">{option.label}</span>
 													{#if agentHarness === option.value}<Check class="h-3.5 w-3.5 text-brand" />{/if}
 												</button>
 											{/each}

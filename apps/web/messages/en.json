@@ -1043,6 +1043,7 @@
 	"chat_error_header": "Error",
 	"chat_copy_message": "Copy message",
 	"chat_fork_here": "Fork from here",
+	"chat_fork_unavailable": "No fork checkpoint for this message",
 	"chat_cancelled": "cancelled",
 	"chat_cancelled_by": "Cancelled by {name}. Not sent to agent.",
 	"chat_not_sent_to_agent": "Not sent to agent.",
