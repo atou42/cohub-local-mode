@@ -135,6 +135,10 @@ test("syncSpaceChromeTheme still resolves state when optional meta tags are abse
 test("the app shell opts into full-bleed viewport layout and protects its content", () => {
 	const appHtml = readFileSync(new URL("../app.html", import.meta.url), "utf8");
 	const appCss = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+	const appLayout = readFileSync(
+		new URL("../routes/(app)/+layout.svelte", import.meta.url),
+		"utf8",
+	);
 	const sessionComposer = readFileSync(
 		new URL("../lib/components/SessionComposer.svelte", import.meta.url),
 		"utf8",
@@ -158,6 +162,12 @@ test("the app shell opts into full-bleed viewport layout and protects its conten
 		appCss,
 		/background:\s*var\(--cohub-safe-area-background, transparent\)/,
 	);
+	assert.match(
+		appCss,
+		/\.app-shell-viewport\s*{[^}]*height:\s*var\(--cohub-app-shell-height, 100dvh\)/s,
+	);
+	assert.match(appLayout, /use:iosStandaloneViewportRecovery/);
+	assert.doesNotMatch(appLayout, /app-shell h-\[100dvh\]/);
 	assert.match(sessionComposer, /class="px-2 pb-3 pt-2 sm:px-4 sm:pb-4"/);
 	assert.doesNotMatch(
 		sessionComposer,
