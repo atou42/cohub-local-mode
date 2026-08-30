@@ -838,12 +838,20 @@ export function buildHarnessArgv(input: {
 	model: string;
 	thinkingLevel: string;
 	serviceTier?: string | null;
+	writableRoots?: readonly string[];
+	grokSandboxProfile?: string;
 }): string[] {
 	if (!input.model.trim()) throw new Error("external harness model is required");
 	if (!input.thinkingLevel.trim()) {
 		throw new Error("external harness thinking level is required");
 	}
 	if (input.harness === "codex") {
+		const writableRootArgs = input.writableRoots?.length
+			? [
+					"-c",
+					`sandbox_workspace_write.writable_roots=${JSON.stringify(input.writableRoots)}`,
+				]
+			: [];
 		const serviceTierArgs = input.serviceTier
 			? ["-c", `service_tier="${input.serviceTier}"`]
 			: [];
@@ -858,6 +866,7 @@ export function buildHarnessArgv(input: {
 				`sandbox_mode="${input.accessMode === "read_only" ? "read-only" : "workspace-write"}"`,
 				"-c",
 				`model_reasoning_effort="${input.thinkingLevel}"`,
+				...writableRootArgs,
 				...serviceTierArgs,
 				"--json",
 				"--skip-git-repo-check",
@@ -874,6 +883,7 @@ export function buildHarnessArgv(input: {
 			input.model,
 			"-c",
 			`model_reasoning_effort="${input.thinkingLevel}"`,
+			...writableRootArgs,
 			...serviceTierArgs,
 			"--sandbox",
 			input.accessMode === "read_only" ? "read-only" : "workspace-write",
@@ -882,7 +892,13 @@ export function buildHarnessArgv(input: {
 	}
 	if (input.harness === "cursor") {
 		if (input.serviceTier) throw new Error("Cursor does not support a service tier");
-		return ["agent", "acp"];
+		return [
+			"agent",
+			"--sandbox",
+			"enabled",
+			...(input.writableRoots ?? []).flatMap((root) => ["--add-dir", root]),
+			"acp",
+		];
 	}
 	if (input.serviceTier) {
 		throw new Error("Grok Build does not support a service tier");
@@ -890,6 +906,10 @@ export function buildHarnessArgv(input: {
 
 	const common = [
 		"grok",
+		"--sandbox",
+		input.accessMode === "read_only"
+			? "read-only"
+			: input.grokSandboxProfile ?? "workspace",
 		"--model",
 		input.model,
 		"--reasoning-effort",

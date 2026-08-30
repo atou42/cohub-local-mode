@@ -8,6 +8,7 @@ import type {
 } from "./external-harness-protocol.js";
 import { buildCodexAppServerArgv } from "./external-harness-codex-config.js";
 import { parseCodexGoalCommand } from "./codex-goal-command.js";
+import { localSpaceAccessKey } from "./local-space-access.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
@@ -503,6 +504,7 @@ function createRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	writableRoots: readonly string[];
 }) {
 	evictRuntimeIfNeeded();
 	let resolveProcessId: (processId: string) => void = () => undefined;
@@ -542,7 +544,7 @@ function createRuntime(input: {
 		input.connection,
 		"process.start",
 		{
-			argv: buildCodexAppServerArgv(),
+			argv: buildCodexAppServerArgv(input.writableRoots),
 			cwd: entry.workspaceCwd,
 			env: input.environment,
 			timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -590,7 +592,10 @@ function createRuntime(input: {
 		});
 		await notify(entry, "initialized", {});
 	})();
-	entry.readyPromise.catch(() => undefined);
+	entry.readyPromise.catch((error) => {
+		const runtimeError = error instanceof Error ? error : new Error(String(error));
+		closeEntry(entry, runtimeError.message);
+	});
 	runtimes.set(entry.key, entry);
 	return entry;
 }
@@ -603,8 +608,9 @@ function getOrCreateRuntime(input: {
 	externalSessionId: string | null;
 	environment: Record<string, string>;
 	executionContextKey: string;
+	writableRoots: readonly string[];
 }) {
-	const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}`;
+	const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}:${localSpaceAccessKey(input.writableRoots)}`;
 	const existing = runtimes.get(key);
 	if (
 		existing &&
@@ -671,6 +677,7 @@ export async function runCodexAppServerHarness(input: {
 	prompt: string;
 	environment: Record<string, string>;
 	executionContextKey: string;
+	writableRoots: readonly string[];
 	externalSessionId: string | null;
 	accessMode: AccessMode;
 	model: string;

@@ -15,8 +15,10 @@ const CODEX_SHELL_ENVIRONMENT_INCLUDE_ONLY = [
 const CODEX_MODEL_CONTEXT_WINDOW = 1_050_000;
 const CODEX_AUTO_COMPACT_TOKEN_LIMIT = 400_000;
 
-export function buildCodexAppServerArgv() {
-	return [
+export function buildCodexAppServerArgv(
+	writableRoots: readonly string[] = [],
+) {
+	const argv = [
 		"codex",
 		"app-server",
 		"--listen",
@@ -34,4 +36,11 @@ export function buildCodexAppServerArgv() {
 		"-c",
 		`shell_environment_policy.include_only=${JSON.stringify(CODEX_SHELL_ENVIRONMENT_INCLUDE_ONLY)}`,
 	];
+	if (writableRoots.length > 0) {
+		argv.push(
+			"-c",
+			`sandbox_workspace_write.writable_roots=${JSON.stringify(writableRoots)}`,
+		);
+	}
+	return argv;
 }
