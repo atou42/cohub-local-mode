@@ -101,14 +101,22 @@ export function getFastServiceTier(
 /** Compact labels for dense controls (composer, chips). */
 export function formatThinkingLevelShort(level: ModelThinkingLevel): string {
 	switch (level) {
+		case "off":
+			return "O";
 		case "minimal":
 			return "Min";
+		case "low":
+			return "L";
 		case "medium":
-			return "Med";
+			return "M";
+		case "high":
+			return "H";
 		case "xhigh":
-			return "xHigh";
-		default:
-			return level.charAt(0).toUpperCase() + level.slice(1);
+			return "xH";
+		case "max":
+			return "Max";
+		case "ultra":
+			return "U";
 	}
 }
 

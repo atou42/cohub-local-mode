@@ -1,12 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	formatThinkingLevelShort,
 	getFastServiceTier,
 	getModelServiceTiers,
 	getRequestedServiceTier,
 	getRequestedThinkingLevel,
 	getSupportedThinkingLevels,
 } from "../lib/model-catalog";
+
+test("dense thinking-level labels use compact effort abbreviations", () => {
+	assert.deepEqual(
+		(
+			[
+				"off",
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max",
+				"ultra",
+			] as const
+		).map((level) => formatThinkingLevelShort(level)),
+		["O", "Min", "L", "M", "H", "xH", "Max", "U"],
+	);
+});
 
 test("getRequestedThinkingLevel only reads explicit requests", () => {
 	assert.equal(
