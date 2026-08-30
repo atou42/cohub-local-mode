@@ -14,16 +14,27 @@ import {
   updateSpaceSessionInfo,
 } from "../space-sessions.js";
 import { markMessageAsFull, summarizeMessageForHistory } from "../session-content.js";
-import { createSignedTurnUrls, findLatestVisibleAgentEntryId, getSessionTurnById, getSessionTurnSequenceById, hydrateTurnAuthorProfiles, listSessionTurnIndex, listSessionTurns, listSessionTurnWindow } from "../session-turns.js";
+import { createSignedTurnUrls, findLatestVisibleAgentEntryId, findLatestVisibleAgentRuntime, getSessionTurnById, getSessionTurnSequenceById, hydrateTurnAuthorProfiles, listSessionTurnIndex, listSessionTurns, listSessionTurnWindow } from "../session-turns.js";
 import { clearSessionStreamSnapshot, getSessionStreamSnapshot, listPersistedTurnIntermediateMessages } from "../session-stream-snapshot.js";
 import { createSessionFork, listSessionForksForSessions } from "../session-forks.js";
 import { dispatchLabelAssignmentsUpdated } from "../realtime-events.js";
 import { buildSessionTurnResponse } from "../session-turn-response.js";
 import { parseSessionTitleInput } from "../session-title-input.js";
+import { resolveSessionAgentFork } from "../session-agent-fork.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
 router.post("/:id/turns/:turnId/fork", async (c) => {
   const user = useAuth(c);
@@ -41,26 +52,81 @@ router.post("/:id/turns/:turnId/fork", async (c) => {
 
   const sourceTurn = await getSessionTurnById(session.id, turnId);
   if (!sourceTurn) return c.json({ message: "turn not found" }, 404);
-  if (sourceTurn.executionKind === "direct_generation" && !["completed", "failed", "interrupted", "cancelled"].includes(sourceTurn.status)) {
+  if (!["completed", "failed", "interrupted", "cancelled"].includes(sourceTurn.status)) {
     return c.json({ message: "cannot fork a running turn" }, 400);
   }
   const sourceTurnId = sourceTurn.sourceTurnId ?? sourceTurn.id;
 
   const body = await c.req.json<{ title?: string | null }>().catch((): { title?: string | null } => ({}));
-  const anchorEntryId = await findLatestVisibleAgentEntryId(session.id, sourceTurn.sequence);
-  if (!anchorEntryId && sourceTurn.executionKind !== "direct_generation") {
+  const childSessionId = randomUUID();
+  const anchorEntryId = session.agentHarness === "pi"
+    ? await findLatestVisibleAgentEntryId(session.id, sourceTurn.sequence)
+    : null;
+  if (session.agentHarness === "pi" && !anchorEntryId && sourceTurn.executionKind !== "direct_generation") {
     return c.json({ message: "session checkpoint missing" }, 400);
+  }
+
+  const sourceMeta = record(sourceTurn.meta);
+  const runtime = sourceTurn.executionKind === "agent"
+    ? { model: sourceTurn.model, thinkingLevel: sourceTurn.thinkingLevel, meta: sourceMeta }
+    : await findLatestVisibleAgentRuntime(session.id, sourceTurn.sequence);
+  const forkPreparation = resolveSessionAgentFork({
+    agentHarness: session.agentHarness,
+    executionKind: sourceTurn.executionKind,
+    parentExternalSessionId: session.externalSessionId,
+    turnMeta: sourceMeta,
+  });
+  const model = nonEmptyText(runtime?.model);
+  const thinkingLevel = nonEmptyText(runtime?.thinkingLevel)
+    ?? nonEmptyText(runtime?.meta?.effectiveThinkingLevel);
+  if (session.agentHarness !== "pi" && (!model || !thinkingLevel)) {
+    return c.json({ message: "agent model checkpoint missing" }, 400);
+  }
+
+  let prepared: Awaited<ReturnType<typeof enqueueSessionFork>>;
+  try {
+    prepared = await enqueueSessionFork({
+      spaceId: session.spaceId,
+      sessionId: childSessionId,
+      parentSessionId: session.id,
+      anchorTurnId: sourceTurnId,
+      anchorSequence: sourceTurn.sequence,
+      anchorEntryId,
+      agentHarness: session.agentHarness,
+      forkStrategy: forkPreparation.strategy,
+      parentExternalSessionId: session.externalSessionId,
+      anchorExternalTurnId: forkPreparation.anchorExternalTurnId,
+      model,
+      thinkingLevel,
+      serviceTier: nonEmptyText(runtime?.meta?.effectiveServiceTier),
+    });
+  } catch (error) {
+    logger.error("[SessionFork] failed to prepare Agent branch", error);
+    return c.json({
+      message: error instanceof Error
+        ? error.message.toLowerCase().replace(/\.$/, "")
+        : "failed to prepare fork session",
+    }, 503);
   }
 
   try {
     const { session: childSession, fork } = await createSessionFork({
       spaceId: session.spaceId,
-      childSessionId: randomUUID(),
+      childSessionId,
       parentSessionId: session.id,
       turnId: sourceTurnId,
       sequence: sourceTurn.sequence,
       title: body.title,
       createdBy: user.uuid,
+      externalSessionId: prepared.externalSessionId,
+      agentFork: prepared.strategy === "pi_session"
+        ? null
+        : {
+            strategy: prepared.strategy,
+            anchorSequence: sourceTurn.sequence,
+            bootstrapPending: prepared.strategy === "context_clone",
+            preparedAt: new Date().toISOString(),
+          },
     });
     // Notify clients so they proactively cache the inherited labels.
     dispatchLabelAssignmentsUpdated({
@@ -71,19 +137,6 @@ router.post("/:id/turns/:turnId/fork", async (c) => {
     }).catch((error) => {
       logger.warn("[SessionFork] failed to dispatch label assignments updated", error);
     });
-    try {
-      await enqueueSessionFork({
-        spaceId: session.spaceId,
-        sessionId: childSession.id,
-        parentSessionId: session.id,
-        anchorTurnId: sourceTurnId,
-        anchorSequence: sourceTurn.sequence,
-        anchorEntryId,
-      });
-    } catch (enqueueError) {
-      logger.error("[SessionFork] failed to enqueue agent fork", enqueueError);
-      return c.json({ message: "failed to prepare fork session" }, 503);
-    }
     const [hydratedChildSession] = await hydrateSessionParticipantProfiles([childSession]);
     const [enrichedFork] = await listSessionForksForSessions([childSession.id]);
     return c.json({ session: hydratedChildSession ?? childSession, fork: enrichedFork ?? fork });

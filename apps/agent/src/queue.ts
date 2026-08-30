@@ -1,5 +1,6 @@
 import { COHUB_AGENT_TURNS_QUEUE, defaultJobRetention } from "@cohub/infra/bullmq";
 import type { JobsOptions } from "bullmq";
+import type { AgentHarness } from "@cohub/protocol";
 import { getCurrentRequestId } from "@cohub/infra/tracing";
 import { injectTrace } from "@cohub/infra/tracing/propagator";
 import {
@@ -51,8 +52,21 @@ export type AgentSessionForkJobData = {
   anchorTurnId: string;
   anchorSequence: number;
   anchorEntryId?: string | null;
+  agentHarness: AgentHarness;
+  forkStrategy: "pi_session" | "codex_native" | "context_clone";
+  parentExternalSessionId?: string | null;
+  anchorExternalTurnId?: string | null;
+  model?: string | null;
+  thinkingLevel?: string | null;
+  serviceTier?: string | null;
   requestId?: string | null;
   trace?: Record<string, unknown>;
+};
+
+export type AgentSessionForkJobResult = {
+  sessionId: string;
+  externalSessionId: string | null;
+  strategy: "pi_session" | "codex_native" | "context_clone";
 };
 
 export type AgentJobData = AgentTurnJobData | AgentSessionForkJobData | AgentSandboxBashUploadJobData | AgentRunCommandJobData | AgentSandboxFsMutationJobData;
@@ -87,8 +101,7 @@ export async function enqueueAgentSessionForkJob(data: AgentSessionForkJobData, 
     trace: injectTrace(),
   }, {
     jobId: `agent-session-fork-${data.sessionId}-${data.anchorEntryId ?? data.anchorTurnId}`,
-    attempts: 3,
-    backoff: { type: "fixed", delay: 1000 },
+    attempts: 1,
     ...defaultJobRetention,
     ...options,
   });

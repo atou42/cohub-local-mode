@@ -188,6 +188,13 @@ export async function createSessionFork(input: {
   sequence?: number;
   title?: string | null;
   createdBy?: string | null;
+  externalSessionId?: string | null;
+  agentFork?: {
+    strategy: "codex_native" | "context_clone";
+    anchorSequence: number;
+    bootstrapPending: boolean;
+    preparedAt: string;
+  } | null;
 }) {
   const now = new Date();
   const createdBy = input.createdBy?.trim();
@@ -256,6 +263,7 @@ export async function createSessionFork(input: {
         createdAt: now.toISOString(),
         createdBy,
       },
+      ...(input.agentFork ? { agentFork: input.agentFork } : {}),
     }, childParticipantUserUuids, now);
 
     const [child] = await tx.insert(spaceSessions).values({
@@ -265,7 +273,7 @@ export async function createSessionFork(input: {
       title: requestedTitle,
       source: parent.source,
       status: "active",
-      externalSessionId: null,
+      externalSessionId: input.externalSessionId ?? null,
       agentHarness: parent.agentHarness,
       meta: sanitizePostgresJsonValue(requestedTitle ? setSessionTitleMeta(childMeta, { source: "user" }) : childMeta),
       lastMessageAt: now,
