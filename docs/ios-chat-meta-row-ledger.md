@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-实现、提交、生产部署和线上验收已经完成。产品提交为 `aac9c1e3f4d8c81409df48138db9689af5698175`，远端 `fork/main` 已确认与该提交一致。`.playwright-cli` 是既有未跟踪目录，没有进入提交。
+第一轮宽度修复已部署。后续用户实机截图确认信息分组仍不符合预期：模型与 Effort 应位于同一框且紧贴，token 与运行时长应位于另一个框。第二轮分组修正与 Agent logo 恢复已在本地完成，尚未提交或部署。`.playwright-cli` 是既有未跟踪目录，不属于本目标。
 
 ## 目标与边界
 
@@ -60,3 +60,22 @@ Chat 消息底部信息行必须在窄屏内保持单行并受消息宽度约束
 - 发布后 Postgres、Redis、对象存储、API、Gateway、Web、Private ingress 和 Cloudflare relay node 全部 ready，Tunnel 仍由 `launchctl` 确认为 running。
 
 `VERDICT: PASS`
+
+## 后续视觉纠正
+
+- 用户截图 `.cohub/relay-attachments/4ddd5fb4-b0c8-4e5c-9048-3a3d765ac1fb/IMG_0275.jpg` 证明第一轮信息行虽然不再溢出，但模型、Effort、token 和时长仍共用一个外框。此前验收只证明宽度正确，没有证明视觉分组正确，原 `PASS` 不覆盖这项新增且明确的视觉要求。
+- 第二轮候选把模型和 Effort 放入独立分组，把 token、缓存数字、运行时长和费用放入另一个分组。模型组使用 2 像素内部间距，信息组使用 4 像素内部间距；两组仍可收缩，时间和操作按钮保持固定。
+- 新增定向检查修复前失败，修复后相关 9 项通过；Web 完整测试 406 项通过。
+- 在生产真实消息 DOM 上临时套用候选结构后，320、393、430 像素视口均满足页面和信息行 `scrollWidth === clientWidth`。两组分别获得现有 Space 样式的独立背景、圆角和内边距，模型与 Effort 的实测间距为 2 像素，token 与运行时长的实测间距为 4 像素。
+- 当前第二轮候选尚未提交或部署，线上仍是第一轮结构。
+
+`VERDICT: PENDING_DEPLOY`
+
+## Agent logo 恢复
+
+- 用户截图 `.cohub/relay-attachments/f280c444-aa80-4d41-b0ec-f5974f81ce55/IMG_0276.jpg` 证明生产环境退回了通用机器人图标加文字的样式；截图 `.cohub/relay-attachments/9e48cea3-576d-47b5-bd00-3a7254250af9/IMG_0277.jpg` 是需要恢复的 logo 形态。
+- 根因是 Agent logo 组件和资源只存在于运行目录的未提交改动中。上一轮从隔离分支部署时没有包含它们。
+- 本轮只取回 Agent logo 组件、四种 harness 的图标资源和选择器显示，不带入运行目录的其他未提交改动。移动端触发器只显示 logo，桌面端保留 logo 和名称，菜单内每个选项显示对应 logo。
+- 定向回归在修复前 2 项失败，修复后 2 项通过。
+
+`VERDICT: PENDING_DEPLOY`
