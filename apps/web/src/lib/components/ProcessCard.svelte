@@ -373,13 +373,13 @@ const summaryLabel = $derived(
 {#if !expanded}
 	<button type="button" class="flex w-full items-center gap-2 px-2 py-2 text-left transition-colors hover:bg-bg-hover/50 cursor-pointer rounded-md disabled:cursor-wait disabled:opacity-75" disabled={isLoading} onclick={() => void toggle()} title={usageTitle || undefined}>
 		{#if isLoading}<Loader2 class="w-3.5 h-3.5 text-text-tertiary shrink-0 animate-spin" />{:else}<ChevronRight class="w-3.5 h-3.5 text-text-tertiary shrink-0" />{/if}
-		<span class="text-[13px] text-text-tertiary tabular-nums">{summaryLabel}</span>
+		<span class="min-w-0 truncate text-[13px] text-text-secondary tabular-nums">{summaryLabel}</span>
 	</button>
 {:else}
 	<div class="flex flex-col gap-0">
 		<button type="button" class="flex w-full items-center gap-2 px-2 py-2 text-left transition-colors hover:bg-bg-hover/50 cursor-pointer rounded-md" onclick={() => void toggle()} title={usageTitle || undefined}>
 			<ChevronDown class="w-3.5 h-3.5 text-text-tertiary shrink-0" />
-			<span class="text-[13px] text-text-tertiary tabular-nums">{summaryLabel}</span>
+			<span class="min-w-0 truncate text-[13px] text-text-secondary tabular-nums">{summaryLabel}</span>
 		</button>
 		<div class="flex flex-col gap-2">
 			{#if loadError}
