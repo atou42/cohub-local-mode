@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { AgentHarness } from "@cohub/protocol";
 import type {
 	MessageToolCallsFile,
 	SessionTurnRecord,
@@ -44,6 +45,7 @@ type Props = {
 	onOpenUrl?: (href: string, event: MouseEvent) => void | Promise<void>;
 	onForkTurn?: (turn: SessionTurnRecord) => void;
 	forkingTurnId?: string | null;
+	agentHarness?: AgentHarness | null;
 };
 
 let {
@@ -64,6 +66,7 @@ let {
 	onOpenUrl,
 	onForkTurn,
 	forkingTurnId = null,
+	agentHarness = null,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -227,6 +230,7 @@ $effect(() => {
 							onForkTurn={onForkTurn && forkTurn ? () => onForkTurn(forkTurn) : undefined}
 							forkDisabled={Boolean(forkingTurnId)}
 							forking={forkingTurnId === forkTurn?.id}
+							agentHarness={agentHarness}
 					/>
 				{:else if item.kind === 'process' && item.turn}
 						<ProcessCard turn={item.turn} summary={item.summary} intermediateMessages={item.intermediateMessages} streaming={item.streaming} {modelsCatalog} {onLoadIntermediate} {onRequestIntermediateSync} {onLoadToolCalls} {onOpenFile} {onOpenUrl} />

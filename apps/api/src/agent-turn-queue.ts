@@ -1,5 +1,6 @@
-import { COHUB_AGENT_TURNS_QUEUE, createBullmqQueue, defaultJobRetention } from "@cohub/infra/bullmq";
-import type { JobsOptions } from "bullmq";
+import { COHUB_AGENT_TURNS_QUEUE, createBullmqConnectionOptions, createBullmqQueue, defaultJobRetention } from "@cohub/infra/bullmq";
+import type { AgentHarness } from "@cohub/protocol";
+import { QueueEvents, type JobsOptions } from "bullmq";
 import { config } from "./config.js";
 
 export const AGENT_TURN_QUEUE_NAME = COHUB_AGENT_TURNS_QUEUE;
@@ -21,8 +22,21 @@ export type AgentSessionForkJobData = {
   anchorTurnId: string;
   anchorSequence: number;
   anchorEntryId?: string | null;
+  agentHarness: AgentHarness;
+  forkStrategy: "pi_session" | "codex_native" | "context_clone";
+  parentExternalSessionId?: string | null;
+  anchorExternalTurnId?: string | null;
+  model?: string | null;
+  thinkingLevel?: string | null;
+  serviceTier?: string | null;
   requestId?: string | null;
   trace?: Record<string, unknown>;
+};
+
+export type AgentSessionForkJobResult = {
+  sessionId: string;
+  externalSessionId: string | null;
+  strategy: "pi_session" | "codex_native" | "context_clone";
 };
 
 export type AgentJobData = AgentTurnJobData | AgentSessionForkJobData;
@@ -31,6 +45,20 @@ export const agentTurnQueue = createBullmqQueue<AgentJobData>(AGENT_TURN_QUEUE_N
   redisUrl: config.bullmqRedisUrl,
   telemetryServiceName: "cohub-api-agent-turns",
 });
+
+let sessionForkQueueEvents: QueueEvents | null = null;
+let sessionForkQueueEventsReady: Promise<void> | null = null;
+
+async function getSessionForkQueueEvents() {
+  if (!sessionForkQueueEvents) {
+    sessionForkQueueEvents = new QueueEvents(AGENT_TURN_QUEUE_NAME, {
+      connection: createBullmqConnectionOptions(config.bullmqRedisUrl),
+    });
+    sessionForkQueueEventsReady = sessionForkQueueEvents.waitUntilReady().then(() => undefined);
+  }
+  await sessionForkQueueEventsReady;
+  return sessionForkQueueEvents;
+}
 
 export async function enqueueAgentTurnJob(
   data: AgentTurnJobData,
@@ -52,9 +80,16 @@ export async function enqueueAgentSessionForkJob(
 ) {
   return agentTurnQueue.add(AGENT_SESSION_FORK_JOB_NAME, data, {
     jobId: `agent-session-fork-${data.sessionId}-${data.anchorEntryId ?? data.anchorTurnId}`,
-    attempts: 3,
-    backoff: { type: "fixed", delay: 1000 },
+    attempts: 1,
     ...defaultJobRetention,
     ...options,
   });
+}
+
+export async function prepareAgentSessionFork(
+  data: AgentSessionForkJobData,
+): Promise<AgentSessionForkJobResult> {
+  const events = await getSessionForkQueueEvents();
+  const job = await enqueueAgentSessionForkJob(data);
+  return await job.waitUntilFinished(events, 60_000) as AgentSessionForkJobResult;
 }
