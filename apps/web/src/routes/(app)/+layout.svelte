@@ -33,6 +33,7 @@ import {
 	shouldStartRightDrawerGesture,
 } from "$lib/gestures/drawer-swipe";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { iosStandaloneViewportRecovery } from "$lib/ios-standalone-viewport";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { DESKTOP_SHELL_MIN_WIDTH_PX } from "$lib/layout/breakpoints";
 import { DURATION_DRAWER_OUT, DURATION_PANEL } from "$lib/motion.svelte";
@@ -611,7 +612,7 @@ onMount(() => {
     <CenteredLoading label={m.shell_loading({}, { locale })} size="page" />
   </main>
 {:else}
-  <div class="app-shell h-[100dvh] min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
+  <div use:iosStandaloneViewportRecovery class="app-shell app-shell-viewport min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
     <!-- Desktop sidebar — hidden on mobile -->
     <!-- z-30 keeps collapsed rail flyouts above main workspace stacking contexts.
          Width-only panel-shell: the icon rail stays interactive (no --collapsed). -->
