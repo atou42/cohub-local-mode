@@ -194,6 +194,9 @@ const defaultExpandToolCalls = $derived(
 		(message.content ?? []).some((block) => block.type === "tool_use"),
 );
 
+const metaActionButtonClass =
+	"shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50";
+
 const hasForkCheckpoint = $derived(
 	Boolean(
 		message.meta?.turn &&
@@ -354,7 +357,7 @@ const tokenDisplay = $derived.by(() => {
 		const inputLabel = `↑${formatTokenCount(displayInputTokens)}`;
 		parts.push(
 			cachedInputTokens > 0
-				? `${inputLabel} (${m.chat_cached({ count: formatTokenCount(cachedInputTokens) }, { locale })})`
+				? `${inputLabel} (${formatTokenCount(cachedInputTokens)})`
 				: inputLabel,
 		);
 	}
@@ -517,11 +520,11 @@ function handleCopy() {
 
     {#if (message.role === 'assistant' && (message.meta?.model || hasUsage || hasDuration || timeDisplay)) || (message.role === 'user' && timeDisplay)}
       <!-- Meta bar: copy | identity/model | tokens | time -->
-      <div class="mt-1 flex items-center gap-1 px-2 text-[11px] text-text-placeholder/50 select-none">
+      <div class="mt-1 flex w-full min-w-0 max-w-full items-center gap-1 overflow-hidden px-2 text-[11px] text-text-placeholder/50 select-none">
         <!-- Copy button -->
         <button
           type="button"
-          class="shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+          class={metaActionButtonClass}
           onclick={(e) => { e.stopPropagation(); handleCopy(); }}
           title={m.chat_copy_message({}, { locale })}
         >
@@ -535,7 +538,7 @@ function handleCopy() {
         {#if canFork}
           <button
             type="button"
-            class="shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50"
+            class={metaActionButtonClass}
             onclick={(e) => { e.stopPropagation(); if (!forkDisabled) onForkTurn?.(); }}
             title={m.chat_fork_here({}, { locale })}
             disabled={forkDisabled}
@@ -572,9 +575,10 @@ function handleCopy() {
 							: m.chat_not_sent_to_agent({}, { locale })}>{m.chat_cancelled({}, { locale })}</span>
           {/if}
         {:else}
+          <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <!-- Model (truncates when space is tight) -->
           {#if modelDisplayName}
-            <span class="min-w-0 truncate cursor-default" title={modelHoverText}>
+            <span class="min-w-0 flex-1 truncate cursor-default" title={modelHoverText}>
               {modelDisplayName}
             </span>
           {/if}
@@ -607,6 +611,7 @@ function handleCopy() {
           {#if assistantAbortMessage}
             <span class="shrink-0 text-[11px] font-medium text-warning-soft/75" title={assistantAbortMessage}>{m.chat_user_stopped({}, { locale })}</span>
           {/if}
+          </span>
         {/if}
 
         <!-- Time (always visible on the right) -->
