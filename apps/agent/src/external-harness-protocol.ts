@@ -43,6 +43,7 @@ export type ExternalHarnessProgress = ExternalHarnessRuntimeEventMeta & {
 export type ExternalHarnessResult = {
 	content: ContentBlock[];
 	externalSessionId: string | null;
+	externalTurnId?: string | null;
 	model: string;
 	provider: string;
 	stopReason: string;

@@ -14,7 +14,10 @@ import {
 	appendLocalGenerationInstructions,
 	buildExternalHarnessEnvironment,
 } from "../external-harness-context.js";
-import { buildCodexAppServerArgv } from "../external-harness-codex-config.js";
+import {
+	buildCodexAppServerArgv,
+	buildCodexThreadForkParams,
+} from "../external-harness-codex-config.js";
 import { buildGrokAppServerArgv } from "../external-harness-grok-config.js";
 import { createExternalProgressPublisher } from "../external-progress-publisher.js";
 import {
@@ -57,6 +60,29 @@ test("Cursor pins the selected effort through the CLI startup model", () => {
 	assert.throws(
 		() => cursorCliModelId("grok-4.6[effort=high,fast=true]", "off"),
 		/unsupported/,
+	);
+});
+
+test("Codex native fork is bounded by the selected parent turn", () => {
+	assert.deepEqual(
+		buildCodexThreadForkParams({
+			threadId: "parent-thread",
+			lastTurnId: "parent-turn-2",
+			cwd: "/workspace",
+			accessMode: "full_access",
+			writableRoots: ["/Users/atou/project"],
+		}),
+		{
+			threadId: "parent-thread",
+			lastTurnId: "parent-turn-2",
+			cwd: "/workspace",
+			approvalPolicy: "never",
+			approvalsReviewer: "user",
+			sandbox: "workspace-write",
+			runtimeWorkspaceRoots: ["/Users/atou/project"],
+			excludeTurns: true,
+			deferGoalContinuation: true,
+		},
 	);
 });
 
