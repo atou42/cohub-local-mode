@@ -8,6 +8,28 @@
     <meta name="apple-mobile-web-app-title" content="Cohub" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <script>
+      // Run before app modules so a stale client can activate a waiting worker
+      // even when its old route chunks can no longer boot.
+      (() => {
+        if (!('serviceWorker' in navigator)) return;
+        var wasControlled = navigator.serviceWorker.controller !== null;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!wasControlled || window.__cohubServiceWorkerReloading) return;
+          window.__cohubServiceWorkerReloading = true;
+          location.reload();
+        });
+        navigator.serviceWorker.getRegistration().then((registration) => {
+          if (!registration) return;
+          registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
+          registration.update().catch((error) => {
+            console.error('[ServiceWorker] early update failed', error);
+          });
+        }).catch((error) => {
+          console.error('[ServiceWorker] registration lookup failed', error);
+        });
+      })();
+    </script>
     <!-- Favicons are set per-route (Work pages use Work icons; others use shell defaults). -->
     <script>
       (() => {

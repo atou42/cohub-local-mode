@@ -82,7 +82,7 @@ export default defineConfig(({ mode }) => {
 			}),
 			sveltekit(),
 			VitePWA({
-				registerType: undefined,
+				registerType: "autoUpdate",
 				injectRegister: null,
 				includeAssets: ["robots.txt", "pwa/*.png", "pwa/*.svg"],
 				manifest: {
@@ -119,11 +119,12 @@ export default defineConfig(({ mode }) => {
 					],
 				},
 				workbox: {
+					clientsClaim: true,
+					skipWaiting: true,
 					globPatterns: [
 						"**/*.{css,html,ico,png,svg,woff2}",
 						"_app/immutable/entry/*.js",
 						"_app/immutable/nodes/*.js",
-						"_app/version.json",
 					],
 					importScripts: ["notification-sw.js"],
 					navigateFallback: undefined,

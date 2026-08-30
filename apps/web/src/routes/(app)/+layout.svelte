@@ -3,6 +3,7 @@ import "../../app.css";
 import { onMount } from "svelte";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
+import { clearFailedDynamicImportRecovery } from "$lib/asset-import-recovery";
 import { scheduleCacheCleanup } from "$lib/cache/cleanup";
 import BillingConversionCenter from "$lib/components/BillingConversionCenter.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -559,6 +560,13 @@ $effect(() => {
 onMount(() => {
 	window.cohubDisableVConsole = disableVConsole;
 	window.cohubEnableVConsole = enableVConsole;
+	if (page.status < 400) {
+		try {
+			clearFailedDynamicImportRecovery(sessionStorage);
+		} catch {
+			// Storage policy must not prevent a successful app boot.
+		}
+	}
 
 	if (shouldEnableVConsole()) {
 		void enableVConsole();
@@ -576,13 +584,6 @@ onMount(() => {
 		}
 		initSpacePinRealtime();
 	});
-
-	// Register PWA Service Worker (conservative update: closes all tabs to activate)
-	if ("serviceWorker" in navigator) {
-		window.addEventListener("load", () => {
-			void navigator.serviceWorker.register("/sw.js");
-		});
-	}
 
 	return () => {
 		delete window.cohubDisableVConsole;
