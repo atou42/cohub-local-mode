@@ -8,7 +8,10 @@ import {
 	type ExternalHarnessProgress,
 	type ExternalHarnessResult,
 } from "./external-harness-protocol.js";
-import { runCodexAppServerHarness } from "./external-harness-codex-runtime.js";
+import {
+	prepareCodexForkSession,
+	runCodexAppServerHarness,
+} from "./external-harness-codex-runtime.js";
 import { runGrokAcpHarness } from "./external-harness-grok-runtime.js";
 import { runCursorAcpHarness } from "./external-harness-cursor-runtime.js";
 import {
@@ -26,6 +29,55 @@ export {
 const SANDBOX_WORKSPACE = "/workspace";
 const MAX_STREAM_BYTES = 20 * 1024 * 1024;
 const PROCESS_TIMEOUT_SECONDS = 60 * 60;
+
+export async function prepareExternalHarnessFork(input: {
+	harness: Exclude<AgentHarness, "pi">;
+	spaceId: string;
+	sessionId: string;
+	strategy: "codex_native" | "context_clone";
+	parentExternalSessionId?: string | null;
+	anchorExternalTurnId?: string | null;
+	model: string;
+	thinkingLevel: string;
+	serviceTier?: string | null;
+}) {
+	const connection = await ensureSandboxConnection(input.spaceId);
+	if (connection.capabilities?.processStartArgv !== true || connection.capabilities?.processWrite !== true) {
+		throw new Error("Local sandbox must support writable process execution for Agent Fork");
+	}
+	const writableRoots = getLocalSpaceWritableRoots(input.spaceId);
+	if (input.strategy === "context_clone") {
+		return { externalSessionId: null, strategy: input.strategy };
+	}
+	const common = {
+		spaceId: input.spaceId,
+		sessionId: input.sessionId,
+		environment: {},
+		executionContextKey: `fork:${input.sessionId}`,
+		writableRoots,
+		accessMode: "full_access" as const,
+		model: input.model,
+		thinkingLevel: input.thinkingLevel,
+		connection,
+	};
+	if (input.harness === "codex") {
+		const parentThreadId = input.parentExternalSessionId?.trim();
+		const lastTurnId = input.anchorExternalTurnId?.trim();
+		if (!parentThreadId || !lastTurnId) {
+			throw new Error("Codex native fork requires parent thread and turn ids");
+		}
+		return {
+			externalSessionId: await prepareCodexForkSession({
+				...common,
+				parentThreadId,
+				lastTurnId,
+				serviceTier: input.serviceTier,
+			}),
+			strategy: input.strategy,
+		};
+	}
+	throw new Error(`${input.harness} does not expose a native fork operation`);
+}
 
 export async function runExternalHarness(input: {
 	harness: Exclude<AgentHarness, "pi">;
