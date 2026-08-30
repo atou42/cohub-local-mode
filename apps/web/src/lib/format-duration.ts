@@ -6,32 +6,22 @@ const UNIT_MS = {
 	zh: "毫秒",
 };
 
-/**
- * Locale-aware short duration, e.g. "1m 30s" (en) / "1分 30秒" (zh-CN).
- * The unit names follow the requested locale so chat/tool/process meta bars
- * read naturally in Chinese without relying on a non-reactive runtime.
- */
-export function formatDurationMs(ms: number, locale?: Locale): string {
-	const zh = toIntlTag(locale) === "zh-CN";
-	if (ms < 1000)
-		return `${Math.max(1, Math.round(ms))}${zh ? "毫秒" : UNIT_MS.en}`;
+/** Compact elapsed time for dense status rows, e.g. "4m6s". */
+export function formatDurationMs(ms: number, _locale?: Locale): string {
+	if (ms < 1000) return `${Math.max(1, Math.round(ms))}${UNIT_MS.en}`;
 	if (ms < 10_000) {
 		const seconds = Math.round(ms / 100) / 10;
-		if (seconds < 10) return `${seconds.toFixed(1)}${zh ? "秒" : "s"}`;
+		if (seconds < 10) return `${seconds.toFixed(1)}s`;
 	}
 	const totalSeconds = Math.round(ms / 1000);
-	if (totalSeconds < 60) return `${totalSeconds}${zh ? "秒" : "s"}`;
+	if (totalSeconds < 60) return `${totalSeconds}s`;
 	const totalMinutes = Math.floor(totalSeconds / 60);
 	const seconds = totalSeconds % 60;
 	if (totalMinutes < 60)
-		return seconds > 0
-			? `${zh ? `${totalMinutes}分 ${seconds}秒` : `${totalMinutes}m ${seconds}s`}`
-			: `${totalMinutes}${zh ? "分" : "m"}`;
+		return seconds > 0 ? `${totalMinutes}m${seconds}s` : `${totalMinutes}m`;
 	const hours = Math.floor(totalMinutes / 60);
 	const remainingMinutes = totalMinutes % 60;
-	return remainingMinutes > 0
-		? `${zh ? `${hours}时 ${remainingMinutes}分` : `${hours}h ${remainingMinutes}m`}`
-		: `${hours}${zh ? "时" : "h"}`;
+	return remainingMinutes > 0 ? `${hours}h${remainingMinutes}m` : `${hours}h`;
 }
 
 export function formatDurationDetail(
