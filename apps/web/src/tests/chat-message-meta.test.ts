@@ -51,13 +51,14 @@ test("copy and fork keep one shared icon-button presentation", () => {
 		2,
 	);
 	const forkMarkup = chatMessageBubble.slice(
-		chatMessageBubble.indexOf("{#if canFork}"),
+		chatMessageBubble.indexOf("{#if forkState.visible}"),
 		chatMessageBubble.indexOf(
-			"{/if}",
-			chatMessageBubble.indexOf("{#if canFork}"),
-		) + 6,
+			"{#if message.role === 'user'}",
+			chatMessageBubble.indexOf("{#if forkState.visible}"),
+		),
 	);
-	assert.match(forkMarkup, /if \(!forkDisabled\) onForkTurn\?\.\(\)/);
+	assert.match(forkMarkup, /handleForkClick\(\)/);
+	assert.match(forkMarkup, /class=\{metaActionButtonClass\}/);
 	assert.match(forkMarkup, /disabled=\{forkDisabled\}/);
 	assert.doesNotMatch(forkMarkup, /\bhidden\b/);
 });
