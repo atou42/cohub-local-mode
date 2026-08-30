@@ -239,7 +239,7 @@ type fsGrepParams struct {
 
 const (
 	processStartMaxArgvItems      = 256
-	processStartMaxArgvItemBytes  = 8 * 1024
+	processStartMaxArgvItemBytes  = 32 * 1024
 	processStartMaxArgvTotalBytes = 64 * 1024
 	processOutputQueueSize        = 64
 )
@@ -1084,13 +1084,20 @@ func (d *Dispatcher) handleProcessStart(request protocol.RPCRequest, opID string
 		return d.failed(request, opID, "NOT_DIRECTORY", fmt.Sprintf("not a directory: %s", resolved.path))
 	}
 
-	processID, stdout, stderr, exitCh, err := d.processManager.StartWithOptions(ownerIdentity, process.StartOptions{
+	startOptions := process.StartOptions{
 		Command:     params.Command,
 		Argv:        params.Argv,
 		CWD:         resolved.path,
 		TimeoutSecs: params.TimeoutSecs,
 		Env:         params.Env,
-	})
+	}
+	if commandProvided {
+		if sandboxArgv := localCommandSandboxArgv(d.cfg, params.Command); len(sandboxArgv) > 0 {
+			startOptions.Command = ""
+			startOptions.Argv = sandboxArgv
+		}
+	}
+	processID, stdout, stderr, exitCh, err := d.processManager.StartWithOptions(ownerIdentity, startOptions)
 	if err != nil {
 		d.logger.Error("process:start failed", slog.String("cmd", cmdSummary), slog.String("error", err.Error()))
 		return d.failed(request, opID, "PROCESS_SPAWN_FAILED", err.Error())

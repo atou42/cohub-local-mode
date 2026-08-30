@@ -11,6 +11,10 @@ import {
 import { runCodexAppServerHarness } from "./external-harness-codex-runtime.js";
 import { runGrokAcpHarness } from "./external-harness-grok-runtime.js";
 import { runCursorAcpHarness } from "./external-harness-cursor-runtime.js";
+import {
+	getLocalSpaceWritableRoots,
+	resolveGrokSandboxProfile,
+} from "./local-space-access.js";
 
 export {
 	buildHarnessArgv,
@@ -44,6 +48,7 @@ export async function runExternalHarness(input: {
 		model: input.model,
 		thinkingLevel: input.thinkingLevel,
 	});
+	const writableRoots = getLocalSpaceWritableRoots(input.spaceId);
 	const harnessLabel = input.harness === "codex" ? "Codex" : input.harness === "grok_build" ? "Grok Build" : "Cursor";
 	const emitProgress = (progress: ExternalHarnessProgress) => {
 		input.onProgress?.(progress);
@@ -70,6 +75,7 @@ export async function runExternalHarness(input: {
 	if (input.harness === "codex" && connection.capabilities?.processWrite === true) {
 		return runCodexAppServerHarness({
 			...input,
+			writableRoots,
 			connection,
 			reducer,
 		});
@@ -77,6 +83,7 @@ export async function runExternalHarness(input: {
 	if (input.harness === "grok_build" && connection.capabilities?.processWrite === true) {
 		return runGrokAcpHarness({
 			...input,
+			writableRoots,
 			connection,
 			reducer,
 		});
@@ -84,6 +91,7 @@ export async function runExternalHarness(input: {
 	if (input.harness === "cursor" && connection.capabilities?.processWrite === true) {
 		return runCursorAcpHarness({
 			...input,
+			writableRoots,
 			connection,
 			reducer,
 		});
@@ -100,6 +108,11 @@ export async function runExternalHarness(input: {
 		model: input.model,
 		thinkingLevel: input.thinkingLevel,
 		serviceTier: input.serviceTier,
+		writableRoots,
+		grokSandboxProfile: resolveGrokSandboxProfile(
+			input.spaceId,
+			writableRoots,
+		),
 	});
 	let buffered = "";
 	let stderr = "";
