@@ -283,11 +283,13 @@ func resolveSandboxPath(cfg env.Config, rawPath string, cwd string) (resolvedSan
 	cleaned = mapVirtualWorkspacePath(cfg, cleaned)
 
 	if cfg.Fence {
-		if err := ensureWithinAnyRoot([]string{
+		roots := []string{
 			cfg.WorkspaceDir,
 			cfg.PlatformAgentsDir,
 			cfg.UserAgentsDir,
-		}, cleaned); err != nil {
+		}
+		roots = append(roots, cfg.WritableRoots...)
+		if err := ensureWithinAnyRoot(roots, cleaned); err != nil {
 			return resolvedSandboxPath{}, err
 		}
 	}

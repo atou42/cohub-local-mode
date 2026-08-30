@@ -16,8 +16,15 @@ function loadCodexUserRules() {
 	}
 }
 
-export function buildGrokAppServerArgv(accessMode: "full_access" | "read_only") {
-	const argv = ["grok"];
+export function buildGrokAppServerArgv(
+	accessMode: "full_access" | "read_only",
+	sandboxProfile = "workspace",
+) {
+	const argv = [
+		"grok",
+		"--sandbox",
+		accessMode === "read_only" ? "read-only" : sandboxProfile,
+	];
 	if (accessMode === "full_access") argv.push("--always-approve");
 	else argv.push("--tools", "read_file,grep,list_dir,web_search,web_fetch");
 
