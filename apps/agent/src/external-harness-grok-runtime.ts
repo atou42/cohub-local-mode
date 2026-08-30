@@ -8,6 +8,10 @@ import type {
 import { normalizeGrokAcpPrompt } from "./grok-native-command.js";
 import { buildGrokAppServerArgv } from "./external-harness-grok-config.js";
 import { tracedRpc } from "./sandbox/tools.js";
+import {
+	localSpaceAccessKey,
+	resolveGrokSandboxProfile,
+} from "./local-space-access.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
@@ -356,6 +360,7 @@ function createRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	writableRoots: readonly string[];
 }) {
 	evictRuntimeIfNeeded();
 	let resolveProcessId: (processId: string) => void = () => undefined;
@@ -397,7 +402,10 @@ function createRuntime(input: {
 		input.connection,
 		"process.start",
 		{
-			argv: buildGrokAppServerArgv(input.accessMode),
+			argv: buildGrokAppServerArgv(
+				input.accessMode,
+				resolveGrokSandboxProfile(input.spaceId, input.writableRoots),
+			),
 			cwd: input.connection.filesystem?.defaultCwd?.trim() || SANDBOX_WORKSPACE,
 			env: input.environment,
 			timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -461,8 +469,9 @@ function getOrCreateRuntime(input: {
 	externalSessionId: string | null;
 	environment: Record<string, string>;
 	executionContextKey: string;
+	writableRoots: readonly string[];
 }) {
-	const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}`;
+	const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}:${localSpaceAccessKey(input.writableRoots)}`;
 	const existing = runtimes.get(key);
 	if (
 		existing &&
@@ -487,6 +496,7 @@ function getOrCreateRuntime(input: {
 			accessMode: input.accessMode,
 			externalSessionId: input.externalSessionId,
 			environment: input.environment,
+			writableRoots: input.writableRoots,
 		}),
 		reused: false,
 	};
@@ -543,6 +553,7 @@ export async function runGrokAcpHarness(input: {
 	accessMode: AccessMode;
 	model: string;
 	thinkingLevel: string;
+	writableRoots: readonly string[];
 	abortSignal: AbortSignal;
 	connection: SandboxConnection;
 	onExternalSessionId?: (sessionId: string) => void;

@@ -6,6 +6,7 @@ import type {
   HarnessEventReducer,
 } from "./external-harness-protocol.js";
 import { tracedRpc } from "./sandbox/tools.js";
+import { localSpaceAccessKey } from "./local-space-access.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
@@ -41,6 +42,22 @@ export function cursorCliModelId(model: string, thinkingLevel: string): string {
     return `claude-fable-5-${thinking ? "thinking-" : ""}${thinkingLevel}`;
   }
   return model;
+}
+
+export function buildCursorAppServerArgv(
+  model: string,
+  writableRoots: readonly string[] = [],
+  command = process.env.CURSOR_AGENT_COMMAND?.trim() || "agent",
+) {
+  return [
+    command,
+    "--model",
+    model,
+    "--sandbox",
+    "enabled",
+    ...writableRoots.flatMap((root) => ["--add-dir", root]),
+    "acp",
+  ];
 }
 
 type PendingRequest = {
@@ -387,6 +404,7 @@ function createRuntime(input: {
   environment: Record<string, string>;
   model: string;
   thinkingLevel: string;
+  writableRoots: readonly string[];
 }) {
   evictRuntimeIfNeeded();
   let resolveProcessId: (id: string) => void = () => undefined;
@@ -429,12 +447,10 @@ function createRuntime(input: {
     input.connection,
     "process.start",
     {
-      argv: [
-        process.env.CURSOR_AGENT_COMMAND?.trim() || "agent",
-        "--model",
+      argv: buildCursorAppServerArgv(
         cursorCliModelId(input.model, input.thinkingLevel),
-        "acp",
-      ],
+        input.writableRoots,
+      ),
       cwd: entry.workspaceCwd,
       env: input.environment,
       timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -497,8 +513,9 @@ function getOrCreateRuntime(input: {
   executionContextKey: string;
   model: string;
   thinkingLevel: string;
+  writableRoots: readonly string[];
 }) {
-  const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}:${input.model}:${input.thinkingLevel}`;
+  const key = `${input.spaceId}:${input.sessionId}:${input.executionContextKey}:${input.model}:${input.thinkingLevel}:${localSpaceAccessKey(input.writableRoots)}`;
   const existing = runtimes.get(key);
   if (
     existing &&
@@ -525,6 +542,7 @@ function getOrCreateRuntime(input: {
       environment: input.environment,
       model: input.model,
       thinkingLevel: input.thinkingLevel,
+      writableRoots: input.writableRoots,
     }),
     reused: false,
   };
@@ -577,6 +595,7 @@ export async function runCursorAcpHarness(input: {
   accessMode: AccessMode;
   model: string;
   thinkingLevel: string;
+  writableRoots: readonly string[];
   abortSignal: AbortSignal;
   connection: SandboxConnection;
   onExternalSessionId?: (sessionId: string) => void;
