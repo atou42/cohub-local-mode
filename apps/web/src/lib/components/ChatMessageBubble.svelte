@@ -448,7 +448,7 @@ const inputContextPercent = $derived.by(() => {
 });
 
 function getTokenDisplayClass(percent: number | null) {
-	const base = "tabular-nums shrink-0 cursor-default transition-colors";
+	const base = "min-w-0 truncate tabular-nums cursor-default transition-colors";
 	if (percent === null || percent < 60)
 		return `${base} text-text-placeholder/65`;
 	if (percent < 85) return `${base} text-warning-soft/85`;
@@ -575,43 +575,55 @@ function handleCopy() {
 							: m.chat_not_sent_to_agent({}, { locale })}>{m.chat_cancelled({}, { locale })}</span>
           {/if}
         {:else}
-          <span class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-          <!-- Model (truncates when space is tight) -->
-          {#if modelDisplayName}
-            <span class="min-w-0 flex-1 truncate cursor-default" title={modelHoverText}>
-              {modelDisplayName}
+          {#if modelDisplayName || requestedThinkingLevel}
+            <span
+              data-chat-meta-group="model"
+              class="inline-flex min-w-0 shrink-[3] items-center gap-0.5 overflow-hidden"
+            >
+              <!-- Model (truncates when space is tight) -->
+              {#if modelDisplayName}
+                <span class="min-w-0 truncate cursor-default" title={modelHoverText}>
+                  {modelDisplayName}
+                </span>
+              {/if}
+
+              {#if requestedThinkingLevel}
+                <span class="shrink-0 text-text-placeholder/65">
+                  {requestedThinkingLevelShort}
+                </span>
+              {/if}
             </span>
           {/if}
 
-          {#if requestedThinkingLevel}
-            <span class="shrink-0 text-text-placeholder/65">
-              {requestedThinkingLevelShort}
-            </span>
-          {/if}
+          {#if (hasUsage && tokenDisplay) || hasDuration || visibleCost}
+            <span
+              data-chat-meta-group="usage"
+              class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden"
+            >
+              <!-- Tokens -->
+              {#if hasUsage && tokenDisplay}
+                <span class={getTokenDisplayClass(inputContextPercent)} title={tokenDetailText}>
+                  {tokenDisplay}
+                </span>
+              {/if}
 
-          <!-- Tokens -->
-          {#if hasUsage && tokenDisplay}
-            <span class={getTokenDisplayClass(inputContextPercent)} title={tokenDetailText}>
-              {tokenDisplay}
-            </span>
-          {/if}
+              {#if hasDuration}
+                <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={durationDetailText}>
+                  {durationDisplay}
+                </span>
+              {/if}
 
-          {#if hasDuration}
-            <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={durationDetailText}>
-              {durationDisplay}
-            </span>
-          {/if}
-
-          {#if visibleCost}
-            <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={visibleCost.detail}>
-              {visibleCost.label}
+              {#if visibleCost}
+                <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={visibleCost.detail}>
+                  {visibleCost.label}
+                </span>
+              {/if}
             </span>
           {/if}
 
           {#if assistantAbortMessage}
             <span class="shrink-0 text-[11px] font-medium text-warning-soft/75" title={assistantAbortMessage}>{m.chat_user_stopped({}, { locale })}</span>
           {/if}
-          </span>
         {/if}
 
         <!-- Time (always visible on the right) -->
