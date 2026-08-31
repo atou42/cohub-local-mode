@@ -1,6 +1,52 @@
 import { DurableObject } from "cloudflare:workers";
 import { authorizeNodeRequest, authorizeOwnerRequest } from "./auth";
 import {
+	ACTIVITY_WATCH_LEASE_MS,
+	evolveActivityWatchSnapshot,
+	isActivityWatchPreferenceExpired,
+	publicActivityWatchPreference,
+	selectEffectiveActivityWatchPreference,
+	upsertActivityWatchPreference,
+	type StoredActivityWatchAck,
+	type StoredActivityWatchPreference,
+	type StoredActivityWatchSnapshot,
+} from "./activity-preferences.ts";
+import {
+	buildActivityStartPushPayload,
+	buildActivityPushPayload,
+	composeRelayHealth,
+	ACTIVITY_LIFECYCLE_TERMINAL_TTL_MS,
+	ACTIVITY_OUTBOX_MAX_AGE_MS,
+	ACTIVITY_OUTBOX_SENDING_LEASE_MS,
+	activityRevocationEpochAfterRemoval,
+	currentActivityRevocationEpoch,
+	decideActivityOutboxRetry,
+	recoverActivitySendingLease,
+	isActivityDeliveryRevoked,
+	isActivityRegistrationExpired,
+	isDeliverableLifecycleProjection,
+	parseActivityTokenBody,
+	publicActivityRegistration,
+	revokedActivityOutboxPatch,
+	selectActivityProjection,
+	shouldDeleteActivityStartMarker,
+	shouldEnqueueActivityStart,
+	shouldAcceptLifecycleEvent,
+	upsertActivityRegistration,
+	validateActivityIdentifier,
+	type ActivityRegistrationKind,
+	type ActivityPushPayload,
+	type RelayTurnLifecycleEvent,
+	type StoredActivityRegistration,
+} from "./activity.ts";
+import {
+	ApnsConfigurationError,
+	createApnsProviderToken,
+	sendActivityPush,
+	validateApnsConfig,
+	type ApnsConfig,
+} from "./apns.ts";
+import {
 	GC_ALARM_MS,
 	TURN_EVENT_MAX_STORED,
 	decideCancel,
@@ -14,10 +60,16 @@ import {
 } from "./lifecycle";
 import {
 	assertRelayAttachmentFresh,
+	assertRelayOwnerOrigin,
+	browserTurnEvents,
 	parseNodeMessage,
+	parseActivityWatchPreferences,
+	parseActivityOwnerUserId,
 	RELAY_PROTOCOL_VERSION,
 	RelayProtocolError,
 	type RelayBrowserEvent,
+	type ActivityWatchPreferences,
+	type ActivityWatchReplaceMessage,
 	type RelayAttachment,
 	type RelayCommand,
 	type RelayCommandAccepted,
@@ -34,6 +86,7 @@ import {
 type RelayEnv = {
 	NODES: DurableObjectNamespace<LocalNodeRelay>;
 	COMMAND_WAKEUPS: Queue<RelayWakeupMessage>;
+	ACTIVITY_PUSHES: Queue<ActivityPushQueueMessage>;
 	ATTACHMENTS: R2Bucket;
 	ALLOWED_ORIGIN: string;
 	NODE_ID: string;
@@ -41,10 +94,18 @@ type RelayEnv = {
 	TEAM_DOMAIN: string;
 	POLICY_AUD: string;
 	OWNER_EMAIL: string;
+	OWNER_USER_ID: string;
 	COMMAND_LEASE_MS: string;
 	COMMAND_MAX_BODY_BYTES: string;
 	ATTACHMENT_MAX_BYTES: string;
 	ATTACHMENT_TTL_MS: string;
+	ACTIVITY_STALE_SECONDS: string;
+	ACTIVITY_REGISTRATION_TTL_SECONDS: string;
+	APNS_TEAM_ID?: string;
+	APNS_KEY_ID?: string;
+	APNS_PRIVATE_KEY?: string;
+	APNS_LIVE_ACTIVITY_TOPIC?: string;
+	APNS_LIVE_ACTIVITY_ATTRIBUTES_TYPE?: string;
 };
 
 const COMMAND_KEY_PREFIX = "command:";
@@ -55,6 +116,70 @@ const NEXT_EVENT_SEQUENCE_KEY = "meta:next-event-sequence";
 const ATTACHMENT_KEY_PREFIX = "attachment:";
 const TURN_EVENT_KEY_PREFIX = "turnevent:";
 const TURN_EVENT_ID_PREFIX = "turnevent-id:";
+const ACTIVITY_REGISTRATION_PREFIX = "activity-registration:";
+const ACTIVITY_REVOCATION_EPOCH_PREFIX = "activity-revocation-epoch:";
+const ACTIVITY_OUTBOX_PREFIX = "activity-outbox:";
+const ACTIVITY_REVISION_PREFIX = "activity-revision:";
+const TURN_LIFECYCLE_LATEST_PREFIX = "turn-lifecycle-latest:";
+const ACTIVITY_DEPLOYMENT_FAILURE_KEY = "meta:activity-deployment-failure";
+const ACTIVITY_START_PREFIX = "activity-start:";
+const ACTIVITY_PREFERENCE_PREFIX = "activity-preference:";
+const ACTIVITY_WATCH_SNAPSHOT_KEY = "meta:activity-watch-snapshot";
+const ACTIVITY_WATCH_ACK_KEY = "meta:activity-watch-ack";
+const TURN_EVENT_SEEN_PREFIX = "turnevent-seen:";
+const ACTIVITY_OUTBOX_TERMINAL_TTL_MS = 24 * 60 * 60 * 1_000;
+
+type ActivityPushQueueMessage = {
+	kind: "activity-push";
+	nodeId: string;
+	outboxId: string;
+};
+
+type StoredActivityOutbox = {
+	// Start pushes are at-most-once after entering sending; update/end pushes
+	// recover expired sends and retry with the stable APNs request ID.
+	id: string;
+	eventId: string;
+	registrationId: string;
+	registrationEpoch: number;
+	payload: ActivityPushPayload;
+	revision: number;
+	state:
+		| "pending"
+		| "sending"
+		| "delivered"
+		| "failed"
+		| "invalidated"
+		| "cancelled"
+		| "dead_letter";
+	apnsRequestId: string;
+	attempts: number;
+	createdAt: string;
+	updatedAt: string;
+	deliveredAt: string | null;
+	lastStatus: number | null;
+	lastReason: string | null;
+	apnsId: string | null;
+	queuedAt: string | null;
+	nextAttemptAt: string;
+	sendingStartedAt: string | null;
+	sendingLeaseExpiresAt: string | null;
+	deadLetterCode: string | null;
+	enqueueAttempts: number;
+};
+
+type ActivityOwnerIdentity = {
+	subject: string;
+	email: string;
+};
+
+type StoredActivityStart = {
+	installationId: string;
+	activityId: string;
+	origin: RelayTurnLifecycleEvent["origin"];
+	turnId: string;
+	createdAt: string;
+};
 
 type StoredRelayAttachment = RelayAttachment & {
 	uploadTokenHash: string;
@@ -135,6 +260,73 @@ function parsePositiveInteger(value: string, label: string) {
 	return parsed;
 }
 
+function apnsConfig(
+	env: RelayEnv,
+	environment: ApnsConfig["environment"],
+) {
+	return validateApnsConfig({
+		teamId: env.APNS_TEAM_ID,
+		keyId: env.APNS_KEY_ID,
+		privateKey: env.APNS_PRIVATE_KEY,
+		environment,
+		topic: env.APNS_LIVE_ACTIVITY_TOPIC,
+		attributesType: env.APNS_LIVE_ACTIVITY_ATTRIBUTES_TYPE,
+	});
+}
+
+function activityOutboxStorageKey(outboxId: string) {
+	return `${ACTIVITY_OUTBOX_PREFIX}${outboxId}`;
+}
+
+function activityRevocationEpochStorageKey(installationId: string) {
+	return `${ACTIVITY_REVOCATION_EPOCH_PREFIX}${installationId}`;
+}
+
+function activityRegistrationStorageKey(
+	ownerDigest: string,
+	kind: ActivityRegistrationKind,
+	installationId: string,
+	activityId: string | null,
+) {
+	return `${ACTIVITY_REGISTRATION_PREFIX}${ownerDigest}:${kind}:${installationId}:${activityId ?? "device"}`;
+}
+
+function activityPreferenceStorageKey(
+	ownerDigest: string,
+	installationId: string,
+) {
+	return `${ACTIVITY_PREFERENCE_PREFIX}${ownerDigest}:${installationId}`;
+}
+
+function activityWatchMessage(
+	snapshot: StoredActivityWatchSnapshot,
+): ActivityWatchReplaceMessage {
+	return {
+		protocolVersion: snapshot.protocolVersion,
+		type: snapshot.type,
+		revision: snapshot.revision,
+		digest: snapshot.digest,
+		ownerUserId: snapshot.ownerUserId,
+		expiresAt: snapshot.expiresAt,
+		leaseExpiresAt: snapshot.leaseExpiresAt,
+		watchedSpaces: snapshot.watchedSpaces,
+		focus: snapshot.focus,
+	};
+}
+
+function relayOwnerIdentity(payload: { sub?: unknown; email?: unknown }) {
+	const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
+	const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+	if (!subject || !email) {
+		throw new RelayProtocolError(
+			"access_identity_invalid",
+			"Cloudflare Access subject and email are required",
+			403,
+		);
+	}
+	return { subject, email } satisfies ActivityOwnerIdentity;
+}
+
 function websocketPair() {
 	const pair = new WebSocketPair();
 	return {
@@ -167,6 +359,7 @@ function sendSocket(socket: WebSocket, message: RelayToNodeMessage | RelayBrowse
 
 export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	private readonly leaseMs: number;
+	private apnsProviderToken: { value: string; issuedAtMs: number } | null = null;
 
 	constructor(state: DurableObjectState, env: RelayEnv) {
 		super(state, env);
@@ -194,6 +387,29 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (request.method === "POST" && url.pathname === "/internal/wake") {
 				await this.dispatchNext();
 				return json({ ok: true });
+			}
+			if (request.method === "GET" && url.pathname === "/internal/activity-health") {
+				return this.getActivityHealth();
+			}
+			if (request.method === "PUT" && url.pathname === "/internal/activity-registration") {
+				return await this.putActivityRegistration(request);
+			}
+			if (request.method === "DELETE" && url.pathname === "/internal/activity-registration") {
+				return await this.deleteActivityRegistration(request);
+			}
+			if (request.method === "PUT" && url.pathname === "/internal/activity-preference") {
+				return await this.putActivityPreference(request);
+			}
+			if (request.method === "DELETE" && url.pathname === "/internal/activity-preference") {
+				return await this.deleteActivityPreference(request);
+			}
+			const activityPushMatch = url.pathname.match(
+				/^\/internal\/activity-push\/([^/]+)$/,
+			);
+			if (request.method === "POST" && activityPushMatch?.[1]) {
+				return await this.deliverActivityOutbox(
+					decodeURIComponent(activityPushMatch[1]),
+				);
 			}
 			const commandCancelMatch = url.pathname.match(
 				/^\/internal\/commands\/([^/]+)\/cancel$/,
@@ -358,6 +574,876 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		return json({ attachment: publicAttachment(ready) });
 	}
 
+	private async activityRegistrationKey(input: {
+		identity: ActivityOwnerIdentity;
+		kind: ActivityRegistrationKind;
+		installationId: string;
+		activityId: string | null;
+	}) {
+		return activityRegistrationStorageKey(
+			await sha256Text(input.identity.subject),
+			input.kind,
+			input.installationId,
+			input.activityId,
+		);
+	}
+
+	private async activityPreferenceKey(input: {
+		identity: ActivityOwnerIdentity;
+		installationId: string;
+	}) {
+		return activityPreferenceStorageKey(
+			await sha256Text(input.identity.subject),
+			input.installationId,
+		);
+	}
+
+	private async putActivityPreference(request: Request) {
+		const body = await parseJsonBody<{
+			identity?: ActivityOwnerIdentity;
+			ownerUserId?: string;
+			installationId?: string;
+			preferences?: ActivityWatchPreferences;
+		}>(request);
+		if (
+			!body.identity?.subject ||
+			!body.identity.email ||
+			!body.ownerUserId ||
+			!body.installationId ||
+			!body.preferences
+		) {
+			throw new RelayProtocolError(
+				"invalid_activity_watch",
+				"internal activity watch preference is invalid",
+			);
+		}
+		const identity = body.identity;
+		const rawOwnerUserId = body.ownerUserId;
+		const rawInstallationId = body.installationId;
+		const preferences = body.preferences;
+		const ownerUserId = parseActivityOwnerUserId(rawOwnerUserId);
+		if (ownerUserId !== parseActivityOwnerUserId(this.env.OWNER_USER_ID)) {
+			throw new RelayProtocolError(
+				"activity_watch_owner_mismatch",
+				"Activity watch owner does not match the configured owner",
+				403,
+			);
+		}
+		const installationId = validateActivityIdentifier(
+			rawInstallationId,
+			"installation ID",
+		);
+		const key = await this.activityPreferenceKey({
+			identity,
+			installationId,
+		});
+		const nowMs = Date.now();
+		const now = new Date(nowMs).toISOString();
+		const expiresAt = new Date(
+			nowMs +
+				parsePositiveInteger(
+					this.env.ACTIVITY_REGISTRATION_TTL_SECONDS,
+					"ACTIVITY_REGISTRATION_TTL_SECONDS",
+				) *
+					1_000,
+		).toISOString();
+		const result = await this.ctx.storage.transaction(async (storage) => {
+			const existing =
+				(await storage.get<StoredActivityWatchPreference>(key)) ?? null;
+			const preference = await upsertActivityWatchPreference({
+				existing,
+				nodeId: this.env.NODE_ID,
+				installationId,
+				ownerSubject: identity.subject,
+				ownerEmail: identity.email,
+				ownerUserId,
+				preferences,
+				now,
+				expiresAt,
+			});
+			await storage.put(key, preference);
+			return { preference, created: existing === null };
+		});
+		await this.reconcileActivityWatch({ forceSend: true, nowMs });
+		await this.scheduleNextAlarm(nowMs);
+		return json(
+			{ preference: publicActivityWatchPreference(result.preference) },
+			result.created ? 201 : 200,
+		);
+	}
+
+	private async deleteActivityPreference(request: Request) {
+		const body = await parseJsonBody<{
+			identity?: ActivityOwnerIdentity;
+			installationId?: string;
+		}>(request);
+		if (!body.identity?.subject || !body.identity.email || !body.installationId) {
+			throw new RelayProtocolError(
+				"invalid_activity_watch",
+				"internal activity watch preference deletion is invalid",
+			);
+		}
+		const identity = body.identity;
+		const installationId = validateActivityIdentifier(
+			body.installationId,
+			"installation ID",
+		);
+		const key = await this.activityPreferenceKey({
+			identity,
+			installationId,
+		});
+		await this.ctx.storage.delete(key);
+		const nowMs = Date.now();
+		await this.reconcileActivityWatch({ forceSend: true, nowMs });
+		await this.scheduleNextAlarm(nowMs);
+		return new Response(null, { status: 204 });
+	}
+
+	private async listActivityPreferences() {
+		return this.ctx.storage.list<StoredActivityWatchPreference>({
+			prefix: ACTIVITY_PREFERENCE_PREFIX,
+		});
+	}
+
+	private async effectiveActivityPreference(nowMs = Date.now()) {
+		return selectEffectiveActivityWatchPreference(
+			(await this.listActivityPreferences()).values(),
+			nowMs,
+		);
+	}
+
+	private async reconcileActivityWatch(input: {
+		forceSend?: boolean;
+		socket?: WebSocket;
+		nowMs?: number;
+	} = {}) {
+		const nowMs = input.nowMs ?? Date.now();
+		const result = await this.ctx.storage.transaction(async (storage) => {
+			const records = await storage.list<StoredActivityWatchPreference>({
+				prefix: ACTIVITY_PREFERENCE_PREFIX,
+			});
+			for (const [key, preference] of records) {
+				if (isActivityWatchPreferenceExpired(preference, nowMs)) {
+					await storage.delete(key);
+				}
+			}
+			const effective = selectEffectiveActivityWatchPreference(
+				records.values(),
+				nowMs,
+			);
+			const current =
+				(await storage.get<StoredActivityWatchSnapshot>(
+					ACTIVITY_WATCH_SNAPSHOT_KEY,
+				)) ?? null;
+			const next = await evolveActivityWatchSnapshot({
+				current,
+				effective,
+				ownerUserId: parseActivityOwnerUserId(this.env.OWNER_USER_ID),
+				nowMs,
+			});
+			const changed =
+				!current ||
+				current.revision !== next.revision ||
+				current.digest !== next.digest;
+			await storage.put(ACTIVITY_WATCH_SNAPSHOT_KEY, next);
+			if (changed) await storage.delete(ACTIVITY_WATCH_ACK_KEY);
+			return { next, changed };
+		});
+		if (input.forceSend || result.changed || input.socket) {
+			const sockets = input.socket
+				? [input.socket]
+				: this.ctx.getWebSockets("node");
+			for (const socket of sockets) {
+				sendSocket(socket, activityWatchMessage(result.next));
+			}
+		}
+		return result.next;
+	}
+
+	private async acceptActivityWatchAck(
+		socket: WebSocket,
+		ack: Extract<NodeToRelayMessage, { type: "activity-watch.ack" }>,
+	) {
+		const current = await this.ctx.storage.get<StoredActivityWatchSnapshot>(
+			ACTIVITY_WATCH_SNAPSHOT_KEY,
+		);
+		if (
+			!current ||
+			current.revision !== ack.revision ||
+			current.digest !== ack.digest
+		) {
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "error",
+				code: "activity_watch_ack_mismatch",
+				message: "Activity watch acknowledgement does not match the current snapshot",
+			});
+			await this.reconcileActivityWatch({ forceSend: true, socket });
+			return;
+		}
+		await this.ctx.storage.put(ACTIVITY_WATCH_ACK_KEY, {
+			revision: ack.revision,
+			digest: ack.digest,
+			ackedAt: new Date().toISOString(),
+		} satisfies StoredActivityWatchAck);
+	}
+
+	private async putActivityRegistration(request: Request) {
+		const body = await parseJsonBody<{
+			identity?: ActivityOwnerIdentity;
+			kind?: ActivityRegistrationKind;
+			installationId?: string;
+			activityId?: string | null;
+			registration?: ReturnType<typeof parseActivityTokenBody>;
+		}>(request);
+		if (
+			!body.identity?.subject ||
+			!body.identity.email ||
+			(body.kind !== "device" && body.kind !== "activity") ||
+			!body.installationId ||
+			!body.registration?.token
+		) {
+			throw new RelayProtocolError(
+				"invalid_activity_registration",
+				"internal activity registration is invalid",
+			);
+		}
+		const identity = body.identity;
+		const kind = body.kind;
+		const registrationInput = body.registration;
+		const installationId = validateActivityIdentifier(
+			body.installationId,
+			"installation ID",
+		);
+		const activityId = kind === "activity"
+			? validateActivityIdentifier(body.activityId ?? "", "activity ID")
+			: null;
+		const key = await this.activityRegistrationKey({
+			identity,
+			kind,
+			installationId,
+			activityId,
+		});
+		const now = new Date().toISOString();
+		const expiresAt = new Date(
+			Date.now() +
+				parsePositiveInteger(
+					this.env.ACTIVITY_REGISTRATION_TTL_SECONDS,
+					"ACTIVITY_REGISTRATION_TTL_SECONDS",
+				) * 1_000,
+		).toISOString();
+		const result = await this.ctx.storage.transaction(async (storage) => {
+			const existing = await storage.get<StoredActivityRegistration>(key);
+			const epochKey = activityRevocationEpochStorageKey(installationId);
+			const revocationEpoch = currentActivityRevocationEpoch(
+				await storage.get<unknown>(epochKey),
+			);
+			const registration = await upsertActivityRegistration({
+				existing: existing ?? null,
+				id: crypto.randomUUID(),
+				revocationEpoch,
+				kind,
+				nodeId: this.env.NODE_ID,
+				ownerSubject: identity.subject,
+				ownerEmail: identity.email,
+				installationId,
+				activityId,
+				environment: registrationInput.environment,
+				token: registrationInput.token,
+				now,
+				expiresAt,
+			});
+			await storage.put({
+				[key]: registration,
+				[epochKey]: revocationEpoch,
+			});
+			return { existing: existing ?? null, registration };
+		});
+		const { existing, registration } = result;
+		const changed =
+			!existing ||
+			existing.token !== registration.token ||
+			existing.environment !== registration.environment ||
+			existing.revocationEpoch !== registration.revocationEpoch;
+		if (registration.kind === "activity" && changed) {
+			await this.enqueueRegistrationRefresh(registration);
+		}
+		return json(
+			{ registration: publicActivityRegistration(registration) },
+			existing ? 200 : 201,
+		);
+	}
+
+	private async enqueueRegistrationRefresh(
+		registration: StoredActivityRegistration,
+	) {
+		const preference = await this.effectiveActivityPreference();
+		if (!preference) return;
+		const lifecycleRecords = await this.ctx.storage.list<RelayTurnLifecycleEvent>({
+			prefix: TURN_LIFECYCLE_LATEST_PREFIX,
+		});
+		const events = [...lifecycleRecords.values()];
+		const triggeringEvent = events.sort(
+			(left, right) => Date.parse(right.observedAt) - Date.parse(left.observedAt),
+		)[0];
+		if (!triggeringEvent) return;
+		const projection = selectActivityProjection(
+			preference.preferences,
+			events,
+			triggeringEvent,
+		);
+		if (!projection) return;
+		if (!isDeliverableLifecycleProjection(projection.event)) {
+			await this.ctx.storage.put(ACTIVITY_DEPLOYMENT_FAILURE_KEY, {
+				code: "activity_projection_incomplete",
+				observedAt: new Date().toISOString(),
+			});
+			return;
+		}
+		const eventId = crypto.randomUUID();
+		const enqueued = await this.ctx.storage.transaction(async (storage) => {
+			const currentEpoch = currentActivityRevocationEpoch(
+				await storage.get<unknown>(
+					activityRevocationEpochStorageKey(registration.installationId),
+				),
+			);
+			if (
+				isActivityDeliveryRevoked({
+					registrationEpoch: registration.revocationEpoch,
+					outboxEpoch: registration.revocationEpoch,
+					currentEpoch,
+				})
+			) {
+				return false;
+			}
+			const revisionKey = `${ACTIVITY_REVISION_PREFIX}${registration.installationId}`;
+			const revision = ((await storage.get<number>(revisionKey)) ?? 0) + 1;
+			const now = new Date().toISOString();
+			const outboxId = crypto.randomUUID();
+			await storage.put({
+				[revisionKey]: revision,
+				[activityOutboxStorageKey(outboxId)]: {
+					id: outboxId,
+					eventId,
+					registrationId: registration.id,
+					registrationEpoch: registration.revocationEpoch,
+					payload: buildActivityPushPayload(
+						projection.event,
+						revision,
+						parsePositiveInteger(
+							this.env.ACTIVITY_STALE_SECONDS,
+							"ACTIVITY_STALE_SECONDS",
+						),
+						projection.otherActiveCount,
+					),
+					revision,
+					state: "pending",
+					apnsRequestId: crypto.randomUUID(),
+					attempts: 0,
+					createdAt: now,
+					updatedAt: now,
+					deliveredAt: null,
+					lastStatus: null,
+					lastReason: null,
+					apnsId: null,
+					queuedAt: null,
+					nextAttemptAt: now,
+					sendingStartedAt: null,
+					sendingLeaseExpiresAt: null,
+					deadLetterCode: null,
+					enqueueAttempts: 0,
+				} satisfies StoredActivityOutbox,
+			});
+			return true;
+		});
+		if (enqueued) await this.enqueuePendingActivityOutboxes(eventId);
+	}
+
+	private async deleteActivityRegistration(request: Request) {
+		const body = await parseJsonBody<{
+			identity?: ActivityOwnerIdentity;
+			kind?: ActivityRegistrationKind;
+			installationId?: string;
+			activityId?: string | null;
+		}>(request);
+		if (
+			!body.identity?.subject ||
+			!body.identity.email ||
+			(body.kind !== "device" && body.kind !== "activity") ||
+			!body.installationId
+		) {
+			throw new RelayProtocolError(
+				"invalid_activity_registration",
+				"internal activity registration deletion is invalid",
+			);
+		}
+		const installationId = validateActivityIdentifier(
+			body.installationId,
+			"installation ID",
+		);
+		const activityId = body.kind === "activity"
+			? validateActivityIdentifier(body.activityId ?? "", "activity ID")
+			: null;
+		const key = await this.activityRegistrationKey({
+			identity: body.identity,
+			kind: body.kind,
+			installationId,
+			activityId,
+		});
+		await this.revokeActivityRegistration({
+			key,
+			kind: body.kind,
+			installationId,
+			activityId,
+			nowMs: Date.now(),
+			reason: "Activity registration revoked",
+		});
+		return new Response(null, { status: 204 });
+	}
+
+	private async revokeActivityRegistration(input: {
+		key: string;
+		kind: ActivityRegistrationKind;
+		installationId: string;
+		activityId: string | null;
+		nowMs: number;
+		reason: string;
+		expectedRegistrationId?: string;
+		expectedToken?: string;
+	}) {
+		await this.ctx.storage.transaction(async (storage) => {
+			const existing = await storage.get<StoredActivityRegistration>(input.key);
+			if (
+				existing &&
+				(existing.kind !== input.kind ||
+					existing.installationId !== input.installationId ||
+					existing.activityId !== input.activityId)
+			) {
+				throw new Error("activity registration storage key does not match its value");
+			}
+			if (
+				input.expectedRegistrationId !== undefined &&
+				(!existing ||
+					existing.id !== input.expectedRegistrationId ||
+					existing.token !== input.expectedToken)
+			) {
+				return;
+			}
+			const startKey = `${ACTIVITY_START_PREFIX}${input.installationId}`;
+			const [registrations, outboxes, activeStart] = await Promise.all([
+				storage.list<StoredActivityRegistration>({
+					prefix: ACTIVITY_REGISTRATION_PREFIX,
+				}),
+				storage.list<StoredActivityOutbox>({ prefix: ACTIVITY_OUTBOX_PREFIX }),
+				storage.get<StoredActivityStart>(startKey),
+			]);
+			const revokedRegistrationIds = new Set<string>();
+			if (input.kind === "device") {
+				for (const registration of registrations.values()) {
+					if (registration.installationId === input.installationId) {
+						revokedRegistrationIds.add(registration.id);
+					}
+				}
+			}
+			if (existing) revokedRegistrationIds.add(existing.id);
+			const now = new Date(input.nowMs).toISOString();
+			const writes: Record<string, unknown> = {};
+			if (input.kind === "device") {
+				const epochKey = activityRevocationEpochStorageKey(input.installationId);
+				writes[epochKey] = activityRevocationEpochAfterRemoval(
+					input.kind,
+					await storage.get<unknown>(epochKey),
+				);
+			}
+			for (const [outboxKey, outbox] of outboxes) {
+				const patch = revokedActivityOutboxPatch(
+					outbox,
+					revokedRegistrationIds,
+					now,
+					input.reason,
+				);
+				if (patch) writes[outboxKey] = { ...outbox, ...patch };
+			}
+			if (Object.keys(writes).length > 0) await storage.put(writes);
+			const revokedActivityIds = new Set<string>();
+			if (input.activityId) revokedActivityIds.add(input.activityId);
+			const deletes = [input.key];
+			if (
+				shouldDeleteActivityStartMarker({
+					deviceRevoked: input.kind === "device",
+					storedActivityId: activeStart?.activityId,
+					revokedActivityIds,
+				})
+			) {
+				deletes.push(startKey);
+			}
+			await storage.delete(deletes);
+		});
+	}
+
+	private async getActivityHealth() {
+		await this.gcExpiredActivityRegistrations(Date.now());
+		const deploymentFailure = await this.ctx.storage.get<{
+			code?: string;
+			observedAt: string;
+		}>(ACTIVITY_DEPLOYMENT_FAILURE_KEY);
+		return deploymentFailure
+			? json({
+					status: "error",
+					code: deploymentFailure.code ?? "apns_deployment_failure",
+					observedAt: deploymentFailure.observedAt,
+				})
+			: json({ status: "ready" });
+	}
+
+	private async currentApnsProviderToken(config: ApnsConfig) {
+		const nowMs = Date.now();
+		if (
+			this.apnsProviderToken &&
+			nowMs - this.apnsProviderToken.issuedAtMs < 50 * 60 * 1_000
+		) {
+			return this.apnsProviderToken.value;
+		}
+		const value = await createApnsProviderToken(config, nowMs);
+		this.apnsProviderToken = { value, issuedAtMs: nowMs };
+		return value;
+	}
+
+	private async findActivityRegistrationForOutbox(
+		outbox: StoredActivityOutbox,
+		nowMs = Date.now(),
+	) {
+		const registrations = await this.ctx.storage.list<StoredActivityRegistration>({
+			prefix: ACTIVITY_REGISTRATION_PREFIX,
+		});
+		const entry = [...registrations.entries()].find(
+			([, registration]) => registration.id === outbox.registrationId,
+		) ?? null;
+		if (!entry) return null;
+		if (isActivityRegistrationExpired(entry[1], nowMs)) {
+			await this.gcExpiredActivityRegistrations(nowMs);
+			return null;
+		}
+		const currentEpoch = currentActivityRevocationEpoch(
+			await this.ctx.storage.get<unknown>(
+				activityRevocationEpochStorageKey(entry[1].installationId),
+			),
+		);
+		if (
+			isActivityDeliveryRevoked({
+				registrationEpoch: entry[1].revocationEpoch,
+				outboxEpoch: outbox.registrationEpoch,
+				currentEpoch,
+			})
+		) {
+			return null;
+		}
+		return entry;
+	}
+
+	private async cancelRevokedActivityOutbox(
+		key: string,
+		outbox: StoredActivityOutbox,
+		nowMs: number,
+	) {
+		const stored = await this.ctx.storage.get<StoredActivityOutbox>(key);
+		if (!stored) {
+			throw new Error(`activity outbox disappeared during revocation: ${outbox.id}`);
+		}
+		if (stored.state === "cancelled") return stored;
+		const patch = revokedActivityOutboxPatch(
+			stored,
+			new Set([stored.registrationId]),
+			new Date(nowMs).toISOString(),
+			"Activity registration is missing or revoked",
+		);
+		if (!patch) return stored;
+		const cancelled: StoredActivityOutbox = { ...stored, ...patch };
+		await this.ctx.storage.put(key, cancelled);
+		return cancelled;
+	}
+
+	private async deliverActivityOutbox(outboxId: string) {
+		const key = activityOutboxStorageKey(outboxId);
+		let outbox = await this.ctx.storage.get<StoredActivityOutbox>(key);
+		if (!outbox) {
+			return json({ code: "activity_outbox_not_found", message: "Activity outbox not found" }, 404);
+		}
+		const nowMs = Date.now();
+		if (
+			(outbox.state === "pending" || outbox.state === "sending") &&
+			!(await this.findActivityRegistrationForOutbox(outbox, nowMs))
+		) {
+			await this.cancelRevokedActivityOutbox(key, outbox, nowMs);
+			return json({ outboxId, state: "cancelled" });
+		}
+		if (outbox.state === "sending") {
+			const leaseExpiresAtMs = Date.parse(outbox.sendingLeaseExpiresAt ?? "");
+			if (Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > nowMs) {
+				return json({ outboxId, state: "sending" }, 202);
+			}
+			if (recoverActivitySendingLease(outbox.payload.aps.event) === "dead_letter") {
+				outbox = await this.deadLetterActivityOutbox(
+					key,
+					outbox,
+					"apns_start_delivery_unknown",
+				);
+				return json({ outboxId, state: outbox.state });
+			}
+			const recovered = await this.retryActivityOutbox(
+				key,
+				outbox,
+				nowMs,
+				null,
+				"apns_sending_lease_expired",
+			);
+			return json({ outboxId, state: recovered.state });
+		}
+		if (outbox.state !== "pending") return json({ outboxId, state: outbox.state });
+		if (Date.parse(outbox.nextAttemptAt) > nowMs) {
+			return json({ outboxId, state: "pending", nextAttemptAt: outbox.nextAttemptAt }, 202);
+		}
+		const registrationEntry = await this.findActivityRegistrationForOutbox(
+			outbox,
+			nowMs,
+		);
+		if (!registrationEntry) {
+			await this.cancelRevokedActivityOutbox(key, outbox, nowMs);
+			return json({ outboxId, state: "cancelled" });
+		}
+		const [, registration] = registrationEntry;
+		let config: ApnsConfig;
+		try {
+			config = apnsConfig(this.env, registration.environment);
+		} catch (error) {
+			if (error instanceof ApnsConfigurationError) {
+				const nextAttemptAt = new Date(nowMs + 5 * 60 * 1_000).toISOString();
+				await this.ctx.storage.put({
+					[key]: {
+						...outbox,
+						queuedAt: null,
+						nextAttemptAt,
+						updatedAt: new Date(nowMs).toISOString(),
+						lastReason: "APNs configuration is unavailable",
+					},
+					[ACTIVITY_DEPLOYMENT_FAILURE_KEY]: {
+						code: "apns_configuration_error",
+						observedAt: new Date(nowMs).toISOString(),
+					},
+				});
+				await this.scheduleNextAlarm(nowMs);
+				return json({
+					code: "apns_configuration_error",
+					message: error.message,
+					nextAttemptAt,
+				}, 503);
+			}
+			throw error;
+		}
+		const sending: StoredActivityOutbox = {
+			...outbox,
+			state: "sending",
+			attempts: outbox.attempts + 1,
+			queuedAt: null,
+			sendingStartedAt: new Date(nowMs).toISOString(),
+			sendingLeaseExpiresAt: new Date(
+				nowMs + ACTIVITY_OUTBOX_SENDING_LEASE_MS,
+			).toISOString(),
+			updatedAt: new Date(nowMs).toISOString(),
+		};
+		await this.ctx.storage.put(key, sending);
+		await this.scheduleNextAlarm(nowMs);
+		const providerToken = await this.currentApnsProviderToken(config);
+		const deliveryRegistrationEntry = await this.findActivityRegistrationForOutbox(
+			sending,
+			Date.now(),
+		);
+		if (!deliveryRegistrationEntry) {
+			await this.cancelRevokedActivityOutbox(key, sending, Date.now());
+			return json({ outboxId, state: "cancelled" });
+		}
+		const [, deliveryRegistration] = deliveryRegistrationEntry;
+		config = apnsConfig(this.env, deliveryRegistration.environment);
+		let result: Awaited<ReturnType<typeof sendActivityPush>>;
+		try {
+			result = await sendActivityPush({
+				config,
+				deviceToken: deliveryRegistration.token,
+				payload: sending.payload,
+				providerToken,
+				apnsRequestId: sending.apnsRequestId,
+			});
+		} catch {
+			if (!(await this.findActivityRegistrationForOutbox(sending, Date.now()))) {
+				await this.cancelRevokedActivityOutbox(key, sending, Date.now());
+				return json({ outboxId, state: "cancelled" });
+			}
+			if (sending.payload.aps.event === "start") {
+				const dead = await this.deadLetterActivityOutbox(
+					key,
+					sending,
+					"apns_start_delivery_unknown",
+				);
+				return json({ outboxId, state: dead.state });
+			}
+			const retry = await this.retryActivityOutbox(
+				key,
+				sending,
+				nowMs,
+				null,
+				"apns_delivery_unknown",
+			);
+			return json({ outboxId, state: retry.state, nextAttemptAt: retry.nextAttemptAt });
+		}
+		if (!(await this.findActivityRegistrationForOutbox(sending, Date.now()))) {
+			await this.cancelRevokedActivityOutbox(key, sending, Date.now());
+			return json({ outboxId, state: "cancelled" });
+		}
+		const now = new Date(nowMs).toISOString();
+		if (result.disposition === "retry") {
+			if (sending.payload.aps.event === "start" && result.status >= 500) {
+				const dead = await this.deadLetterActivityOutbox(
+					key,
+					sending,
+					"apns_start_delivery_unknown",
+				);
+				return json({ outboxId, state: dead.state });
+			}
+			const retry = await this.retryActivityOutbox(
+				key,
+				{ ...sending, lastStatus: result.status, apnsId: result.apnsId },
+				nowMs,
+				result.retryAfterMs,
+				result.reason ?? "apns_retryable",
+			);
+			return json({ outboxId, state: retry.state, nextAttemptAt: retry.nextAttemptAt });
+		}
+		let state: StoredActivityOutbox["state"] = "failed";
+		if (result.disposition === "delivered") state = "delivered";
+		if (result.disposition === "invalidate_registration") state = "invalidated";
+		await this.ctx.storage.put(key, {
+			...sending,
+			state,
+			updatedAt: now,
+			deliveredAt: state === "delivered" ? now : null,
+			lastStatus: result.status,
+			lastReason: result.reason,
+			apnsId: result.apnsId,
+			sendingStartedAt: null,
+			sendingLeaseExpiresAt: null,
+		});
+		if (result.disposition === "invalidate_registration") {
+			await this.revokeActivityRegistration({
+				key: deliveryRegistrationEntry[0],
+				kind: deliveryRegistration.kind,
+				installationId: deliveryRegistration.installationId,
+				activityId: deliveryRegistration.activityId,
+				nowMs: Date.now(),
+				reason: "APNs invalidated the activity registration",
+				expectedRegistrationId: deliveryRegistration.id,
+				expectedToken: deliveryRegistration.token,
+			});
+		}
+		if (result.disposition === "deployment_failure") {
+			await this.ctx.storage.put(ACTIVITY_DEPLOYMENT_FAILURE_KEY, {
+				code: "apns_deployment_failure",
+				status: result.status,
+				reason: result.reason,
+				observedAt: now,
+			});
+			console.error("[relay] APNs deployment authorization failed", {
+				status: result.status,
+				reason: result.reason,
+				outboxId,
+			});
+		}
+		if (result.disposition === "permanent_failure") {
+			await this.ctx.storage.put(ACTIVITY_DEPLOYMENT_FAILURE_KEY, {
+				code: "apns_permanent_failure",
+				status: result.status,
+				reason: result.reason,
+				observedAt: now,
+			});
+		}
+		if (result.disposition === "delivered") {
+			const failure = await this.ctx.storage.get<{ code?: string }>(
+				ACTIVITY_DEPLOYMENT_FAILURE_KEY,
+			);
+			if (
+				failure?.code === "apns_deployment_failure" ||
+				failure?.code === "apns_configuration_error" ||
+				failure?.code === "activity_projection_incomplete"
+			) {
+				await this.ctx.storage.delete(ACTIVITY_DEPLOYMENT_FAILURE_KEY);
+			}
+		}
+		return json({ outboxId, state, status: result.status });
+	}
+
+	private async retryActivityOutbox(
+		key: string,
+		outbox: StoredActivityOutbox,
+		nowMs: number,
+		retryAfterMs: number | null,
+		reason: string,
+	) {
+		const decision = decideActivityOutboxRetry({
+			attempts: outbox.attempts,
+			createdAtMs: Date.parse(outbox.createdAt),
+			nowMs,
+			retryAfterMs,
+		});
+		if (decision.action === "dead_letter") {
+			return this.deadLetterActivityOutbox(
+				key,
+				outbox,
+				"apns_retry_exhausted",
+			);
+		}
+		const retry: StoredActivityOutbox = {
+			...outbox,
+			state: "pending",
+			queuedAt: null,
+			nextAttemptAt: decision.nextAttemptAt,
+			updatedAt: new Date(nowMs).toISOString(),
+			lastReason: reason,
+			sendingStartedAt: null,
+			sendingLeaseExpiresAt: null,
+		};
+		await this.ctx.storage.put(key, retry);
+		await this.scheduleNextAlarm(nowMs);
+		return retry;
+	}
+
+	private async deadLetterActivityOutbox(
+		key: string,
+		outbox: StoredActivityOutbox,
+		code: string,
+	) {
+		const now = new Date().toISOString();
+		const dead: StoredActivityOutbox = {
+			...outbox,
+			state: "dead_letter",
+			updatedAt: now,
+			queuedAt: null,
+			sendingStartedAt: null,
+			sendingLeaseExpiresAt: null,
+			deadLetterCode: code,
+		};
+		await this.ctx.storage.put({
+			[key]: dead,
+			[ACTIVITY_DEPLOYMENT_FAILURE_KEY]: {
+				code,
+				observedAt: now,
+			},
+		});
+		console.error("[relay] activity push moved to dead letter", {
+			outboxId: outbox.id,
+			code,
+		});
+		return dead;
+	}
+
 	private connectNode(request: Request) {
 		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
 			throw new RelayProtocolError(
@@ -377,7 +1463,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			nodeId: this.env.NODE_ID,
 		});
 		this.ctx.waitUntil(
-			Promise.all([this.ensurePeriodicAlarm(), this.dispatchNext()]),
+			Promise.all([
+				this.scheduleNextAlarm(),
+				this.dispatchNext(),
+				this.reconcileActivityWatch({ forceSend: true, socket: server }),
+			]),
 		);
 		return websocketResponse(client);
 	}
@@ -396,7 +1486,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "snapshot",
 			commands: selectSnapshotCommands(await this.listCommands()),
-			events: selectSnapshotEvents(await this.listTurnEvents()),
+			events: selectSnapshotEvents(await this.listBrowserTurnEvents()),
 		});
 		return websocketResponse(client);
 	}
@@ -625,6 +1715,10 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			await this.acceptTurnEvent(socket, parsed.event);
 			return;
 		}
+		if (parsed.type === "activity-watch.ack") {
+			await this.acceptActivityWatchAck(socket, parsed);
+			return;
+		}
 		const command = await this.getCommandById(parsed.commandId);
 		if (!command) {
 			sendSocket(socket, {
@@ -808,8 +1902,25 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const nowMs = Date.now();
 		await this.requeueExpired(nowMs);
 		await this.dispatchNext();
+		await this.recoverExpiredActivitySends(nowMs);
+		await this.enqueuePendingActivityOutboxes();
 		await this.collectGarbage(nowMs);
+		await this.reconcileActivityWatch({ forceSend: true, nowMs });
 		await this.scheduleNextAlarm(nowMs);
+	}
+
+	private async recoverExpiredActivitySends(nowMs: number) {
+		const records = await this.ctx.storage.list<StoredActivityOutbox>({
+			prefix: ACTIVITY_OUTBOX_PREFIX,
+		});
+		for (const outbox of records.values()) {
+			if (
+				outbox.state === "sending" &&
+				Date.parse(outbox.sendingLeaseExpiresAt ?? "") <= nowMs
+			) {
+				await this.deliverActivityOutbox(outbox.id);
+			}
+		}
 	}
 
 	private async cancelCommand(commandId: string) {
@@ -840,10 +1951,14 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async acceptTurnEvent(socket: WebSocket, event: RelayTurnEvent) {
-		const existingKey = await this.ctx.storage.get<string>(
-			`${TURN_EVENT_ID_PREFIX}${event.id}`,
-		);
-		if (existingKey) {
+		const [existingKey, seen] = await Promise.all([
+			this.ctx.storage.get<string>(`${TURN_EVENT_ID_PREFIX}${event.id}`),
+			this.ctx.storage.get<{ seenAt: string }>(`${TURN_EVENT_SEEN_PREFIX}${event.id}`),
+		]);
+		if (existingKey || seen) {
+			if (event.kind === "turn.lifecycle") {
+				await this.enqueuePendingActivityOutboxes(event.id);
+			}
 			sendSocket(socket, {
 				protocolVersion: RELAY_PROTOCOL_VERSION,
 				type: "turn-event-ack",
@@ -851,27 +1966,278 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			});
 			return;
 		}
-		const sequence = (await this.ctx.storage.get<number>(NEXT_EVENT_SEQUENCE_KEY)) ?? 1;
-		const key = turnEventStorageKey(sequence);
-		await this.ctx.storage.put({
-			[NEXT_EVENT_SEQUENCE_KEY]: sequence + 1,
-			[key]: event,
-			[`${TURN_EVENT_ID_PREFIX}${event.id}`]: key,
+		if (event.kind === "turn.lifecycle" && event.nodeId !== this.env.NODE_ID) {
+			throw new RelayProtocolError(
+				"node_identity_mismatch",
+				"Turn lifecycle event node does not match the fixed relay node",
+				403,
+			);
+		}
+		const accepted = await this.ctx.storage.transaction(async (storage) => {
+			const sequence = (await storage.get<number>(NEXT_EVENT_SEQUENCE_KEY)) ?? 1;
+			const key = turnEventStorageKey(sequence);
+			const seenAt = new Date().toISOString();
+			const writes: Record<string, unknown> = {
+				[NEXT_EVENT_SEQUENCE_KEY]: sequence + 1,
+				[key]: event,
+				[`${TURN_EVENT_ID_PREFIX}${event.id}`]: key,
+				[`${TURN_EVENT_SEEN_PREFIX}${event.id}`]: { seenAt },
+			};
+			if (event.kind === "turn.lifecycle") {
+				const latestLifecycleKey = `${TURN_LIFECYCLE_LATEST_PREFIX}${event.origin}:${event.turnId}`;
+				const latestForTurn = await storage.get<RelayTurnLifecycleEvent>(
+					latestLifecycleKey,
+				);
+				if (!shouldAcceptLifecycleEvent(latestForTurn ?? null, event)) {
+					await storage.put(writes);
+					return false;
+				}
+				writes[latestLifecycleKey] = event;
+				if (!isDeliverableLifecycleProjection(event)) {
+					writes[ACTIVITY_DEPLOYMENT_FAILURE_KEY] = {
+						code: "activity_projection_incomplete",
+						observedAt: seenAt,
+					};
+				}
+				const [registrationRecords, lifecycleRecords, preferenceRecords] = await Promise.all([
+					storage.list<StoredActivityRegistration>({
+						prefix: ACTIVITY_REGISTRATION_PREFIX,
+					}),
+					storage.list<RelayTurnLifecycleEvent>({
+						prefix: TURN_LIFECYCLE_LATEST_PREFIX,
+					}),
+					storage.list<StoredActivityWatchPreference>({
+						prefix: ACTIVITY_PREFERENCE_PREFIX,
+					}),
+				]);
+				const lifecycleEvents = [...lifecycleRecords.values()].filter(
+					(item) =>
+						item.origin !== event.origin || item.turnId !== event.turnId,
+				);
+				lifecycleEvents.push(event);
+					const registrations: StoredActivityRegistration[] = [];
+					for (const registration of registrationRecords.values()) {
+						if (isActivityRegistrationExpired(registration)) continue;
+						const currentEpoch = currentActivityRevocationEpoch(
+							await storage.get<unknown>(
+								activityRevocationEpochStorageKey(registration.installationId),
+							),
+						);
+						if (
+							isActivityDeliveryRevoked({
+								registrationEpoch: registration.revocationEpoch,
+								outboxEpoch: registration.revocationEpoch,
+								currentEpoch,
+							})
+						) {
+							continue;
+						}
+						registrations.push(registration);
+					}
+				const effectivePreference = selectEffectiveActivityWatchPreference(
+					preferenceRecords.values(),
+				);
+				if (effectivePreference) {
+					for (const registration of registrations) {
+					const projection = selectActivityProjection(
+						effectivePreference.preferences,
+						lifecycleEvents,
+						event,
+					);
+					if (!projection) continue;
+					if (!isDeliverableLifecycleProjection(projection.event)) continue;
+					const hasActivityRegistration = registrations.some(
+						(item) =>
+							item.kind === "activity" &&
+							item.installationId === registration.installationId,
+					);
+					const startKey = `${ACTIVITY_START_PREFIX}${registration.installationId}`;
+					const activeStart = await storage.get<StoredActivityStart>(startKey);
+					if (
+						registration.kind === "device" &&
+						!shouldEnqueueActivityStart({
+							hasActivityRegistration,
+							hasActiveStart: Boolean(activeStart),
+							status: projection.event.status,
+						})
+					) {
+						continue;
+					}
+					if (registration.kind === "activity" && registration.activityId === null) {
+						continue;
+					}
+					const revisionKey = `${ACTIVITY_REVISION_PREFIX}${registration.installationId}`;
+					const revision = ((await storage.get<number>(revisionKey)) ?? 0) + 1;
+					const outboxId = crypto.randomUUID();
+					const now = new Date().toISOString();
+					const startActivityId = crypto.randomUUID();
+					const payload = registration.kind === "device"
+						? buildActivityStartPushPayload({
+								event: projection.event,
+								revision,
+								staleSeconds: parsePositiveInteger(
+									this.env.ACTIVITY_STALE_SECONDS,
+									"ACTIVITY_STALE_SECONDS",
+								),
+								otherActiveCount: projection.otherActiveCount,
+								attributesType: this.env.APNS_LIVE_ACTIVITY_ATTRIBUTES_TYPE ?? "",
+								installationId: registration.installationId,
+								activityId: startActivityId,
+							})
+						: buildActivityPushPayload(
+								projection.event,
+								revision,
+								parsePositiveInteger(
+									this.env.ACTIVITY_STALE_SECONDS,
+									"ACTIVITY_STALE_SECONDS",
+								),
+								projection.otherActiveCount,
+							);
+					const outbox: StoredActivityOutbox = {
+							id: outboxId,
+							eventId: event.id,
+							registrationId: registration.id,
+							registrationEpoch: registration.revocationEpoch,
+						payload,
+						revision,
+						state: "pending",
+						apnsRequestId: crypto.randomUUID(),
+						attempts: 0,
+						createdAt: now,
+						updatedAt: now,
+						deliveredAt: null,
+						lastStatus: null,
+						lastReason: null,
+						apnsId: null,
+						queuedAt: null,
+						nextAttemptAt: now,
+						sendingStartedAt: null,
+						sendingLeaseExpiresAt: null,
+						deadLetterCode: null,
+						enqueueAttempts: 0,
+					};
+					writes[revisionKey] = revision;
+					writes[activityOutboxStorageKey(outboxId)] = outbox;
+						if (registration.kind === "device") {
+							writes[startKey] = {
+								installationId: registration.installationId,
+								activityId: startActivityId,
+								origin: projection.event.origin,
+								turnId: projection.event.turnId,
+								createdAt: now,
+							} satisfies StoredActivityStart;
+						}
+					}
+				}
+				if (
+					event.status === "completed" ||
+					event.status === "failed" ||
+					event.status === "interrupted" ||
+					event.status === "merged" ||
+					event.status === "cancelled"
+				) {
+					const starts = await storage.list<StoredActivityStart>({
+						prefix: ACTIVITY_START_PREFIX,
+					});
+					for (const [startKey, start] of starts) {
+						if (
+							start.origin === event.origin &&
+							start.turnId === event.turnId
+						) {
+							await storage.delete(startKey);
+						}
+					}
+				}
+			}
+			await storage.put(writes);
+			return true;
 		});
-		const browserEvent: RelayBrowserEvent = {
-			protocolVersion: RELAY_PROTOCOL_VERSION,
-			type: "turn.event",
-			event,
-		};
-		for (const browserSocket of this.ctx.getWebSockets("browser")) {
-			sendSocket(browserSocket, browserEvent);
+		if (!accepted) {
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "turn-event-ack",
+				eventId: event.id,
+			});
+			await this.gcTurnEvents();
+			return;
+		}
+		if (event.kind === "turn.completed") {
+			const browserEvent: RelayBrowserEvent = {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "turn.event",
+				event,
+			};
+			for (const browserSocket of this.ctx.getWebSockets("browser")) {
+				sendSocket(browserSocket, browserEvent);
+			}
 		}
 		sendSocket(socket, {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "turn-event-ack",
 			eventId: event.id,
 		});
+		if (event.kind === "turn.lifecycle") {
+			await this.enqueuePendingActivityOutboxes(event.id);
+		}
 		await this.gcTurnEvents();
+	}
+
+	private async enqueuePendingActivityOutboxes(eventId?: string) {
+		const records = await this.ctx.storage.list<StoredActivityOutbox>({
+			prefix: ACTIVITY_OUTBOX_PREFIX,
+		});
+		const nowMs = Date.now();
+		for (const [key, outbox] of records) {
+			if (
+				outbox.state !== "pending" ||
+				(eventId !== undefined && outbox.eventId !== eventId) ||
+				Date.parse(outbox.nextAttemptAt) > nowMs ||
+				(eventId === undefined && outbox.queuedAt !== null)
+			) {
+				continue;
+			}
+			try {
+				await this.env.ACTIVITY_PUSHES.send({
+					kind: "activity-push",
+					nodeId: this.env.NODE_ID,
+					outboxId: outbox.id,
+				});
+				await this.ctx.storage.put(key, {
+					...outbox,
+					queuedAt: new Date(nowMs).toISOString(),
+					updatedAt: new Date(nowMs).toISOString(),
+				});
+			} catch (error) {
+				const enqueueAttempts = outbox.enqueueAttempts + 1;
+				const decision = decideActivityOutboxRetry({
+					attempts: enqueueAttempts,
+					createdAtMs: Date.parse(outbox.createdAt),
+					nowMs,
+					retryAfterMs: null,
+				});
+				if (decision.action === "dead_letter") {
+					await this.deadLetterActivityOutbox(
+						key,
+						{ ...outbox, enqueueAttempts },
+						"activity_queue_enqueue_exhausted",
+					);
+					continue;
+				}
+				await this.ctx.storage.put(key, {
+					...outbox,
+					enqueueAttempts,
+					queuedAt: null,
+					nextAttemptAt: decision.nextAttemptAt,
+					updatedAt: new Date(nowMs).toISOString(),
+					lastReason: "Activity push queue enqueue failed",
+				});
+				console.error("[relay] activity push enqueue failed", {
+					outboxId: outbox.id,
+					error,
+				});
+			}
+		}
+		await this.scheduleNextAlarm(nowMs);
 	}
 
 	private async listTurnEvents() {
@@ -879,6 +2245,10 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			prefix: TURN_EVENT_KEY_PREFIX,
 		});
 		return [...records.values()];
+	}
+
+	private async listBrowserTurnEvents() {
+		return browserTurnEvents(await this.listTurnEvents());
 	}
 
 	private async ensurePeriodicAlarm() {
@@ -899,6 +2269,33 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			const leaseMs = new Date(command.leaseExpiresAt).getTime();
 			if (Number.isFinite(leaseMs)) next = Math.min(next, leaseMs);
 		}
+		const outboxes = await this.ctx.storage.list<StoredActivityOutbox>({
+			prefix: ACTIVITY_OUTBOX_PREFIX,
+		});
+		for (const outbox of outboxes.values()) {
+			if (outbox.state === "pending" && outbox.queuedAt === null) {
+				const dueMs = Date.parse(outbox.nextAttemptAt);
+				if (Number.isFinite(dueMs)) next = Math.min(next, Math.max(nowMs + 1_000, dueMs));
+			}
+			if (outbox.state === "sending" && outbox.sendingLeaseExpiresAt) {
+				const leaseMs = Date.parse(outbox.sendingLeaseExpiresAt);
+				if (Number.isFinite(leaseMs)) next = Math.min(next, Math.max(nowMs + 1_000, leaseMs));
+			}
+		}
+		const preferences = await this.listActivityPreferences();
+		let hasActivePreference = false;
+		for (const preference of preferences.values()) {
+			const expiresAtMs = Date.parse(preference.expiresAt);
+			if (Number.isFinite(expiresAtMs)) {
+				next = Math.min(next, Math.max(nowMs + 1_000, expiresAtMs));
+			}
+			if (!isActivityWatchPreferenceExpired(preference, nowMs)) {
+				hasActivePreference = true;
+			}
+		}
+		if (hasActivePreference) {
+			next = Math.min(next, nowMs + Math.floor(ACTIVITY_WATCH_LEASE_MS / 2));
+		}
 		await this.ctx.storage.setAlarm(next);
 	}
 
@@ -914,6 +2311,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			await this.ctx.storage.delete(deletes);
 		}
 		await this.gcTurnEvents();
+		await this.gcActivityOutboxes(nowMs);
+		await this.gcExpiredActivityRegistrations(nowMs);
+		if (await this.gcExpiredActivityPreferences(nowMs)) {
+			await this.reconcileActivityWatch({ nowMs });
+		}
 		await this.gcExpiredAttachments(nowMs);
 	}
 
@@ -928,6 +2330,133 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (event?.id) deletes.push(`${TURN_EVENT_ID_PREFIX}${event.id}`);
 			await this.ctx.storage.delete(deletes);
 		}
+		const nowMs = Date.now();
+		const lifecycle = await this.ctx.storage.list<RelayTurnLifecycleEvent>({
+			prefix: TURN_LIFECYCLE_LATEST_PREFIX,
+		});
+		for (const [key, event] of lifecycle) {
+			if (
+				!(["completed", "failed", "interrupted", "merged", "cancelled"] as string[])
+					.includes(event.status) ||
+				nowMs - Date.parse(event.observedAt) <= ACTIVITY_LIFECYCLE_TERMINAL_TTL_MS
+			) {
+				continue;
+			}
+			await this.ctx.storage.delete(key);
+		}
+	}
+
+	private async gcActivityOutboxes(nowMs: number) {
+		const records = await this.ctx.storage.list<StoredActivityOutbox>({
+			prefix: ACTIVITY_OUTBOX_PREFIX,
+		});
+		for (const [key, outbox] of records) {
+			const ageMs = nowMs - Date.parse(outbox.createdAt);
+			if (
+				(outbox.state === "pending" || outbox.state === "sending") &&
+				ageMs >= ACTIVITY_OUTBOX_MAX_AGE_MS
+			) {
+				await this.deadLetterActivityOutbox(key, outbox, "apns_outbox_expired");
+				continue;
+			}
+			if (
+				outbox.state !== "pending" &&
+				outbox.state !== "sending" &&
+				nowMs - Date.parse(outbox.updatedAt) >= ACTIVITY_OUTBOX_TERMINAL_TTL_MS
+			) {
+				await this.ctx.storage.delete(key);
+			}
+		}
+	}
+
+	private async gcExpiredActivityRegistrations(nowMs: number) {
+		await this.ctx.storage.transaction(async (storage) => {
+			const [registrations, outboxes, starts] = await Promise.all([
+				storage.list<StoredActivityRegistration>({
+					prefix: ACTIVITY_REGISTRATION_PREFIX,
+				}),
+				storage.list<StoredActivityOutbox>({
+					prefix: ACTIVITY_OUTBOX_PREFIX,
+				}),
+				storage.list<StoredActivityStart>({ prefix: ACTIVITY_START_PREFIX }),
+			]);
+			const expiredInstallationIds = new Set<string>();
+			const expiredDeviceInstallationIds = new Set<string>();
+			const expiredActivityIdsByInstallation = new Map<string, Set<string>>();
+			const expiredRegistrationIds = new Set<string>();
+			const registrationKeysToDelete: string[] = [];
+			for (const [key, registration] of registrations) {
+				if (!isActivityRegistrationExpired(registration, nowMs)) continue;
+				expiredInstallationIds.add(registration.installationId);
+				expiredRegistrationIds.add(registration.id);
+				if (registration.kind === "device") {
+					expiredDeviceInstallationIds.add(registration.installationId);
+				} else if (registration.activityId) {
+					const activityIds =
+						expiredActivityIdsByInstallation.get(registration.installationId) ??
+						new Set<string>();
+					activityIds.add(registration.activityId);
+					expiredActivityIdsByInstallation.set(
+						registration.installationId,
+						activityIds,
+					);
+				}
+				registrationKeysToDelete.push(key);
+			}
+			if (expiredInstallationIds.size === 0) return;
+			const revokedRegistrationIds = new Set(expiredRegistrationIds);
+			for (const registration of registrations.values()) {
+				if (expiredDeviceInstallationIds.has(registration.installationId)) {
+					revokedRegistrationIds.add(registration.id);
+				}
+			}
+			const now = new Date(nowMs).toISOString();
+			const writes: Record<string, unknown> = {};
+			const startKeysToDelete: string[] = [];
+			for (const installationId of expiredDeviceInstallationIds) {
+				const epochKey = activityRevocationEpochStorageKey(installationId);
+				writes[epochKey] = activityRevocationEpochAfterRemoval(
+					"device",
+					await storage.get<unknown>(epochKey),
+				);
+			}
+			for (const [startKey, start] of starts) {
+				if (!expiredInstallationIds.has(start.installationId)) continue;
+				if (
+					shouldDeleteActivityStartMarker({
+						deviceRevoked: expiredDeviceInstallationIds.has(start.installationId),
+						storedActivityId: start.activityId,
+						revokedActivityIds:
+							expiredActivityIdsByInstallation.get(start.installationId) ??
+							new Set<string>(),
+					})
+				) {
+					startKeysToDelete.push(startKey);
+				}
+			}
+			for (const [key, outbox] of outboxes) {
+				const patch = revokedActivityOutboxPatch(
+					outbox,
+					revokedRegistrationIds,
+					now,
+					"Activity registration expired",
+				);
+				if (patch) writes[key] = { ...outbox, ...patch };
+			}
+			if (Object.keys(writes).length > 0) await storage.put(writes);
+			await storage.delete([...registrationKeysToDelete, ...startKeysToDelete]);
+		});
+	}
+
+	private async gcExpiredActivityPreferences(nowMs: number) {
+		const preferences = await this.listActivityPreferences();
+		let deleted = false;
+		for (const [key, preference] of preferences) {
+			if (!isActivityWatchPreferenceExpired(preference, nowMs)) continue;
+			await this.ctx.storage.delete(key);
+			deleted = true;
+		}
+		return deleted;
 	}
 
 	private async gcExpiredAttachments(nowMs: number) {
@@ -956,13 +2485,18 @@ function requireConfigured(env: RelayEnv) {
 		"TEAM_DOMAIN",
 		"POLICY_AUD",
 		"OWNER_EMAIL",
+		"OWNER_USER_ID",
 		"COMMAND_LEASE_MS",
 		"COMMAND_MAX_BODY_BYTES",
 		"ATTACHMENT_MAX_BYTES",
 		"ATTACHMENT_TTL_MS",
+		"ACTIVITY_STALE_SECONDS",
+		"ACTIVITY_REGISTRATION_TTL_SECONDS",
+		"APNS_LIVE_ACTIVITY_ATTRIBUTES_TYPE",
 	] as const) {
 		if (!env[name]?.trim()) throw new Error(`Missing relay setting: ${name}`);
 	}
+	parseActivityOwnerUserId(env.OWNER_USER_ID);
 }
 
 function nodeStub(env: RelayEnv, nodeId: string) {
@@ -1170,6 +2704,72 @@ async function handleAttachmentDownload(input: {
 	});
 }
 
+async function handleActivityRegistration(input: {
+	request: Request;
+	stub: DurableObjectStub<LocalNodeRelay>;
+	identity: ActivityOwnerIdentity;
+	kind: ActivityRegistrationKind;
+	installationId: string;
+	activityId: string | null;
+}) {
+	const { request, stub, identity, kind, installationId, activityId } = input;
+	if (request.method === "DELETE") {
+		return stub.fetch("https://relay.internal/internal/activity-registration", {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				identity,
+				kind,
+				installationId,
+				activityId,
+			}),
+		});
+	}
+	const registration = parseActivityTokenBody(
+		await parseJsonBody(request),
+		kind,
+	);
+	return stub.fetch("https://relay.internal/internal/activity-registration", {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			identity,
+			kind,
+			installationId,
+			activityId,
+			registration,
+		}),
+	});
+}
+
+async function handleActivityPreference(input: {
+	request: Request;
+	stub: DurableObjectStub<LocalNodeRelay>;
+	identity: ActivityOwnerIdentity;
+	ownerUserId: string;
+	installationId: string;
+}) {
+	const { request, stub, identity, ownerUserId, installationId } = input;
+	if (request.method === "DELETE") {
+		return stub.fetch("https://relay.internal/internal/activity-preference", {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ identity, installationId }),
+		});
+	}
+	const preferences = parseActivityWatchPreferences(await parseJsonBody(request));
+	return stub.fetch("https://relay.internal/internal/activity-preference", {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			identity,
+			ownerUserId,
+			installationId,
+			preferences,
+		}),
+	});
+}
+
 async function handleRequest(request: Request, env: RelayEnv) {
 	requireConfigured(env);
 	const url = new URL(request.url);
@@ -1180,7 +2780,26 @@ async function handleRequest(request: Request, env: RelayEnv) {
 				? url.pathname.slice("/relay".length)
 				: url.pathname;
 	if (request.method === "GET" && pathname === "/healthz") {
-		return json({ status: "ready", protocolVersion: RELAY_PROTOCOL_VERSION });
+		let activityPush: Record<string, unknown> = { status: "ready" };
+		try {
+			apnsConfig(env, "development");
+			apnsConfig(env, "production");
+		} catch (error) {
+			if (error instanceof ApnsConfigurationError) {
+				activityPush = {
+					status: "error",
+					code: "apns_configuration_error",
+				};
+			} else {
+				throw error;
+			}
+		}
+		const activityHealth = await nodeStub(env, env.NODE_ID).fetch(
+			"https://relay.internal/internal/activity-health",
+		);
+		const storedActivityHealth = await activityHealth.json<Record<string, unknown>>();
+		if (storedActivityHealth.status === "error") activityPush = storedActivityHealth;
+		return json(composeRelayHealth(RELAY_PROTOCOL_VERSION, activityPush));
 	}
 	const match = pathname.match(/^\/v1\/nodes\/([^/]+)(\/.*)?$/);
 	if (!match?.[1]) {
@@ -1223,26 +2842,72 @@ async function handleRequest(request: Request, env: RelayEnv) {
 			attachmentId: decodeURIComponent(attachmentContentMatch[1]),
 		});
 	}
-	await authorizeOwnerRequest(request, {
+	const ownerPayload = await authorizeOwnerRequest(request, {
 		teamDomain: env.TEAM_DOMAIN,
 		policyAudience: env.POLICY_AUD,
 		ownerEmail: env.OWNER_EMAIL,
 	});
-	if (
-		(request.method !== "GET" || suffix === "/events") &&
-		request.headers.get("origin") !== env.ALLOWED_ORIGIN
-	) {
-		throw new RelayProtocolError(
-			"origin_not_allowed",
-			"Request origin is not allowed for this relay",
-			403,
-		);
-	}
+	const ownerIdentity = relayOwnerIdentity(ownerPayload);
+	const ownerUserId = parseActivityOwnerUserId(env.OWNER_USER_ID);
+	assertRelayOwnerOrigin({
+		method: request.method,
+		suffix,
+		origin: request.headers.get("origin"),
+		allowedOrigin: env.ALLOWED_ORIGIN,
+	});
 	if (request.method === "GET" && suffix === "/events") {
 		return stub.fetch(new Request("https://relay.internal/internal/events", request));
 	}
 	if (request.method === "GET" && suffix === "/status") {
 		return stub.fetch("https://relay.internal/internal/status");
+	}
+	const activityPreferenceMatch = suffix.match(
+		/^\/activity\/preferences\/([^/]+)$/,
+	);
+	if (
+		(request.method === "PUT" || request.method === "DELETE") &&
+		activityPreferenceMatch?.[1]
+	) {
+		return handleActivityPreference({
+			request,
+			stub,
+			identity: ownerIdentity,
+			ownerUserId,
+			installationId: decodeURIComponent(activityPreferenceMatch[1]),
+		});
+	}
+	const deviceRegistrationMatch = suffix.match(
+		/^\/activity\/devices\/([^/]+)$/,
+	);
+	if (
+		(request.method === "PUT" || request.method === "DELETE") &&
+		deviceRegistrationMatch?.[1]
+	) {
+		return handleActivityRegistration({
+			request,
+			stub,
+			identity: ownerIdentity,
+			kind: "device",
+			installationId: decodeURIComponent(deviceRegistrationMatch[1]),
+			activityId: null,
+		});
+	}
+	const activityRegistrationMatch = suffix.match(
+		/^\/activity\/registrations\/([^/]+)\/([^/]+)$/,
+	);
+	if (
+		(request.method === "PUT" || request.method === "DELETE") &&
+		activityRegistrationMatch?.[1] &&
+		activityRegistrationMatch[2]
+	) {
+		return handleActivityRegistration({
+			request,
+			stub,
+			identity: ownerIdentity,
+			kind: "activity",
+			installationId: decodeURIComponent(activityRegistrationMatch[1]),
+			activityId: decodeURIComponent(activityRegistrationMatch[2]),
+		});
 	}
 	if (request.method === "POST" && suffix === "/attachments") {
 		return createAttachmentPlan({ request, url, stub, nodeId });
@@ -1296,9 +2961,38 @@ export default {
 		}
 	},
 
-	async queue(batch: MessageBatch<RelayWakeupMessage>, env: RelayEnv) {
+	async queue(
+		batch: MessageBatch<RelayWakeupMessage | ActivityPushQueueMessage>,
+		env: RelayEnv,
+	) {
 		for (const message of batch.messages) {
 			const payload = message.body;
+			if ("kind" in payload) {
+				if (
+					payload.kind !== "activity-push" ||
+					payload.nodeId !== env.NODE_ID ||
+					!payload.outboxId
+				) {
+					console.error("[relay] rejected malformed activity push job", payload);
+					message.ack();
+					continue;
+				}
+				try {
+					const response = await nodeStub(env, payload.nodeId).fetch(
+						`https://relay.internal/internal/activity-push/${encodeURIComponent(payload.outboxId)}`,
+						{ method: "POST" },
+					);
+					await response.body?.cancel();
+					message.ack();
+				} catch (error) {
+					console.error("[relay] activity push queue delivery failed", {
+						outboxId: payload.outboxId,
+						error,
+					});
+					message.retry();
+				}
+				continue;
+			}
 			if (
 				payload.protocolVersion !== RELAY_PROTOCOL_VERSION ||
 				payload.nodeId !== env.NODE_ID
@@ -1320,4 +3014,7 @@ export default {
 			}
 		}
 	},
-} satisfies ExportedHandler<RelayEnv, RelayWakeupMessage>;
+} satisfies ExportedHandler<
+	RelayEnv,
+	RelayWakeupMessage | ActivityPushQueueMessage
+>;

@@ -7,8 +7,53 @@ import test from "node:test";
 import {
   executeRelayCommand,
   executeRelayCommandUntilAvailable,
+  parseWatchFromPromptResponse,
   RelayNodeError,
+  resolveLocalAccessToken,
 } from "./core.mjs";
+
+test("requests an explicit host credential refresh only when asked", async () => {
+  const urls = [];
+  const fetcher = async (url) => {
+    urls.push(String(url));
+    return Response.json({ accessToken: "host-access-token" });
+  };
+  assert.equal(
+    await resolveLocalAccessToken(fetcher, "http://127.0.0.1:8787"),
+    "host-access-token",
+  );
+  assert.equal(
+    await resolveLocalAccessToken(fetcher, "http://127.0.0.1:8787", undefined, {
+      forceRefresh: true,
+    }),
+    "host-access-token",
+  );
+  assert.deepEqual(urls, [
+    "http://127.0.0.1:8787/api/local-mode/auth",
+    "http://127.0.0.1:8787/api/local-mode/auth?refresh=1",
+  ]);
+});
+
+test("does not invent an initial lifecycle status when the prompt response omits it", () => {
+  const watch = parseWatchFromPromptResponse(
+    JSON.stringify({
+      session: { id: "f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02" },
+      turn: { id: "bd5bc93a-c1a4-45f8-8ba2-bc45fb87ce01" },
+    }),
+    "/api/spaces/2f4cb274-7f80-4a4b-b326-22d4af6a9873/prompt",
+  );
+  assert.ok(watch);
+  assert.equal("initialStatus" in watch, false);
+  const invalid = parseWatchFromPromptResponse(
+    JSON.stringify({
+      session: { id: "f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02" },
+      turn: { id: "bd5bc93a-c1a4-45f8-8ba2-bc45fb87ce01", status: "waiting" },
+    }),
+    "/api/spaces/2f4cb274-7f80-4a4b-b326-22d4af6a9873/prompt",
+  );
+  assert.ok(invalid);
+  assert.equal("initialStatus" in invalid, false);
+});
 
 const command = {
   id: "relay-command-1",

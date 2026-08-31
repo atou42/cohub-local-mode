@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "revision": 9001,
+  "generatedAt": "2026-08-31T02:52:33.000Z",
+  "freshness": "live",
+  "primarySpaceId": "space-focus",
+  "primarySessionId": "session-focus",
+  "otherActiveCount": 3,
+  "boardSpaceIds": [
+    "space-focus",
+    "space-studio",
+    "space-release"
+  ],
+  "spaces": [
+    {
+      "spaceId": "space-focus",
+      "spaceName": "Cohub Native",
+      "origin": "local",
+      "isPrimary": true,
+      "activeAgentCount": 1,
+      "attentionCount": 0,
+      "activity": {
+        "sessionId": "session-focus",
+        "sessionTitle": "Ship Focus Board",
+        "turnId": "turn-focus",
+        "status": "running",
+        "phase": "working",
+        "harness": "codex",
+        "model": "gpt-5.6-sol",
+        "summary": "Validating the native experience",
+        "startedAt": "2026-08-31T02:50:33.000Z",
+        "updatedAt": "2026-08-31T02:52:33.000Z",
+        "errorMessage": null
+      }
+    },
+    {
+      "spaceId": "space-studio",
+      "spaceName": "Neta Studio",
+      "origin": "cloud",
+      "isPrimary": false,
+      "activeAgentCount": 2,
+      "attentionCount": 0,
+      "activity": {
+        "sessionId": "session-studio",
+        "sessionTitle": "Review world import",
+        "turnId": "turn-studio",
+        "status": "queued",
+        "phase": "dispatching",
+        "harness": "cursor",
+        "model": "grok-4.6",
+        "summary": "Queued behind the active run",
+        "startedAt": "2026-08-31T02:51:33.000Z",
+        "updatedAt": "2026-08-31T02:52:03.000Z",
+        "errorMessage": null
+      }
+    },
+    {
+      "spaceId": "space-release",
+      "spaceName": "Release Ops",
+      "origin": "local",
+      "isPrimary": false,
+      "activeAgentCount": 0,
+      "attentionCount": 1,
+      "activity": {
+        "sessionId": "session-release",
+        "sessionTitle": "Publish iOS build",
+        "turnId": "turn-release",
+        "status": "failed",
+        "phase": "error",
+        "harness": "pi",
+        "model": "deepseek-v4",
+        "summary": "Signing credentials are unavailable",
+        "startedAt": "2026-08-31T02:40:33.000Z",
+        "updatedAt": "2026-08-31T02:49:33.000Z",
+        "errorMessage": "Signing credentials are unavailable"
+      }
+    }
+  ]
+}
