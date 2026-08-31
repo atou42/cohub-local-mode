@@ -160,11 +160,8 @@ export function createAuthRefreshCoordinator(
 				const current = options.state.read();
 				if (!sessionMatches(current, request)) return false;
 
-				try {
-					await options.clearSession();
-				} finally {
-					options.state.clear();
-				}
+				await options.clearSession();
+				options.state.clear();
 				return true;
 			}),
 		);

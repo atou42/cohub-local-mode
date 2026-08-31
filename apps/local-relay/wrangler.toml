@@ -27,11 +27,21 @@ new_sqlite_classes = ["LocalNodeRelay"]
 binding = "COMMAND_WAKEUPS"
 queue = "cohub-local-relay-wakeups"
 
+[[queues.producers]]
+binding = "ACTIVITY_PUSHES"
+queue = "cohub-local-relay-activity-pushes"
+
 [[queues.consumers]]
 queue = "cohub-local-relay-wakeups"
 max_batch_size = 10
 max_batch_timeout = 1
 max_retries = 5
+
+[[queues.consumers]]
+queue = "cohub-local-relay-activity-pushes"
+max_batch_size = 10
+max_batch_timeout = 1
+max_retries = 8
 
 [[r2_buckets]]
 binding = "ATTACHMENTS"
@@ -44,3 +54,13 @@ COMMAND_LEASE_MS = "60000"
 COMMAND_MAX_BODY_BYTES = "1048576"
 ATTACHMENT_MAX_BYTES = "104857600"
 ATTACHMENT_TTL_MS = "604800000"
+ACTIVITY_STALE_SECONDS = "120"
+# The foreground client refreshes every 5 minutes and logout sends DELETE.
+# A crashed or disconnected client can remain registered for at most 24 hours.
+ACTIVITY_REGISTRATION_TTL_SECONDS = "86400"
+APNS_LIVE_ACTIVITY_TOPIC = "cc.atou.cohub.push-type.liveactivity"
+APNS_LIVE_ACTIVITY_ATTRIBUTES_TYPE = "CohubAgentPulseAttributes"
+
+# Configure APNS_TEAM_ID, APNS_KEY_ID, and APNS_PRIVATE_KEY as Worker secrets.
+# Configure OWNER_EMAIL and OWNER_USER_ID as Worker secrets. OWNER_USER_ID is
+# the Cohub account ID returned by the authenticated /api/me response.
