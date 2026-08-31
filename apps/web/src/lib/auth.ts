@@ -7,6 +7,7 @@ import {
 	createAuthRefreshCoordinator,
 } from "$lib/auth-refresh-coordinator";
 import { localNodeFetch } from "$lib/local-node-route";
+import { runAuthInvalidationCleanup } from "$lib/native-activity/auth-invalidation";
 
 const IS_DEV =
 	(typeof location !== "undefined" && location.hostname.startsWith("dev")) ||
@@ -239,11 +240,14 @@ async function resolveLogtoAccessToken(forceRefresh: boolean) {
 async function resolveLocalModeAccessToken(forceRefresh: boolean) {
 	const baseUrl = (env.PUBLIC_API_ORIGIN ?? "").trim().replace(/\/+$/, "");
 	const query = forceRefresh ? "?refresh=1" : "";
-	const response = await localNodeFetch(`${baseUrl}/api/local-mode/auth${query}`, {
-		method: "GET",
-		credentials: "include",
-		cache: "no-store",
-	});
+	const response = await localNodeFetch(
+		`${baseUrl}/api/local-mode/auth${query}`,
+		{
+			method: "GET",
+			credentials: "include",
+			cache: "no-store",
+		},
+	);
 	if (response.status === 401) return null;
 	if (!response.ok) {
 		const body = await response.json().catch(() => null);
@@ -429,6 +433,7 @@ const authRefreshCoordinator = createAuthRefreshCoordinator({
 	isReusable: isReusableAuthSnapshot,
 	resolveToken: resolveAuthAccessToken,
 	clearSession: async () => {
+		await runAuthInvalidationCleanup();
 		if (IS_COHUB_LOCAL_MODE) return;
 		try {
 			await getLogtoClient().clearAllTokens();
@@ -538,6 +543,8 @@ export const clearBrokenAuthSession = async (
 	}
 };
 
+export const prepareForAuthInvalidation = runAuthInvalidationCleanup;
+
 export function setAuthToken(token: string) {
 	// Keep stored token free of CR/LF so later Authorization headers stay valid
 	// (Safari: "The string did not match the expected pattern.").
@@ -637,6 +644,7 @@ export const signInAfterUnauthorized = async (
 	guard: ClearBrokenSessionOptions,
 ): Promise<boolean> =>
 	authRefreshCoordinator.runGuardedMutation(guard, async () => {
+		await runAuthInvalidationCleanup();
 		if (IS_COHUB_LOCAL_MODE) {
 			clearAuthToken();
 			await signInWithRedirectPath(redirectPath);

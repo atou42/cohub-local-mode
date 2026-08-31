@@ -13,6 +13,7 @@ import {
 	MoreHorizontal,
 	PanelRightClose,
 	PanelRightOpen,
+	Radio,
 	Share2,
 	TextCursorInput,
 	X,
@@ -60,6 +61,8 @@ export type SpaceWorkspaceHeaderContext = {
 	spaceHasMinimalAccess: boolean;
 	rightSidebarAvailable: boolean;
 	rightSidebarCollapsed: boolean;
+	nativeActivityEnabled: boolean;
+	isActiveSessionFocused: boolean;
 };
 
 export type SessionRenameState = {
@@ -84,6 +87,7 @@ export type SpaceWorkspaceHeaderActions = {
 	labelHeaderResource: (anchorEl?: HTMLElement | null) => void | Promise<void>;
 	insertHeaderReference: () => void;
 	toggleRightSidebar: () => void | Promise<void>;
+	toggleNativeSessionFocus: () => void;
 };
 
 type Props = {
@@ -160,6 +164,22 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 </script>
 
 {#snippet HeaderActions()}
+	{#if context.nativeActivityEnabled && context.activeSessionId}
+		<button
+			type="button"
+			class="header-action-btn {context.isActiveSessionFocused ? 'is-focused' : ''}"
+			onclick={actions.toggleNativeSessionFocus}
+			title={context.isActiveSessionFocused ? "Stop following in Agent Pulse" : "Follow in Agent Pulse"}
+			aria-label={context.isActiveSessionFocused ? "Stop following this Session in Agent Pulse" : "Follow this Session in Agent Pulse"}
+			aria-pressed={context.isActiveSessionFocused}
+		>
+			<Radio class="h-4 w-4 shrink-0" />
+			<span class="hidden text-[13px] font-medium lg:inline">
+				{context.isActiveSessionFocused ? "Focused" : "Focus"}
+			</span>
+		</button>
+	{/if}
+
 	{#if context.activeSessionId && context.canManageSessionAccess}
 		<button
 			type="button"
@@ -357,5 +377,15 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 	.header-action-btn.is-shared:hover {
 		background: var(--success-bg);
 		color: var(--success);
+	}
+
+	.header-action-btn.is-focused {
+		background: var(--bg-hover);
+		color: var(--brand);
+	}
+
+	.header-action-btn.is-focused:hover {
+		background: var(--bg-hover-strong);
+		color: var(--brand-hover);
 	}
 </style>

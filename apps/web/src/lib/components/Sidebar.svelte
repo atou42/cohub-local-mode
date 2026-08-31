@@ -2325,7 +2325,9 @@ async function loadTasksForSpace(spaceId: string, force = false) {
 		refreshingTasks = true;
 	}
 	try {
-		const result = await sdkForSpaceOrigin(resolveSpaceOrigin(spaceId)).tasks.list({
+		const result = await sdkForSpaceOrigin(
+			resolveSpaceOrigin(spaceId),
+		).tasks.list({
 			spaceId,
 			limit: TASK_PAGE_SIZE,
 		});
@@ -2351,7 +2353,9 @@ async function loadMoreTasksForSpace(spaceId: string) {
 	if (!cursor) return;
 	loadingMoreTasks = true;
 	try {
-		const result = await sdkForSpaceOrigin(resolveSpaceOrigin(spaceId)).tasks.list({
+		const result = await sdkForSpaceOrigin(
+			resolveSpaceOrigin(spaceId),
+		).tasks.list({
 			spaceId,
 			limit: TASK_PAGE_SIZE,
 			cursor,
@@ -3028,7 +3032,15 @@ function orderLabelItemsBySessionTree(
 
 async function handleLogout() {
 	onClose?.();
-	const commandPaletteRecentKey = `cohub:command-palette:recent:${encodeURIComponent(getCacheUserKey())}`;
+	const cacheUserKey = getCacheUserKey();
+	const userUuid = authStore.userUuid;
+	try {
+		await authStore.reset();
+	} catch {
+		console.error("[sidebar] Native activity cleanup failed; logout cancelled");
+		return;
+	}
+	const commandPaletteRecentKey = `cohub:command-palette:recent:${encodeURIComponent(cacheUserKey)}`;
 	try {
 		localStorage.removeItem(commandPaletteRecentKey);
 	} catch {
@@ -3040,11 +3052,9 @@ async function handleLogout() {
 	await clearAllIndexedDbCache().catch((error) => {
 		console.warn("[sidebar] Failed to clear IndexedDB cache", error);
 	});
-	const userUuid = authStore.userUuid;
 	if (userUuid) clearActivityCache(userUuid);
 	if (userUuid) clearRecentSpace(userUuid);
 	if (userUuid) clearGrantedAppScopes(userUuid);
-	authStore.reset();
 	try {
 		await logtoClient.signOut(`${window.location.origin}/`);
 	} catch (error) {

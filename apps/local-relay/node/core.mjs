@@ -47,14 +47,22 @@ export async function readLimitedResponseBody(response, maxBytes) {
   }
 }
 
-export async function resolveLocalAccessToken(fetcher, localApiOrigin, signal) {
-  let response;
-  try {
-    response = await fetcher(`${localApiOrigin}/api/local-mode/auth`, {
-      method: "GET",
-      cache: "no-store",
-      signal,
-    });
+export async function resolveLocalAccessToken(
+  fetcher,
+  localApiOrigin,
+  signal,
+  { forceRefresh = false } = {},
+) {
+	let response;
+	try {
+		response = await fetcher(
+			`${localApiOrigin}/api/local-mode/auth${forceRefresh ? "?refresh=1" : ""}`,
+			{
+			method: "GET",
+			cache: "no-store",
+			signal,
+			},
+		);
   } catch (error) {
     throw new RelayNodeError(
       "local_api_unavailable",
@@ -586,6 +594,11 @@ export const TERMINAL_TURN_STATUSES = new Set([
   "merged",
   "cancelled",
 ]);
+const ACTIVE_TURN_LIFECYCLE_STATUSES = new Set([
+  "queued",
+  "running",
+  "abort_requested",
+]);
 
 export function delay(ms, signal) {
   return new Promise((resolve, reject) => {
@@ -663,7 +676,14 @@ export function parseWatchFromPromptResponse(body, requestPath) {
     typeof requestPath === "string" ? requestPath.match(PROMPT_PATH_PATTERN) : null;
   const spaceId = spaceMatch?.[1];
   if (!spaceId) return null;
-  return { spaceId, sessionId, turnId };
+  return {
+    spaceId,
+    sessionId,
+    turnId,
+    ...(ACTIVE_TURN_LIFECYCLE_STATUSES.has(turnStatus)
+      ? { initialStatus: turnStatus }
+      : {}),
+  };
 }
 
 export async function executeRelayCommand(command, {
