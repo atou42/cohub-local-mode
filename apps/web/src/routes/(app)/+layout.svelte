@@ -38,6 +38,7 @@ import { iosStandaloneViewportRecovery } from "$lib/ios-standalone-viewport";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { DESKTOP_SHELL_MIN_WIDTH_PX } from "$lib/layout/breakpoints";
 import { DURATION_DRAWER_OUT, DURATION_PANEL } from "$lib/motion.svelte";
+import { startNativeActivityBridge } from "$lib/native-activity";
 import {
 	beginMobileSessionViewTransition,
 	resolveMobileSessionNavTransition,
@@ -109,6 +110,9 @@ let isDragging = $state(false);
 let leftSidebarResizeCleanup: (() => void) | null = null;
 let vConsole: InstanceType<typeof import("vconsole").default> | null = null;
 let vConsoleRequestId = 0;
+let nativeActivityBridge = $state<ReturnType<
+	typeof startNativeActivityBridge
+> | null>(null);
 /**
  * Sidebar content mode lags collapse so the expanded tree can clip away
  * with the width tween instead of hard-swapping to the icon rail first.
@@ -544,6 +548,10 @@ $effect(() => {
 	turnNotifications.syncActiveSessionPresence();
 });
 
+$effect(() => {
+	nativeActivityBridge?.setCurrentRoute(currentLayoutSpaceId);
+});
+
 // Lock body scroll when drawer is open
 $effect(() => {
 	if (
@@ -582,6 +590,12 @@ onMount(() => {
 			turnNotifications.start();
 			// Listen in the shell, not a page, so delivery never depends on route.
 			stopDesktopCommands = startDesktopCommandListener();
+			if (authStore.userUuid) {
+				nativeActivityBridge = startNativeActivityBridge({
+					userKey: authStore.userUuid,
+				});
+				nativeActivityBridge?.setCurrentRoute(currentLayoutSpaceId);
+			}
 		}
 		initSpacePinRealtime();
 	});
@@ -591,6 +605,8 @@ onMount(() => {
 		delete window.cohubEnableVConsole;
 		stopDesktopCommands?.();
 		turnNotifications.stop();
+		nativeActivityBridge?.stop();
+		nativeActivityBridge = null;
 		vConsoleRequestId += 1;
 		vConsole?.destroy();
 		vConsole = null;

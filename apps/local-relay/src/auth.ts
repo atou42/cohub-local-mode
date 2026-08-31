@@ -7,6 +7,29 @@ export type AccessAuthConfig = {
 	ownerEmail: string;
 };
 
+export function requireOwnerAccessIdentity(
+	payload: JWTPayload,
+	ownerEmail: string,
+) {
+	const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+	const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
+	if (!email || email !== ownerEmail.trim().toLowerCase()) {
+		throw new RelayProtocolError(
+			"owner_mismatch",
+			"Cloudflare Access identity is not authorized for this node",
+			403,
+		);
+	}
+	if (!subject) {
+		throw new RelayProtocolError(
+			"access_identity_invalid",
+			"Cloudflare Access subject is required",
+			403,
+		);
+	}
+	return { subject, email };
+}
+
 const jwksByUrl = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 function normalizeTeamDomain(value: string) {
@@ -56,14 +79,7 @@ export async function authorizeOwnerRequest(
 			403,
 		);
 	}
-	const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
-	if (!email || email !== config.ownerEmail.trim().toLowerCase()) {
-		throw new RelayProtocolError(
-			"owner_mismatch",
-			"Cloudflare Access identity is not authorized for this node",
-			403,
-		);
-	}
+	requireOwnerAccessIdentity(payload, config.ownerEmail);
 	return payload;
 }
 

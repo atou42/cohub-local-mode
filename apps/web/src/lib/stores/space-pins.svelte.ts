@@ -1,10 +1,12 @@
 import { invalidatePaletteOverview } from "$lib/command-palette/palette-overview";
-import { sdk } from "$lib/sdk";
+import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import { authStore } from "$lib/stores/auth.svelte";
 import {
 	getCachedSpaceList,
 	patchCachedSpaceList,
 } from "$lib/stores/space-list-cache";
+import { routeSpacePinClient } from "$lib/stores/space-pin-routing";
 
 /**
  * Space pin store — manages optimistic pin/unpin and multi-client sync.
@@ -36,7 +38,15 @@ export function initSpacePinRealtime() {
 
 async function refreshPinnedState(spaceId: string) {
 	try {
-		const result = await sdk.user.labels.getResourceLabels("space", spaceId);
+		const pinClient = routeSpacePinClient(
+			spaceId,
+			resolveSpaceOrigin,
+			sdkForSpaceOrigin,
+		);
+		const result = await pinClient.user.labels.getResourceLabels(
+			"space",
+			spaceId,
+		);
 		const isPinned = result.assignments.some(
 			(a) => a.labelSystemKey === "user:pinned",
 		);
@@ -64,7 +74,12 @@ export async function toggleSpacePin(spaceId: string): Promise<void> {
 	invalidatePaletteOverview();
 
 	try {
-		await sdk.user.labels.patchResourceLabels(
+		const pinClient = routeSpacePinClient(
+			spaceId,
+			resolveSpaceOrigin,
+			sdkForSpaceOrigin,
+		);
+		await pinClient.user.labels.patchResourceLabels(
 			"space",
 			spaceId,
 			wasPinned

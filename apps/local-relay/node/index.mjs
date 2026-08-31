@@ -9,7 +9,12 @@ import WebSocket from "ws";
 import {
   executeRelayCommandUntilAvailable,
   RelayNodeError,
+  resolveLocalAccessToken,
 } from "./core.mjs";
+import {
+  createPulseWatcher,
+  normalizePulseWatchEnvelope,
+} from "./pulse-watch.mjs";
 import { createTurnWatcher } from "./turn-watch.mjs";
 
 const PROTOCOL_VERSION = 2;
@@ -17,6 +22,14 @@ const nodeId = process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
 const relayUrl = process.env.COHUB_LOCAL_RELAY_URL?.trim();
 const localApiOrigin =
   process.env.COHUB_LOCAL_RELAY_API_ORIGIN?.trim() || "http://127.0.0.1:8787";
+const localGatewayOrigin =
+  process.env.COHUB_LOCAL_RELAY_GATEWAY_ORIGIN?.trim() ||
+  "ws://127.0.0.1:8788/ws";
+const cloudApiOrigin =
+  process.env.PUBLIC_CLOUD_API_ORIGIN?.trim() || "https://api.cohub.live";
+const cloudGatewayOrigin =
+  process.env.PUBLIC_CLOUD_GATEWAY_ORIGIN?.trim() ||
+  "wss://gateway.cohub.live/ws";
 const spaceStorageRoot = process.env.SPACE_STORAGE_ROOT?.trim();
 const heartbeatMs = Number(
   process.env.COHUB_LOCAL_RELAY_HEARTBEAT_MS?.trim() || "30000",
@@ -104,6 +117,7 @@ let reconnectTimer = null;
 let current = null;
 let pendingOutcome = null;
 let statusWrite = Promise.resolve();
+let activityWatchUpdate = Promise.resolve();
 
 const watcher = createTurnWatcher({
   dataDir,
@@ -117,7 +131,31 @@ const watcher = createTurnWatcher({
     send({ type: "turn-event", event });
   },
 });
-void watcher.start();
+await watcher.start();
+
+const pulseWatcher = createPulseWatcher({
+  dataDir,
+  nodeId,
+  originConfigs: {
+    local: { apiOrigin: localApiOrigin, gatewayOrigin: localGatewayOrigin },
+    cloud: { apiOrigin: cloudApiOrigin, gatewayOrigin: cloudGatewayOrigin },
+  },
+  getAccessToken: (forceRefresh = false) =>
+    resolveLocalAccessToken(fetch, localApiOrigin, undefined, { forceRefresh }),
+  onEvent: (event) => {
+    send({ type: "turn-event", event });
+  },
+  onError: (error) => {
+    const code =
+      error && typeof error === "object" && "name" in error
+        ? String(error.name)
+        : "PulseCollectorError";
+    console.error(
+      `[relay-node] pulse collector ${code}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  },
+});
+await pulseWatcher.start();
 
 function writeStatus(state, details = {}) {
   const payload = {
@@ -265,10 +303,41 @@ function handleMessage(raw) {
     writeStatus("connected");
     if (pendingOutcome) sendOutcome(pendingOutcome);
     watcher.flushPending();
+    pulseWatcher.flushPending();
     return;
   }
   if (message.type === "turn-event-ack" && typeof message.eventId === "string") {
-    void watcher.ack(message.eventId);
+    void Promise.all([
+      watcher.ack(message.eventId),
+      pulseWatcher.ack(message.eventId),
+    ]);
+    return;
+  }
+  if (message.type === "activity-watch.replace") {
+    let replacement;
+    try {
+      replacement = normalizePulseWatchEnvelope(message);
+    } catch (error) {
+      console.error(
+        `[relay-node] ${error instanceof Error ? error.message : String(error)}`,
+      );
+      socket?.close(1002, "invalid Activity watch replacement");
+      return;
+    }
+    activityWatchUpdate = activityWatchUpdate
+      .then(async () => {
+        await pulseWatcher.replaceWatch(replacement);
+        send({
+          type: "activity-watch.ack",
+          revision: replacement.revision,
+          digest: replacement.digest,
+        });
+      })
+      .catch((error) => {
+        console.error(
+          `[relay-node] Activity watch replacement failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
     return;
   }
   if (message.type === "command") {
@@ -348,14 +417,23 @@ function connect() {
   });
 }
 
-function shutdown() {
+async function shutdown() {
+  if (stopping) return;
   stopping = true;
   writeStatus("stopping");
   if (reconnectTimer) clearTimeout(reconnectTimer);
   clearCurrent();
-  void watcher.stop();
   socket?.close(1000, "node shutting down");
-  setTimeout(() => process.exit(0), 250).unref();
+  const forcedExit = setTimeout(() => process.exit(1), 5_000);
+  forcedExit.unref();
+  await activityWatchUpdate.catch(() => {});
+  await Promise.all([watcher.stop(), pulseWatcher.stop(), statusWrite]).catch((error) => {
+    console.error(
+      `[relay-node] shutdown persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  clearTimeout(forcedExit);
+  process.exit(0);
 }
 
 process.once("SIGINT", shutdown);
