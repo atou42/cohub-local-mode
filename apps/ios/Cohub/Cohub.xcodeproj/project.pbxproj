@@ -1,0 +1,129 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* CohubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* CohubApp.swift */; };
+		100000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* ContentView.swift */; };
+		100000000000000000000003 /* CohubWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* CohubWebView.swift */; };
+		100000000000000000000004 /* CohubNavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* CohubNavigationPolicy.swift */; };
+		100000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Assets.xcassets */; };
+		100000000000000000000006 /* CohubActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* CohubActivityController.swift */; };
+		100000000000000000000007 /* CohubActivityBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* CohubActivityBridge.swift */; };
+		100000000000000000000008 /* CohubActivityState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000A /* CohubActivityState.swift */; };
+		100000000000000000000009 /* CohubActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000B /* CohubActivityStore.swift */; };
+		10000000000000000000000A /* CohubWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000C /* CohubWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		10000000000000000000000B /* CohubWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* CohubWidgetsBundle.swift */; };
+		10000000000000000000000C /* CohubFocusBoardWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000F /* CohubFocusBoardWidget.swift */; };
+		10000000000000000000000D /* CohubAgentPulseLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* CohubAgentPulseLiveActivity.swift */; };
+		10000000000000000000000E /* CohubActivityState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000A /* CohubActivityState.swift */; };
+		10000000000000000000000F /* CohubActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000B /* CohubActivityStore.swift */; };
+		100000000000000000000010 /* CohubAgentPulseAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* CohubAgentPulseAttributes.swift */; };
+		100000000000000000000011 /* CohubAgentPulseAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* CohubAgentPulseAttributes.swift */; };
+		F10000000000000000000001 /* CohubFreeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* CohubFreeApp.swift */; };
+		F10000000000000000000002 /* CohubFreeContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000002 /* CohubFreeContentView.swift */; };
+		F10000000000000000000003 /* CohubFreeWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000003 /* CohubFreeWebView.swift */; };
+		F10000000000000000000004 /* CohubFreeNavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000004 /* CohubFreeNavigationPolicy.swift */; };
+		F10000000000000000000005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = 800000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 500000000000000000000002; remoteInfo = CohubWidgets; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		700000000000000000000007 /* Embed App Extensions */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (10000000000000000000000A /* CohubWidgets.appex in Embed App Extensions */, ); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* CohubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* CohubWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubWebView.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* CohubNavigationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubNavigationPolicy.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		200000000000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		200000000000000000000007 /* Cohub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cohub.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000008 /* CohubActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubActivityController.swift; sourceTree = "<group>"; };
+		200000000000000000000009 /* CohubActivityBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubActivityBridge.swift; sourceTree = "<group>"; };
+		20000000000000000000000A /* CohubActivityState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubActivityState.swift; sourceTree = "<group>"; };
+		20000000000000000000000B /* CohubActivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubActivityStore.swift; sourceTree = "<group>"; };
+		20000000000000000000000C /* CohubWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CohubWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		20000000000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		20000000000000000000000E /* CohubWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubWidgetsBundle.swift; sourceTree = "<group>"; };
+		20000000000000000000000F /* CohubFocusBoardWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubFocusBoardWidget.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* CohubAgentPulseLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubAgentPulseLiveActivity.swift; sourceTree = "<group>"; };
+		200000000000000000000011 /* Cohub.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Cohub.entitlements; sourceTree = "<group>"; };
+		200000000000000000000012 /* CohubWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CohubWidgets.entitlements; sourceTree = "<group>"; };
+		200000000000000000000013 /* CohubAgentPulseAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubAgentPulseAttributes.swift; sourceTree = "<group>"; };
+		F20000000000000000000001 /* CohubFreeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubFreeApp.swift; sourceTree = "<group>"; };
+		F20000000000000000000002 /* CohubFreeContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubFreeContentView.swift; sourceTree = "<group>"; };
+		F20000000000000000000003 /* CohubFreeWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubFreeWebView.swift; sourceTree = "<group>"; };
+		F20000000000000000000004 /* CohubFreeNavigationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CohubFreeNavigationPolicy.swift; sourceTree = "<group>"; };
+		F20000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F20000000000000000000006 /* CohubFree.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CohubFree.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		300000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		300000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F30000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		400000000000000000000001 = {isa = PBXGroup; children = (400000000000000000000002 /* Cohub */, F40000000000000000000001 /* CohubFree */, 400000000000000000000004 /* Shared */, 400000000000000000000005 /* CohubWidgets */, 400000000000000000000003 /* Products */, ); sourceTree = "<group>"; };
+		400000000000000000000002 /* Cohub */ = {isa = PBXGroup; children = (200000000000000000000001 /* CohubApp.swift */, 200000000000000000000002 /* ContentView.swift */, 200000000000000000000003 /* CohubWebView.swift */, 200000000000000000000004 /* CohubNavigationPolicy.swift */, 200000000000000000000008 /* CohubActivityController.swift */, 200000000000000000000009 /* CohubActivityBridge.swift */, 200000000000000000000011 /* Cohub.entitlements */, 200000000000000000000005 /* Info.plist */, 200000000000000000000006 /* Assets.xcassets */, ); path = Cohub; sourceTree = "<group>"; };
+		400000000000000000000003 /* Products */ = {isa = PBXGroup; children = (200000000000000000000007 /* Cohub.app */, F20000000000000000000006 /* CohubFree.app */, 20000000000000000000000C /* CohubWidgets.appex */, ); name = Products; sourceTree = "<group>"; };
+		400000000000000000000004 /* Shared */ = {isa = PBXGroup; children = (20000000000000000000000A /* CohubActivityState.swift */, 20000000000000000000000B /* CohubActivityStore.swift */, 200000000000000000000013 /* CohubAgentPulseAttributes.swift */, ); path = Shared; sourceTree = "<group>"; };
+		400000000000000000000005 /* CohubWidgets */ = {isa = PBXGroup; children = (20000000000000000000000E /* CohubWidgetsBundle.swift */, 20000000000000000000000F /* CohubFocusBoardWidget.swift */, 200000000000000000000010 /* CohubAgentPulseLiveActivity.swift */, 200000000000000000000012 /* CohubWidgets.entitlements */, 20000000000000000000000D /* Info.plist */, ); path = CohubWidgets; sourceTree = "<group>"; };
+		F40000000000000000000001 /* CohubFree */ = {isa = PBXGroup; children = (F20000000000000000000001 /* CohubFreeApp.swift */, F20000000000000000000002 /* CohubFreeContentView.swift */, F20000000000000000000003 /* CohubFreeWebView.swift */, F20000000000000000000004 /* CohubFreeNavigationPolicy.swift */, F20000000000000000000005 /* Info.plist */, ); path = CohubFree; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* Cohub */ = {isa = PBXNativeTarget; buildConfigurationList = 600000000000000000000002 /* Build configuration list for PBXNativeTarget "Cohub" */; buildPhases = (700000000000000000000001 /* Sources */, 300000000000000000000001 /* Frameworks */, 700000000000000000000002 /* Resources */, 700000000000000000000007 /* Embed App Extensions */, ); buildRules = (); dependencies = (A00000000000000000000002 /* PBXTargetDependency */, ); name = Cohub; productName = Cohub; productReference = 200000000000000000000007 /* Cohub.app */; productType = "com.apple.product-type.application"; };
+		500000000000000000000002 /* CohubWidgets */ = {isa = PBXNativeTarget; buildConfigurationList = 600000000000000000000003 /* Build configuration list for PBXNativeTarget "CohubWidgets" */; buildPhases = (700000000000000000000004 /* Sources */, 300000000000000000000002 /* Frameworks */, 700000000000000000000005 /* Resources */, ); buildRules = (); dependencies = (); name = CohubWidgets; productName = CohubWidgets; productReference = 20000000000000000000000C /* CohubWidgets.appex */; productType = "com.apple.product-type.app-extension"; };
+		F50000000000000000000001 /* CohubFree */ = {isa = PBXNativeTarget; buildConfigurationList = F60000000000000000000001 /* Build configuration list for PBXNativeTarget "CohubFree" */; buildPhases = (F70000000000000000000001 /* Sources */, F30000000000000000000001 /* Frameworks */, F70000000000000000000002 /* Resources */, ); buildRules = (); dependencies = (); name = CohubFree; productName = CohubFree; productReference = F20000000000000000000006 /* CohubFree.app */; productType = "com.apple.product-type.application"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		800000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {500000000000000000000001 = {CreatedOnToolsVersion = 26.6; ProvisioningStyle = Automatic; }; 500000000000000000000002 = {CreatedOnToolsVersion = 26.6; ProvisioningStyle = Automatic; }; F50000000000000000000001 = {CreatedOnToolsVersion = 26.6; ProvisioningStyle = Automatic; }; }; }; buildConfigurationList = 600000000000000000000001 /* Build configuration list for PBXProject "Cohub" */; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = 400000000000000000000001; productRefGroup = 400000000000000000000003 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (500000000000000000000001 /* Cohub */, F50000000000000000000001 /* CohubFree */, 500000000000000000000002 /* CohubWidgets */, ); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		700000000000000000000002 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		700000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F70000000000000000000002 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (F10000000000000000000005 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		700000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001 /* CohubApp.swift in Sources */, 100000000000000000000002 /* ContentView.swift in Sources */, 100000000000000000000003 /* CohubWebView.swift in Sources */, 100000000000000000000004 /* CohubNavigationPolicy.swift in Sources */, 100000000000000000000006 /* CohubActivityController.swift in Sources */, 100000000000000000000007 /* CohubActivityBridge.swift in Sources */, 100000000000000000000008 /* CohubActivityState.swift in Sources */, 100000000000000000000009 /* CohubActivityStore.swift in Sources */, 100000000000000000000010 /* CohubAgentPulseAttributes.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		700000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (10000000000000000000000B /* CohubWidgetsBundle.swift in Sources */, 10000000000000000000000C /* CohubFocusBoardWidget.swift in Sources */, 10000000000000000000000D /* CohubAgentPulseLiveActivity.swift in Sources */, 10000000000000000000000E /* CohubActivityState.swift in Sources */, 10000000000000000000000F /* CohubActivityStore.swift in Sources */, 100000000000000000000011 /* CohubAgentPulseAttributes.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		F70000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F10000000000000000000001 /* CohubFreeApp.swift in Sources */, F10000000000000000000002 /* CohubFreeContentView.swift in Sources */, F10000000000000000000003 /* CohubFreeWebView.swift in Sources */, F10000000000000000000004 /* CohubFreeNavigationPolicy.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 500000000000000000000002 /* CohubWidgets */; targetProxy = A00000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		900000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_STRICT_OBJC_MSGSEND = YES; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		900000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; ENABLE_STRICT_OBJC_MSGSEND = YES; GCC_C_LANGUAGE_STANDARD = gnu17; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; VALIDATE_PRODUCT = YES; }; name = Release; };
+		900000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {APS_ENVIRONMENT = development; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = Cohub/Cohub.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_ASSET_PATHS = ""; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Cohub/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou.cohub; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		900000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {APS_ENVIRONMENT = production; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = Cohub/Cohub.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Cohub/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou.cohub; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		900000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = CohubWidgets/CohubWidgets.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CohubWidgets/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou.cohub.widgets; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		900000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = CohubWidgets/CohubWidgets.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CohubWidgets/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou.cohub.widgets; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		F90000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_ASSET_PATHS = ""; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CohubFree/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou42.cohub.preview; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		F90000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CohubFree/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = cc.atou42.cohub.preview; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		600000000000000000000001 /* Project configuration list */ = {isa = XCConfigurationList; buildConfigurations = (900000000000000000000001 /* Debug */, 900000000000000000000002 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		600000000000000000000002 /* Cohub configuration list */ = {isa = XCConfigurationList; buildConfigurations = (900000000000000000000003 /* Debug */, 900000000000000000000004 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		600000000000000000000003 /* CohubWidgets configuration list */ = {isa = XCConfigurationList; buildConfigurations = (900000000000000000000005 /* Debug */, 900000000000000000000006 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		F60000000000000000000001 /* CohubFree configuration list */ = {isa = XCConfigurationList; buildConfigurations = (F90000000000000000000001 /* Debug */, F90000000000000000000002 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 800000000000000000000001 /* Project object */;
+}

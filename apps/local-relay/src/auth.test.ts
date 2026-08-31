@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { authorizeNodeRequest } from "./auth.ts";
+import { authorizeNodeRequest, requireOwnerAccessIdentity } from "./auth.ts";
 import { RelayProtocolError } from "./protocol.ts";
 
 test("node bearer authentication fails closed", async () => {
@@ -32,4 +32,23 @@ test("node bearer authentication fails closed", async () => {
 			"expected",
 		),
 	);
+});
+
+test("owner identity requires the configured email and a verified Access subject", () => {
+	assert.deepEqual(
+		requireOwnerAccessIdentity(
+			{ sub: "access-subject", email: "Owner@Example.com" },
+			"owner@example.com",
+		),
+		{ subject: "access-subject", email: "owner@example.com" },
+	);
+	for (const payload of [
+		{ sub: "access-subject", email: "attacker@example.com" },
+		{ email: "owner@example.com" },
+	]) {
+		assert.throws(
+			() => requireOwnerAccessIdentity(payload, "owner@example.com"),
+			(error: unknown) => error instanceof RelayProtocolError && error.status === 403,
+		);
+	}
 });
