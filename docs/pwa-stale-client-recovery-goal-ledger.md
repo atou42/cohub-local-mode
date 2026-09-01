@@ -49,3 +49,12 @@ None.
 ## Next action
 
 Complete. Keep the production Worker and its assets in the same deployment whenever a web build changes.
+
+## 2026-09-01 release guard
+
+- A post-rebase service restart exposed new root HTML while `cohub-local-web` still served the previous static asset set. Every new immutable entry returned 404 and the authenticated root rendered blank.
+- The matching assets were deployed as Worker version `f76af6af-f7fe-4179-bcdb-cfcb5cf85a36`, which restored the page before the permanent guard was added.
+- `pnpm local:release` now builds, deploys a version-marked Worker, verifies that Cloudflare reports the same web build, and only then restarts Local Mode.
+- `pnpm local:service:restart` now refuses to restart when the local build and latest public Worker marker differ. The failure-path check preserved the running service PID.
+- The exact public root is now served by the same Worker deployment as its immutable assets, so root HTML and asset references cannot split during a Local Mode service restart.
+- The guarded release completed as Worker version `d4a807d8-93fb-4b16-adbe-9a1402409bfa` with web build `1788232293845`. Fresh authenticated desktop and mobile pages rendered with matching widths and no application resource failures.
