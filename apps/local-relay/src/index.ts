@@ -65,6 +65,7 @@ import {
 	parseNodeMessage,
 	parseActivityWatchPreferences,
 	parseActivityOwnerUserId,
+	RELAY_EVENT_SCHEMA_VERSION,
 	RELAY_PROTOCOL_VERSION,
 	RelayProtocolError,
 	type RelayBrowserEvent,
@@ -1461,6 +1462,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "ready",
 			nodeId: this.env.NODE_ID,
+			eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
 		});
 		this.ctx.waitUntil(
 			Promise.all([
@@ -2799,7 +2801,13 @@ async function handleRequest(request: Request, env: RelayEnv) {
 		);
 		const storedActivityHealth = await activityHealth.json<Record<string, unknown>>();
 		if (storedActivityHealth.status === "error") activityPush = storedActivityHealth;
-		return json(composeRelayHealth(RELAY_PROTOCOL_VERSION, activityPush));
+		return json(
+			composeRelayHealth(
+				RELAY_PROTOCOL_VERSION,
+				RELAY_EVENT_SCHEMA_VERSION,
+				activityPush,
+			),
+		);
 	}
 	const match = pathname.match(/^\/v1\/nodes\/([^/]+)(\/.*)?$/);
 	if (!match?.[1]) {

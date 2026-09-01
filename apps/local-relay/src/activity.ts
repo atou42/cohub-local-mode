@@ -507,11 +507,13 @@ export function recoverActivitySendingLease(event: ActivityPushPayload["aps"]["e
 
 export function composeRelayHealth(
 	protocolVersion: number,
+	eventSchemaVersion: number,
 	activityPush: Record<string, unknown>,
 ) {
 	return {
 		status: "ready" as const,
 		protocolVersion,
+		eventSchemaVersion,
 		activityPush,
 	};
 }
