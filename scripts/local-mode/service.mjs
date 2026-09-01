@@ -14,6 +14,11 @@ import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  assertWebDeploymentMatches,
+  readLocalWebBuildVersion,
+} from "./web-deployment.mjs";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const runScript = join(repoRoot, "scripts/local-mode/run.mjs");
 const label = "cc.atou.cohub-local-mode";
@@ -175,6 +180,24 @@ async function restart() {
   if (!(await isLoaded())) {
     throw new Error("Local Mode service is not installed");
   }
+  const localVersion = await readLocalWebBuildVersion(repoRoot);
+  const { stdout } = await run(
+    "pnpm",
+    [
+      "--filter",
+      "web",
+      "exec",
+      "wrangler",
+      "deployments",
+      "list",
+      "--config",
+      "wrangler.local-mode.toml",
+      "--json",
+    ],
+    { cwd: join(repoRoot, "apps/web"), capture: true },
+  );
+  const deployments = JSON.parse(stdout);
+  assertWebDeploymentMatches({ localVersion, deployments });
   await run("launchctl", ["kickstart", "-k", target]);
   await waitForReady();
   console.log(`Local Mode service restarted: ${label}`);
