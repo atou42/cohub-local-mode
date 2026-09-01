@@ -18,9 +18,20 @@ import {
   assertWebDeploymentMatches,
   readLocalWebBuildVersion,
 } from "./web-deployment.mjs";
+import {
+  assertRelayDeploymentMatches,
+  readLocalRelaySourceVersion,
+  relayHealthUrl,
+  waitForRelayHealth,
+} from "./relay-deployment.mjs";
+import {
+  RELAY_EVENT_SCHEMA_VERSION,
+  RELAY_PROTOCOL_VERSION,
+} from "../../apps/local-relay/node/protocol-compat.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const runScript = join(repoRoot, "scripts/local-mode/run.mjs");
+process.loadEnvFile(join(repoRoot, "deploy/local-mode/.env"));
 const label = "cc.atou.cohub-local-mode";
 const domain = `gui/${userInfo().uid}`;
 const target = `${domain}/${label}`;
@@ -180,6 +191,31 @@ async function restart() {
   if (!(await isLoaded())) {
     throw new Error("Local Mode service is not installed");
   }
+  const localRelayVersion = await readLocalRelaySourceVersion(repoRoot);
+  const { stdout: relayDeploymentsStdout } = await run(
+    "pnpm",
+    [
+      "exec",
+      "wrangler",
+      "deployments",
+      "list",
+      "--config",
+      "wrangler.toml",
+      "--json",
+    ],
+    { cwd: join(repoRoot, "apps/local-relay"), capture: true },
+  );
+  assertRelayDeploymentMatches({
+    localVersion: localRelayVersion,
+    deployments: JSON.parse(relayDeploymentsStdout),
+  });
+  await waitForRelayHealth({
+    url: relayHealthUrl(process.env.COHUB_LOCAL_RELAY_URL),
+    expected: {
+      protocolVersion: RELAY_PROTOCOL_VERSION,
+      eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+    },
+  });
   const localVersion = await readLocalWebBuildVersion(repoRoot);
   const { stdout } = await run(
     "pnpm",
@@ -198,7 +234,10 @@ async function restart() {
   );
   const deployments = JSON.parse(stdout);
   assertWebDeploymentMatches({ localVersion, deployments });
-  await run("launchctl", ["kickstart", "-k", target]);
+  // bootout gives child workers a SIGTERM path so in-flight agent turns can
+  // drain. kickstart -k kills the service tree and can strand a running turn.
+  await stopLoadedService();
+  await bootstrapService();
   await waitForReady();
   console.log(`Local Mode service restarted: ${label}`);
 }

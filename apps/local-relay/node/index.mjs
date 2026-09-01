@@ -16,8 +16,13 @@ import {
   normalizePulseWatchEnvelope,
 } from "./pulse-watch.mjs";
 import { createTurnWatcher } from "./turn-watch.mjs";
+import {
+  assertRelayReadyCompatibility,
+  RELAY_EVENT_SCHEMA_VERSION,
+  RELAY_PROTOCOL_VERSION,
+} from "./protocol-compat.mjs";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = RELAY_PROTOCOL_VERSION;
 const nodeId = process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
 const relayUrl = process.env.COHUB_LOCAL_RELAY_URL?.trim();
 const localApiOrigin =
@@ -160,6 +165,7 @@ await pulseWatcher.start();
 function writeStatus(state, details = {}) {
   const payload = {
     protocolVersion: PROTOCOL_VERSION,
+    eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
     nodeId,
     state,
     pid: process.pid,
@@ -299,6 +305,18 @@ function handleMessage(raw) {
     return;
   }
   if (message.type === "ready") {
+    try {
+      assertRelayReadyCompatibility(message);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[relay-node] ${detail}`);
+      writeStatus("incompatible", {
+        lastErrorCode: "relay_event_schema_mismatch",
+        lastErrorMessage: detail,
+      });
+      socket?.close(1002, "relay event schema mismatch");
+      return;
+    }
     console.log(`[relay-node] connected as ${message.nodeId}`);
     writeStatus("connected");
     if (pendingOutcome) sendOutcome(pendingOutcome);

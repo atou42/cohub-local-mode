@@ -20,6 +20,7 @@ import {
 } from "$lib/format-usage";
 import { getGenerationCostPresentation } from "$lib/generation-cost";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { resolveMessageAuthorProfile } from "$lib/message-author-profile";
 import {
 	findModelCatalogItem,
 	formatThinkingLevelShort,
@@ -29,6 +30,7 @@ import {
 } from "$lib/model-catalog";
 import { m } from "$lib/paraglide/messages.js";
 import type { ChatMessage } from "$lib/session-tree";
+import { authStore } from "$lib/stores/auth.svelte";
 import {
 	formatCompactAbsoluteTime,
 	formatFullAbsoluteTime,
@@ -129,11 +131,20 @@ const isCancelledBeforeDispatch = $derived(
 		message.meta?.turn?.meta?.cancelledBeforeDispatch === true,
 );
 
+const resolvedAuthorProfile = $derived(
+	resolveMessageAuthorProfile({
+		messageAuthorUuid: message.authorUuid,
+		messageAuthorProfile: message.authorProfile,
+		currentUserUuid: authStore.userUuid,
+		currentUserProfile: authStore.profile,
+	}),
+);
+
 const cancelledByDisplay = $derived.by(() => {
 	const userId = message.meta?.turn?.meta?.cancelledByUserId;
 	if (typeof userId !== "string" || !userId.trim()) return "";
-	if (message.authorProfile?.userUuid === userId)
-		return message.authorProfile.displayName;
+	if (resolvedAuthorProfile?.userUuid === userId)
+		return resolvedAuthorProfile.displayName;
 	return userId.replaceAll("-", "").slice(0, 8);
 });
 
@@ -234,7 +245,7 @@ function fallbackUserName(uuid?: string | null): string {
 }
 
 const userDisplayName = $derived(
-	message.authorProfile?.displayName?.trim() ||
+	resolvedAuthorProfile?.displayName?.trim() ||
 		fallbackUserName(message.authorUuid),
 );
 
@@ -567,8 +578,8 @@ function handleCopy() {
             <!-- User identity -->
             <UserIdentity
               name={userDisplayName}
-              avatarUrl={message.authorProfile?.avatarUrl}
-              username={message.authorProfile?.username}
+              avatarUrl={resolvedAuthorProfile?.avatarUrl}
+              username={resolvedAuthorProfile?.username}
               title={userDisplayName}
               size="xxs"
               class="text-inherit"
