@@ -634,13 +634,14 @@ test("unknown push-to-start delivery is not replayed while updates recover", () 
 
 test("activity push failure does not mark core Relay health unavailable", () => {
 	assert.deepEqual(
-		composeRelayHealth(2, {
+		composeRelayHealth(2, 1, {
 			status: "error",
 			code: "apns_configuration_error",
 		}),
 		{
 			status: "ready",
 			protocolVersion: 2,
+			eventSchemaVersion: 1,
 			activityPush: {
 				status: "error",
 				code: "apns_configuration_error",
