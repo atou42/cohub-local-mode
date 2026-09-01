@@ -40,7 +40,7 @@ pnpm local:service:install
 pnpm local:service:status
 ```
 
-The service starts at login, supervises every Local Space runner, restarts them after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. `pnpm local:service:restart` applies environment or code changes after running `pnpm local:build`. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
+The service starts at login, supervises every Local Space runner, restarts them after an unexpected exit, and writes logs under `~/.cohub-local-mode/logs`. The public web port serves compiled immutable assets directly and forwards page rendering to the loopback-only Worker runtime on port 4174. Run `pnpm local:release` after code changes; it builds the local service, deploys the matching public Worker assets, verifies their build marker, and only then restarts the service. `pnpm local:service:restart` refuses to restart when the local and public web builds differ. `pnpm local:service:uninstall` removes only the service and leaves all Local Mode data unchanged.
 
 Local Space host access is opt-in and remains machine-owned. Set `COHUB_LOCAL_SPACE_WRITABLE_ROOTS_JSON` to a JSON object keyed by Space ID, with existing absolute paths under the local user's home directory as values. Pi receives those roots through the local sandbox filesystem and command policy. Codex and Cursor receive them as additional workspace roots. Grok uses the matching `cohub-local-<space-id>` custom sandbox profile from `~/.grok/sandbox.toml`. Spaces absent from the map remain restricted to their managed workspace. Restart the service and start a new agent session after changing this policy.
 
@@ -102,7 +102,7 @@ COHUB_LOCAL_TAILSCALE_HOST=mac-mini.example.ts.net
 COHUB_LOCAL_OWNER_EMAIL=owner@example.com
 ```
 
-Run `pnpm local:build` and `pnpm local:service:restart` after changing the private origin. The client probes the private node first and uses the Cloudflare hostname when it cannot be reached. Application errors are not hidden by the public route, and writes are never automatically repeated. Leave `PUBLIC_LOCAL_PRIVATE_ORIGIN` empty to use Cloudflare Tunnel only.
+Run `pnpm local:release` after changing the private origin. The client probes the private node first and uses the Cloudflare hostname when it cannot be reached. Application errors are not hidden by the public route, and writes are never automatically repeated. Leave `PUBLIC_LOCAL_PRIVATE_ORIGIN` empty to use Cloudflare Tunnel only.
 
 Before treating Tailscale as the performance path, run `tailscale ping` from another active tailnet device and confirm that it reports a direct peer address rather than DERP relay traffic.
 
