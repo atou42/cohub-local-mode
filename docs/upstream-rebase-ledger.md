@@ -4,6 +4,17 @@
 
 Rebase the local-mode work onto the latest `upstream/main` without losing local capabilities or adding unrelated design work. Publish the rebased history only after explicit authorization.
 
+## 2026-09-01 Rebase
+
+- Local baseline: `bdbd353010995b79344f37a12275701cd9236f29`.
+- Upstream target: `ff9689ac1304456a7031f2414def32c8340ecf80`.
+- Rebase completed locally with `upstream/main` as an ancestor of `HEAD`.
+- All 37 local commits were replayed. Recovery branch: `backup/pre-upstream-rebase-20260901`.
+- Upstream process output hardening, dependency upgrades, and sandbox event-order coverage were retained while preserving local harness routing, relay behavior, and process stdin support.
+- The regenerated lockfile passes a frozen install. API, Agent, Protocol, and Web suites passed 798 tests in total, all Sandbox Go packages passed, and the production local build completed successfully.
+- The untracked `.playwright-cli/` directory was restored unchanged after the rebase.
+- No remote history was changed.
+
 ## 2026-08-28 Rebase
 
 - Local baseline: `981cb67814a93427af14e2b48ab0e23224cb4866`.
