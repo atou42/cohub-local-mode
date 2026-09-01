@@ -39,6 +39,7 @@
     "local:infra": "node scripts/local-mode/run.mjs infra",
     "local:init": "node scripts/local-mode/run.mjs init",
     "local:build": "node scripts/local-mode/run.mjs build",
+    "local:release": "node scripts/local-mode/release.mjs",
     "local:up": "node scripts/local-mode/run.mjs up",
     "local:host": "node scripts/local-mode/run.mjs host",
     "local:serve": "node scripts/local-mode/run.mjs serve",
