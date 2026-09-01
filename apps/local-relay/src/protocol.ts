@@ -4,6 +4,7 @@ import {
 } from "./activity.ts";
 
 export const RELAY_PROTOCOL_VERSION = 2 as const;
+export const RELAY_EVENT_SCHEMA_VERSION = 1 as const;
 
 export const ACTIVITY_SPACE_ORIGINS = ["local", "cloud"] as const;
 export type ActivitySpaceOrigin = (typeof ACTIVITY_SPACE_ORIGINS)[number];
@@ -194,6 +195,7 @@ export type RelayToNodeMessage =
 			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
 			type: "ready";
 			nodeId: string;
+			eventSchemaVersion: typeof RELAY_EVENT_SCHEMA_VERSION;
 		}
 	| {
 			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
