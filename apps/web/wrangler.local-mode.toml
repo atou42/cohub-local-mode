@@ -18,6 +18,10 @@ PUBLIC_LOCAL_RELAY_BASE_PATH = "/relay"
 PUBLIC_LOCAL_RELAY_NODE_ID = "mac-mini"
 
 [[routes]]
+pattern = "cohub.atou.cc/"
+zone_name = "atou.cc"
+
+[[routes]]
 pattern = "cohub.atou.cc/_app/*"
 zone_name = "atou.cc"
 
