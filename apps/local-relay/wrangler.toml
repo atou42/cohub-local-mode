@@ -49,6 +49,7 @@ bucket_name = "cohub-local-relay-attachments"
 
 [vars]
 ALLOWED_ORIGIN = "https://cohub.atou.cc"
+CLOUD_API_ORIGIN = "https://api.cohub.live"
 NODE_ID = "mac-mini"
 COMMAND_LEASE_MS = "60000"
 COMMAND_MAX_BODY_BYTES = "1048576"

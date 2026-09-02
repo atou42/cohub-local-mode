@@ -3,7 +3,7 @@ import {
 	type RelayTurnLifecycleEvent,
 } from "./activity.ts";
 
-export const RELAY_PROTOCOL_VERSION = 2 as const;
+export const RELAY_PROTOCOL_VERSION = 3 as const;
 export const RELAY_EVENT_SCHEMA_VERSION = 1 as const;
 
 export const ACTIVITY_SPACE_ORIGINS = ["local", "cloud"] as const;
@@ -63,7 +63,7 @@ export type RelayCommandStatus =
 	| "cancelled";
 
 export type RelayHttpRequest = {
-	method: "POST";
+	method: "GET" | "POST" | "PUT" | "DELETE";
 	path: string;
 	headers: Record<string, string>;
 	body: string;
@@ -360,6 +360,8 @@ const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMPACT_OWNER_ID_PATTERN = /^[0-9a-f]{32}$/i;
 const PROMPT_PATH_PATTERN = /^\/api\/spaces\/([0-9a-f-]{36})\/prompt$/i;
+const FEDERATED_FS_PATH_PATTERN =
+	/^\/api\/spaces\/([0-9a-f-]{36})\/fs\/(tree|file|dir|node|move)$/i;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const CONTENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
@@ -651,6 +653,116 @@ export function validateRelayCommandInput(
 	}
 	if (!isRecord(value.request)) {
 		throw new RelayProtocolError("invalid_request", "request is required");
+	}
+	if (value.kind === "federated_fs") {
+		const method = value.request.method;
+		if (
+			method !== "GET" &&
+			method !== "POST" &&
+			method !== "PUT" &&
+			method !== "DELETE"
+		) {
+			throw new RelayProtocolError(
+				"method_not_allowed",
+				"unsupported federated filesystem method",
+				405,
+			);
+		}
+		const path = requireString(value.request.path, "request.path", {
+			maxLength: 512,
+		});
+		let url: URL;
+		try {
+			url = new URL(path, "https://relay.internal");
+		} catch {
+			throw new RelayProtocolError(
+				"path_not_allowed",
+				"invalid federated filesystem path",
+				403,
+			);
+		}
+		const route = url.pathname.match(FEDERATED_FS_PATH_PATTERN);
+		const endpoint = route?.[2];
+		if (!route || !UUID_PATTERN.test(route[1] ?? "")) {
+			throw new RelayProtocolError(
+				"path_not_allowed",
+				"only Local Space filesystem commands are accepted",
+				403,
+			);
+		}
+		const validMethod =
+			(endpoint === "tree" && method === "GET") ||
+			(endpoint === "file" && (method === "GET" || method === "PUT")) ||
+			(endpoint === "dir" && method === "POST") ||
+			(endpoint === "move" && method === "POST") ||
+			(endpoint === "node" && method === "DELETE");
+		if (!validMethod) {
+			throw new RelayProtocolError(
+				"method_not_allowed",
+				"filesystem method does not match the allowlisted route",
+				405,
+			);
+		}
+		const body = typeof value.request.body === "string" ? value.request.body : "";
+		if (new TextEncoder().encode(body).byteLength > options.maxBodyBytes) {
+			throw new RelayProtocolError(
+				"body_too_large",
+				"command body exceeds the relay limit",
+				413,
+			);
+		}
+		if (method === "PUT" || method === "POST") {
+			let parsedBody: Record<string, unknown> | null = null;
+			try {
+				const parsed = JSON.parse(body) as unknown;
+				parsedBody = isRecord(parsed) ? parsed : null;
+			} catch {
+				parsedBody = null;
+			}
+			if (!parsedBody) {
+				throw new RelayProtocolError(
+					"invalid_request",
+					"federated filesystem body must be a JSON object",
+				);
+			}
+			if (parsedBody.mutationId !== idempotencyKey) {
+				throw new RelayProtocolError(
+					"idempotency_mismatch",
+					"mutationId must match idempotencyKey",
+				);
+			}
+		}
+		if (
+			method === "DELETE" &&
+			url.searchParams.get("mutationId") !== idempotencyKey
+		) {
+			throw new RelayProtocolError(
+				"idempotency_mismatch",
+				"mutationId must match idempotencyKey",
+			);
+		}
+		if (
+			value.attachmentIds !== undefined &&
+			(!Array.isArray(value.attachmentIds) || value.attachmentIds.length > 0)
+		) {
+			throw new RelayProtocolError(
+				"invalid_attachment_refs",
+				"federated filesystem commands cannot carry attachments",
+			);
+		}
+		return {
+			idempotencyKey,
+			request: {
+				method,
+				path: `${url.pathname}${url.search}`,
+				headers:
+					method === "PUT" || method === "POST"
+						? { "content-type": "application/json" }
+						: {},
+				body,
+			},
+			attachmentIds: [],
+		};
 	}
 	if (value.request.method !== "POST") {
 		throw new RelayProtocolError(

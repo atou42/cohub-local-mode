@@ -1,4 +1,4 @@
-export const RELAY_PROTOCOL_VERSION = 2;
+export const RELAY_PROTOCOL_VERSION = 3;
 export const RELAY_EVENT_SCHEMA_VERSION = 1;
 
 export function assertRelayReadyCompatibility(message) {
