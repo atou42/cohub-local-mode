@@ -23,6 +23,7 @@ import {
   SANDBOX_WORKSPACE_PATH,
   SANDBOX_WORKSPACE_SKILLS_PATH,
 } from "./paths.js";
+import { LOCAL_SESSION_REGISTRY_RELATIVE_DIR } from "../local-session-registry-core.js";
 
 const FALLBACK_SYSTEM_PROMPT = "You are a helpful assistant.";
 
@@ -253,6 +254,15 @@ export async function buildCohubSystemPrompt(options: BuildCohubSystemPromptOpti
   if (process.env.COHUB_NODE_ORIGIN === "local" && selectedTools.includes("bash")) {
     sections.push(
       '[Cohub generation]\nWhen the user asks for an image, video, audio, or another multimodal asset, use the host Cohub CLI instead of calling a provider directly. First inspect available models with `cohub models ls --model-type multimodal`, then run `cohub generate <prompt> -m <model>` with the required parameters and inputs. The command submits through the local node and returns the generated asset; expose any failure and preserve the returned URL or saved file path.',
+    );
+    sections.push(
+      '[Cohub cross-Space access]\nWhen a request explicitly mentions a Cloud Space, use `cohub -s <space-id> spaces files ls`, `cat`, `write`, `mkdir`, `mv`, or `rm` to inspect or mutate it as requested. The connected Cloud account\'s real permissions apply. Report identity, permission, transport, or unsupported-route failures exactly; never infer read-only access from a bridge failure.',
+    );
+  }
+
+  if (process.env.COHUB_NODE_ORIGIN === "local" && selectedTools.includes("read")) {
+    sections.push(
+      `[Local Space sessions]\nShared local session records for this Space are available under ${SANDBOX_WORKSPACE_PATH}/${LOCAL_SESSION_REGISTRY_RELATIVE_DIR}. Use index.json to discover Cohub Sessions and read their normalized transcript.jsonl files when another local session is relevant. The manifest maps Cohub and native harness session IDs. Treat native harness artifacts as read-only and report a missing or malformed mapping instead of guessing a path.`,
     );
   }
 

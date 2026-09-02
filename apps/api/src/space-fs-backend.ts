@@ -90,7 +90,7 @@ function normalizeMutationId(mutationId: string | undefined): string {
  * against its existing connection pool, so sandbox-local watchers observe the
  * change; this path never falls back to a direct PVC write.
  */
-async function runCloudSandboxMutation<Op extends AgentSandboxFsMutationOperation>(
+async function runSandboxMutation<Op extends AgentSandboxFsMutationOperation>(
   spaceId: string,
   mutation: Op,
   mutationId?: string,
@@ -146,11 +146,19 @@ export async function writeSpaceFile(
   if (await isLocal(spaceId)) {
     // The API relay connection does not forward watcher events, so the route
     // remains responsible for publishing the mutation event for local spaces.
+    if (input.mutationId) {
+      const { mutationId, ...mutation } = input;
+      return asApiEventOutcome(await runSandboxMutation(
+        spaceId,
+        { operation: "write", ...mutation },
+        mutationId,
+      ));
+    }
     return asApiEventOutcome(await remote.writeSpaceFile(spaceId, input));
   }
   if (await isCloudSandboxDialable(spaceId)) {
     const { mutationId, ...mutation } = input;
-    return asSandboxOutcome(await runCloudSandboxMutation(spaceId, { operation: "write", ...mutation }, mutationId));
+    return asSandboxOutcome(await runSandboxMutation(spaceId, { operation: "write", ...mutation }, mutationId));
   }
   return asApiEventOutcome(await direct.writeSpaceFile(spaceId, input));
 }
@@ -160,11 +168,19 @@ export async function createSpaceFileExclusive(
   input: Parameters<typeof direct.createSpaceFileExclusive>[1],
 ): Promise<ApiEventOutcome<Awaited<ReturnType<typeof direct.createSpaceFileExclusive>>> | SandboxEventOutcome<SandboxWriteResult>> {
   if (await isLocal(spaceId)) {
+    if (input.mutationId) {
+      const { mutationId, ...mutation } = input;
+      return asApiEventOutcome(await runSandboxMutation(
+        spaceId,
+        { operation: "write", ...mutation, exclusive: true },
+        mutationId,
+      ));
+    }
     return asApiEventOutcome(await remote.createSpaceFileExclusive(spaceId, input));
   }
   if (await isCloudSandboxDialable(spaceId)) {
     const { mutationId, ...mutation } = input;
-    return asSandboxOutcome(await runCloudSandboxMutation(spaceId, { operation: "write", ...mutation, exclusive: true }, mutationId));
+    return asSandboxOutcome(await runSandboxMutation(spaceId, { operation: "write", ...mutation, exclusive: true }, mutationId));
   }
   return asApiEventOutcome(await direct.createSpaceFileExclusive(spaceId, input));
 }
@@ -175,10 +191,17 @@ export async function createSpaceDirectory(
   mutationId?: string,
 ): Promise<ApiEventOutcome<Awaited<ReturnType<typeof direct.createSpaceDirectory>>> | SandboxEventOutcome<SandboxMkdirResult>> {
   if (await isLocal(spaceId)) {
+    if (mutationId) {
+      return asApiEventOutcome(await runSandboxMutation(
+        spaceId,
+        { operation: "mkdir", path },
+        mutationId,
+      ));
+    }
     return asApiEventOutcome(await remote.createSpaceDirectory(spaceId, path));
   }
   if (await isCloudSandboxDialable(spaceId)) {
-    return asSandboxOutcome(await runCloudSandboxMutation(spaceId, { operation: "mkdir", path }, mutationId));
+    return asSandboxOutcome(await runSandboxMutation(spaceId, { operation: "mkdir", path }, mutationId));
   }
   return asApiEventOutcome(await direct.createSpaceDirectory(spaceId, path));
 }
@@ -188,12 +211,23 @@ export async function deleteSpaceNode(
   path: string,
   recursive = false,
   mutationId?: string,
-): Promise<ApiEventOutcome<Awaited<ReturnType<typeof direct.deleteSpaceNode>>> | SandboxEventOutcome<SandboxDeleteResult>> {
+): Promise<
+  | ApiEventOutcome<Awaited<ReturnType<typeof direct.deleteSpaceNode>>>
+  | ApiEventOutcome<SandboxDeleteResult>
+  | SandboxEventOutcome<SandboxDeleteResult>
+> {
   if (await isLocal(spaceId)) {
+    if (mutationId) {
+      return asApiEventOutcome(await runSandboxMutation(
+        spaceId,
+        { operation: "delete", path, recursive },
+        mutationId,
+      ));
+    }
     return asApiEventOutcome(await remote.deleteSpaceNode(spaceId, path, recursive));
   }
   if (await isCloudSandboxDialable(spaceId)) {
-    return asSandboxOutcome(await runCloudSandboxMutation(spaceId, { operation: "delete", path, recursive }, mutationId));
+    return asSandboxOutcome(await runSandboxMutation(spaceId, { operation: "delete", path, recursive }, mutationId));
   }
   return asApiEventOutcome(await direct.deleteSpaceNode(spaceId, path, recursive));
 }
@@ -201,13 +235,24 @@ export async function deleteSpaceNode(
 export async function moveSpaceNode(
   spaceId: string,
   input: Parameters<typeof direct.moveSpaceNode>[1] & { mutationId?: string },
-): Promise<ApiEventOutcome<Awaited<ReturnType<typeof direct.moveSpaceNode>>> | SandboxEventOutcome<SandboxMoveResult>> {
+): Promise<
+  | ApiEventOutcome<Awaited<ReturnType<typeof direct.moveSpaceNode>>>
+  | ApiEventOutcome<SandboxMoveResult>
+  | SandboxEventOutcome<SandboxMoveResult>
+> {
   const { mutationId, ...move } = input;
   if (await isLocal(spaceId)) {
+    if (mutationId) {
+      return asApiEventOutcome(await runSandboxMutation(
+        spaceId,
+        { operation: "move", fromPath: move.fromPath, toPath: move.toPath },
+        mutationId,
+      ));
+    }
     return asApiEventOutcome(await remote.moveSpaceNode(spaceId, move));
   }
   if (await isCloudSandboxDialable(spaceId)) {
-    return asSandboxOutcome(await runCloudSandboxMutation(spaceId, { operation: "move", fromPath: move.fromPath, toPath: move.toPath }, mutationId));
+    return asSandboxOutcome(await runSandboxMutation(spaceId, { operation: "move", fromPath: move.fromPath, toPath: move.toPath }, mutationId));
   }
   return asApiEventOutcome(await direct.moveSpaceNode(spaceId, move));
 }

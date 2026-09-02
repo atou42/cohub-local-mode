@@ -9,9 +9,10 @@ import {
 	splitExternalHarnessContent,
 } from "../external-harness-protocol.js";
 import {
-	appendCloudSpaceReadInstructions,
+	appendCloudSpaceInstructions,
 	appendCursorLocalContextInstructions,
 	appendLocalGenerationInstructions,
+	appendLocalSessionRegistryInstructions,
 	buildExternalHarnessEnvironment,
 } from "../external-harness-context.js";
 import {
@@ -50,12 +51,12 @@ test("Cursor pins the selected effort through the CLI startup model", () => {
 		"cursor-grok-4.6-xhigh-fast",
 	);
 	assert.equal(
-		cursorCliModelId("claude-fable-5[thinking=true,context=300k,effort=high]", "medium"),
-		"claude-fable-5-thinking-medium",
+		cursorCliModelId("claude-fable-5-1[thinking=true,context=300k,effort=high]", "medium"),
+		"claude-fable-5-1-thinking-medium",
 	);
 	assert.equal(
-		cursorCliModelId("claude-fable-5[thinking=true,context=300k,effort=high]", "max"),
-		"claude-fable-5-thinking-max",
+		cursorCliModelId("claude-fable-5-1[thinking=true,context=300k,effort=high]", "max"),
+		"claude-fable-5-1-thinking-max",
 	);
 	assert.throws(
 		() => cursorCliModelId("grok-4.6[effort=high,fast=true]", "off"),
@@ -519,12 +520,14 @@ test("external harness cloud mention instructions expose capability but not cred
 			mentions: [{ type: "space", spaceId: cloudSpaceId, origin: "cloud" }],
 		},
 	}];
-	const prompt = appendCloudSpaceReadInstructions("inspect it", [content]);
+	const prompt = appendCloudSpaceInstructions("inspect it", [content]);
 	assert.match(
 		prompt,
 		new RegExp(`\\$COHUB_LOCAL_CLI.*-s ${cloudSpaceId} spaces files ls`),
 	);
-	assert.match(prompt, /read-only/);
+	assert.match(prompt, /write <path>/);
+	assert.match(prompt, /real permissions/);
+	assert.match(prompt, /transport failures must be reported exactly/);
 	assert.doesNotMatch(prompt, /secret-execution-token/);
 
 	const env = buildExternalHarnessEnvironment({
@@ -539,6 +542,15 @@ test("external harness cloud mention instructions expose capability but not cred
 	assert.equal(env.COHUB_LOCAL_CLI, "/opt/cohub-local/bin/cohub");
 	assert.equal(env.COHUB_EXECUTION_TOKEN, "secret-execution-token");
 	assert.equal(env.COHUB_SESSION_ID, "33333333-3333-4333-8333-333333333333");
+	assert.match(env.COHUB_LOCAL_SESSIONS_DIR, /\.cohub\/local-sessions$/);
+	assert.match(
+		env.COHUB_LOCAL_SESSION_MANIFEST,
+		/33333333-3333-4333-8333-333333333333\/manifest\.json$/,
+	);
+	assert.match(
+		env.COHUB_LOCAL_SESSION_TRANSCRIPT,
+		/33333333-3333-4333-8333-333333333333\/transcript\.jsonl$/,
+	);
 });
 
 test("external harness prompt is unchanged for local and legacy mentions", () => {
@@ -554,7 +566,7 @@ test("external harness prompt is unchanged for local and legacy mentions", () =>
 				}],
 			},
 		}];
-		assert.equal(appendCloudSpaceReadInstructions("inspect it", [content]), "inspect it");
+		assert.equal(appendCloudSpaceInstructions("inspect it", [content]), "inspect it");
 	}
 });
 
@@ -563,6 +575,15 @@ test("external harness prompt exposes the local generation CLI", () => {
 	assert.match(prompt, /\$COHUB_LOCAL_CLI.*models ls --model-type multimodal/);
 	assert.match(prompt, /\$COHUB_LOCAL_CLI.*generate/);
 	assert.match(prompt, /expose any failure/);
+});
+
+test("external harness prompt exposes shared local session records without native write access", () => {
+	const prompt = appendLocalSessionRegistryInstructions("inspect prior work");
+	assert.match(prompt, /\$COHUB_LOCAL_SESSIONS_DIR/);
+	assert.match(prompt, /index\.json/);
+	assert.match(prompt, /transcript\.jsonl/);
+	assert.match(prompt, /read-only/);
+	assert.match(prompt, /instead of guessing a path/);
 });
 
 test("Cursor prompt points at the host rules and skills without embedding them", () => {

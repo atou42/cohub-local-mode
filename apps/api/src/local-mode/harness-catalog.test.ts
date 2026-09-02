@@ -109,14 +109,14 @@ test("Cursor catalog exposes only the selected models with exact ACP ids and rea
     models: {
       availableModels: [
         { modelId: "grok-4.6[effort=high,fast=true]", name: "grok-4.6" },
-        { modelId: "claude-fable-5[thinking=true,context=300k,effort=high]", name: "claude-fable-5" },
+        { modelId: "claude-fable-5-1[thinking=true,context=300k,effort=high]", name: "claude-fable-5-1" },
         { modelId: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "GPT-5.6-Sol" },
       ],
     },
   }, now);
   assert.deepEqual(catalog.map((entry) => entry.id), [
     "grok-4.6[effort=high,fast=true]",
-    "claude-fable-5[thinking=true,context=300k,effort=high]",
+    "claude-fable-5-1[thinking=true,context=300k,effort=high]",
   ]);
   const [grok, fable] = catalog;
   assert.ok(grok);
@@ -137,7 +137,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   else if (request.id === 2) output({ jsonrpc: "2.0", id: 2, result: {} });
   else if (request.id === 3) output({ jsonrpc: "2.0", id: 3, result: { models: { availableModels: [
     { modelId: "grok-4.6[effort=high,fast=true]", name: "grok-4.6" },
-    { modelId: "claude-fable-5[thinking=true,context=300k,effort=high]", name: "claude-fable-5" },
+    { modelId: "claude-fable-5-1[thinking=true,context=300k,effort=high]", name: "claude-fable-5-1" },
   ] } } });
 });
 `, { encoding: "utf8", mode: 0o700 });
@@ -149,9 +149,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   clearCursorModelCatalogCacheForTests();
   try {
     const first = await loadExternalHarnessCatalog("cursor");
-    assert.deepEqual(first.map((entry) => entry.model.name), ["grok-4.6", "claude-fable-5"]);
+    assert.deepEqual(first.map((entry) => entry.model.name), ["grok-4.6", "claude-fable-5-1"]);
     const persisted = await readFile(join(root, "cache", "cursor-models.v2.json"), "utf8");
-    assert.match(persisted, /"version":3/);
+    assert.match(persisted, /"version":4/);
 
     clearCursorModelCatalogCacheForTests();
     process.env.CURSOR_AGENT_COMMAND = join(root, "missing-agent");

@@ -24,6 +24,7 @@ import { logger } from "./logger.js";
 import { invalidateSandboxConnection, closeSandboxPool } from "./sandbox-pool.js";
 import { closeSandboxLifecycleEventSubscriber, subscribeSandboxLifecycleEvents } from "./sandbox-events.js";
 import { SandboxRpcError } from "@cohub/sandbox-client";
+import { backfillLocalSessionRegistries } from "./local-session-registry.js";
 
 export const __test = {
   runInSessionOperation: async <T>(_handle: unknown, fn: () => Promise<T>) => fn(),
@@ -150,6 +151,11 @@ await subscribeSandboxLifecycleEvents((event) => {
 logger.info("[AgentWorker] Starting BullMQ agent worker...");
 logger.info("[AgentWorker] Queue:", AGENT_TURN_QUEUE_NAME);
 logger.info("[AgentWorker] Concurrency:", env.AGENT_WORKER_CONCURRENCY);
+void backfillLocalSessionRegistries().catch((error) => {
+  logger.error("[LocalSessionRegistry] startup backfill failed", {
+    error: serializeError(error),
+  });
+});
 
 let shuttingDown = false;
 async function shutdown(signal: string, options?: { exitCode?: number }) {
