@@ -9,7 +9,7 @@ import { ensureFsCdnManifest, shouldUseFsCdnForMeta } from "../../space-fs-cdn-c
 import { FS_CDN_DOWNLOAD_WAIT_TIMEOUT_MS } from "../../space-fs-cdn-constants.js";
 import { getExecutionPrincipal, getOptionalAuth, useAuth, requireValidId, authzDenied } from "../../lib/middleware.js";
 import { config } from "../../config.js";
-import { createCloudSpaceReadProxy } from "../../local-mode/cloud-space-read-proxy.js";
+import { createCloudSpaceProxy } from "../../local-mode/cloud-space-proxy.js";
 import { listSessionTurns } from "../../session-turns.js";
 import { hasPermission } from "../../permissions.js";
 import { getSpacePendingDiffFile, getSpacePendingDiffSummary } from "../../checkpoint-pending-diff.js";
@@ -66,7 +66,7 @@ import type {
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
-const proxyCloudSpaceRead = createCloudSpaceReadProxy({
+const proxyCloudSpace = createCloudSpaceProxy({
   nodeOrigin: config.nodeOrigin,
   cloudApiOrigin: config.cloudApiOrigin,
   loadRecentSessionTurns: (sessionId) =>
@@ -162,7 +162,7 @@ router.get("/tree", async (c) => {
   const path = c.req.query("path") ?? "";
   const execution = getExecutionPrincipal(c);
   if (execution) {
-    const cloudResponse = await proxyCloudSpaceRead({
+    const cloudResponse = await proxyCloudSpace({
       execution,
       targetSpaceId: spaceId,
       endpoint: "tree",
@@ -188,7 +188,7 @@ router.get("/file", async (c) => {
   const path = c.req.query("path") ?? "";
   const execution = getExecutionPrincipal(c);
   if (execution) {
-    const cloudResponse = await proxyCloudSpaceRead({
+    const cloudResponse = await proxyCloudSpace({
       execution,
       targetSpaceId: spaceId,
       endpoint: "file",
@@ -263,10 +263,23 @@ router.put("/file", bodyLimit({
   maxSize: MAX_INLINE_WRITE_REQUEST_BYTES,
   onError: (c) => c.json({ message: "file exceeds 10MB limit" }, 413),
 }), async (c) => {
-  const user = useAuth(c);
-  if (user instanceof Response) return user;
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpace({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "file",
+      path: "",
+      method: "PUT",
+      body: await c.req.raw.clone().text(),
+      contentType: c.req.header("content-type"),
+    });
+    if (cloudResponse) return cloudResponse;
+  }
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
   if (!(await hasPermission(user, "file.edit", { spaceId }))) return authzDenied(c);
 
   const body = await c.req
@@ -324,10 +337,23 @@ router.put("/file", bodyLimit({
 });
 
 router.post("/dir", async (c) => {
-  const user = useAuth(c);
-  if (user instanceof Response) return user;
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpace({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "dir",
+      path: "",
+      method: "POST",
+      body: await c.req.raw.clone().text(),
+      contentType: c.req.header("content-type"),
+    });
+    if (cloudResponse) return cloudResponse;
+  }
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
   if (!(await hasPermission(user, "file.edit", { spaceId }))) return authzDenied(c);
 
   const body = await c.req.json<{ path: string; mutationId?: string }>().catch(() => null);
@@ -352,10 +378,22 @@ router.post("/dir", async (c) => {
 });
 
 router.delete("/node", async (c) => {
-  const user = useAuth(c);
-  if (user instanceof Response) return user;
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpace({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "node",
+      path: "",
+      method: "DELETE",
+      query: new URL(c.req.url).search,
+    });
+    if (cloudResponse) return cloudResponse;
+  }
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
   if (!(await hasPermission(user, "file.edit", { spaceId }))) return authzDenied(c);
 
   const rawPath = c.req.query("path") ?? "";
@@ -379,10 +417,23 @@ router.delete("/node", async (c) => {
 });
 
 router.post("/move", async (c) => {
-  const user = useAuth(c);
-  if (user instanceof Response) return user;
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  const execution = getExecutionPrincipal(c);
+  if (execution) {
+    const cloudResponse = await proxyCloudSpace({
+      execution,
+      targetSpaceId: spaceId,
+      endpoint: "move",
+      path: "",
+      method: "POST",
+      body: await c.req.raw.clone().text(),
+      contentType: c.req.header("content-type"),
+    });
+    if (cloudResponse) return cloudResponse;
+  }
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
   if (!(await hasPermission(user, "file.edit", { spaceId }))) return authzDenied(c);
 
   const body = await c.req.json<unknown>().catch(() => null);

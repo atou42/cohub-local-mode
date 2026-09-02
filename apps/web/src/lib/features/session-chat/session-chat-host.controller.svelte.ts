@@ -48,12 +48,17 @@ import { createSkillController } from "$lib/features/space/modules/skill-control
 import { asRecord } from "$lib/features/space/space-utils";
 import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
+import {
+	buildLocalFederatedPromptContext,
+	buildLocalFederatedPromptEnv,
+} from "$lib/local-federated-space";
 import { localRelayCommandFailure } from "$lib/local-node-error";
 import {
 	cancelLocalRelayCommand,
 	getLocalRelayNodeStatus,
 	isLocalRelayEnabled,
 	listPendingLocalRelayCommands,
+	localFederatedApiUrl,
 	openLocalRelayEvents,
 	type PendingLocalRelayCommand,
 	registerPendingLocalRelayCommand,
@@ -3945,6 +3950,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			const mentions = extractSpaceMentionsFromText(text, {
 				resolveOrigin: getRegisteredSpaceOrigin,
 			});
+			const localFederatedPromptEnv = buildLocalFederatedPromptEnv({
+				useLocalRelay,
+				relayEnabled: isLocalRelayEnabled,
+				mentions,
+				apiUrl: localFederatedApiUrl,
+			});
+			const localFederatedPromptContext = localFederatedPromptEnv
+				? buildLocalFederatedPromptContext(mentions)
+				: null;
 			content = [
 				...(text
 					? [
@@ -3956,6 +3970,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						]
 					: []),
 				...(viewportBlock ? [viewportBlock] : []),
+				...(localFederatedPromptContext ? [localFederatedPromptContext] : []),
 				...attachmentBlocks,
 			];
 
@@ -4046,6 +4061,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					: {}),
 				clientMessageId,
 				generationPolicy: buildTurnGenerationPolicy(),
+				...(localFederatedPromptEnv ? { env: localFederatedPromptEnv } : {}),
 				accessMode: "full_access",
 				intent: "followup",
 				schedule: { mode: "immediate" },

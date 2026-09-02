@@ -4,6 +4,8 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { basename, extname, resolve, sep } from "node:path";
 
 const PROMPT_PATH_PATTERN = /^\/api\/spaces\/([0-9a-f-]{36})\/prompt$/i;
+const FEDERATED_FS_PATH_PATTERN =
+  /^\/api\/spaces\/([0-9a-f-]{36})\/fs\/(tree|file|dir|node|move)(?:\?.*)?$/i;
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 const RELAY_ATTACHMENT_REFERENCE_SOURCE =
@@ -704,56 +706,79 @@ export async function executeRelayCommand(command, {
     request && typeof request.path === "string"
       ? request.path.match(PROMPT_PATH_PATTERN)
       : null;
+  const federatedFsPathMatch =
+    request && typeof request.path === "string"
+      ? request.path.match(FEDERATED_FS_PATH_PATTERN)
+      : null;
+  const federatedEndpoint = federatedFsPathMatch?.[2];
+  const validFederatedMethod =
+    (federatedEndpoint === "tree" && request?.method === "GET") ||
+    (federatedEndpoint === "file" &&
+      (request?.method === "GET" || request?.method === "PUT")) ||
+    (federatedEndpoint === "dir" && request?.method === "POST") ||
+    (federatedEndpoint === "move" && request?.method === "POST") ||
+    (federatedEndpoint === "node" && request?.method === "DELETE");
   if (
-		request?.method !== "POST" ||
     typeof request.path !== "string" ||
-    !promptPathMatch
+    (!promptPathMatch && !validFederatedMethod)
   ) {
     throw new RelayNodeError(
       "path_not_allowed",
-      "Relay node only accepts Local Space prompt commands",
+      "Relay node only accepts allowlisted Local Space commands",
     );
   }
   if (typeof request.body !== "string") {
     throw new RelayNodeError("invalid_command", "Relay command body is invalid");
+  }
+  if (!promptPathMatch && Array.isArray(command.attachments) && command.attachments.length > 0) {
+    throw new RelayNodeError(
+      "invalid_command",
+      "Federated filesystem commands cannot carry attachments",
+    );
   }
   const accessToken = await resolveLocalAccessToken(
     fetcher,
     localApiOrigin,
     signal,
   );
-	const preparedPrompt = await preparePromptBody(command, {
-		fetcher,
-		attachmentRoot: spaceStorageRoot
-			? resolve(
-					spaceStorageRoot,
-					promptPathMatch[1],
-					"workspace",
-					".cohub",
-					"relay-attachments",
-				)
-			: null,
-		relayNodeBaseUrl,
-		relayNodeToken,
-		signal,
-	});
+  const preparedPrompt = promptPathMatch
+    ? await preparePromptBody(command, {
+        fetcher,
+        attachmentRoot: spaceStorageRoot
+          ? resolve(
+              spaceStorageRoot,
+              promptPathMatch[1],
+              "workspace",
+              ".cohub",
+              "relay-attachments",
+            )
+          : null,
+        relayNodeBaseUrl,
+        relayNodeToken,
+        signal,
+      })
+    : { body: request.body, responseReplacements: new Map() };
   let response;
   try {
     response = await fetcher(`${localApiOrigin}${request.path}`, {
-      method: "POST",
+      method: request.method,
       headers: {
-        "content-type": "application/json",
+        ...(request.method === "POST" || request.method === "PUT"
+          ? { "content-type": "application/json" }
+          : {}),
         authorization: `Bearer ${accessToken}`,
-        "x-cohub-source-via": "web",
+        "x-cohub-source-via": promptPathMatch ? "web" : "federated_cloud",
         "x-cohub-relay-command-id": command.idempotencyKey,
       },
-	      body: preparedPrompt.body,
+      ...(request.method === "POST" || request.method === "PUT"
+        ? { body: preparedPrompt.body }
+        : {}),
       signal,
     });
   } catch (error) {
     throw new RelayNodeError(
       "local_api_unavailable",
-      `Local Cohub prompt endpoint is unavailable: ${
+      `Local Cohub endpoint is unavailable: ${
         error instanceof Error ? error.message : String(error)
       }`,
       { cause: error },

@@ -9,7 +9,7 @@ import {
 test("accepts a Relay ready message with the current event schema", () => {
   assert.doesNotThrow(() =>
     assertRelayReadyCompatibility({
-      protocolVersion: 2,
+      protocolVersion: 3,
       type: "ready",
       nodeId: "mac-mini",
       eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
@@ -21,7 +21,7 @@ test("rejects a Relay that cannot accept the node's event schema", () => {
   assert.throws(
     () =>
       assertRelayReadyCompatibility({
-        protocolVersion: 2,
+        protocolVersion: 3,
         type: "ready",
         nodeId: "mac-mini",
       }),
@@ -30,7 +30,7 @@ test("rejects a Relay that cannot accept the node's event schema", () => {
   assert.throws(
     () =>
       assertRelayReadyCompatibility({
-        protocolVersion: 2,
+        protocolVersion: 3,
         type: "ready",
         nodeId: "mac-mini",
         eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION - 1,

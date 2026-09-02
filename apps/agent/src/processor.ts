@@ -87,11 +87,17 @@ import {
   splitExternalHarnessContent,
 } from "./external-harness.js";
 import {
-	appendCloudSpaceReadInstructions,
+	appendCloudSpaceInstructions,
 	appendCursorLocalContextInstructions,
 	appendLocalGenerationInstructions,
+	appendLocalSessionRegistryInstructions,
   buildExternalHarnessEnvironment,
 } from "./external-harness-context.js";
+import {
+	ensureLocalSessionRegistryForSpace,
+	recordLocalSessionRegistryFailure,
+	syncLocalSessionRegistry,
+} from "./local-session-registry.js";
 import { createExternalProgressPublisher } from "./external-progress-publisher.js";
 import {
   buildExternalForkBootstrapPrompt,
@@ -1309,6 +1315,7 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
         );
         logSpaceBootstrapWarning(data.spaceId, spaceInfo?.space?.meta);
         const sessionHarness = await getSessionHarness(data.sessionId);
+        await ensureLocalSessionRegistryForSpace(data.spaceId);
         if (sessionHarness.agentHarness !== "pi") {
           const harness = sessionHarness.agentHarness;
           const requestedModel = resolveRequestedModel(ownerMeta);
@@ -1356,10 +1363,12 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
             .filter(Boolean)
             .join("\n\n");
           if (!rawPrompt) throw new Error(`${harness} requires a text prompt`);
-          const promptWithContext = appendLocalGenerationInstructions(
-            appendCloudSpaceReadInstructions(
-              rawPrompt,
-              externalMessages.map((item) => item.content),
+          const promptWithContext = appendLocalSessionRegistryInstructions(
+            appendLocalGenerationInstructions(
+              appendCloudSpaceInstructions(
+                rawPrompt,
+                externalMessages.map((item) => item.content),
+              ),
             ),
           );
           let prompt = harness === "cursor"
@@ -2118,6 +2127,27 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
         }
         if (claimedBatch) clearRetryState(data);
         await lock.release();
+        if (claimedBatch) {
+          await syncLocalSessionRegistry({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+          }).catch(async (error) => {
+            logger.error(
+              `[LocalSessionRegistry] failed to sync sessionId=${data.sessionId}`,
+              error,
+            );
+            await recordLocalSessionRegistryFailure({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              error,
+            }).catch((recordError) => {
+              logger.error(
+                `[LocalSessionRegistry] failed to record sync error sessionId=${data.sessionId}`,
+                recordError,
+              );
+            });
+          });
+        }
         if (drainAfterRelease) await drainNextQueuedTurn(drainAfterRelease);
       }
     },

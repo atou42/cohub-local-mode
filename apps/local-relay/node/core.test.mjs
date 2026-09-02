@@ -99,6 +99,51 @@ test("resolves host auth and forwards a prompt only to the loopback API", async 
   assert.equal(result.watch, null);
 });
 
+test("forwards an allowlisted federated filesystem mutation to the loopback API", async () => {
+  const mutationId = "3bb14c9d-7c86-47eb-88ef-e8db2acd4875";
+  const federated = {
+    ...command,
+    idempotencyKey: mutationId,
+    request: {
+      method: "PUT",
+      path: "/api/spaces/2f4cb274-7f80-4a4b-b326-22d4af6a9873/fs/file",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: "shared/result.txt",
+        content: "written",
+        encoding: "utf-8",
+        mutationId,
+      }),
+    },
+  };
+  const calls = [];
+  const result = await executeRelayCommand(federated, {
+    localApiOrigin: "http://127.0.0.1:8787",
+    fetcher: async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).endsWith("/api/local-mode/auth")) {
+        return Response.json({ accessToken: "host-access-token" });
+      }
+      return Response.json({ path: "shared/result.txt", size: 7, created: true });
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[1].url,
+    "http://127.0.0.1:8787/api/spaces/2f4cb274-7f80-4a4b-b326-22d4af6a9873/fs/file",
+  );
+  assert.equal(calls[1].init.method, "PUT");
+  assert.equal(calls[1].init.headers.authorization, "Bearer host-access-token");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    path: "shared/result.txt",
+    content: "written",
+    encoding: "utf-8",
+    mutationId,
+  });
+  assert.equal(result.result.status, 200);
+  assert.equal(result.watch, null);
+});
+
 test("rejects an arbitrary local API path before resolving credentials", async () => {
   let calls = 0;
   await assert.rejects(
