@@ -12,6 +12,11 @@
       // Run before app modules so a stale client can activate a waiting worker
       // even when its old route chunks can no longer boot.
       (() => {
+        try {
+          sessionStorage.removeItem('cohub:server-error-recovery');
+        } catch (error) {
+          console.error('[Cohub] server-error recovery state could not be cleared', error);
+        }
         if (!('serviceWorker' in navigator)) return;
         var wasControlled = navigator.serviceWorker.controller !== null;
         navigator.serviceWorker.addEventListener('controllerchange', () => {

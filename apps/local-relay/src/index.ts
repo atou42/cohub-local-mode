@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { authorizeNodeRequest, authorizeOwnerRequest } from "./auth";
+import { handleFederatedApi } from "./federated-handler.ts";
 import {
 	ACTIVITY_WATCH_LEASE_MS,
 	evolveActivityWatchSnapshot,
@@ -96,6 +97,7 @@ type RelayEnv = {
 	POLICY_AUD: string;
 	OWNER_EMAIL: string;
 	OWNER_USER_ID: string;
+	CLOUD_API_ORIGIN: string;
 	COMMAND_LEASE_MS: string;
 	COMMAND_MAX_BODY_BYTES: string;
 	ATTACHMENT_MAX_BYTES: string;
@@ -2488,6 +2490,7 @@ function requireConfigured(env: RelayEnv) {
 		"POLICY_AUD",
 		"OWNER_EMAIL",
 		"OWNER_USER_ID",
+		"CLOUD_API_ORIGIN",
 		"COMMAND_LEASE_MS",
 		"COMMAND_MAX_BODY_BYTES",
 		"ATTACHMENT_MAX_BYTES",
@@ -2808,6 +2811,18 @@ async function handleRequest(request: Request, env: RelayEnv) {
 				activityPush,
 			),
 		);
+	}
+	if (pathname.startsWith("/api/")) {
+		return handleFederatedApi({
+			request,
+			stub: nodeStub(env, env.NODE_ID),
+			cloudApiOrigin: env.CLOUD_API_ORIGIN,
+			ownerUserId: env.OWNER_USER_ID,
+			maxBodyBytes: parsePositiveInteger(
+				env.COMMAND_MAX_BODY_BYTES,
+				"COMMAND_MAX_BODY_BYTES",
+			),
+		});
 	}
 	const match = pathname.match(/^\/v1\/nodes\/([^/]+)(\/.*)?$/);
 	if (!match?.[1]) {
