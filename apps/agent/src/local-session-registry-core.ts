@@ -557,11 +557,11 @@ export async function readExistingLocalSessionManifest(input: {
 	workspacePath: string;
 	spaceId: string;
 	sessionId: string;
-}) {
+}): Promise<LocalSessionManifest | null | undefined> {
 	const paths = localSessionRegistryPaths(input);
 	const existing = await readJsonIfPresent<unknown>(paths.manifest);
 	if (existing) assertExistingManifest(existing, input);
-	return existing;
+	return existing as LocalSessionManifest | null | undefined;
 }
 
 export async function writeLocalSessionRegistryFiles(input: {

@@ -10,6 +10,7 @@ import {
 	buildCodexAppServerArgv,
 	buildCodexThreadForkParams,
 } from "./external-harness-codex-config.js";
+import { claimCodexInterrupt } from "./external-harness-codex-interrupt.js";
 import { parseCodexGoalCommand } from "./codex-goal-command.js";
 import { localSpaceAccessKey } from "./local-space-access.js";
 
@@ -35,6 +36,7 @@ type ActiveTurn = {
 	resolve: (result: ExternalHarnessResult) => void;
 	reject: (error: Error) => void;
 	abortRequested: boolean;
+	interruptRequested: boolean;
 	usage: Record<string, unknown> | null;
 };
 
@@ -305,6 +307,24 @@ function notify(
 	return writePayload(entry, { method, params });
 }
 
+function requestActiveTurnInterrupt(entry: RuntimeEntry) {
+	const active = entry.activeTurn;
+	if (!active) return;
+	const params = claimCodexInterrupt(active);
+	if (!params) return;
+	void request(entry, "turn/interrupt", params).catch((error) => {
+		if (entry.activeTurn !== active) return;
+		const interruptError = error instanceof Error ? error : new Error(String(error));
+		if (interruptError.message.includes("no active turn to interrupt")) {
+			entry.activeTurn = null;
+			active.reject(new Error("aborted"));
+			scheduleIdleClose(entry);
+			return;
+		}
+		closeEntry(entry, interruptError.message);
+	});
+}
+
 function respondToServerRequest(
 	entry: RuntimeEntry,
 	payload: Record<string, unknown>,
@@ -374,12 +394,7 @@ function handleNotification(entry: RuntimeEntry, payload: Record<string, unknown
 		active.turnId = text(turn?.id) || text(params.turnId) || active.turnId;
 		emit(entry, { type: "thread.started", thread_id: active.threadId });
 		emit(entry, { type: "turn.started", turn_id: active.turnId });
-		if (active.abortRequested && active.turnId) {
-			void request(entry, "turn/interrupt", {
-				threadId: active.threadId,
-				turnId: active.turnId,
-			});
-		}
+		requestActiveTurnInterrupt(entry);
 		return;
 	}
 	if (method === "item/agentMessage/delta") {
@@ -821,6 +836,7 @@ export async function runCodexAppServerHarness(input: {
 			resolve,
 			reject,
 			abortRequested: input.abortSignal.aborted,
+			interruptRequested: false,
 			usage: null,
 		};
 		entry.activeTurn = active;
@@ -829,11 +845,7 @@ export async function runCodexAppServerHarness(input: {
 
 		const abort = () => {
 			active.abortRequested = true;
-			if (!active.turnId) return;
-			void request(entry, "turn/interrupt", {
-				threadId,
-				turnId: active.turnId,
-			});
+			requestActiveTurnInterrupt(entry);
 		};
 		input.abortSignal.addEventListener("abort", abort, { once: true });
 
@@ -856,7 +868,7 @@ export async function runCodexAppServerHarness(input: {
 			(result) => {
 				const turn = record(result.turn);
 				active.turnId = text(turn?.id) || text(result.turnId) || active.turnId;
-				if (active.abortRequested) abort();
+				requestActiveTurnInterrupt(entry);
 			},
 			(error) => {
 				if (entry.activeTurn === active) entry.activeTurn = null;

@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
+import nodeFetch from "node-fetch";
 import { ManagedSandboxSupervisor } from "./sandbox-supervisor-core.mjs";
 
 const apiBaseUrl = (process.env.API_BASE_URL ?? "http://127.0.0.1:8787").replace(
@@ -14,6 +15,9 @@ const relayToken = process.env.LOCAL_SANDBOX_RELAY_TOKEN?.trim();
 const relayUrl =
   process.env.COHUB_RELAY_URL?.trim() ??
   "ws://127.0.0.1:8788/sandbox/relay";
+const clientGatewayUrl =
+  process.env.LOCAL_COHUB_GATEWAY_ORIGIN?.trim() ?? "ws://127.0.0.1:8788/ws";
+const localCohubCliPath = process.env.LOCAL_COHUB_CLI_PATH?.trim() || null;
 const pollIntervalMs = Number(
   process.env.LOCAL_SANDBOX_SUPERVISOR_POLL_MS ?? 1_000,
 );
@@ -32,7 +36,7 @@ if (!Number.isFinite(startupTimeoutMs) || startupTimeoutMs < 1_000) {
 }
 
 async function internalRequest(path, init = {}) {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await nodeFetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
@@ -96,28 +100,32 @@ function lineWriter(spaceId, stream, onLine) {
 }
 
 async function startRunner({ spaceId, workspaceDir }) {
+  const command = localCohubCliPath ?? "pnpm";
+  const commandArgs = localCohubCliPath
+    ? ["sandbox", "up", workspaceDir, "--space", spaceId, "--yes", "--json"]
+    : [
+        "--filter",
+        "@neta-art/cohub-cli",
+        "exec",
+        "tsx",
+        "src/index.ts",
+        "sandbox",
+        "up",
+        workspaceDir,
+        "--space",
+        spaceId,
+        "--yes",
+        "--json",
+      ];
   const child = spawn(
-    "pnpm",
-    [
-      "--filter",
-      "@neta-art/cohub-cli",
-      "exec",
-      "tsx",
-      "src/index.ts",
-      "sandbox",
-      "up",
-      workspaceDir,
-      "--space",
-      spaceId,
-      "--yes",
-      "--json",
-    ],
+    command,
+    commandArgs,
     {
       cwd: process.cwd(),
       env: {
         ...process.env,
         COHUB_API_URL: apiBaseUrl,
-        COHUB_WS_URL: "ws://127.0.0.1:8788/ws",
+		COHUB_WS_URL: clientGatewayUrl,
         COHUB_WEB_URL: "http://127.0.0.1:4173",
         COHUB_RELAY_URL: relayUrl,
         COHUB_LOCAL_SANDBOX_MANAGED: "1",

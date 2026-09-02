@@ -1,5 +1,6 @@
 import { env } from "$env/dynamic/public";
 import { LocalNodeRouteManager } from "$lib/local-node-route-core";
+import { personalNodeFetch } from "$lib/personal-node-fetch";
 
 const fallbackOrigin =
 	(env.PUBLIC_API_ORIGIN ?? "").trim() ||
@@ -11,8 +12,12 @@ export const localNodeRouteManager = new LocalNodeRouteManager({
 	requestOrigins: [typeof location !== "undefined" ? location.origin : null],
 });
 
+const personalNodeAlphaEnabled = env.PUBLIC_PERSONAL_NODE_ALPHA === "true";
+
 export const localNodeFetch: typeof fetch = (input, init) =>
-	localNodeRouteManager.fetch(input, init);
+	personalNodeAlphaEnabled
+		? personalNodeFetch(input, init)
+		: localNodeRouteManager.fetch(input, init);
 
 export function createLocalNodeWebSocket(
 	fallbackUrl: string,

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import WebSocket from "ws";
+import { compatibleFetch } from "./fetch.mjs";
 import {
   executeRelayCommandUntilAvailable,
   RelayNodeError,
@@ -132,6 +133,7 @@ const watcher = createTurnWatcher({
   relayNodeToken: nodeToken,
   maxAttachmentBytes,
   nodeId,
+  fetcher: compatibleFetch,
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -145,8 +147,9 @@ const pulseWatcher = createPulseWatcher({
     local: { apiOrigin: localApiOrigin, gatewayOrigin: localGatewayOrigin },
     cloud: { apiOrigin: cloudApiOrigin, gatewayOrigin: cloudGatewayOrigin },
   },
+  fetcher: compatibleFetch,
   getAccessToken: (forceRefresh = false) =>
-    resolveLocalAccessToken(fetch, localApiOrigin, undefined, { forceRefresh }),
+    resolveLocalAccessToken(compatibleFetch, localApiOrigin, undefined, { forceRefresh }),
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -230,6 +233,7 @@ async function runClaimedCommand(attempt) {
   }, heartbeatMs);
   try {
     const { result, watch } = await executeRelayCommandUntilAvailable(state.command, {
+      fetcher: compatibleFetch,
       localApiOrigin,
       maxAttachmentBytes,
       maxResponseBytes,

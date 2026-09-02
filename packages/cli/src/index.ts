@@ -96,4 +96,4 @@ if (await maybeHandleRunCommand(argv)) {
   process.exit();
 }
 
-program.parse();
+program.parse(process.argv, { from: "node" });

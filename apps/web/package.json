@@ -13,6 +13,9 @@
 		"typecheck": "node ./scripts/ensure-i18n.mjs && node ../../scripts/typecheck-web.mjs",
 		"preview": "pnpm build && wrangler dev",
 		"preview:prod": "pnpm build && wrangler dev --config wrangler.prod.toml",
+		"alpha:build": "COHUB_WEB_WRANGLER_CONFIG=wrangler.alpha.toml pnpm build",
+		"alpha:check": "node ../../scripts/local-mode/alpha-resource-guard.mjs && pnpm alpha:build && wrangler deploy --dry-run --config wrangler.alpha.toml",
+		"alpha:deploy": "node ../../scripts/local-mode/alpha-resource-guard.mjs && wrangler deploy --config wrangler.alpha.toml",
 		"deploy": "wrangler deploy",
 		"deploy:prod": "wrangler deploy --config wrangler.prod.toml",
 		"prepare": "svelte-kit sync || echo ''"

@@ -4,8 +4,8 @@
 // - `svelte-kit sync` only runs when the generated .svelte-kit output is stale:
 //   missing, older than the config files (.svelte.config / package.json / vite.config / .env),
 //   or older than any file under src/ (route additions/renames/removals regenerate $types).
-// - `svelte-check --tsgo --incremental` reuses the svelte2tsx + tsgo caches under
-//   .svelte-kit/.svelte-check (gitignored), so steady-state runs are fast.
+// - `svelte-check --tsgo` runs without its incremental cache. The cache can retain
+//   stale `$env/static/public` declarations after an Alpha environment switch.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -72,7 +72,8 @@ function syncNeeded() {
 }
 
 let status = 0;
-if (syncNeeded()) {
+const needsSync = syncNeeded();
+if (needsSync) {
   console.log("typecheck: running svelte-kit sync");
   status = run("svelte-kit", ["sync"]);
   if (status !== 0) process.exit(status);
@@ -82,7 +83,6 @@ if (syncNeeded()) {
 
 status = run("svelte-check", [
   "--tsgo",
-  "--incremental",
   "--tsconfig",
   "./tsconfig.json",
 ]);

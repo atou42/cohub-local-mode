@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   executeRelayCommand,
   executeRelayCommandUntilAvailable,
+	isAlphaLocalApiRequest,
   parseWatchFromPromptResponse,
   RelayNodeError,
   resolveLocalAccessToken,
@@ -144,12 +145,101 @@ test("forwards an allowlisted federated filesystem mutation to the loopback API"
   assert.equal(result.watch, null);
 });
 
-test("rejects an arbitrary local API path before resolving credentials", async () => {
+test("forwards an allowlisted Alpha read with host authentication", async () => {
+	const alphaRead = {
+		...command,
+		request: {
+			method: "GET",
+			path: "/api/models?harness=cursor",
+			headers: {},
+			body: "",
+		},
+	};
+	const calls = [];
+	const result = await executeRelayCommand(alphaRead, {
+		localApiOrigin: "http://127.0.0.1:8787",
+		fetcher: async (url, init = {}) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/api/local-mode/auth")) {
+				return Response.json({ accessToken: "host-access-token" });
+			}
+			return Response.json({ models: [{ id: "grok-4.6" }] });
+		},
+	});
+	assert.equal(isAlphaLocalApiRequest("GET", alphaRead.request.path), true);
+	assert.equal(calls.length, 2);
+	assert.equal(
+		calls[1].url,
+		"http://127.0.0.1:8787/api/models?harness=cursor",
+	);
+	assert.equal(calls[1].init.method, "GET");
+	assert.equal(calls[1].init.body, undefined);
+	assert.equal(calls[1].init.headers.authorization, "Bearer host-access-token");
+	assert.equal(calls[1].init.headers["x-cohub-source-via"], "web");
+	assert.deepEqual(JSON.parse(result.result.body), {
+		models: [{ id: "grok-4.6" }],
+	});
+	assert.equal(result.watch, null);
+});
+
+test("forwards an owner-scoped Alpha mutation with its exact body", async () => {
+	const alphaMutation = {
+		...command,
+		request: {
+			method: "PATCH",
+			path: "/api/sessions/f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02",
+			headers: {},
+			body: '{"title":"Renamed"}',
+		},
+	};
+	const calls = [];
+	const result = await executeRelayCommand(alphaMutation, {
+		localApiOrigin: "http://127.0.0.1:8787",
+		fetcher: async (url, init = {}) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/api/local-mode/auth")) {
+				return Response.json({ accessToken: "host-access-token" });
+			}
+			return Response.json({ session: { title: "Renamed" } });
+		},
+	});
+	assert.equal(calls.length, 2);
+	assert.equal(calls[1].init.method, "PATCH");
+	assert.equal(calls[1].init.body, alphaMutation.request.body);
+	assert.equal(calls[1].init.headers.authorization, "Bearer host-access-token");
+	assert.equal(result.result.status, 200);
+});
+
+test("rejects Alpha secret-reading routes before host authentication", async () => {
+	for (const request of [
+		{ method: "GET", path: "/api/local-mode/auth", headers: {}, body: "" },
+		{ method: "GET", path: "/api/spaces/2f4cb274-7f80-4a4b-b326-22d4af6a9873/env", headers: {}, body: "" },
+	]) {
+		let calls = 0;
+		await assert.rejects(
+			() =>
+				executeRelayCommand(
+					{ ...command, request },
+					{
+						fetcher: async () => {
+							calls += 1;
+							return Response.json({});
+						},
+					},
+			),
+			(error) =>
+				error instanceof RelayNodeError && error.code === "path_not_allowed",
+		);
+		assert.equal(calls, 0);
+	}
+});
+
+test("rejects an internal local API path before resolving credentials", async () => {
   let calls = 0;
   await assert.rejects(
     () =>
       executeRelayCommand(
-        { ...command, request: { ...command.request, path: "/api/me" } },
+		{ ...command, request: { ...command.request, path: "/internal/spaces" } },
         {
           fetcher: async () => {
             calls += 1;

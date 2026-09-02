@@ -6,13 +6,48 @@ import { basename, extname, resolve, sep } from "node:path";
 const PROMPT_PATH_PATTERN = /^\/api\/spaces\/([0-9a-f-]{36})\/prompt$/i;
 const FEDERATED_FS_PATH_PATTERN =
   /^\/api\/spaces\/([0-9a-f-]{36})\/fs\/(tree|file|dir|node|move)(?:\?.*)?$/i;
+const UUID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const ALPHA_LOCAL_API_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const ALPHA_LOCAL_API_DENIED_PATHS = [
+	/^\/api\/local-mode(?:\/|$)/,
+	new RegExp(`^/api/spaces/${UUID_SOURCE}/env(?:/|$)`, "i"),
+];
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 const RELAY_ATTACHMENT_REFERENCE_SOURCE =
-  "(?:relay-attachment:\\/\\/([0-9a-f-]{36})|\\/relay\\/v1\\/nodes\\/[^/\\s]+\\/attachments\\/([0-9a-f-]{36})\\/content)";
+	"(?:relay-attachment:\\/\\/([0-9a-f-]{36})|(?:\\/relay\\/v1|\\/api\\/alpha\\/v1)\\/nodes\\/[^/\\s]+\\/attachments\\/([0-9a-f-]{36})\\/content)";
 
 function relayAttachmentReferencePattern() {
   return new RegExp(RELAY_ATTACHMENT_REFERENCE_SOURCE, "gi");
+}
+
+function publicAttachmentBasePath(relayNodeBaseUrl, nodeId) {
+	const pathname = new URL(relayNodeBaseUrl).pathname;
+	return pathname.startsWith("/api/alpha/v1/nodes/")
+		? pathname
+		: `/relay/v1/nodes/${encodeURIComponent(nodeId)}`;
+}
+
+export function isAlphaLocalApiRequest(method, path) {
+	if (
+		typeof method !== "string" ||
+		!ALPHA_LOCAL_API_METHODS.has(method) ||
+		typeof path !== "string" ||
+		!path.startsWith("/")
+	) {
+    return false;
+  }
+  let url;
+  try {
+    url = new URL(path, "https://alpha.internal");
+  } catch {
+    return false;
+  }
+  return (
+		url.origin === "https://alpha.internal" &&
+		url.pathname.startsWith("/api/") &&
+		!ALPHA_LOCAL_API_DENIED_PATHS.some((pattern) => pattern.test(url.pathname))
+  );
 }
 
 export class RelayNodeError extends Error {
@@ -295,7 +330,7 @@ async function preparePromptBody(command, options) {
   const responseReplacements = new Map();
   for (const attachment of attachments) {
     const localUrl = await materializeRelayAttachment(attachment, options);
-    const relayUrl = `/relay/v1/nodes/${encodeURIComponent(command.nodeId)}/attachments/${encodeURIComponent(attachment.id)}/content`;
+		const relayUrl = `${publicAttachmentBasePath(options.relayNodeBaseUrl, command.nodeId)}/attachments/${encodeURIComponent(attachment.id)}/content`;
     replacements.set(attachment.id.toLowerCase(), localUrl);
     responseReplacements.set(localUrl, relayUrl);
   }
@@ -503,7 +538,7 @@ async function uploadReturnedArtifact(artifact, command, options) {
       `Returned attachment upload failed with HTTP ${upload.status}`,
     );
   }
-  return `/relay/v1/nodes/${encodeURIComponent(command.nodeId)}/attachments/${encodeURIComponent(plan.attachment.id)}/content`;
+	return `${publicAttachmentBasePath(options.relayNodeBaseUrl, command.nodeId)}/attachments/${encodeURIComponent(plan.attachment.id)}/content`;
 }
 
 async function persistReturnedArtifactProjection(payload, replacements, options) {
@@ -718,9 +753,10 @@ export async function executeRelayCommand(command, {
     (federatedEndpoint === "dir" && request?.method === "POST") ||
     (federatedEndpoint === "move" && request?.method === "POST") ||
     (federatedEndpoint === "node" && request?.method === "DELETE");
+  const alphaApiRequest = isAlphaLocalApiRequest(request?.method, request?.path);
   if (
     typeof request.path !== "string" ||
-    (!promptPathMatch && !validFederatedMethod)
+    (!promptPathMatch && !validFederatedMethod && !alphaApiRequest)
   ) {
     throw new RelayNodeError(
       "path_not_allowed",
@@ -733,7 +769,7 @@ export async function executeRelayCommand(command, {
   if (!promptPathMatch && Array.isArray(command.attachments) && command.attachments.length > 0) {
     throw new RelayNodeError(
       "invalid_command",
-      "Federated filesystem commands cannot carry attachments",
+      "Non-prompt relay commands cannot carry attachments",
     );
   }
   const accessToken = await resolveLocalAccessToken(
@@ -763,15 +799,16 @@ export async function executeRelayCommand(command, {
     response = await fetcher(`${localApiOrigin}${request.path}`, {
       method: request.method,
       headers: {
-        ...(request.method === "POST" || request.method === "PUT"
-          ? { "content-type": "application/json" }
-          : {}),
+		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.body
+			? { "content-type": "application/json" }
+			: {}),
         authorization: `Bearer ${accessToken}`,
-        "x-cohub-source-via": promptPathMatch ? "web" : "federated_cloud",
+        "x-cohub-source-via":
+          promptPathMatch || alphaApiRequest ? "web" : "federated_cloud",
         "x-cohub-relay-command-id": command.idempotencyKey,
       },
-      ...(request.method === "POST" || request.method === "PUT"
-        ? { body: preparedPrompt.body }
+		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.body
+			? { body: preparedPrompt.body }
         : {}),
       signal,
     });

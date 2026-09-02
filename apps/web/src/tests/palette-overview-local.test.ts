@@ -49,6 +49,7 @@ function makeSession(input: {
 		title: null,
 		source: null,
 		status: null,
+		agentHarness: "codex",
 		externalSessionId: null,
 		meta: null,
 		latestMessageText: null,

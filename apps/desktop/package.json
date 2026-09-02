@@ -1,0 +1,66 @@
+{
+	"name": "@cohub/desktop",
+	"private": true,
+	"version": "0.1.0-alpha.1",
+	"description": "Cohub Personal Node for macOS",
+	"author": "Cohub",
+	"type": "module",
+	"main": "build/main.js",
+	"scripts": {
+		"build:node": "esbuild ../local-relay/node/index.mjs --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=resources/relay-node.mjs",
+		"build:runtime": "node scripts/prepare-runtime.mjs",
+		"build": "pnpm build:node && pnpm build:runtime && tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"package:dir": "ulimit -n 65536 && pnpm build && electron-builder --dir --mac --arm64",
+		"package": "ulimit -n 65536 && pnpm build && electron-builder --mac dmg --arm64",
+		"test": "node --test src/**/*.test.mjs"
+	},
+	"dependencies": {
+		"ws": "8.21.1"
+	},
+	"devDependencies": {
+		"@types/node": "26.4.0",
+		"electron": "44.1.1",
+		"electron-builder": "26.15.3",
+		"esbuild": "0.27.4",
+		"typescript": "7.0.2"
+	},
+	"build": {
+		"appId": "cc.atou.cohub.personal-node",
+		"productName": "Cohub Personal Node",
+		"asar": true,
+		"directories": {
+			"output": "release"
+		},
+		"files": [
+			"build/**/*",
+			"preload.cjs",
+			"package.json",
+			"!node_modules/**/*"
+		],
+		"extraResources": [
+			{
+				"from": "resources",
+				"to": ".",
+				"filter": [
+					"relay-node.mjs",
+					"runtime.tar",
+					"runtime-manifest.json"
+				]
+			}
+		],
+		"mac": {
+			"category": "public.app-category.developer-tools",
+			"target": ["dmg"],
+			"identity": "-",
+			"icon": "assets/Cohub.icns",
+			"entitlements": "assets/entitlements.mac.plist",
+			"entitlementsInherit": "assets/entitlements.mac.plist",
+			"hardenedRuntime": true,
+			"gatekeeperAssess": false
+		},
+		"dmg": {
+			"artifactName": "Cohub-Personal-Node-${version}-${arch}.${ext}"
+		}
+	}
+}

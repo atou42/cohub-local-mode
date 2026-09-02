@@ -106,7 +106,11 @@ function parseCommand(value: unknown): LocalRelayEventCommand | null {
 	if (!isRecord(value)) return null;
 	const id = asString(value.id);
 	const status = asString(value.status);
-	if (!id || !status || !COMMAND_STATUSES.has(status as LocalRelayCommandStatus)) {
+	if (
+		!id ||
+		!status ||
+		!COMMAND_STATUSES.has(status as LocalRelayCommandStatus)
+	) {
 		return null;
 	}
 	let result: LocalRelayHttpResult | null = null;
@@ -310,7 +314,8 @@ export function connectLocalRelayEvents(input: {
 	url: string;
 	handlers: LocalRelayEventHandlers;
 	signal?: AbortSignal;
-	WebSocket?: new (url: string) => EventSocket;
+	protocols?: string[];
+	WebSocket?: new (url: string, protocols?: string | string[]) => EventSocket;
 	random?: () => number;
 	setTimeout?: (fn: () => void, ms: number) => unknown;
 	clearTimeout?: (handle: unknown) => void;
@@ -318,7 +323,10 @@ export function connectLocalRelayEvents(input: {
 	const WebSocketImpl =
 		input.WebSocket ??
 		(globalThis.WebSocket as unknown as
-			| (new (url: string) => EventSocket)
+			| (new (
+					url: string,
+					protocols?: string | string[],
+			  ) => EventSocket)
 			| undefined);
 	const setTimeoutFn: (fn: () => void, ms: number) => unknown =
 		input.setTimeout ?? setTimeout;
@@ -348,7 +356,8 @@ export function connectLocalRelayEvents(input: {
 	const scheduleReconnect = () => {
 		if (closed) return;
 		consecutiveFailures += 1;
-		if (consecutiveFailures >= RELAY_EVENTS_UNAVAILABLE_AFTER) markUnavailable();
+		if (consecutiveFailures >= RELAY_EVENTS_UNAVAILABLE_AFTER)
+			markUnavailable();
 		const delay = nextRelayEventReconnectDelay(attempt, random);
 		attempt += 1;
 		clearReconnect();
@@ -403,7 +412,7 @@ export function connectLocalRelayEvents(input: {
 		detachSocket();
 		let next: EventSocket;
 		try {
-			next = new WebSocketImpl(input.url);
+			next = new WebSocketImpl(input.url, input.protocols);
 		} catch (error) {
 			console.warn("[local-relay] event socket failed to open", error);
 			scheduleReconnect();

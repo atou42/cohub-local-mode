@@ -19,19 +19,21 @@ const GROK_ACP_EXECUTABLE_COMMANDS = new Set([
   "workflow",
   "goal",
 ]);
-const CURSOR_BUILTIN_COMMANDS: HarnessCapabilityCommand[] = [
+const CURSOR_BUILTIN_COMMANDS: HarnessCapabilityCommand[] = ([
   ["goal", "Set a goal that Cursor will pursue to completion", "<objective>"],
   ["loop", "Run a prompt or skill repeatedly", "<interval> <prompt>"],
   ["create-plan", "Create an implementation plan before editing", ""],
   ["create-rule", "Create persistent Cursor rules", ""],
-  ["create-skill", "Create a Cursor Agent Skill", ""],
-].map(([name, description, argumentHint]): HarnessCapabilityCommand => ({
-  name,
-  description,
-  ...(argumentHint ? { argumentHint } : {}),
-  category: "Cursor",
-  insertionText: `/${name}${argumentHint ? " " : ""}`,
-}));
+	["create-skill", "Create a Cursor Agent Skill", ""],
+] satisfies Array<[string, string, string]>).map(
+	([name, description, argumentHint]): HarnessCapabilityCommand => ({
+	name,
+	description,
+	...(argumentHint ? { argumentHint } : {}),
+	category: "Cursor",
+	insertionText: `/${name}${argumentHint ? " " : ""}`,
+	}),
+);
 const cache = new Map<string, { expiresAt: number; value: HarnessCapabilityCatalog }>();
 const inFlight = new Map<string, Promise<HarnessCapabilityCatalog>>();
 

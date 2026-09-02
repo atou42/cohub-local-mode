@@ -43,6 +43,7 @@ import {
 	resolveMobileSessionNavTransition,
 } from "$lib/navigation-transition";
 import { m } from "$lib/paraglide/messages.js";
+import { registerBundledPersonalNode } from "$lib/personal-node-desktop";
 import { activateSpaceStyle, deactivateSpaceStyle } from "$lib/space-style";
 import { authStore } from "$lib/stores/auth.svelte";
 import { initSpacePinRealtime } from "$lib/stores/space-pins.svelte";
@@ -84,6 +85,26 @@ const currentLayoutSpaceId = $derived(
 );
 let showHelpPanel = $state(false);
 let authReady = $state(false);
+type PersonalNodeStatus = {
+	state: string;
+	deviceId: string | null;
+	message: string | null;
+};
+let personalNodeStatus = $state<PersonalNodeStatus | null>(null);
+const personalNodeStatusLabel = $derived.by(() => {
+	if (!personalNodeStatus) return null;
+	if (personalNodeStatus.state === "initializing")
+		return "Preparing this Mac...";
+	if (personalNodeStatus.state === "connecting")
+		return "Connecting this Mac...";
+	if (personalNodeStatus.state === "local-runtime-unavailable") {
+		return "The local Cohub runtime is unavailable.";
+	}
+	if (personalNodeStatus.state === "error") {
+		return personalNodeStatus.message ?? "Personal Node failed to start.";
+	}
+	return null;
+});
 
 $effect(() => {
 	if (!authReady) return;
@@ -150,13 +171,7 @@ function shouldEnableVConsole() {
 	if (import.meta.env.DEV) return true;
 
 	const hostname = window.location.hostname;
-	return (
-		hostname === "localhost" ||
-		hostname === "127.0.0.1" ||
-		hostname.startsWith("dev.") ||
-		hostname.startsWith("dev-") ||
-		hostname.includes("-dev.")
-	);
+	return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
 async function enableVConsole() {
@@ -581,11 +596,38 @@ onMount(() => {
 	}
 
 	let stopDesktopCommands: (() => void) | null = null;
+	let stopPersonalNodeStatus: (() => void) | null = null;
+	if (window.cohubPersonalNode) {
+		stopPersonalNodeStatus = window.cohubPersonalNode.onStatus((status) => {
+			if (!status || typeof status !== "object") return;
+			personalNodeStatus = status as PersonalNodeStatus;
+		});
+		void window.cohubPersonalNode
+			.status()
+			.then((status) => {
+				personalNodeStatus = status;
+			})
+			.catch((error) => {
+				personalNodeStatus = {
+					state: "error",
+					deviceId: null,
+					message: error instanceof Error ? error.message : String(error),
+				};
+			});
+	}
 
 	void authStore.ensureLoaded().finally(() => {
 		authReady = true;
 		scheduleCacheCleanup();
 		if (authStore.isAuthenticated) {
+			void registerBundledPersonalNode().catch((error) => {
+				console.error("[personal-node] desktop registration failed", error);
+				personalNodeStatus = {
+					state: "error",
+					deviceId: personalNodeStatus?.deviceId ?? null,
+					message: error instanceof Error ? error.message : String(error),
+				};
+			});
 			turnNotifications.start();
 			// Listen in the shell, not a page, so delivery never depends on route.
 			stopDesktopCommands = startDesktopCommandListener();
@@ -603,6 +645,7 @@ onMount(() => {
 		delete window.cohubDisableVConsole;
 		delete window.cohubEnableVConsole;
 		stopDesktopCommands?.();
+		stopPersonalNodeStatus?.();
 		turnNotifications.stop();
 		nativeActivityBridge?.stop();
 		nativeActivityBridge = null;
@@ -628,6 +671,14 @@ onMount(() => {
     <CenteredLoading label={m.shell_loading({}, { locale })} size="page" />
   </main>
 {:else}
+  {#if personalNodeStatusLabel}
+    <div
+      class="fixed top-3 left-1/2 z-[100] max-w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 rounded border border-border bg-surface px-3 py-2 text-center text-sm text-text-primary shadow-md"
+      role={personalNodeStatus?.state === "error" ? "alert" : "status"}
+    >
+      {personalNodeStatusLabel}
+    </div>
+  {/if}
   <div use:iosStandaloneViewportRecovery class="app-shell app-shell-viewport min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
     <!-- Desktop sidebar — hidden on mobile -->
     <!-- z-30 keeps collapsed rail flyouts above main workspace stacking contexts.

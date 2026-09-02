@@ -1,0 +1,25 @@
+{
+	"name": "@cohub/desktop-runtime",
+	"private": true,
+	"version": "0.1.0-alpha.1",
+	"type": "module",
+	"files": [
+		"fetch-polyfill.mjs",
+		"manager.mjs",
+		"sandbox-supervisor.mjs",
+		"sandbox-supervisor-core.mjs"
+	],
+	"dependencies": {
+		"@cohub/agent": "workspace:*",
+		"@cohub/api": "workspace:*",
+		"@cohub/gateway": "workspace:*",
+		"@cohub/worker": "workspace:*",
+		"@embedded-postgres/darwin-arm64": "18.4.0-beta.17",
+		"@neta-art/cohub": "workspace:*",
+		"@neta-art/cohub-cli": "workspace:*",
+		"node-fetch": "3.3.2",
+		"postgres": "3.4.9",
+		"s3rver": "3.7.1"
+	},
+	"license": "Apache-2.0"
+}

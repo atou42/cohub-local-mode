@@ -27,6 +27,13 @@ const CURSOR_EFFORTS: Record<string, readonly ModelThinkingLevel[]> = {
   "grok-4.6": ["low", "medium", "high", "xhigh"],
   "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
 };
+const CURSOR_BUNDLED_MODELS = [
+  { modelId: "grok-4.6[effort=high,fast=true]", name: "grok-4.6" },
+  {
+    modelId: "claude-fable-5-1[thinking=true,context=300k,effort=high]",
+    name: "claude-fable-5-1",
+  },
+];
 let cursorCatalogCache: { fetchedAt: number; entries: ModelCatalogEntry[] } | null = null;
 let cursorCatalogCacheHydrated = false;
 let cursorCatalogInflight: Promise<ModelCatalogEntry[]> | null = null;
@@ -402,6 +409,19 @@ export function parseCursorAcpModels(result: Record<string, unknown>, now = new 
   return entries;
 }
 
+export function bundledCursorModelsCatalog(): ModelCatalogEntry[] {
+  return parseCursorAcpModels({
+    models: { availableModels: CURSOR_BUNDLED_MODELS },
+  }).map((entry) => ({
+    ...entry,
+    model: {
+      ...entry.model,
+      catalogFetchedAt: undefined,
+      catalogSource: "bundled",
+    },
+  }));
+}
+
 async function loadCursorAcpModels(): Promise<Record<string, unknown>> {
   const command = process.env.CURSOR_AGENT_COMMAND?.trim() || "agent";
   return new Promise((resolve, reject) => {
@@ -558,7 +578,10 @@ async function loadCursorModelsCatalog(): Promise<ModelCatalogEntry[]> {
       return cursorCatalogCache.entries;
     }
   }
-  return refreshCursorModelsCatalog();
+  void refreshCursorModelsCatalog().catch((error) => {
+    console.warn("[models] Cursor catalog initial refresh failed", error);
+  });
+  return bundledCursorModelsCatalog();
 }
 
 export function clearCursorModelCatalogCacheForTests() {

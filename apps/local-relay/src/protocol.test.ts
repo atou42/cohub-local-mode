@@ -4,6 +4,7 @@ import {
 	assertRelayAttachmentFresh,
 	assertRelayOwnerOrigin,
 	browserTurnEvents,
+	isAlphaLocalApiRequest,
 	parseNodeMessage,
 	parseActivityDisplayName,
 	parseActivityOwnerUserId,
@@ -146,6 +147,93 @@ test("rejects a command outside the prompt allowlist", () => {
 			error.code === "path_not_allowed" &&
 			error.status === 403,
 	);
+});
+
+test("accepts the Personal Node Alpha read surface", () => {
+	for (const path of [
+		"/api/spaces",
+		`/api/spaces/${spaceId}`,
+		`/api/spaces/${spaceId}/sessions?limit=50`,
+		`/api/spaces/${spaceId}/turns?limit=20`,
+		`/api/spaces/${spaceId}/fs/tree?path=docs`,
+		`/api/spaces/${spaceId}/fs/file?path=README.md`,
+		`/api/sessions/${sessionId}`,
+		`/api/sessions/${sessionId}/turns/window?anchor=2`,
+		`/api/sessions/${sessionId}/messages`,
+		"/api/models?harness=cursor",
+		"/api/prompts",
+		"/api/skills",
+		"/api/harness-capabilities?harness=codex",
+		"/api/tasks",
+		"/api/me/sessions",
+	]) {
+		assert.equal(isAlphaLocalApiRequest("GET", path), true, path);
+		const result = validateRelayCommandInput(
+			{
+				kind: "alpha_api",
+				idempotencyKey: clientMessageId,
+				request: {
+					method: "GET",
+					path,
+					headers: { authorization: "must-not-cross-relay" },
+					body: "ignored",
+				},
+			},
+			{ maxBodyBytes: 64 * 1024 },
+		);
+		assert.equal(result.request.path, path);
+		assert.deepEqual(result.request.headers, {});
+		assert.equal(result.request.body, "");
+	}
+});
+
+test("accepts owner-scoped Personal Node Alpha mutations", () => {
+	for (const [method, path, body] of [
+		["POST", "/api/spaces", '{"name":"Alpha"}'],
+		["PATCH", `/api/sessions/${sessionId}`, '{"title":"Renamed"}'],
+		["PUT", `/api/spaces/${spaceId}/fs/file`, '{"path":"README.md"}'],
+		["DELETE", `/api/spaces/${spaceId}/fs/node?path=old.txt`, ""],
+	]) {
+		assert.equal(isAlphaLocalApiRequest(method, path), true, `${method} ${path}`);
+		const result = validateRelayCommandInput(
+			{
+				kind: "alpha_api",
+				idempotencyKey: clientMessageId,
+				request: { method, path, headers: { authorization: "secret" }, body },
+			},
+			{ maxBodyBytes: 64 * 1024 },
+		);
+		assert.equal(result.request.method, method);
+		assert.equal(result.request.body, body);
+		assert.equal(result.request.headers.authorization, undefined);
+	}
+});
+
+test("rejects secret, arbitrary, and cross-origin Alpha API routes", () => {
+	for (const [method, path] of [
+		["GET", "/api/local-mode/auth"],
+		["GET", `/api/spaces/${spaceId}/env`],
+		["GET", "https://attacker.example/api/spaces"],
+		["GET", "//attacker.example/api/spaces"],
+		["GET", "/internal/spaces"],
+	]) {
+		assert.equal(isAlphaLocalApiRequest(method, path), false, `${method} ${path}`);
+		assert.throws(
+			() =>
+				validateRelayCommandInput(
+					{
+						kind: "alpha_api",
+						idempotencyKey: clientMessageId,
+						request: { method, path, headers: {}, body: "" },
+					},
+					{ maxBodyBytes: 64 * 1024 },
+				),
+			(error: unknown) =>
+				error instanceof RelayProtocolError &&
+				error.code === "path_not_allowed" &&
+				error.status === 403,
+		);
+	}
 });
 
 test("accepts a pre-authorized federated filesystem mutation", () => {

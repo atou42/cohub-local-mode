@@ -63,7 +63,7 @@ export type RelayCommandStatus =
 	| "cancelled";
 
 export type RelayHttpRequest = {
-	method: "GET" | "POST" | "PUT" | "DELETE";
+	method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
 	headers: Record<string, string>;
 	body: string;
@@ -631,6 +631,44 @@ export function validateRelayAttachmentCreateInput(
 	return { name, size: Number(size), contentType, sha256 };
 }
 
+const ALPHA_LOCAL_API_METHODS = new Set([
+	"GET",
+	"POST",
+	"PUT",
+	"PATCH",
+	"DELETE",
+]);
+
+const ALPHA_LOCAL_API_DENIED_PATHS = [
+	/^\/api\/local-mode(?:\/|$)/,
+	new RegExp(
+		`^/api/spaces/${UUID_PATTERN.source.slice(1, -1)}/env(?:/|$)`,
+		"i",
+	),
+] as const;
+
+export function isAlphaLocalApiRequest(method: unknown, path: unknown) {
+	if (
+		typeof method !== "string" ||
+		!ALPHA_LOCAL_API_METHODS.has(method) ||
+		typeof path !== "string" ||
+		!path.startsWith("/")
+	) {
+		return false;
+	}
+	let url: URL;
+	try {
+		url = new URL(path, "https://alpha.internal");
+	} catch {
+		return false;
+	}
+	if (url.origin !== "https://alpha.internal") return false;
+	if (!url.pathname.startsWith("/api/")) return false;
+	return !ALPHA_LOCAL_API_DENIED_PATHS.some((pattern) =>
+		pattern.test(url.pathname),
+	);
+}
+
 export function validateRelayCommandInput(
 	value: unknown,
 	options: { maxBodyBytes: number },
@@ -653,6 +691,52 @@ export function validateRelayCommandInput(
 	}
 	if (!isRecord(value.request)) {
 		throw new RelayProtocolError("invalid_request", "request is required");
+	}
+	if (value.kind === "alpha_api") {
+		const method = value.request.method;
+		const path = requireString(value.request.path, "request.path", {
+			maxLength: 1024,
+		});
+		if (!isAlphaLocalApiRequest(method, path)) {
+			throw new RelayProtocolError(
+				"path_not_allowed",
+				"Local API route is not available through Personal Node Alpha",
+				403,
+			);
+		}
+		if (
+			value.attachmentIds !== undefined &&
+			(!Array.isArray(value.attachmentIds) || value.attachmentIds.length > 0)
+		) {
+			throw new RelayProtocolError(
+				"invalid_attachment_refs",
+				"Local API read commands cannot carry attachments",
+			);
+		}
+		const url = new URL(path, "https://alpha.internal");
+		const body =
+			method === "GET"
+				? ""
+				: typeof value.request.body === "string"
+					? value.request.body
+					: "";
+		if (new TextEncoder().encode(body).byteLength > options.maxBodyBytes) {
+			throw new RelayProtocolError(
+				"body_too_large",
+				"command body exceeds the relay limit",
+				413,
+			);
+		}
+		return {
+			idempotencyKey,
+			request: {
+				method: method as RelayHttpRequest["method"],
+				path: `${url.pathname}${url.search}`,
+				headers: body ? { "content-type": "application/json" } : {},
+				body,
+			},
+			attachmentIds: [],
+		};
 	}
 	if (value.kind === "federated_fs") {
 		const method = value.request.method;

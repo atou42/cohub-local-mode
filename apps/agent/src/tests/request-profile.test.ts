@@ -62,3 +62,33 @@ assert.deepEqual(applyRequestProfile(alternateApiModel, { sessionId: "session" }
   "session-id": "session",
   "thread-id": "session",
 });
+
+const missingEnvName = "COHUB_TEST_MISSING_PROVIDER_KEY";
+delete process.env[missingEnvName];
+const missingEnvRegistry = new CohubModelRegistry({
+  configs: [{
+    providers: {
+      test: {
+        api: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        apiKey: missingEnvName,
+        models: [{ id: "missing-key" }],
+      },
+    },
+  }],
+});
+assert.equal(missingEnvRegistry.getApiKey("test"), undefined);
+
+const literalKeyRegistry = new CohubModelRegistry({
+  configs: [{
+    providers: {
+      test: {
+        api: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        apiKey: "sk-test-literal",
+        models: [{ id: "literal-key" }],
+      },
+    },
+  }],
+});
+assert.equal(literalKeyRegistry.getApiKey("test"), "sk-test-literal");
