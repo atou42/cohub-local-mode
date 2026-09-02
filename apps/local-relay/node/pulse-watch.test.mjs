@@ -51,7 +51,7 @@ function watchSnapshot({
 
 test("accepts only the exact Relay Activity watch envelope", () => {
   const envelope = {
-    protocolVersion: 2,
+    protocolVersion: 3,
     type: "activity-watch.replace",
     digest: "AB".repeat(32),
     ...watchSnapshot(),

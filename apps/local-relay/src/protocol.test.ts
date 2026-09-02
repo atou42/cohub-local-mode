@@ -148,6 +148,48 @@ test("rejects a command outside the prompt allowlist", () => {
 	);
 });
 
+test("accepts a pre-authorized federated filesystem mutation", () => {
+	const input = {
+		kind: "federated_fs",
+		idempotencyKey: clientMessageId,
+		request: {
+			method: "PUT",
+			path: `/api/spaces/${spaceId}/fs/file`,
+			headers: { authorization: "must-not-cross-relay" },
+			body: JSON.stringify({
+				path: "shared/result.txt",
+				content: "written",
+				encoding: "utf-8",
+				mutationId: clientMessageId,
+			}),
+		},
+	};
+	const result = validateRelayCommandInput(input, { maxBodyBytes: 64 * 1024 });
+	assert.equal(result.request.method, "PUT");
+	assert.equal(result.request.path, `/api/spaces/${spaceId}/fs/file`);
+	assert.deepEqual(result.request.headers, { "content-type": "application/json" });
+	assert.equal("authorization" in result.request.headers, false);
+	assert.deepEqual(result.attachmentIds, []);
+});
+
+test("rejects a federated mutation whose receipt identity differs", () => {
+	assert.throws(
+		() => validateRelayCommandInput({
+			kind: "federated_fs",
+			idempotencyKey: clientMessageId,
+			request: {
+				method: "DELETE",
+				path: `/api/spaces/${spaceId}/fs/node?path=shared%2Fresult.txt&mutationId=${crypto.randomUUID()}`,
+				headers: {},
+				body: "",
+			},
+		}, { maxBodyBytes: 64 * 1024 }),
+		(error: unknown) =>
+			error instanceof RelayProtocolError &&
+			error.code === "idempotency_mismatch",
+	);
+});
+
 test("rejects a prompt whose client message identity differs", () => {
 	const input = validCommand();
 	input.request.body = JSON.stringify({

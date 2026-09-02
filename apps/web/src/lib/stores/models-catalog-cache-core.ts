@@ -2,10 +2,10 @@ import type { AgentHarness } from "@cohub/protocol";
 import type { ModelCatalogItem } from "$lib/model-catalog";
 import type { SpaceOrigin } from "$lib/space-origin";
 
-export const MODEL_CATALOG_CACHE_VERSION = 4;
+export const MODEL_CATALOG_CACHE_VERSION = 5;
 export const MODEL_CATALOG_CACHE_REFRESH_AFTER_MS = 5 * 60 * 1000;
 export const MODEL_CATALOG_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const CURSOR_ALLOWED_MODEL_NAMES = new Set(["grok-4.6", "claude-fable-5"]);
+const CURSOR_ALLOWED_MODEL_NAMES = new Set(["grok-4.6", "claude-fable-5-1"]);
 
 type PersistedModelCatalog = {
 	version: typeof MODEL_CATALOG_CACHE_VERSION;

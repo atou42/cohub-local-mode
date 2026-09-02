@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { publishWebBuild } from "./web-release.mjs";
+import { probeLocalAppShell } from "./web-health.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const envFile = resolve(
@@ -365,6 +366,13 @@ async function status() {
     ["Gateway", () => probeHttp("http://127.0.0.1:8788/healthz")],
     ["Web", () => probeHttp("http://127.0.0.1:4173/robots.txt", 10_000)],
     [
+      "Web app shell",
+      () =>
+        probeLocalAppShell({
+          url: "http://127.0.0.1:4173/spaces/release-health",
+        }),
+    ],
+    [
       "Private ingress",
       () => probeHttp("http://127.0.0.1:4180/api/local-mode/route-health"),
     ],
@@ -459,6 +467,7 @@ async function startServices(webMode = "development") {
 		  `PUBLIC_LOCAL_RELAY_BASE_PATH:${process.env.PUBLIC_LOCAL_RELAY_BASE_PATH ?? "/relay"}`,
 		  "--var",
 		  `PUBLIC_LOCAL_RELAY_NODE_ID:${process.env.PUBLIC_LOCAL_RELAY_NODE_ID ?? "mac-mini"}`,
+		  `PUBLIC_LOCAL_FEDERATED_API_URL:${process.env.PUBLIC_LOCAL_FEDERATED_API_URL ?? "https://relay-node.atou.cc"}`,
         ]
       : [
           "--filter",

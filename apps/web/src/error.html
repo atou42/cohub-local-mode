@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>Cohub</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			body {
+				min-height: 100dvh;
+				margin: 0;
+				display: grid;
+				place-items: center;
+				background: Canvas;
+				color: CanvasText;
+			}
+			main {
+				width: min(32rem, calc(100% - 3rem));
+				text-align: center;
+			}
+			h1 {
+				margin: 0 0 0.75rem;
+				font-size: 1.5rem;
+				letter-spacing: 0;
+			}
+			p {
+				margin: 0 0 1.5rem;
+				color: color-mix(in srgb, CanvasText 65%, Canvas);
+			}
+			button {
+				min-width: 6rem;
+				min-height: 2.75rem;
+				border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas);
+				border-radius: 6px;
+				background: CanvasText;
+				color: Canvas;
+				font: inherit;
+				cursor: pointer;
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1 data-title>Cohub is reconnecting</h1>
+			<p data-message>The latest version is being loaded.</p>
+			<button type="button" data-retry>Retry</button>
+		</main>
+		<script>
+			(() => {
+				var status = Number('%sveltekit.status%');
+				var storageKey = 'cohub:server-error-recovery';
+				var retryWindowMs = 30000;
+				var retryButton = document.querySelector('[data-retry]');
+				var isChinese = (navigator.language || '').toLowerCase().startsWith('zh');
+				if (isChinese) {
+					document.documentElement.lang = 'zh-CN';
+					document.querySelector('[data-title]').textContent = 'Cohub 正在重新连接';
+					document.querySelector('[data-message]').textContent = '正在加载最新版本。';
+					retryButton.textContent = '重试';
+				}
+
+				function recoveryUrl() {
+					var url = new URL(location.href);
+					url.searchParams.set('_cohub_recover', String(Date.now()));
+					return url.href;
+				}
+
+				function replaceLocation() {
+					location.replace(recoveryUrl());
+				}
+
+				retryButton.addEventListener('click', () => {
+					try {
+						sessionStorage.removeItem(storageKey);
+					} catch (error) {
+						console.error('[Cohub] retry state could not be cleared', error);
+					}
+					replaceLocation();
+				});
+
+				if (status < 500) return;
+				var now = Date.now();
+				var previousAttempt = 0;
+				try {
+					previousAttempt = Number(sessionStorage.getItem(storageKey) || 0);
+					if (now - previousAttempt < retryWindowMs) return;
+					sessionStorage.setItem(storageKey, String(now));
+				} catch (error) {
+					console.error('[Cohub] retry state is unavailable', error);
+				}
+
+				Promise.resolve(
+					navigator.serviceWorker?.getRegistration
+						? navigator.serviceWorker.getRegistration()
+						: null,
+				)
+					.then((registration) => {
+						if (!registration) return;
+						registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
+						return registration.update();
+					})
+					.catch((error) => {
+						console.error('[Cohub] recovery update failed', error);
+					})
+					.finally(() => setTimeout(replaceLocation, 500));
+			})();
+		</script>
+	</body>
+</html>
