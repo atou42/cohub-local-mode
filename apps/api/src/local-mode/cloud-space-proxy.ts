@@ -8,7 +8,7 @@ type RecentSessionTurn = {
   userContent: ContentBlock[];
 };
 
-type CloudSpaceReadProxyDependencies = {
+type CloudSpaceProxyDependencies = {
   nodeOrigin: "cloud" | "local";
   cloudApiOrigin: string;
   loadRecentSessionTurns: (sessionId: string) => Promise<RecentSessionTurn[]>;
@@ -17,11 +17,15 @@ type CloudSpaceReadProxyDependencies = {
   now?: () => number;
 };
 
-type CloudSpaceReadProxyInput = {
+type CloudSpaceProxyInput = {
   execution: ExecutionAuthPrincipal;
   targetSpaceId: string;
-  endpoint: "tree" | "file";
+  endpoint: "tree" | "file" | "dir" | "node" | "move";
   path: string;
+  method?: "GET" | "PUT" | "POST" | "DELETE";
+  body?: string;
+  contentType?: string | null;
+  query?: string;
 };
 
 const ACTIVE_TURN_STATUSES = new Set(["running", "abort_requested"]);
@@ -85,7 +89,7 @@ function relayCloudResponse(response: Response) {
   });
 }
 
-export function createCloudSpaceReadProxy(deps: CloudSpaceReadProxyDependencies) {
+export function createCloudSpaceProxy(deps: CloudSpaceProxyDependencies) {
   const now = deps.now ?? Date.now;
   let verifiedAccount: {
     token: string;
@@ -183,8 +187,8 @@ export function createCloudSpaceReadProxy(deps: CloudSpaceReadProxyDependencies)
     return { token };
   };
 
-  return async function proxyCloudSpaceRead(
-    input: CloudSpaceReadProxyInput,
+  return async function proxyCloudSpace(
+    input: CloudSpaceProxyInput,
   ): Promise<Response | null> {
     if (deps.nodeOrigin !== "local" || input.targetSpaceId === input.execution.spaceId) {
       return null;
@@ -195,7 +199,7 @@ export function createCloudSpaceReadProxy(deps: CloudSpaceReadProxyDependencies)
       return jsonError(
         403,
         "cloud_proxy_context_invalid",
-        "Cloud Space reads require an actor-bound Session execution.",
+        "Cloud Space access requires an actor-bound Session execution.",
       );
     }
 
@@ -220,10 +224,18 @@ export function createCloudSpaceReadProxy(deps: CloudSpaceReadProxyDependencies)
         `/api/spaces/${encodeURIComponent(input.targetSpaceId)}/fs/${input.endpoint}`,
         deps.cloudApiOrigin,
       );
-      if (input.path) url.searchParams.set("path", input.path);
+      if (input.query) {
+        const query = new URLSearchParams(input.query.startsWith("?") ? input.query.slice(1) : input.query);
+        for (const [name, value] of query) url.searchParams.append(name, value);
+      } else if (input.path) {
+        url.searchParams.set("path", input.path);
+      }
+      const method = input.method ?? "GET";
       return deps.fetch(url, {
+        method,
         headers: {
           Authorization: `Bearer ${token}`,
+          ...(input.contentType ? { "Content-Type": input.contentType } : {}),
           ...requestSourceToHeaders({
             spaceId: input.execution.spaceId,
             sessionId,
@@ -231,6 +243,9 @@ export function createCloudSpaceReadProxy(deps: CloudSpaceReadProxyDependencies)
             via: "tool",
           }),
         },
+        ...(method === "GET" || method === "DELETE" || input.body === undefined
+          ? {}
+          : { body: input.body }),
       });
     };
 

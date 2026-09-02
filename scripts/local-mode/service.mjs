@@ -105,14 +105,15 @@ async function stopLoadedService() {
 
 async function bootstrapService() {
   let lastError;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  // launchd can keep the old service coalition during graceful child drain.
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       await run("launchctl", ["bootstrap", domain, plistPath]);
       return;
     } catch (error) {
       lastError = error;
-      if (error?.code !== 5 || attempt === 4) throw error;
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+      if (error?.code !== 5 || attempt === 29) throw error;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
     }
   }
   throw lastError;

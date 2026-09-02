@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { createCloudSpaceReadProxy } from "./cloud-space-read-proxy.js";
+import { createCloudSpaceProxy } from "./cloud-space-proxy.js";
 
 const sourceSpaceId = "11111111-1111-4111-8111-111111111111";
 const targetSpaceId = "22222222-2222-4222-8222-222222222222";
@@ -35,7 +35,7 @@ function activeTurn(userContent: ContentBlock[]) {
 
 test("an execution-bound external harness can read an explicitly mentioned cloud Space", async () => {
   const requests: Request[] = [];
-  const proxy = createCloudSpaceReadProxy({
+  const proxy = createCloudSpaceProxy({
     nodeOrigin: "local",
     cloudApiOrigin: "https://api.cohub.test",
     loadRecentSessionTurns: async () => activeTurn(mention("cloud")),
@@ -64,10 +64,86 @@ test("an execution-bound external harness can read an explicitly mentioned cloud
   assert.match(requests[1]?.url ?? "", new RegExp(`/api/spaces/${targetSpaceId}/fs/tree`));
 });
 
+test("an execution-bound external harness can write an explicitly mentioned cloud Space", async () => {
+  const requests: Request[] = [];
+  const proxy = createCloudSpaceProxy({
+    nodeOrigin: "local",
+    cloudApiOrigin: "https://api.cohub.test",
+    loadRecentSessionTurns: async () => activeTurn(mention("cloud")),
+    resolveAccessToken: async () => "host-cloud-token",
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.url.endsWith("/api/me")) {
+        return Response.json({ uuid: actorUserId, profile: {}, email: null });
+      }
+      return Response.json({ path: "shared/result.txt", size: 7, created: true });
+    },
+  });
+
+  const body = JSON.stringify({
+    path: "shared/result.txt",
+    content: "written",
+    encoding: "utf-8",
+    mutationId: "mutation-1",
+  });
+  const response = await proxy({
+    execution,
+    targetSpaceId,
+    endpoint: "file",
+    path: "",
+    method: "PUT",
+    body,
+    contentType: "application/json",
+  } as never);
+
+  assert.ok(response);
+  assert.equal(response.status, 200);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1]?.method, "PUT");
+  assert.equal(requests[1]?.headers.get("content-type"), "application/json");
+  assert.equal(await requests[1]?.text(), body);
+});
+
+test("cloud mutation responses preserve target permission failures", async () => {
+  const proxy = createCloudSpaceProxy({
+    nodeOrigin: "local",
+    cloudApiOrigin: "https://api.cohub.test",
+    loadRecentSessionTurns: async () => activeTurn(mention("cloud")),
+    resolveAccessToken: async () => "host-cloud-token",
+    fetch: async (input) => {
+      const request = new Request(input);
+      if (request.url.endsWith("/api/me")) {
+        return Response.json({ uuid: actorUserId, profile: {}, email: null });
+      }
+      return Response.json(
+        { code: "permission_denied", message: "file.edit is required" },
+        { status: 403 },
+      );
+    },
+  });
+
+  const response = await proxy({
+    execution,
+    targetSpaceId,
+    endpoint: "dir",
+    path: "",
+    method: "POST",
+    body: JSON.stringify({ path: "shared", mutationId: "mutation-2" }),
+    contentType: "application/json",
+  });
+  assert.ok(response);
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    code: "permission_denied",
+    message: "file.edit is required",
+  });
+});
+
 test("local and legacy mentions never fall through to the cloud proxy", async () => {
   for (const content of [mention("local"), mention()]) {
     let fetched = false;
-    const proxy = createCloudSpaceReadProxy({
+    const proxy = createCloudSpaceProxy({
       nodeOrigin: "local",
       cloudApiOrigin: "https://api.cohub.test",
       loadRecentSessionTurns: async () => activeTurn(content),
@@ -86,7 +162,7 @@ test("local and legacy mentions never fall through to the cloud proxy", async ()
 });
 
 test("the host cloud account must match the execution actor", async () => {
-  const proxy = createCloudSpaceReadProxy({
+  const proxy = createCloudSpaceProxy({
     nodeOrigin: "local",
     cloudApiOrigin: "https://api.cohub.test",
     loadRecentSessionTurns: async () => activeTurn(mention("cloud")),
@@ -107,7 +183,7 @@ test("the host cloud account must match the execution actor", async () => {
 });
 
 test("corrupt mention metadata fails explicitly instead of being treated as local", async () => {
-  const proxy = createCloudSpaceReadProxy({
+  const proxy = createCloudSpaceProxy({
     nodeOrigin: "local",
     cloudApiOrigin: "https://api.cohub.test",
     loadRecentSessionTurns: async () => activeTurn([{ type: "text", text: "bad", _meta: { mentions: {} } }]),

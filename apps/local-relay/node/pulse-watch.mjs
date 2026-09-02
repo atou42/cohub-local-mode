@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { RELAY_PROTOCOL_VERSION } from "./protocol-compat.mjs";
 import WebSocket from "ws";
 
 export const PULSE_STATE_FILENAME = "relay-pulse-watch.json";
@@ -224,14 +225,17 @@ export function normalizePulseWatchEnvelope(value, path = "message") {
   ) {
     fail(path, "has an invalid Activity watch envelope shape");
   }
-  if (envelope.protocolVersion !== 2 || envelope.type !== "activity-watch.replace") {
+  if (
+    envelope.protocolVersion !== RELAY_PROTOCOL_VERSION ||
+    envelope.type !== "activity-watch.replace"
+  ) {
     fail(path, "has an unsupported Activity watch protocol");
   }
   if (typeof envelope.digest !== "string" || !SHA256_PATTERN.test(envelope.digest)) {
     fail(`${path}.digest`, "must be a SHA-256 digest");
   }
   return {
-    protocolVersion: 2,
+    protocolVersion: RELAY_PROTOCOL_VERSION,
     type: "activity-watch.replace",
     digest: envelope.digest.toLowerCase(),
     ...normalizePulseWatchSnapshot(envelope, path),

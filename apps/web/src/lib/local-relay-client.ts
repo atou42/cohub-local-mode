@@ -69,6 +69,9 @@ const relayNodeId = env.PUBLIC_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
 export const isLocalRelayEnabled =
 	env.PUBLIC_LOCAL_RELAY_ENABLED?.trim() === "true";
 
+export const localFederatedApiUrl =
+	env.PUBLIC_LOCAL_FEDERATED_API_URL?.trim() || "https://relay-node.atou.cc";
+
 function relayNodePath(suffix: string) {
 	return `${relayBasePath}/v1/nodes/${encodeURIComponent(relayNodeId)}${suffix}`;
 }
