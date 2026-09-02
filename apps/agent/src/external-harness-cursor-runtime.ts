@@ -18,7 +18,7 @@ const MAX_JSON_LINE_CHARS = 16 * 1024 * 1024;
 const CURSOR_EFFORTS_BY_MODEL = {
   "grok-4.5": new Set(["low", "medium", "high"]),
   "grok-4.6": new Set(["low", "medium", "high", "xhigh"]),
-  "claude-fable-5": new Set(["low", "medium", "high", "xhigh", "max"]),
+  "claude-fable-5-1": new Set(["low", "medium", "high", "xhigh", "max"]),
 } as const;
 
 /**
@@ -37,9 +37,9 @@ export function cursorCliModelId(model: string, thinkingLevel: string): string {
     const fast = /\bfast=true\b/i.test(model);
     return `cursor-${baseId}-${thinkingLevel}${fast ? "-fast" : ""}`;
   }
-  if (baseId === "claude-fable-5") {
+  if (baseId === "claude-fable-5-1") {
     const thinking = /\bthinking=true\b/i.test(model);
-    return `claude-fable-5-${thinking ? "thinking-" : ""}${thinkingLevel}`;
+    return `claude-fable-5-1-${thinking ? "thinking-" : ""}${thinkingLevel}`;
   }
   return model;
 }

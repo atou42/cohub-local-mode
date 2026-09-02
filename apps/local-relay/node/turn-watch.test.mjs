@@ -423,7 +423,7 @@ test("emits a lifecycle fixture accepted by the Relay protocol at database limit
   const lifecycle = events.find((event) => event.kind === "turn.lifecycle");
   assert.ok(lifecycle);
   const parsed = parseNodeMessage({
-    protocolVersion: 2,
+    protocolVersion: 3,
     type: "turn-event",
     event: lifecycle,
   });

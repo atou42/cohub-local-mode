@@ -30,6 +30,7 @@ docs/examples/work-capability-lab/whale-shrine/data/
 
 # Changelog generation drafts
 .changelog-draft/
+.playwright-cli/
 
 # K8s rendered files (generated)
 deploy/api/prod/rendered/

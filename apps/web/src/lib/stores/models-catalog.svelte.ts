@@ -10,7 +10,7 @@ import {
 } from "$lib/stores/models-catalog-cache";
 
 type CatalogKey = `${SpaceOrigin}:${AgentHarness}`;
-const CURSOR_ALLOWED_MODEL_NAMES = new Set(["grok-4.6", "claude-fable-5"]);
+const CURSOR_ALLOWED_MODEL_NAMES = new Set(["grok-4.6", "claude-fable-5-1"]);
 
 function isAllowedCursorModel(item: ModelCatalogItem) {
 	const baseId = item.id.split("[", 1)[0]?.trim() ?? item.id;
