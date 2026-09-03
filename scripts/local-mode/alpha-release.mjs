@@ -114,9 +114,9 @@ await run(
 		...deployArgs,
 		"--config",
 		"wrangler.alpha.toml",
-		...varArg("PUBLIC_LOGTO_APP_ID"),
+		...varArg("LOGTO_APP_ID"),
 	],
-	{ cwd: resolve(repoRoot, "apps/web") },
+	{ cwd: resolve(repoRoot, "apps/local-relay") },
 );
 await run(
 	"pnpm",
@@ -126,7 +126,7 @@ await run(
 		...deployArgs,
 		"--config",
 		"wrangler.alpha.toml",
-		...varArg("LOGTO_APP_ID"),
+		...varArg("PUBLIC_LOGTO_APP_ID"),
 	],
-	{ cwd: resolve(repoRoot, "apps/local-relay") },
+	{ cwd: resolve(repoRoot, "apps/web") },
 );

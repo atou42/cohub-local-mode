@@ -281,6 +281,98 @@ test("a registered device credential opens only its per-device node channel", as
 	assert.equal(new URL(nodeRequest.url).pathname, "/internal/node");
 });
 
+test("a registered Connector reports local runtime health without a browser token", async () => {
+	const deviceId = "669526bb-bf65-4013-a825-4f61adf199f8";
+	const token = "device-secret";
+	const accountRequests: Request[] = [];
+	const nodeRequests: Request[] = [];
+	const handler = createAlphaHandler({
+		authorizeUser: async () => {
+			throw new Error("Connector health must not require a browser token");
+		},
+	});
+	const response = await handler.fetch(
+		new Request(
+			`https://dev-cohub.atou.cc/api/alpha/v1/nodes/${identity.accountId}/${deviceId}/status`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					state: "recovering",
+					message: "postgres stopped unexpectedly",
+					attempt: 2,
+					maxAttempts: 5,
+					appVersion: "0.2.0-alpha.1",
+				}),
+			},
+		),
+		environment(
+			async (request) => {
+				accountRequests.push(request);
+				return Response.json({ ok: true });
+			},
+			async (request) => {
+				nodeRequests.push(request);
+				return Response.json({ ok: true });
+			},
+		),
+	);
+	assert.equal(response.status, 200);
+	assert.equal(accountRequests.length, 1);
+	const accountRequest = accountRequests[0];
+	assert.ok(accountRequest);
+	assert.deepEqual(await accountRequest.json(), {
+		credentialHash: await sha256Hex(token),
+	});
+	assert.equal(nodeRequests.length, 1);
+	const nodeRequest = nodeRequests[0];
+	assert.ok(nodeRequest);
+	assert.equal(new URL(nodeRequest.url).pathname, "/internal/connector-status");
+	assert.equal(nodeRequest.headers.get("authorization"), null);
+	assert.deepEqual(await nodeRequest.json(), {
+		state: "recovering",
+		message: "postgres stopped unexpectedly",
+		attempt: 2,
+		maxAttempts: 5,
+		appVersion: "0.2.0-alpha.1",
+	});
+});
+
+test("Connector health reports reject oversized bodies before node storage", async () => {
+	const deviceId = "669526bb-bf65-4013-a825-4f61adf199f8";
+	let nodeCalls = 0;
+	const handler = createAlphaHandler();
+	const response = await handler.fetch(
+		new Request(
+			`https://dev-cohub.atou.cc/api/alpha/v1/nodes/${identity.accountId}/${deviceId}/status`,
+			{
+				method: "POST",
+				headers: {
+					authorization: "Bearer device-secret",
+					"content-type": "application/json",
+				},
+				body: "x".repeat(4_097),
+			},
+		),
+		environment(
+			async () => Response.json({ ok: true }),
+			async () => {
+				nodeCalls += 1;
+				return new Response();
+			},
+		),
+	);
+	assert.equal(response.status, 413);
+	assert.equal(nodeCalls, 0);
+	assert.deepEqual(await response.json(), {
+		code: "connector_status_too_large",
+		message: "Connector status exceeds 4096 bytes",
+	});
+});
+
 test("a rejected or revoked device never reaches a node Durable Object", async () => {
 	const deviceId = "669526bb-bf65-4013-a825-4f61adf199f8";
 	let routed = false;

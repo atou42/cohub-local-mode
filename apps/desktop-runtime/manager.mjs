@@ -478,9 +478,25 @@ async function syncLocalCatalogs(env) {
 async function stop(exitCode = 0) {
 	if (stopping) return;
 	stopping = true;
-	for (const child of children.values()) child.kill("SIGTERM");
+	const running = [...children.values()].filter((child) => child.exitCode === null);
+	const exited = Promise.all(
+		running.map(
+			(child) =>
+				new Promise((resolvePromise) => {
+					child.once("exit", resolvePromise);
+				}),
+		),
+	);
+	for (const child of running) child.kill("SIGTERM");
 	await objectStore?.close().catch(() => undefined);
-	setTimeout(() => process.exit(exitCode), 1_000);
+	await Promise.race([
+		exited,
+		new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000)),
+	]);
+	for (const child of running) {
+		if (child.exitCode === null) child.kill("SIGKILL");
+	}
+	process.exit(exitCode);
 }
 
 process.once("SIGINT", () => void stop());

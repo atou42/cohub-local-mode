@@ -144,7 +144,25 @@ const ACTIVITY_PREFERENCE_PREFIX = "activity-preference:";
 const ACTIVITY_WATCH_SNAPSHOT_KEY = "meta:activity-watch-snapshot";
 const ACTIVITY_WATCH_ACK_KEY = "meta:activity-watch-ack";
 const TURN_EVENT_SEEN_PREFIX = "turnevent-seen:";
+const CONNECTOR_STATUS_KEY = "meta:connector-status";
 const ACTIVITY_OUTBOX_TERMINAL_TTL_MS = 24 * 60 * 60 * 1_000;
+
+type StoredConnectorStatus = {
+	state:
+		| "signed-out"
+		| "initializing"
+		| "local-runtime-unavailable"
+		| "connecting"
+		| "connected"
+		| "recovering"
+		| "error"
+		| "stopped";
+	message: string | null;
+	attempt: number | null;
+	maxAttempts: number | null;
+	appVersion: string;
+	updatedAt: string;
+};
 
 type ActivityPushQueueMessage = {
 	kind: "activity-push";
@@ -404,6 +422,9 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (request.method === "GET" && url.pathname === "/internal/status") {
 				return this.getStatus();
 			}
+			if (request.method === "POST" && url.pathname === "/internal/connector-status") {
+				return await this.putConnectorStatus(request);
+			}
 			if (request.method === "GET" && url.pathname === "/internal/projection") {
 				return this.getAlphaProjection(url.searchParams.get("path") ?? "");
 			}
@@ -502,6 +523,8 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	private async getStatus() {
 		const nodeId = await this.resolveNodeId();
+		const connector =
+			(await this.ctx.storage.get<StoredConnectorStatus>(CONNECTOR_STATUS_KEY)) ?? null;
 		const active = (await this.listCommands()).find(
 			(command) => command.status === "claimed" || command.status === "running",
 		);
@@ -511,7 +534,80 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			connected: this.ctx.getWebSockets("node").length > 0,
 			activeCommandId: active?.id ?? null,
 			activeCommandStatus: active?.status ?? null,
+			connector,
 		});
+	}
+
+	private async putConnectorStatus(request: Request) {
+		const payload = await request.json().catch(() => null);
+		if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status must be a JSON object",
+			);
+		}
+		const state = Reflect.get(payload, "state");
+		if (
+			typeof state !== "string" ||
+			![
+				"signed-out",
+				"initializing",
+				"local-runtime-unavailable",
+				"connecting",
+				"connected",
+				"recovering",
+				"error",
+				"stopped",
+			].includes(state)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid state",
+			);
+		}
+		const rawMessage = Reflect.get(payload, "message");
+		if (
+			rawMessage !== null &&
+			(typeof rawMessage !== "string" || rawMessage.length > 2_048)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid message",
+			);
+		}
+		const optionalInteger = (field: string) => {
+			const value = Reflect.get(payload, field);
+			if (value === undefined || value === null) return null;
+			if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100) {
+				throw new RelayProtocolError(
+					"connector_status_invalid",
+					`Connector status has an invalid ${field}`,
+				);
+			}
+			return Number(value);
+		};
+		const appVersion = Reflect.get(payload, "appVersion");
+		if (
+			typeof appVersion !== "string" ||
+			!appVersion.trim() ||
+			appVersion.length > 64 ||
+			/[\r\n\0]/.test(appVersion)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid appVersion",
+			);
+		}
+		const connector: StoredConnectorStatus = {
+			state: state as StoredConnectorStatus["state"],
+			message: rawMessage as string | null,
+			attempt: optionalInteger("attempt"),
+			maxAttempts: optionalInteger("maxAttempts"),
+			appVersion: appVersion.trim(),
+			updatedAt: new Date().toISOString(),
+		};
+		await this.ctx.storage.put(CONNECTOR_STATUS_KEY, connector);
+		return json({ ok: true, connector });
 	}
 
 	private async getAlphaProjection(path: string) {

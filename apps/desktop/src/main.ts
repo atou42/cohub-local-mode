@@ -2,16 +2,25 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
 	access,
+	appendFile,
 	mkdir,
 	readFile,
 	rename,
+	rm,
 	stat,
 	writeFile,
 } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import {
+	isTrustedLegacyRuntimeCommand,
+	nextRuntimeRestart,
+	runtimeRestartLimit,
+	statusPresentation,
+	type ConnectorStatus,
+} from "./connector-core.js";
 
 const alphaOrigin = "https://dev-cohub.atou.cc";
 const stateVersion = 2;
@@ -32,6 +41,13 @@ if (
 }
 const localApiOrigin = `http://127.0.0.1:${8_787 + testPortOffset}`;
 const localGatewayOrigin = `ws://127.0.0.1:${8_788 + testPortOffset}/ws`;
+const localServicePorts = [
+	54_329 + testPortOffset,
+	6_380 + testPortOffset,
+	9_000 + testPortOffset,
+	8_787 + testPortOffset,
+	8_788 + testPortOffset,
+] as const;
 
 type StoredState = {
 	version: typeof stateVersion;
@@ -47,32 +63,33 @@ type RegistrationInput = {
 	scope: string;
 };
 
-type PublicStatus = {
-	state:
-		| "unregistered"
-		| "initializing"
-		| "local-runtime-unavailable"
-		| "connecting"
-		| "connected"
-		| "error";
-	deviceId: string | null;
-	message: string | null;
-};
+type PublicStatus = ConnectorStatus;
 
-let window: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let relayProcess: ChildProcess | null = null;
 let relayStartPromise: Promise<void> | null = null;
 let runtimeProcess: ChildProcess | null = null;
+let localRuntimeReady = false;
+let relayConnected = false;
 let lastRelayError: string | null = null;
 let lastRuntimeError: string | null = null;
-let resolveRuntimeReady: (() => void) | null = null;
-let rejectRuntimeReady: ((error: Error) => void) | null = null;
-let runtimeReady = new Promise<void>((resolve, reject) => {
-	resolveRuntimeReady = resolve;
-	rejectRuntimeReady = reject;
-});
+let runtimeRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeStableTimer: ReturnType<typeof setTimeout> | null = null;
+let relayRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let statusHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let runtimeRecoveryAttempt = 0;
+let relayRecoveryAttempt = 0;
+let runtimeStartPromise: Promise<void> | null = null;
+let signInPromise: Promise<void> | null = null;
+let logWrite = Promise.resolve();
+let statusReportWrite = Promise.resolve();
+let registeredState: StoredState | null = null;
+let registeredCredential: string | null = null;
+let quitting = false;
+let allowQuit = false;
+let suppressRuntimeRecovery = false;
 let currentStatus: PublicStatus = {
-	state: "unregistered",
+	state: "signed-out",
 	deviceId: null,
 	message: null,
 };
@@ -83,6 +100,131 @@ function statePath() {
 
 function dataDir() {
 	return join(app.getPath("userData"), "local-data");
+}
+
+function runtimeOwnerPath() {
+	return join(dataDir(), "runtime-owner.json");
+}
+
+function connectorLogPath() {
+	return join(dataDir(), "logs", "connector.log");
+}
+
+async function prepareDiagnostics() {
+	await mkdir(join(dataDir(), "logs"), { recursive: true });
+	try {
+		const current = await stat(connectorLogPath());
+		if (current.size <= 10 * 1024 * 1024) return;
+		const previous = `${connectorLogPath()}.1`;
+		await rm(previous, { force: true });
+		await rename(connectorLogPath(), previous);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
+function logMessage(source: string, message: string) {
+	const clean = message.trimEnd();
+	if (!clean) return;
+	const entry = `${new Date().toISOString()} [${source}] ${clean}\n`;
+	logWrite = logWrite
+		.then(async () => {
+			await mkdir(join(dataDir(), "logs"), { recursive: true });
+			await appendFile(connectorLogPath(), entry, { mode: 0o600 });
+		})
+		.catch((error) => {
+			console.error("Failed to write Connector diagnostics", error);
+		});
+}
+
+function truncateMenuText(value: string, maxLength = 100) {
+	const line = value.replaceAll(/\s+/g, " ").trim();
+	return line.length <= maxLength ? line : `${line.slice(0, maxLength - 1)}…`;
+}
+
+function publishConnectorError(error: unknown) {
+	publishStatus({
+		state: "error",
+		deviceId: registeredState?.deviceId ?? null,
+		message: error instanceof Error ? error.message : String(error),
+	});
+}
+
+function trayIcon() {
+	const path = app.isPackaged
+		? join(process.resourcesPath, "icon.icns")
+		: join(app.getAppPath(), "assets", "Cohub.icns");
+	const icon = nativeImage.createFromPath(path).resize({ width: 18, height: 18 });
+	icon.setTemplateImage(true);
+	return icon;
+}
+
+function refreshTrayMenu() {
+	if (!tray) return;
+	const presentation = statusPresentation(currentStatus);
+	tray.setTitle(
+		presentation.connected
+			? ""
+			: ["initializing", "connecting", "recovering"].includes(currentStatus.state)
+				? "…"
+				: "!",
+	);
+	tray.setToolTip(`Cohub Connector · ${presentation.label}`);
+	tray.setContextMenu(
+		Menu.buildFromTemplate([
+			{ label: presentation.label, enabled: false },
+			...(presentation.detail
+				? [{ label: truncateMenuText(presentation.detail), enabled: false }]
+				: []),
+			{ type: "separator" },
+			{
+				label: "Open Cohub",
+				click: () => void shell.openExternal(alphaOrigin).catch(publishConnectorError),
+			},
+			...(currentStatus.state === "signed-out"
+				? [
+						{
+							label: "Sign In",
+							click: () => void beginConnectorSignIn(),
+						},
+					]
+				: []),
+			{
+				label: "Reconnect",
+				enabled: !quitting,
+				click: () => void reconnectConnector().catch(publishConnectorError),
+			},
+			{
+				label: "View Diagnostics",
+				click: () => void showDiagnostics().catch(publishConnectorError),
+			},
+			{
+				label: "Start at Login",
+				type: "checkbox",
+				checked: app.getLoginItemSettings().openAtLogin,
+				click: (item) => {
+					app.setLoginItemSettings({ openAtLogin: item.checked });
+					refreshTrayMenu();
+				},
+			},
+			{ type: "separator" },
+			{
+				label: "Quit Cohub Connector",
+				click: () => void quitConnector(),
+			},
+		]),
+	);
+}
+
+async function showDiagnostics() {
+	await mkdir(join(dataDir(), "logs"), { recursive: true });
+	try {
+		await access(connectorLogPath());
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		await writeFile(connectorLogPath(), "", { mode: 0o600, flag: "wx" });
+	}
+	shell.showItemInFolder(connectorLogPath());
 }
 
 async function sha256File(path: string) {
@@ -121,6 +263,7 @@ async function validateInstalledRuntime(directory: string) {
 		"manager.mjs",
 		"node_modules/s3rver/package.json",
 		"node_modules/postgres/package.json",
+		"node_modules/@embedded-postgres/darwin-arm64/package.json",
 		"native/valkey-server",
 		"native/cohub-sandboxd",
 	]) {
@@ -200,13 +343,51 @@ async function resolveRuntimeScript() {
 
 function publishStatus(status: PublicStatus) {
 	currentStatus = status;
-	window?.webContents.send("personal-node:status", status);
+	logMessage("status", JSON.stringify(status));
+	refreshTrayMenu();
+	queueRemoteStatus(status);
 }
 
-function assertTrustedRenderer(event: Electron.IpcMainInvokeEvent) {
-	if (!event.senderFrame || new URL(event.senderFrame.url).origin !== alphaOrigin) {
-		throw new Error("Personal Node bridge rejected an untrusted page");
-	}
+function remoteStatusMessage(message: string | null) {
+	if (!message) return null;
+	return message
+		.replaceAll(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+		.replaceAll(/(api[_-]?key|token|secret|password)\s*[=:]\s*[^\s,;]+/gi, "$1=[redacted]")
+		.slice(-2_048);
+}
+
+function queueRemoteStatus(status: PublicStatus) {
+	if (!registeredState || !registeredCredential) return;
+	const state = registeredState;
+	const credential = registeredCredential;
+	const body = JSON.stringify({
+		state: status.state,
+		message: remoteStatusMessage(status.message),
+		...(status.attempt === undefined ? {} : { attempt: status.attempt }),
+		...(status.maxAttempts === undefined ? {} : { maxAttempts: status.maxAttempts }),
+		appVersion: app.getVersion(),
+	});
+	statusReportWrite = statusReportWrite
+		.then(async () => {
+			const response = await fetch(
+				`${alphaOrigin}/api/alpha/v1/nodes/${state.accountId}/${state.deviceId}/status`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${credential}`,
+						"content-type": "application/json",
+					},
+					body,
+					signal: AbortSignal.timeout(5_000),
+				},
+			);
+			if (!response.ok) {
+				throw new Error(`Connector status report returned HTTP ${response.status}`);
+			}
+		})
+		.catch((error) => {
+			logMessage("status-report-error", error instanceof Error ? error.message : String(error));
+		});
 }
 
 async function readState(): Promise<StoredState | null> {
@@ -256,6 +437,32 @@ function runSecurity(args: string[]) {
 	});
 }
 
+function execFileText(program: string, args: string[]) {
+	return new Promise<string>((resolve, reject) => {
+		execFile(
+			program,
+			args,
+			{ encoding: "utf8", timeout: 15_000, maxBuffer: 256 * 1024 },
+			(error, stdout, stderr) => {
+				if (!error) {
+					resolve(stdout.trim());
+					return;
+				}
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					reject(error);
+					return;
+				}
+				const exitCode = (error as NodeJS.ErrnoException & { code?: number }).code;
+				if (exitCode === 1 && !stderr.trim()) {
+					resolve("");
+					return;
+				}
+				reject(new Error(`${program} failed${stderr.trim() ? `: ${stderr.trim()}` : ""}`, { cause: error }));
+			},
+		);
+	});
+}
+
 async function readCredential(installationId: string) {
 	const credential = await runSecurity([
 		"find-generic-password",
@@ -282,39 +489,6 @@ async function writeCredential(installationId: string, credential: string) {
 		"-w",
 		credential,
 	]);
-}
-
-function parseRegistrationInput(value: unknown): RegistrationInput {
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error("Personal Node registration data is missing");
-	}
-	const record = value as Record<string, unknown>;
-	const requiredString = (field: string) => {
-		const candidate = record[field];
-		if (
-			typeof candidate !== "string" ||
-			!candidate.trim() ||
-			/[\r\n\0]/.test(candidate)
-		) {
-			throw new Error(`Personal Node registration has an invalid ${field}`);
-		}
-		return candidate.trim();
-	};
-	if (
-		typeof record.accessTokenExpiresAt !== "number" ||
-		!Number.isFinite(record.accessTokenExpiresAt) ||
-		record.accessTokenExpiresAt <= Date.now()
-	) {
-		throw new Error(
-			"Personal Node registration has an invalid accessTokenExpiresAt",
-		);
-	}
-	return {
-		accessToken: requiredString("accessToken"),
-		refreshToken: requiredString("refreshToken"),
-		accessTokenExpiresAt: record.accessTokenExpiresAt,
-		scope: requiredString("scope"),
-	};
 }
 
 async function writeCloudAuth(input: RegistrationInput) {
@@ -397,21 +571,266 @@ async function registerDevice(input: RegistrationInput) {
 	await writeCredential(installationId, credential);
 	await writeCloudAuth(input);
 	await writeState(state);
-	void runtimeReady
-		.then(() => startRelay(state, credential))
-		.catch((error) => {
-			publishStatus({
-				state: "error",
-				deviceId: state.deviceId,
-				message: error instanceof Error ? error.message : String(error),
-			});
-		});
+	registeredState = state;
+	registeredCredential = credential;
+	if (!statusHeartbeatTimer) {
+		statusHeartbeatTimer = setInterval(
+			() => queueRemoteStatus(currentStatus),
+			15_000,
+		);
+	}
+	void ensureRuntimeAndRelay(state, credential);
 	return { deviceId: state.deviceId, status: currentStatus.state };
 }
 
-async function startRuntime() {
-	if (runtimeProcess && runtimeProcess.exitCode === null) return runtimeReady;
-	publishStatus({ state: "initializing", deviceId: null, message: null });
+function validString(value: unknown, field: string, maxLength = 16_384) {
+	if (
+		typeof value !== "string" ||
+		!value.trim() ||
+		value.length > maxLength ||
+		/[\r\n\0]/.test(value)
+	) {
+		throw new Error(`Personal Node authentication has an invalid ${field}`);
+	}
+	return value.trim();
+}
+
+function validPositiveNumber(value: unknown, field: string) {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		throw new Error(`Personal Node authentication has an invalid ${field}`);
+	}
+	return value;
+}
+
+function delay(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function beginConnectorSignIn() {
+	if (signInPromise) return signInPromise;
+	signInPromise = (async () => {
+		publishStatus({ state: "signed-out", deviceId: null, message: "Preparing sign-in" });
+		const response = await fetch(`${alphaOrigin}/api/alpha/v1/auth/device`, {
+			method: "POST",
+			cache: "no-store",
+		});
+		if (!response.ok) {
+			throw new Error(`Personal Node sign-in returned HTTP ${response.status}`);
+		}
+		const authorization = (await response.json()) as Record<string, unknown>;
+		const deviceCode = validString(authorization.deviceCode, "deviceCode", 4_096);
+		const userCode = validString(authorization.userCode, "userCode", 64);
+		const verificationUriComplete = validString(
+			authorization.verificationUriComplete,
+			"verificationUriComplete",
+			4_096,
+		);
+		if (new URL(verificationUriComplete).protocol !== "https:") {
+			throw new Error("Personal Node sign-in URL must use HTTPS");
+		}
+		const expiresAt =
+			Date.now() + validPositiveNumber(authorization.expiresInSeconds, "expiresInSeconds") * 1_000;
+		let intervalMs =
+			validPositiveNumber(authorization.intervalSeconds, "intervalSeconds") * 1_000;
+		publishStatus({
+			state: "signed-out",
+			deviceId: null,
+			message: `Complete sign-in using code ${userCode}`,
+		});
+		await shell.openExternal(verificationUriComplete);
+		while (!quitting && Date.now() < expiresAt) {
+			await delay(intervalMs);
+			if (quitting) return;
+			const tokenResponse = await fetch(`${alphaOrigin}/api/alpha/v1/auth/token`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ deviceCode }),
+				cache: "no-store",
+			});
+			if (tokenResponse.status === 202) continue;
+			if (tokenResponse.status === 429) {
+				intervalMs += 5_000;
+				continue;
+			}
+			if (!tokenResponse.ok) {
+				const payload = (await tokenResponse.json().catch(() => null)) as {
+					message?: unknown;
+				} | null;
+				throw new Error(
+					typeof payload?.message === "string"
+						? payload.message
+						: `Personal Node sign-in returned HTTP ${tokenResponse.status}`,
+				);
+			}
+			const token = (await tokenResponse.json()) as Record<string, unknown>;
+			if (token.status !== "complete" || token.tokenType !== "Bearer") {
+				throw new Error("Personal Node token response is invalid");
+			}
+			await registerDevice({
+				accessToken: validString(token.accessToken, "accessToken"),
+				refreshToken: validString(token.refreshToken, "refreshToken"),
+				accessTokenExpiresAt:
+					Date.now() + validPositiveNumber(token.expiresInSeconds, "expiresInSeconds") * 1_000,
+				scope: validString(token.scope, "scope", 1_024),
+			});
+			await shell.openExternal(alphaOrigin);
+			return;
+		}
+		if (!quitting) throw new Error("Personal Node sign-in expired");
+	})()
+		.catch((error) => {
+			if (!quitting) {
+				publishStatus({
+					state: "error",
+					deviceId: null,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+		})
+		.finally(() => {
+			signInPromise = null;
+		});
+	return signInPromise;
+}
+
+type RuntimeOwner = {
+	schemaVersion: 1;
+	pid: number;
+	startedAt: string;
+};
+
+async function readRuntimeOwner(): Promise<RuntimeOwner | null> {
+	try {
+		const owner = JSON.parse(await readFile(runtimeOwnerPath(), "utf8")) as Partial<RuntimeOwner>;
+		if (
+			owner.schemaVersion !== 1 ||
+			typeof owner.pid !== "number" ||
+			!Number.isInteger(owner.pid) ||
+			owner.pid <= 1 ||
+			typeof owner.startedAt !== "string"
+		) {
+			throw new Error("Personal Node runtime owner state is invalid");
+		}
+		return owner as RuntimeOwner;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
+	}
+}
+
+async function writeRuntimeOwner(pid: number) {
+	await mkdir(dataDir(), { recursive: true });
+	const temporary = `${runtimeOwnerPath()}.${process.pid}.tmp`;
+	await writeFile(
+		temporary,
+		`${JSON.stringify({ schemaVersion: 1, pid, startedAt: new Date().toISOString() })}\n`,
+		{ mode: 0o600, flag: "wx" },
+	);
+	await rename(temporary, runtimeOwnerPath());
+}
+
+function processGroupAlive(pid: number) {
+	try {
+		process.kill(-pid, 0);
+		return true;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ESRCH") return false;
+		// A privileged sandbox descendant can briefly outlive the runtime manager.
+		// EPERM still proves that the process group exists, so keep waiting for it.
+		if (code === "EPERM") return true;
+		throw error;
+	}
+}
+
+async function terminateProcessGroup(pid: number) {
+	if (!processGroupAlive(pid)) return;
+	process.kill(-pid, "SIGTERM");
+	const deadline = Date.now() + 5_000;
+	while (processGroupAlive(pid) && Date.now() < deadline) await delay(100);
+	if (processGroupAlive(pid)) process.kill(-pid, "SIGKILL");
+}
+
+async function clearRuntimeOwner(pid: number) {
+	const owner = await readRuntimeOwner();
+	if (owner?.pid === pid) await rm(runtimeOwnerPath(), { force: true });
+}
+
+async function stopOwnedRuntime() {
+	const owner = await readRuntimeOwner();
+	if (!owner) return;
+	await terminateProcessGroup(owner.pid);
+	await clearRuntimeOwner(owner.pid);
+}
+
+async function legacyListenerPids() {
+	const pids = new Set<number>();
+	for (const port of localServicePorts) {
+		const output = await execFileText("/usr/sbin/lsof", [
+			"-nP",
+			`-iTCP:${port}`,
+			"-sTCP:LISTEN",
+			"-t",
+		]);
+		for (const value of output.split("\n")) {
+			if (!value) continue;
+			const pid = Number(value);
+			if (!Number.isInteger(pid) || pid <= 1) {
+				throw new Error(`Invalid listener PID reported for local port ${port}`);
+			}
+			pids.add(pid);
+		}
+	}
+	return [...pids];
+}
+
+async function cleanupLegacyRuntime() {
+	if (await readRuntimeOwner()) return;
+	const pids = await legacyListenerPids();
+	if (pids.length === 0) return;
+	const trustedRoot = app.getPath("userData");
+	for (const pid of pids) {
+		const command = await execFileText("/bin/ps", ["-p", String(pid), "-o", "command="]);
+		if (!isTrustedLegacyRuntimeCommand(command, trustedRoot)) {
+			throw new Error(
+				`Local service port is occupied by another process (${pid}: ${truncateMenuText(command)})`,
+			);
+		}
+		logMessage("recovery", `Stopping stale Personal Node process ${pid}: ${command}`);
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+	}
+	const deadline = Date.now() + 5_000;
+	while ((await legacyListenerPids()).length > 0 && Date.now() < deadline) await delay(100);
+	const remaining = await legacyListenerPids();
+	for (const pid of remaining) {
+		const command = await execFileText("/bin/ps", ["-p", String(pid), "-o", "command="]);
+		if (!isTrustedLegacyRuntimeCommand(command, trustedRoot)) {
+			throw new Error(`Local service port remained occupied by another process (${pid})`);
+		}
+		process.kill(pid, "SIGKILL");
+	}
+}
+
+async function startRuntimeOnce() {
+	if (await localApiReady()) {
+		localRuntimeReady = true;
+		return;
+	}
+	localRuntimeReady = false;
+	await stopOwnedRuntime();
+	await cleanupLegacyRuntime();
+	publishStatus({
+		state: runtimeRecoveryAttempt > 0 ? "recovering" : "initializing",
+		deviceId: (await readState())?.deviceId ?? null,
+		message: lastRuntimeError,
+		...(runtimeRecoveryAttempt > 0
+			? { attempt: runtimeRecoveryAttempt, maxAttempts: runtimeRestartLimit }
+			: {}),
+	});
 	const runtimeScript = await resolveRuntimeScript();
 	await access(runtimeScript);
 	const finderPath = [
@@ -422,7 +841,8 @@ async function startRuntime() {
 		"/bin",
 		process.env.PATH ?? "",
 	].join(":");
-	runtimeProcess = spawn(process.execPath, [runtimeScript], {
+	const child = spawn(process.execPath, [runtimeScript], {
+		detached: true,
 		env: {
 			...process.env,
 			ELECTRON_RUN_AS_NODE: "1",
@@ -437,47 +857,128 @@ async function startRuntime() {
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+	if (!child.pid) throw new Error("Local Cohub runtime did not start");
+	const childPid = child.pid;
+	runtimeProcess = child;
+	await writeRuntimeOwner(childPid);
 	lastRuntimeError = null;
 	let stdoutTail = "";
+	let stderrTail = "";
 	let runtimeHasReady = false;
-	runtimeProcess.stdout?.on("data", (chunk) => {
-		if (runtimeHasReady) {
-			console.log(String(chunk).trimEnd());
-			return;
-		}
-		stdoutTail = `${stdoutTail}${String(chunk)}`.slice(-4_096);
-		if (!stdoutTail.includes("[runtime] ready")) return;
-		runtimeHasReady = true;
-		stdoutTail = "";
-		resolveRuntimeReady?.();
-		resolveRuntimeReady = null;
-		rejectRuntimeReady = null;
-		void readState().then((state) => {
-			if (!state) publishStatus({ state: "unregistered", deviceId: null, message: null });
+	await new Promise<void>((resolvePromise, reject) => {
+		const startupTimeout = setTimeout(() => {
+			reject(new Error("Local Cohub runtime did not become ready within 120 seconds"));
+			void terminateProcessGroup(childPid);
+		}, 120_000);
+		child.stdout?.on("data", (chunk) => {
+			const message = String(chunk);
+			logMessage("runtime", message);
+			stdoutTail = `${stdoutTail}${message}`.slice(-8_192);
+			if (runtimeHasReady || !stdoutTail.includes("[runtime] ready")) return;
+			runtimeHasReady = true;
+			clearTimeout(startupTimeout);
+			resolvePromise();
+		});
+		child.stderr?.on("data", (chunk) => {
+			const message = String(chunk);
+			logMessage("runtime-error", message);
+			stderrTail = `${stderrTail}${message}`.slice(-16_384);
+			lastRuntimeError =
+				message
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.at(-1) ?? lastRuntimeError;
+		});
+		child.once("error", (error) => {
+			clearTimeout(startupTimeout);
+			if (!runtimeHasReady) reject(error);
+		});
+		child.once("exit", (code, signal) => {
+			clearTimeout(startupTimeout);
+			const ownedByConnector = runtimeProcess === child;
+			if (ownedByConnector) runtimeProcess = null;
+			if (!processGroupAlive(childPid)) void clearRuntimeOwner(childPid);
+			const failureLines = stderrTail.trim().split("\n").filter(Boolean);
+			const detail =
+				failureLines.findLast((line) => line.includes("[runtime]")) ||
+				failureLines.at(-1) ||
+				`Local Cohub runtime stopped (${signal ?? code ?? "unknown"})`;
+			const error = new Error(detail);
+			if (!runtimeHasReady) reject(error);
+			else if (ownedByConnector && !quitting) void handleRuntimeFailure(error);
 		});
 	});
-	runtimeProcess.stderr?.on("data", (chunk) => {
-		const message = String(chunk).trim();
-		if (message) {
-			console.error(message);
-			if (!runtimeHasReady) {
-				lastRuntimeError = message;
-				publishStatus({ state: "initializing", deviceId: null, message });
-			}
+	if (runtimeStableTimer) clearTimeout(runtimeStableTimer);
+	localRuntimeReady = true;
+	if (relayConnected) {
+		const state = await readState();
+		publishStatus({ state: "connected", deviceId: state?.deviceId ?? null, message: null });
+	}
+	runtimeStableTimer = setTimeout(() => {
+		runtimeRecoveryAttempt = 0;
+	}, 60_000);
+}
+
+async function startRuntime() {
+	if (await localApiReady()) {
+		localRuntimeReady = true;
+		return;
+	}
+	if (runtimeStartPromise) return runtimeStartPromise;
+	runtimeStartPromise = startRuntimeOnce().finally(() => {
+		runtimeStartPromise = null;
+	});
+	return runtimeStartPromise;
+}
+
+async function ensureRuntimeAndRelay(state: StoredState, credential?: string) {
+	try {
+		await startRelay(state, credential);
+		await startRuntime();
+		if (relayConnected) {
+			publishStatus({ state: "connected", deviceId: state.deviceId, message: null });
 		}
+	} catch (error) {
+		if (!quitting) await scheduleRuntimeRecovery(error);
+	}
+}
+
+async function handleRuntimeFailure(error: Error) {
+	localRuntimeReady = false;
+	await scheduleRuntimeRecovery(error);
+}
+
+async function scheduleRuntimeRecovery(error: unknown) {
+	if (quitting || suppressRuntimeRecovery || runtimeRestartTimer) return;
+	lastRuntimeError = error instanceof Error ? error.message : String(error);
+	localRuntimeReady = false;
+	runtimeRecoveryAttempt += 1;
+	const restart = nextRuntimeRestart(runtimeRecoveryAttempt);
+	const state = await readState();
+	if (!restart) {
+		publishStatus({
+			state: "error",
+			deviceId: state?.deviceId ?? null,
+			message: `${lastRuntimeError} Recovery stopped after ${runtimeRestartLimit} attempts.`,
+		});
+		return;
+	}
+	publishStatus({
+		state: "recovering",
+		deviceId: state?.deviceId ?? null,
+		message: lastRuntimeError,
+		attempt: restart.attempt,
+		maxAttempts: runtimeRestartLimit,
 	});
-	runtimeProcess.once("exit", (code) => {
-		runtimeProcess = null;
-		const error = new Error(
-			runtimeHasReady
-				? `Local Cohub runtime stopped (${code ?? "signal"})`
-				: lastRuntimeError ??
-					`Local Cohub runtime stopped (${code ?? "signal"})`,
-		);
-		rejectRuntimeReady?.(error);
-		publishStatus({ state: "error", deviceId: null, message: error.message });
-	});
-	return runtimeReady;
+	runtimeRestartTimer = setTimeout(() => {
+		runtimeRestartTimer = null;
+		void readState()
+			.then((registered) =>
+				registered ? ensureRuntimeAndRelay(registered) : startRuntime(),
+			)
+			.catch((nextError) => scheduleRuntimeRecovery(nextError));
+	}, restart.delayMs);
 }
 
 async function localApiReady() {
@@ -501,21 +1002,13 @@ async function startRelay(state: StoredState, credential?: string) {
 }
 
 async function startRelayOnce(state: StoredState, credential?: string) {
-	if (!(await localApiReady())) {
-		publishStatus({
-			state: "local-runtime-unavailable",
-			deviceId: state.deviceId,
-			message: "The local Cohub runtime is not running",
-		});
-		return;
-	}
 	const relayScript = app.isPackaged
 		? join(process.resourcesPath, "relay-node.mjs")
 		: join(app.getAppPath(), "resources", "relay-node.mjs");
 	await access(relayScript);
 	const relayCredential = credential ?? await readCredential(state.installationId);
 	publishStatus({ state: "connecting", deviceId: state.deviceId, message: null });
-	relayProcess = spawn(process.execPath, [relayScript], {
+	const child = spawn(process.execPath, [relayScript], {
 		env: {
 			...process.env,
 			ELECTRON_RUN_AS_NODE: "1",
@@ -532,105 +1025,205 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+	relayProcess = child;
 	lastRelayError = null;
-	relayProcess.stdout?.on("data", (chunk) => {
-		if (String(chunk).includes("connected as")) {
-			publishStatus({ state: "connected", deviceId: state.deviceId, message: null });
+	child.stdout?.on("data", (chunk) => {
+		const message = String(chunk);
+		logMessage("relay", message);
+		if (message.includes("connected as")) {
+			relayConnected = true;
+			relayRecoveryAttempt = 0;
+			publishStatus(
+				localRuntimeReady
+					? { state: "connected", deviceId: state.deviceId, message: null }
+					: {
+							state: "initializing",
+							deviceId: state.deviceId,
+							message: "Cloud connection ready; starting local services",
+						},
+			);
 		}
 	});
-	relayProcess.stderr?.on("data", (chunk) => {
+	child.stderr?.on("data", (chunk) => {
 		const message = String(chunk).trim();
 		if (message) {
 			lastRelayError = message;
-			console.error(message);
-			publishStatus({ state: "error", deviceId: state.deviceId, message });
+			logMessage("relay-error", message);
 		}
 	});
-	relayProcess.once("exit", (code) => {
+	child.once("exit", (code) => {
+		if (relayProcess !== child) return;
 		relayProcess = null;
-		publishStatus({
-			state: "error",
-			deviceId: state.deviceId,
-			message:
+		relayConnected = false;
+		if (!quitting) {
+			void scheduleRelayRecovery(
+				state,
 				lastRelayError ?? `Personal Node relay stopped (${code ?? "signal"})`,
+			);
+		}
+	});
+}
+
+function scheduleRelayRecovery(state: StoredState, message: string) {
+	if (quitting || relayRestartTimer) return;
+	relayRecoveryAttempt += 1;
+	const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(relayRecoveryAttempt - 1, 5));
+	publishStatus({
+		state: "connecting",
+		deviceId: state.deviceId,
+		message: `${message} Reconnecting in ${Math.ceil(delayMs / 1_000)}s.`,
+	});
+	relayRestartTimer = setTimeout(() => {
+		relayRestartTimer = null;
+		void startRelay(state).catch((error) => {
+			scheduleRelayRecovery(
+				state,
+				error instanceof Error ? error.message : String(error),
+			);
+		});
+	}, delayMs);
+}
+
+async function stopRelay() {
+	if (relayRestartTimer) {
+		clearTimeout(relayRestartTimer);
+		relayRestartTimer = null;
+	}
+	const child = relayProcess;
+	relayProcess = null;
+	relayConnected = false;
+	if (!child || child.exitCode !== null) return;
+	child.kill("SIGTERM");
+	await new Promise<void>((resolve) => {
+		const timeout = setTimeout(() => {
+			child.kill("SIGKILL");
+			resolve();
+		}, 5_000);
+		child.once("exit", () => {
+			clearTimeout(timeout);
+			resolve();
 		});
 	});
 }
 
-function createWindow() {
-	window = new BrowserWindow({
-		width: 1440,
-		height: 940,
-		minWidth: 960,
-		minHeight: 640,
-		title: "Cohub Personal Node",
-		webPreferences: {
-			preload: join(app.getAppPath(), "preload.cjs"),
-			contextIsolation: true,
-			nodeIntegration: false,
-			sandbox: true,
-		},
-	});
-	window.webContents.setWindowOpenHandler(({ url }) => {
-		void shell.openExternal(url);
-		return { action: "deny" };
-	});
-	window.webContents.on("will-navigate", (event, url) => {
-		const origin = new URL(url).origin;
-		if (origin !== alphaOrigin && origin !== "https://auth.neta.art") {
-			event.preventDefault();
-			void shell.openExternal(url);
-		}
-	});
-	void window.loadURL(alphaOrigin);
+async function stopRuntime() {
+	if (runtimeRestartTimer) {
+		clearTimeout(runtimeRestartTimer);
+		runtimeRestartTimer = null;
+	}
+	if (runtimeStableTimer) {
+		clearTimeout(runtimeStableTimer);
+		runtimeStableTimer = null;
+	}
+	const pendingStart = runtimeStartPromise;
+	runtimeProcess = null;
+	localRuntimeReady = false;
+	await stopOwnedRuntime();
+	await pendingStart?.catch(() => undefined);
 }
 
-ipcMain.handle("personal-node:register", async (event, input: unknown) => {
-	assertTrustedRenderer(event);
-	return registerDevice(parseRegistrationInput(input));
-});
-
-ipcMain.handle("personal-node:status", (event) => {
-	assertTrustedRenderer(event);
-	return currentStatus;
-});
-
-void app.whenReady().then(async () => {
-	createWindow();
-	let restored: StoredState | null = null;
+async function reconnectConnector() {
+	if (quitting) return;
+	suppressRuntimeRecovery = true;
 	try {
-		restored = await readState();
+		await stopRelay();
+		await stopRuntime();
+		runtimeRecoveryAttempt = 0;
+		relayRecoveryAttempt = 0;
+		lastRuntimeError = null;
+		lastRelayError = null;
 	} catch (error) {
 		publishStatus({
 			state: "error",
-			deviceId: null,
+			deviceId: registeredState?.deviceId ?? null,
 			message: error instanceof Error ? error.message : String(error),
 		});
 		return;
+	} finally {
+		suppressRuntimeRecovery = false;
 	}
-	void startRuntime()
-		.then(async () => {
-			const registered = await readState();
-			if (registered) await startRelay(registered);
-		})
-		.catch((error) => {
+	const state = await readState();
+	if (!state) await beginConnectorSignIn();
+	else await ensureRuntimeAndRelay(state);
+}
+
+async function quitConnector() {
+	if (quitting) return;
+	quitting = true;
+	if (statusHeartbeatTimer) {
+		clearInterval(statusHeartbeatTimer);
+		statusHeartbeatTimer = null;
+	}
+	const state = await readState().catch(() => null);
+	publishStatus({ state: "stopped", deviceId: state?.deviceId ?? null, message: null });
+	await stopRelay().catch((error) => logMessage("shutdown-error", String(error)));
+	await statusReportWrite;
+	await stopRuntime().catch((error) => logMessage("shutdown-error", String(error)));
+	await logWrite;
+	allowQuit = true;
+	app.quit();
+}
+
+function createTray() {
+	tray = new Tray(trayIcon());
+	tray.on("click", () => tray?.popUpContextMenu());
+	refreshTrayMenu();
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+	app.quit();
+} else {
+	app.on("second-instance", () => tray?.popUpContextMenu());
+	void app.whenReady().then(async () => {
+		app.dock?.hide();
+		createTray();
+		try {
+			await prepareDiagnostics();
+		} catch (error) {
 			publishStatus({
 				state: "error",
-				deviceId: restored?.deviceId ?? null,
+				deviceId: null,
 				message: error instanceof Error ? error.message : String(error),
 			});
-		});
-});
+			return;
+		}
+		let restored: StoredState | null = null;
+		try {
+			restored = await readState();
+			if (restored) {
+				registeredState = restored;
+				registeredCredential = await readCredential(restored.installationId);
+				statusHeartbeatTimer = setInterval(
+					() => queueRemoteStatus(currentStatus),
+					15_000,
+				);
+			}
+			if (!restored && !app.getLoginItemSettings().openAtLogin) {
+				app.setLoginItemSettings({ openAtLogin: true });
+				refreshTrayMenu();
+			}
+		} catch (error) {
+			publishStatus({
+				state: "error",
+				deviceId: null,
+				message: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+		if (restored) {
+			void ensureRuntimeAndRelay(restored);
+		} else {
+			void startRuntime().catch((error) => scheduleRuntimeRecovery(error));
+			if (process.env.COHUB_CONNECTOR_DISABLE_AUTO_SIGN_IN === "1") {
+				publishStatus({ state: "signed-out", deviceId: null, message: null });
+			} else void beginConnectorSignIn();
+		}
+	});
+}
 
-app.on("activate", () => {
-	if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
-
-app.on("before-quit", () => {
-	relayProcess?.kill("SIGTERM");
-	runtimeProcess?.kill("SIGTERM");
-});
-
-app.on("window-all-closed", () => {
-	if (process.platform !== "darwin") app.quit();
+app.on("before-quit", (event) => {
+	if (allowQuit || !hasSingleInstanceLock) return;
+	event.preventDefault();
+	void quitConnector();
 });

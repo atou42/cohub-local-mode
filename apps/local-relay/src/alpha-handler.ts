@@ -598,6 +598,50 @@ async function connectPersonalNode(input: {
 	return input.env.NODES.getByName(nodeId).fetch(forwarded);
 }
 
+async function reportPersonalNodeStatus(input: {
+	request: Request;
+	env: AlphaEnv;
+	accountId: string;
+	deviceId: string;
+}) {
+	const authorization = await authorizeDeviceConnection(input);
+	if (!authorization.ok) return authorization;
+	const nodeId = await alphaNodeId({
+		accountId: input.accountId,
+		deviceId: input.deviceId,
+	});
+	const forwarded = bindRelayNodeRequest(
+		new Request("https://alpha.internal/internal/connector-status", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: await connectorStatusBody(input.request),
+		}),
+		undefined,
+		nodeId,
+	);
+	return input.env.NODES.getByName(nodeId).fetch(forwarded);
+}
+
+async function connectorStatusBody(request: Request) {
+	const declaredLength = Number(request.headers.get("content-length") ?? "0");
+	if (Number.isFinite(declaredLength) && declaredLength > 4_096) {
+		throw new RelayProtocolError(
+			"connector_status_too_large",
+			"Connector status exceeds 4096 bytes",
+			413,
+		);
+	}
+	const body = await request.clone().arrayBuffer();
+	if (body.byteLength > 4_096) {
+		throw new RelayProtocolError(
+			"connector_status_too_large",
+			"Connector status exceeds 4096 bytes",
+			413,
+		);
+	}
+	return body;
+}
+
 async function routeDeviceAttachmentRequest(input: {
 	request: Request;
 	env: AlphaEnv;
@@ -784,6 +828,21 @@ export function createAlphaHandler(dependencies: AlphaHandlerDependencies = {}) 
 						env,
 						accountId: nodeConnectMatch[1],
 						deviceId: nodeConnectMatch[2].toLowerCase(),
+					});
+				}
+				const nodeStatusReportMatch = url.pathname.match(
+					/^\/api\/alpha\/v1\/nodes\/([0-9a-f]{64})\/([0-9a-f-]{36})\/status$/,
+				);
+				if (
+					request.method === "POST" &&
+					nodeStatusReportMatch?.[1] &&
+					nodeStatusReportMatch[2]
+				) {
+					return await reportPersonalNodeStatus({
+						request,
+						env,
+						accountId: nodeStatusReportMatch[1],
+						deviceId: nodeStatusReportMatch[2].toLowerCase(),
 					});
 				}
 				const nodeAttachmentMatch = url.pathname.match(

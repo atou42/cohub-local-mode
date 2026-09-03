@@ -1,8 +1,8 @@
 {
 	"name": "@cohub/desktop",
 	"private": true,
-	"version": "0.1.0-alpha.1",
-	"description": "Cohub Personal Node for macOS",
+	"version": "0.2.0-alpha.1",
+	"description": "Cohub Connector for macOS",
 	"author": "Cohub",
 	"type": "module",
 	"main": "build/main.js",
@@ -13,7 +13,7 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"package:dir": "ulimit -n 65536 && pnpm build && electron-builder --dir --mac --arm64",
 		"package": "ulimit -n 65536 && pnpm build && electron-builder --mac dmg --arm64",
-		"test": "node --test src/**/*.test.mjs"
+		"test": "node --test src/**/*.test.ts"
 	},
 	"dependencies": {
 		"ws": "8.21.1"
@@ -34,7 +34,6 @@
 		},
 		"files": [
 			"build/**/*",
-			"preload.cjs",
 			"package.json",
 			"!node_modules/**/*"
 		],
@@ -54,13 +53,16 @@
 			"target": ["dmg"],
 			"identity": "-",
 			"icon": "assets/Cohub.icns",
+			"extendInfo": {
+				"LSUIElement": true
+			},
 			"entitlements": "assets/entitlements.mac.plist",
 			"entitlementsInherit": "assets/entitlements.mac.plist",
 			"hardenedRuntime": true,
 			"gatekeeperAssess": false
 		},
 		"dmg": {
-			"artifactName": "Cohub-Personal-Node-${version}-${arch}.${ext}"
+			"artifactName": "Cohub-Connector-${version}-${arch}.${ext}"
 		}
 	}
 }

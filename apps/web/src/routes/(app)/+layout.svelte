@@ -4,6 +4,7 @@ import { onMount } from "svelte";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
 import { clearFailedDynamicImportRecovery } from "$lib/asset-import-recovery";
+import { getAuthToken, IS_PERSONAL_NODE_ALPHA } from "$lib/auth";
 import { scheduleCacheCleanup } from "$lib/cache/cleanup";
 import BillingConversionCenter from "$lib/components/BillingConversionCenter.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -44,6 +45,14 @@ import {
 } from "$lib/navigation-transition";
 import { m } from "$lib/paraglide/messages.js";
 import { registerBundledPersonalNode } from "$lib/personal-node-desktop";
+import {
+	getPersonalNodeDeviceStatus,
+	resolvePersonalNodeDevice,
+} from "$lib/personal-node-fetch";
+import {
+	type PersonalNodeStatusNotice,
+	personalNodeStatusNotice,
+} from "$lib/personal-node-status";
 import { activateSpaceStyle, deactivateSpaceStyle } from "$lib/space-style";
 import { authStore } from "$lib/stores/auth.svelte";
 import { initSpacePinRealtime } from "$lib/stores/space-pins.svelte";
@@ -91,7 +100,9 @@ type PersonalNodeStatus = {
 	message: string | null;
 };
 let personalNodeStatus = $state<PersonalNodeStatus | null>(null);
+let personalNodeNotice = $state<PersonalNodeStatusNotice | null>(null);
 const personalNodeStatusLabel = $derived.by(() => {
+	if (personalNodeNotice) return personalNodeNotice.text;
 	if (!personalNodeStatus) return null;
 	if (personalNodeStatus.state === "initializing")
 		return "Preparing this Mac...";
@@ -105,6 +116,38 @@ const personalNodeStatusLabel = $derived.by(() => {
 	}
 	return null;
 });
+const personalNodeStatusIsError = $derived(
+	personalNodeNotice?.kind === "error" || personalNodeStatus?.state === "error",
+);
+
+function startPersonalNodeStatusMonitor() {
+	let stopped = false;
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const refresh = async () => {
+		try {
+			const accessToken = await getAuthToken();
+			if (!accessToken) throw new Error("Personal Node sign-in is required.");
+			const authorization = `Bearer ${accessToken}`;
+			const device = await resolvePersonalNodeDevice(authorization);
+			if (!device) throw new Error("No active Cohub Connector is registered.");
+			personalNodeNotice = personalNodeStatusNotice(
+				await getPersonalNodeDeviceStatus(device.id, authorization),
+			);
+		} catch (error) {
+			personalNodeNotice = {
+				kind: "error",
+				text: error instanceof Error ? error.message : String(error),
+			};
+		} finally {
+			if (!stopped) timer = setTimeout(refresh, 3_000);
+		}
+	};
+	void refresh();
+	return () => {
+		stopped = true;
+		if (timer) clearTimeout(timer);
+	};
+}
 
 $effect(() => {
 	if (!authReady) return;
@@ -597,6 +640,7 @@ onMount(() => {
 
 	let stopDesktopCommands: (() => void) | null = null;
 	let stopPersonalNodeStatus: (() => void) | null = null;
+	let stopPersonalNodeMonitor: (() => void) | null = null;
 	if (window.cohubPersonalNode) {
 		stopPersonalNodeStatus = window.cohubPersonalNode.onStatus((status) => {
 			if (!status || typeof status !== "object") return;
@@ -629,6 +673,9 @@ onMount(() => {
 				};
 			});
 			turnNotifications.start();
+			if (IS_PERSONAL_NODE_ALPHA && !window.cohubPersonalNode) {
+				stopPersonalNodeMonitor = startPersonalNodeStatusMonitor();
+			}
 			// Listen in the shell, not a page, so delivery never depends on route.
 			stopDesktopCommands = startDesktopCommandListener();
 			if (authStore.userUuid) {
@@ -646,6 +693,7 @@ onMount(() => {
 		delete window.cohubEnableVConsole;
 		stopDesktopCommands?.();
 		stopPersonalNodeStatus?.();
+		stopPersonalNodeMonitor?.();
 		turnNotifications.stop();
 		nativeActivityBridge?.stop();
 		nativeActivityBridge = null;
@@ -674,7 +722,7 @@ onMount(() => {
   {#if personalNodeStatusLabel}
     <div
       class="fixed top-3 left-1/2 z-[100] max-w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 rounded border border-border bg-surface px-3 py-2 text-center text-sm text-text-primary shadow-md"
-      role={personalNodeStatus?.state === "error" ? "alert" : "status"}
+      role={personalNodeStatusIsError ? "alert" : "status"}
     >
       {personalNodeStatusLabel}
     </div>

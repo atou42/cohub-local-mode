@@ -1,4 +1,8 @@
 import {
+	type PersonalNodeStatusSnapshot,
+	parsePersonalNodeStatusSnapshot,
+} from "$lib/personal-node-status";
+import {
 	buildPersonalNodeApiCommand,
 	buildPersonalNodeReadCommand,
 	isPersonalNodeCommandTerminal,
@@ -22,7 +26,8 @@ let deviceCache: {
 } | null = null;
 let statusCache: {
 	deviceId: string;
-	connected: boolean;
+	authorization: string;
+	status: PersonalNodeStatusSnapshot;
 	resolvedAt: number;
 } | null = null;
 const inFlightReads = new Map<string, Promise<Response>>();
@@ -84,23 +89,32 @@ export async function isPersonalNodeDeviceConnected(
 	deviceId: string,
 	authorization: string,
 ) {
+	return (await getPersonalNodeDeviceStatus(deviceId, authorization)).connected;
+}
+
+export async function getPersonalNodeDeviceStatus(
+	deviceId: string,
+	authorization: string,
+) {
 	if (
 		statusCache?.deviceId === deviceId &&
+		statusCache.authorization === authorization &&
 		Date.now() - statusCache.resolvedAt < STATUS_CACHE_MS
 	) {
-		return statusCache.connected;
+		return statusCache.status;
 	}
 	const response = await fetch(
 		`/api/alpha/v1/nodes/${encodeURIComponent(deviceId)}/status`,
 		{ headers: { authorization }, cache: "no-store" },
 	);
-	if (!response.ok) return false;
-	const payload = (await response.json().catch(() => null)) as {
-		connected?: unknown;
-	} | null;
-	const connected = payload?.connected === true;
-	statusCache = { deviceId, connected, resolvedAt: Date.now() };
-	return connected;
+	if (!response.ok) {
+		throw new Error(`Personal Node status returned HTTP ${response.status}`);
+	}
+	const status = parsePersonalNodeStatusSnapshot(
+		await response.json().catch(() => null),
+	);
+	statusCache = { deviceId, authorization, status, resolvedAt: Date.now() };
+	return status;
 }
 
 async function waitForCommand(input: {
