@@ -21,7 +21,7 @@ const EFFORT_LEVEL_SET = new Set<string>(EFFORT_LEVELS);
 const CURSOR_CATALOG_CACHE_VERSION = 4;
 const CURSOR_CATALOG_TTL_MS = 5 * 60_000;
 const CURSOR_CATALOG_STALE_MAX_MS = 7 * 24 * 60 * 60_000;
-const CURSOR_CATALOG_TIMEOUT_MS = 30_000;
+const CURSOR_CATALOG_TIMEOUT_MS = 90_000;
 const CURSOR_ALLOWED_MODELS = new Set(["grok-4.6", "claude-fable-5-1"]);
 const CURSOR_EFFORTS: Record<string, readonly ModelThinkingLevel[]> = {
   "grok-4.6": ["low", "medium", "high", "xhigh"],
