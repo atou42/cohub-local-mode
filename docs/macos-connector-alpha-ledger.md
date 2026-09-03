@@ -52,4 +52,14 @@ The authenticated development Space was inspected at 1440 by 900 and 390 by 844 
 
 ## Remaining Acceptance
 
-The packaged Connector still needs installation acceptance on the user's second MacBook. That run must confirm the visible menu-bar states, browser independence, sign-in and reconnect behavior, and explicit Quit from the menu. Until that evidence exists, this goal remains active rather than being marked complete.
+The packaged Connector needs final acceptance on the user's second MacBook. That run must confirm the visible menu-bar states, browser independence, sign-in and reconnect behavior, and explicit Quit from the menu. Until that evidence exists, this goal remains active rather than being marked complete.
+
+## MacBook Acceptance Follow-up
+
+The first second-Mac installation reached Cloudflare and local runtime health on `MacBook-Air-6.local`. Its log moved from connecting to connected in 41 seconds, and the live Alpha status endpoint reported the device connected with Connector version `0.2.0-alpha.1`. Opening diagnostics from the menu also worked, which proves the installed menu-bar control path is available.
+
+That log exposed a real queue defect. A local API read remained open while Cloudflare repeatedly delivered the next queued command; the old node rejected the same command 341 times and left it queued. The stale queued read was cancelled on the Alpha relay. The node now limits one local API request to 60 seconds, retains distinct commands that arrive while another command is active, suppresses duplicate delivery, drains the retained command afterward, and handles terminal acknowledgements without leaving a false active command. Regression tests reproduce the 341 duplicate deliveries and a never-ending local request before proving both are bounded.
+
+The follow-up image is `Cohub-Connector-0.2.0-alpha.2-arm64.dmg`, with SHA-256 `f2c0cc5e3616b48944b83526f30aeaab3da88f08058232e3ce1061f0dd427150`. Its DMG checksum, strict deep signature, application version, bundled relay syntax, and menu-bar application flag pass validation. The image was uploaded to the user's Feishu Drive and sent to the confirmed direct conversation.
+
+The MacBook log also contains two host-environment failures rather than Connector transport failures. Grok Build has no model catalog on that Mac, and its installed Codex rejects `gpt-5.6-sol` because the CLI is too old. The final second-Mac acceptance therefore requires installing Alpha 2, upgrading Codex, and completing one new Codex turn without duplicate command rejection. The goal remains active until that run is observed.

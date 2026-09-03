@@ -13,7 +13,7 @@ const ALPHA_LOCAL_API_DENIED_PATHS = [
 	new RegExp(`^/api/spaces/${UUID_SOURCE}/env(?:/|$)`, "i"),
 ];
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const DEFAULT_LOCAL_REQUEST_TIMEOUT_MS = 60_000;
 const RELAY_ATTACHMENT_REFERENCE_SOURCE =
 	"(?:relay-attachment:\\/\\/([0-9a-f-]{36})|(?:\\/relay\\/v1|\\/api\\/alpha\\/v1)\\/nodes\\/[^/\\s]+\\/attachments\\/([0-9a-f-]{36})\\/content)";
 
@@ -727,7 +727,7 @@ export async function executeRelayCommand(command, {
   fetcher = fetch,
   localApiOrigin = "http://127.0.0.1:8787",
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
-	maxAttachmentBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
+	requestTimeoutMs = DEFAULT_LOCAL_REQUEST_TIMEOUT_MS,
 	relayNodeBaseUrl,
 	relayNodeToken,
   spaceStorageRoot,
@@ -735,6 +735,9 @@ export async function executeRelayCommand(command, {
 } = {}) {
   if (!command || typeof command !== "object") {
     throw new RelayNodeError("invalid_command", "Relay command is missing");
+  }
+  if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error("Relay local request timeout must be a positive integer");
   }
   const request = command.request;
   const promptPathMatch =
@@ -794,7 +797,19 @@ export async function executeRelayCommand(command, {
         signal,
       })
     : { body: request.body, responseReplacements: new Map() };
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      timeoutController.abort(
+        new DOMException("Local API request timed out", "TimeoutError"),
+      ),
+    requestTimeoutMs,
+  );
+  const requestSignal = signal
+    ? AbortSignal.any([signal, timeoutController.signal])
+    : timeoutController.signal;
   let response;
+  let body;
   try {
     response = await fetcher(`${localApiOrigin}${request.path}`, {
       method: request.method,
@@ -810,9 +825,19 @@ export async function executeRelayCommand(command, {
 		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.body
 			? { body: preparedPrompt.body }
         : {}),
-      signal,
+      signal: requestSignal,
     });
+    body = await readLimitedResponseBody(response, maxResponseBytes);
   } catch (error) {
+    if (timeoutController.signal.aborted && !signal?.aborted) {
+      throw new RelayNodeError(
+        "local_api_timeout",
+        `Local Cohub endpoint did not respond within ${requestTimeoutMs}ms`,
+        { cause: error },
+      );
+    }
+    if (signal?.aborted) throw signal.reason ?? error;
+    if (error instanceof RelayNodeError) throw error;
     throw new RelayNodeError(
       "local_api_unavailable",
       `Local Cohub endpoint is unavailable: ${
@@ -820,8 +845,9 @@ export async function executeRelayCommand(command, {
       }`,
       { cause: error },
     );
+  } finally {
+    clearTimeout(timeout);
   }
-  let body = await readLimitedResponseBody(response, maxResponseBytes);
   body = restoreRelayAttachmentUris(body, preparedPrompt.responseReplacements);
   let watch = null;
   if (response.status >= 200 && response.status < 300) {

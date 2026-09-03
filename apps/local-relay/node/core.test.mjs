@@ -313,6 +313,32 @@ test("stops retrying a claimed command when its lease is abandoned", async () =>
   assert.equal(retries, 1);
 });
 
+test("times out a local API request that never completes", { timeout: 500 }, async () => {
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      executeRelayCommand(command, {
+        requestTimeoutMs: 20,
+        fetcher: async (_url, init) => {
+          calls += 1;
+          if (calls === 1) {
+            return Response.json({ accessToken: "host-access-token" });
+          }
+          return await new Promise((_resolve, reject) => {
+            init.signal.addEventListener(
+              "abort",
+              () => reject(init.signal.reason),
+              { once: true },
+            );
+          });
+        },
+      }),
+    (error) =>
+      error instanceof RelayNodeError && error.code === "local_api_timeout",
+  );
+  assert.equal(calls, 2);
+});
+
 test("rejects an oversized local API response instead of truncating it", async () => {
   let call = 0;
   await assert.rejects(
