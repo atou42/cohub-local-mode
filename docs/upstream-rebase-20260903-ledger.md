@@ -8,9 +8,9 @@ Rebase the stable local `main` series onto the latest fetched `upstream/main`, r
 
 - Pre-rebase local `main`: `c46f4a99103d2659a44b47852b5eabb8fc12771c`.
 - Initial upstream target: `bcd9e6b092164ab27cc559731bbb477dd90f1f82` (`v2.38.1`).
-- Final upstream target: `29da12fb00d2f56609149dd8ff2a8311aef301c5`; four commits landed during validation and were incorporated before completion.
+- Final upstream target: `fbb16f5dfad815d77b244edd4181fc467480975e` (`v2.39.0`); ten commits landed after the initial target and were incorporated before completion.
 - Merge base: `ff9689ac1304456a7031f2414def32c8340ecf80`.
-- Initial divergence: 41 local-only commits and 34 upstream-only commits. The final target adds four more upstream commits.
+- Initial divergence: 41 local-only commits and 34 upstream-only commits. The final target adds ten more upstream commits.
 - Local recovery branch: `backup/pre-upstream-rebase-20260903`.
 - Independent alpha branch: `feat/cloudflare-personal-node-alpha` at `bb50e0591ee926a9850535508b80c37b0970b737`.
 - The worktree was clean before the rebase.
@@ -32,7 +32,7 @@ Rebase the stable local `main` series onto the latest fetched `upstream/main`, r
 
 ## Current Status
 
-The stable local `main` series is rebased onto final upstream target `29da12fb00d2f56609149dd8ff2a8311aef301c5`. Upstream is an ancestor of `HEAD`, no upstream commits are missing, and the original stable local patch series remains intact. The initial release and public acceptance passed against `v2.38.1`; the final four upstream commits and their two semantic conflict resolutions have passed SDK and Web validation. Final publication, release, and responsive acceptance remain pending.
+The stable local `main` series is rebased onto final upstream target `fbb16f5dfad815d77b244edd4181fc467480975e`. Upstream is an ancestor of deployed code commit `2585c69f175afdad8e7c762e0c4e30db78233aea`, no locked upstream commit is missing, and the original stable local patch series remains intact. The rebased branch is published, the atomic release is live, and final authenticated desktop, mobile, Local Agent, relay, and persisted intermediate-output acceptance passed.
 
 ## Evidence, Decisions, And Failures
 
@@ -42,6 +42,8 @@ Record every conflict decision, failed check, compatibility repair, commit mappi
 - `git range-diff` maps every one of the 41 pre-rebase local commits one-to-one to the rebased series with `=` equivalence. No local patch changed or disappeared.
 - Upstream advanced by four commits during the release window. The complete 44-commit local series was rebased again onto `29da12fb`. Two conflicts were resolved semantically: upstream's light-aware PWA chrome defaults remain in `app.html`, while the Local per-Space status-bar synchronizer replaces the upstream generic synchronizer and keeps upstream's new style-change resync; the stale-client recovery script remains alongside those defaults. The second recovery point is `backup/pre-final-upstream-rebase-20260903` at `495cca667d799a0b9c69598d3705d2a761693a0f`.
 - The final `range-diff` maps all 44 local commits. Forty-two are patch-equivalent; the two intentional differences are exactly the PWA status-bar and stale-client conflict resolutions above. No commit disappeared.
+- Upstream then added unified CLI turn browsing and intermediate archives. The 45-commit Local series was rebased onto `b804cb21`; the only semantic conflict retained upstream's nested SDK turn archive API while making persisted Local intermediate messages the authoritative fallback when an object archive is absent or unavailable. The Web client now uses the unified SDK path. Two SDK regression tests prove the no-archive and failed-archive paths.
+- The final upstream advance added realtime Board collaborator presence, released CLI `6.5.0` and SDK `8.8.0`, and published the `v2.39.0` changelog. The complete 46-commit Local series was rebased without further conflict through `fbb16f5d`. Final `range-diff` maps all 46 commits one-to-one with no changed or missing Local patch. Recovery points are published at `backup/pre-final-upstream-rebase-20260903`, `backup/pre-last-upstream-rebase-20260903`, `backup/pre-release-upstream-rebase-20260903`, and `backup/pre-final-release-upstream-rebase-20260903`.
 - The independent Personal Node Alpha branch remains at `bb50e0591ee926a9850535508b80c37b0970b737` and was not rebased or included in `main`.
 - Generated Alpha desktop artifacts were left untouched and locally excluded while validating stable `main`; they are not committed or treated as mainline source.
 - `pnpm install --frozen-lockfile` passed. `pnpm --filter @cohub/api db:generate` reported no schema changes.
@@ -50,6 +52,7 @@ Record every conflict decision, failed check, compatibility repair, commit mappi
 - The first Web test run exposed an upstream TypeScript constructor parameter property that Node's native strip-only loader rejects. `BoardItemValidationError` now declares and assigns `diagnostics` explicitly; the full Web suite and protocol typecheck pass with identical behavior.
 - Agent typecheck exposed an inferred `unknown` return from the local session manifest reader. The reader now has an explicit validated `LocalSessionManifest | null` contract; its focused five-test suite passes and the only remaining Agent typecheck failures come from the unavailable private `@talesofai-billing/sdk` declarations.
 - Protocol, SDK, CLI, Relay, API, and Web typechecks passed. Core and Agent cannot complete repository-wide typechecking in this checkout because the private `@talesofai-billing/sdk` package is unavailable; no non-billing type error remains in their output.
+- Final affected-suite validation passed 86 Protocol tests, 285 SDK tests, 77 CLI tests, 156 API tests, and 494 Web tests. Protocol, SDK, CLI, and Web typechecks pass; Svelte reports zero errors and zero warnings. The first final Web run used the pre-rebase Protocol build and correctly failed on a newly exported Board constant; rebuilding Protocol made the full 494-test suite pass without a source workaround.
 - The first Local Mode production build failed because upstream added the optional static `PUBLIC_MARKETPLACE_APP_ID` export without adding it to Local Mode setup. Local Mode now declares empty optional Marketplace and preview origins, and `pnpm local:build` completes while preserving the previous release until a staged build is complete.
 - `git diff --check` passed, upstream remains an ancestor, and the rebased tree contains the upstream Marketplace/App Center surface.
 - Remote recovery branch `backup/pre-upstream-rebase-20260903` preserves `c46f4a99103d2659a44b47852b5eabb8fc12771c`. `origin/main` was updated with an explicit lease from that exact old hash to rebased commit `1414ae14072089724527f269f4332aa4f55ee6ad` before final runtime acceptance.
@@ -64,7 +67,12 @@ Record every conflict decision, failed check, compatibility repair, commit mappi
 - A deliberately unregistered CLI-only Local mention in Cloud Session `d9ac51ea-1738-41fb-a3ac-22e5cbb8f1d9` failed closed with HTTP 403 `local_space_not_mentioned` and created no file. The same request with the deployed Web client's structured mention metadata and scoped bridge context passed in Cloud Session `e8c6cecd-42c1-4425-9937-86648c984b15`: it wrote, read back, and deleted `rebase-cloud-to-local-1788406000.txt`, and an independent local filesystem check confirmed cleanup.
 - Authenticated desktop 1440x900 and mobile 390x844 captures of Local Space `d5bb1cb3-2154-4037-944f-554e83200df5` rendered the application, workspace, Local identity, files, and composer without a blank/500 state or horizontal overflow. The desktop also shows the upstream Apps surface.
 - The final upstream delta adds live App shell context, light-aware PWA system chrome, and a consolidated General settings page. SDK tests and typecheck pass. The full 488-test Web suite passes. Web typecheck initially caught two stale Local test fixtures after the new protocol types were generated; the fixtures now follow the current model-status and Session contracts, the affected 15 tests pass, and Svelte reports zero errors and zero warnings with the Local build environment.
+- `origin/main` was lease-updated from `1414ae14072089724527f269f4332aa4f55ee6ad` to deployed code commit `2585c69f175afdad8e7c762e0c4e30db78233aea`. The remote hash matched exactly after publication.
+- The final atomic release deployed Relay Worker `7f4160ce-4550-4775-b27e-05a342d3e888` with the unchanged audited relay source digest `2153cba2751e2576b61640fa7fbae1ee369bb9e66738bd4d9c713b974d7cb77c`, plus Web Worker `ebce70b8-c6e5-4918-9cca-b2f9ea9ad304` with Web build `1788411262799`. The expected first macOS bootstrap attempt returned I/O error 5; the release script's managed retry succeeded and reported the release ready.
+- Final Local status reports Postgres, Redis, object storage, API, Gateway, Web, app shell, private ingress, and the Cloudflare relay node ready; the persistent Tunnel service is running. Authenticated public health reports protocol 3, and the Local node status reports `connected: true`. The authenticated public version endpoint matches build `1788411262799`.
+- Final public desktop 1440x900 and mobile 390x844 checks returned HTTP 200, rendered the Local Space and composer without a blank/500/error state, and had no horizontal overflow. Visual inspection confirmed both layouts remain usable.
+- Final public Pi Session `5fb58524-5170-4b48-8fb2-c0a862784588` completed in 5.9 seconds with exact reply `FINAL_REBASE_PI_OK`. The previously accepted Codex Session `37c61fc4-ee63-47d8-94d6-e302f53bf577` still loads its exact final reply and, after expanding the process row, renders persisted `Preparing Codex` intermediate output through the new SDK fallback path. Earlier final-version acceptance for Grok Build, Cursor, and both Local/Cloud write directions remains valid because none of their implementation paths changed in the final upstream deltas.
 
-## Next Action
+## Completion
 
-Commit and lease-update the final rebase, run the atomic release against `29da12fb`, repeat public desktop/mobile and service checks, then record and publish the final deployment evidence.
+The rebase, publication, deployment, and production acceptance are complete. Keep the recovery branches until the next independently verified upstream release.
