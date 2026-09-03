@@ -1468,6 +1468,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	$effect(() => {
 		const sessionId = activeSessionId;
 		generationRealtime.syncActiveSubscription(Boolean(spaceId && sessionId));
+		generationRealtime.syncPersonalNodeProgressPolling(
+			Boolean(
+				spaceId &&
+					sessionId &&
+					activeSessionIsRunning &&
+					relayStatus === "connected" &&
+					options.isLocalSpace?.(),
+			),
+		);
 	});
 
 	// ── Chat methods (extracted from SpaceWorkspacePage) ──
