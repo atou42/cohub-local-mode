@@ -3,8 +3,11 @@ import test from "node:test";
 import {
 	clearFailedDynamicImportRecovery,
 	FAILED_DYNAMIC_IMPORT_STORAGE_KEY,
-} from "../lib/asset-import-recovery";
-import { registerCohubServiceWorker } from "../lib/service-worker-update";
+} from "../lib/asset-import-recovery.ts";
+import {
+	createThrottledWorkerUpdateCheck,
+	registerCohubServiceWorker,
+} from "../lib/service-worker-update.ts";
 
 type Listener = () => void;
 
@@ -174,4 +177,26 @@ test("successful recovery clears only the stale-import retry marker", () => {
 			["cohub:draft", "keep-draft"],
 		],
 	);
+});
+
+test("worker checks triggered by lifecycle events are throttled", async () => {
+	let now = 1_000;
+	let checks = 0;
+	const check = createThrottledWorkerUpdateCheck({
+		check: async () => {
+			checks += 1;
+		},
+		now: () => now,
+		minimumIntervalMs: 30_000,
+	});
+
+	check();
+	check();
+	await Promise.resolve();
+	assert.equal(checks, 1);
+
+	now += 30_000;
+	check();
+	await Promise.resolve();
+	assert.equal(checks, 2);
 });

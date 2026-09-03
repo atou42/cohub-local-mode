@@ -2,9 +2,16 @@ import {
 	TURN_LIFECYCLE_STATUSES,
 	type RelayTurnLifecycleEvent,
 } from "./activity.ts";
+import {
+	LOCAL_RELAY_BROWSER_PROTOCOL_VERSION,
+	LOCAL_RELAY_EVENT_SCHEMA_VERSION,
+	LOCAL_RELAY_NODE_PROTOCOL_VERSION,
+} from "@cohub/protocol/local-relay-compatibility";
 
-export const RELAY_PROTOCOL_VERSION = 3 as const;
-export const RELAY_EVENT_SCHEMA_VERSION = 1 as const;
+export const RELAY_PROTOCOL_VERSION = LOCAL_RELAY_NODE_PROTOCOL_VERSION;
+export const RELAY_BROWSER_PROTOCOL_VERSION =
+	LOCAL_RELAY_BROWSER_PROTOCOL_VERSION;
+export const RELAY_EVENT_SCHEMA_VERSION = LOCAL_RELAY_EVENT_SCHEMA_VERSION;
 
 export const ACTIVITY_SPACE_ORIGINS = ["local", "cloud"] as const;
 export type ActivitySpaceOrigin = (typeof ACTIVITY_SPACE_ORIGINS)[number];
@@ -231,17 +238,17 @@ export type RelayToNodeMessage =
 
 export type RelayBrowserEvent =
 	| {
-			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			protocolVersion: typeof RELAY_BROWSER_PROTOCOL_VERSION;
 			type: "command.updated";
 			command: RelayCommand;
 	  }
 	| {
-			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			protocolVersion: typeof RELAY_BROWSER_PROTOCOL_VERSION;
 			type: "turn.event";
 			event: RelayTurnCompletedEvent;
 	  }
 	| {
-			protocolVersion: typeof RELAY_PROTOCOL_VERSION;
+			protocolVersion: typeof RELAY_BROWSER_PROTOCOL_VERSION;
 			type: "snapshot";
 			commands: RelayCommand[];
 			events: RelayTurnCompletedEvent[];

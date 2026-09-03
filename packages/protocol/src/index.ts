@@ -44,3 +44,4 @@ export * from "./app-catalog.js";
 export * from "./navigation.js";
 export * from "./app-view-stats.js";
 export * from "./app-promotion-stats.js";
+export * from "./local-relay-compatibility.js";

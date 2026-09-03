@@ -5,9 +5,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   assertWebDeploymentMatches,
+  assertWebRetentionBaseline,
   buildWebDeploymentMessage,
   readLocalWebBuildVersion,
 } from "./web-deployment.mjs";
+import {
+  assertWebRetentionBaselineReady,
+  readRetainedWebBuildVersions,
+} from "./web-release.mjs";
 import {
   assertRelayDeploymentMatches,
   assertRelaySecrets,
@@ -17,6 +22,7 @@ import {
   waitForRelayHealth,
 } from "./relay-deployment.mjs";
 import {
+  RELAY_BROWSER_PROTOCOL_VERSION,
   RELAY_EVENT_SCHEMA_VERSION,
   RELAY_PROTOCOL_VERSION,
 } from "../../apps/local-relay/node/protocol-compat.mjs";
@@ -61,8 +67,41 @@ function run(program, args, options = {}) {
   });
 }
 
+const retainedWebVersion = await readLocalWebBuildVersion(repoRoot);
+await assertWebRetentionBaselineReady(join(repoRoot, "apps/web/.svelte-kit"));
+const { stdout: retainedDeploymentsStdout } = await run(
+  "pnpm",
+  [
+    "--filter",
+    "web",
+    "exec",
+    "wrangler",
+    "deployments",
+    "list",
+    "--config",
+    "wrangler.local-mode.toml",
+    "--json",
+  ],
+  { capture: true },
+);
+assertWebRetentionBaseline({
+  localVersion: retainedWebVersion,
+  retainedVersions: await readRetainedWebBuildVersions(
+    join(repoRoot, "apps/web/.svelte-kit"),
+  ),
+  deployments: JSON.parse(retainedDeploymentsStdout),
+});
+
+await run("pnpm", ["--filter", "@cohub/protocol", "build"]);
 await run(process.execPath, [runScript, "build"]);
 await run("pnpm", ["--filter", "@cohub/local-relay", "build"]);
+await run(process.execPath, [
+  "--experimental-strip-types",
+  "--test",
+  join(repoRoot, "scripts/local-mode/protocol-compatibility.test.mjs"),
+  join(repoRoot, "scripts/local-mode/web-client-recovery-config.test.mjs"),
+]);
+await run("pnpm", ["--filter", "web", "test"]);
 
 const relayVersion = await readLocalRelaySourceVersion(repoRoot);
 const relayDeploymentMessage = buildRelayDeploymentMessage(relayVersion);
@@ -107,11 +146,20 @@ await waitForRelayHealth({
   expected: {
     protocolVersion: RELAY_PROTOCOL_VERSION,
     eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+    browserProtocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
   },
 });
 
 const localVersion = await readLocalWebBuildVersion(repoRoot);
-const deploymentMessage = buildWebDeploymentMessage(localVersion);
+const webCompatibility = {
+  nodeProtocolVersion: RELAY_PROTOCOL_VERSION,
+  browserProtocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
+  eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+};
+const deploymentMessage = buildWebDeploymentMessage(
+  localVersion,
+  webCompatibility,
+);
 
 await run("pnpm", [
   "--filter",
@@ -141,7 +189,11 @@ const { stdout } = await run(
   { capture: true },
 );
 const deployments = JSON.parse(stdout);
-assertWebDeploymentMatches({ localVersion, deployments });
+assertWebDeploymentMatches({
+  localVersion,
+  compatibility: webCompatibility,
+  deployments,
+});
 
 await run(process.execPath, [serviceScript, "restart"]);
 console.log(

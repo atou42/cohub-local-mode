@@ -56,7 +56,7 @@ test("parses snapshot, command.updated, and turn.event", () => {
 
 	const updated = parseLocalRelayBrowserMessage(
 		JSON.stringify({
-			protocolVersion: 2,
+			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "command.updated",
 			command: command("running"),
 		}),
@@ -66,7 +66,7 @@ test("parses snapshot, command.updated, and turn.event", () => {
 	assert.equal(updated.message.type, "command.updated");
 
 	const event = parseLocalRelayBrowserMessage({
-		protocolVersion: 2,
+		protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 		type: "turn.event",
 		event: turnEvent({ truncated: true, turn: null }),
 	});
@@ -81,13 +81,13 @@ test("parses snapshot, command.updated, and turn.event", () => {
 test("ignores unknown types and warns on missing fields", () => {
 	assert.deepEqual(
 		parseLocalRelayBrowserMessage({
-			protocolVersion: 2,
+			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "node-heartbeat",
 		}),
 		{ ok: false, reason: "unknown-type" },
 	);
 	const missing = parseLocalRelayBrowserMessage({
-		protocolVersion: 2,
+		protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 		type: "command.updated",
 	});
 	assert.equal(missing.ok, false);
@@ -108,7 +108,7 @@ test("ignores unknown types and warns on missing fields", () => {
 
 test("snapshot drops invalid entries and keeps valid ones", () => {
 	const parsed = parseLocalRelayBrowserMessage({
-		protocolVersion: 2,
+		protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 		type: "snapshot",
 		commands: [command(), { id: "bad" }, "nope"],
 		events: [turnEvent(), { kind: "turn.completed" }],
@@ -137,7 +137,10 @@ test("resolves same-origin wss URL and reconnect delay stays in range", () => {
 	const delay = nextRelayEventReconnectDelay(0, () => 0);
 	assert.ok(delay >= RELAY_EVENTS_RECONNECT_MIN_MS * 0.5);
 	assert.ok(delay <= RELAY_EVENTS_RECONNECT_MIN_MS);
-	assert.equal(nextRelayEventReconnectDelay(20, () => 1), RELAY_EVENTS_RECONNECT_MAX_MS);
+	assert.equal(
+		nextRelayEventReconnectDelay(20, () => 1),
+		RELAY_EVENTS_RECONNECT_MAX_MS,
+	);
 });
 
 test("event socket dispatches snapshot and reconnects after close", async () => {
@@ -183,7 +186,7 @@ test("event socket dispatches snapshot and reconnects after close", async () => 
 	assert.equal(sockets.length, 1);
 	sockets[0]?.onmessage?.({
 		data: JSON.stringify({
-			protocolVersion: 2,
+			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "snapshot",
 			commands: [],
 			events: [],

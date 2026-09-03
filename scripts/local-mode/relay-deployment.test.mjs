@@ -111,25 +111,44 @@ test("requires a healthy Relay with the node's exact wire schema", () => {
         status: "ready",
         protocolVersion: 2,
         eventSchemaVersion: 1,
+        browserProtocolVersion: 2,
         activityPush: { status: "error", code: "apns_configuration_error" },
       },
-      { protocolVersion: 2, eventSchemaVersion: 1 },
+      { protocolVersion: 2, eventSchemaVersion: 1, browserProtocolVersion: 2 },
     ),
   );
   assert.throws(
     () =>
       assertRelayHealth(
         { status: "ready", protocolVersion: 2 },
-        { protocolVersion: 2, eventSchemaVersion: 1 },
+        { protocolVersion: 2, eventSchemaVersion: 1, browserProtocolVersion: 2 },
       ),
     /event schema mismatch/,
   );
   assert.throws(
     () =>
       assertRelayHealth(
-        { status: "error", protocolVersion: 2, eventSchemaVersion: 1 },
-        { protocolVersion: 2, eventSchemaVersion: 1 },
+        {
+          status: "error",
+          protocolVersion: 2,
+          eventSchemaVersion: 1,
+          browserProtocolVersion: 2,
+        },
+        { protocolVersion: 2, eventSchemaVersion: 1, browserProtocolVersion: 2 },
       ),
     /is not ready/,
+  );
+  assert.throws(
+    () =>
+      assertRelayHealth(
+        {
+          status: "ready",
+          protocolVersion: 2,
+          eventSchemaVersion: 1,
+          browserProtocolVersion: 3,
+        },
+        { protocolVersion: 2, eventSchemaVersion: 1, browserProtocolVersion: 2 },
+      ),
+    /browser protocol mismatch/,
   );
 });
