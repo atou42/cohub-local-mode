@@ -11,6 +11,7 @@ import { localSpaceAccessKey } from "./local-space-access.js";
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
 const REQUEST_TIMEOUT_MS = 30_000;
+const STARTUP_REQUEST_TIMEOUT_MS = 90_000;
 const PROMPT_TIMEOUT_MS = 60 * 60_000;
 const IDLE_TIMEOUT_MS = 15 * 60_000;
 const MAX_RUNTIMES = 8;
@@ -495,9 +496,14 @@ function createRuntime(input: {
         terminal: false,
       },
       clientInfo: { name: "cohub-local", version: "1.0.0" },
-    });
+    }, STARTUP_REQUEST_TIMEOUT_MS);
     await notify(entry, "initialized");
-    await request(entry, "authenticate", { methodId: "cursor_login" });
+    await request(
+      entry,
+      "authenticate",
+      { methodId: "cursor_login" },
+      STARTUP_REQUEST_TIMEOUT_MS,
+    );
   })();
   entry.readyPromise.catch(() => undefined);
   runtimes.set(entry.key, entry);
