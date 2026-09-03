@@ -24,7 +24,7 @@ Eliminate production blank screens and Relay protocol drift at `cohub.atou.cc`. 
 
 ## Current Status
 
-The two independent causes are reproduced and fixed locally. Browser events remain on wire protocol 2 while the Node command plane remains on protocol 3 and event schema 1. The Web build now retains immutable assets for 30 days, refuses incomplete manifests, installs a stable preboot recovery script, waits for Service Worker control, limits automatic recovery to Cohub application assets, and shows an independent error surface after one failed retry. The release now refuses an unproven retention baseline and runs protocol and Web recovery gates before any remote deployment.
+The fix is committed, pushed, deployed, and accepted in production. Browser events remain on wire protocol 2 while the Node command plane remains on protocol 3 and event schema 1. The Web build retains immutable assets for 30 days, refuses incomplete manifests, installs a stable preboot recovery script, waits for Service Worker control, limits automatic recovery to Cohub application assets, and shows an independent error surface after one failed retry. The release refuses an unproven retention baseline and runs protocol and Web recovery gates before any remote deployment.
 
 ## Decisions
 
@@ -51,11 +51,16 @@ The two independent causes are reproduced and fixed locally. Browser events rema
 - Release, deployment, retention, route, and failure-path tests pass: 33 checks across the focused commands.
 - A complete `pnpm local:build` passed. The candidate contains `preboot-recovery.js` and both entry assets from production build `1788411262799` after producing build `1788416852741`.
 - The current public build `1788411262799` is recorded with 483 immutable asset paths and SHA-256 digests in the candidate's validated retention lineage. The release preflight accepts it and rejects missing, empty, modified, expired, future-dated, colliding, corrupt, or mismatched lineage and assets.
+- Commit `2f791227` is pushed to `origin/main`. The atomic release completed with Web build `1788418457500`, Relay source `2a3abf4e5a9d2d789f8c846598d52c5f9ce233d23cde177a18fd53476345be26`, and 100% Cloudflare deployments.
+- Public Relay health returns Node protocol 3, browser protocol 2, and event schema 1. Every managed Local Mode service and the persistent Tunnel are ready.
+- The authenticated pre-release browser tab remained rendered and advanced to Web build `1788418457500` without clearing any browser state. Fresh desktop and 390px mobile pages render with no horizontal overflow and no Relay protocol warning.
+- Authenticated requests return HTTP 200 for the stable preboot script and both prior entry assets. Blocking all immutable application assets produces one automatic retry followed by the visible framework-free recovery screen, never an empty body or reload loop.
+- Real Local Codex Session `7e7b2a76-8a14-4433-bf5e-f69ce11b8c23`, Turn `97fb2be9-6cb3-4592-9f43-b353280e3747`, completed through the Relay. Its persisted intermediate record contains one successful shell tool call and output `COHUB_RELEASE_TOOL_OUTPUT_OK`; the final answer is `COHUB_RELEASE_AGENT_OK`.
 
 ## Blockers
 
-Production commit, push, deployment, and live acceptance remain.
+None.
 
 ## Next Action
 
-Commit and push the verified change, run the atomic Local Mode release, then complete fresh, stale, desktop, mobile, Relay health, retained-asset, and real Local Agent acceptance against `cohub.atou.cc`.
+Goal complete.
