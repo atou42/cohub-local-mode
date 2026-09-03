@@ -68,6 +68,8 @@ const values = {
   PUBLIC_LOCAL_RELAY_NODE_ID: "mac-mini",
   PUBLIC_LOCAL_FEDERATED_API_URL: "https://relay-node.atou.cc",
   PUBLIC_COHUB_ENV: "prod",
+  PUBLIC_MARKETPLACE_APP_ID: "",
+  PUBLIC_PREVIEW_ORIGIN: "",
   PUBLIC_CLOUD_API_ORIGIN: "https://api.cohub.live",
   PUBLIC_CLOUD_GATEWAY_ORIGIN: "wss://gateway.cohub.live/ws",
   COHUB_LOCAL_TAILSCALE_HOST: "",

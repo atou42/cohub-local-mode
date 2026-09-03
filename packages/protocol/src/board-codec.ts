@@ -21,9 +21,12 @@ import {
 } from "./board-geometry.js";
 
 export class BoardItemValidationError extends Error {
-	constructor(public diagnostics: BoardNodeValidationDiagnostic[]) {
+	readonly diagnostics: BoardNodeValidationDiagnostic[];
+
+	constructor(diagnostics: BoardNodeValidationDiagnostic[]) {
 		super(diagnostics[0]?.message ?? "invalid Board item");
 		this.name = "BoardItemValidationError";
+		this.diagnostics = diagnostics;
 	}
 }
 
