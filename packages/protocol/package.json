@@ -142,6 +142,10 @@
     "./public-identifiers": {
       "types": "./dist/public-identifiers.d.ts",
       "default": "./dist/public-identifiers.js"
+    },
+    "./local-relay-compatibility": {
+      "types": "./dist/local-relay-compatibility.d.ts",
+      "default": "./dist/local-relay-compatibility.js"
     }
   },
   "types": "./dist/index.d.ts",

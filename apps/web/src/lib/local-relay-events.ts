@@ -1,9 +1,8 @@
-/**
- * Browser event-plane client for Local Relay protocol v2.
- * Message shapes follow apps/local-relay/src/protocol.ts (RelayBrowserEvent).
- */
+import { LOCAL_RELAY_BROWSER_PROTOCOL_VERSION } from "@cohub/protocol/local-relay-compatibility";
 
-export const RELAY_BROWSER_PROTOCOL_VERSION = 2 as const;
+/** Browser event-plane wire version, independent from the Node command plane. */
+export const RELAY_BROWSER_PROTOCOL_VERSION =
+	LOCAL_RELAY_BROWSER_PROTOCOL_VERSION;
 export const RELAY_EVENTS_RECONNECT_MIN_MS = 1_000;
 export const RELAY_EVENTS_RECONNECT_MAX_MS = 30_000;
 export const RELAY_EVENTS_UNAVAILABLE_AFTER = 2;
@@ -106,7 +105,11 @@ function parseCommand(value: unknown): LocalRelayEventCommand | null {
 	if (!isRecord(value)) return null;
 	const id = asString(value.id);
 	const status = asString(value.status);
-	if (!id || !status || !COMMAND_STATUSES.has(status as LocalRelayCommandStatus)) {
+	if (
+		!id ||
+		!status ||
+		!COMMAND_STATUSES.has(status as LocalRelayCommandStatus)
+	) {
 		return null;
 	}
 	let result: LocalRelayHttpResult | null = null;
@@ -193,7 +196,7 @@ export function parseLocalRelayBrowserMessage(
 		return {
 			ok: false,
 			reason: "protocol-mismatch",
-			warning: "[local-relay] event message protocolVersion is not 2",
+			warning: `[local-relay] event message protocolVersion does not match ${RELAY_BROWSER_PROTOCOL_VERSION}`,
 		};
 	}
 	const type = asString(value.type);
@@ -318,7 +321,9 @@ export function connectLocalRelayEvents(input: {
 	const WebSocketImpl =
 		input.WebSocket ??
 		(globalThis.WebSocket as unknown as
-			| (new (url: string) => EventSocket)
+			| (new (
+					url: string,
+			  ) => EventSocket)
 			| undefined);
 	const setTimeoutFn: (fn: () => void, ms: number) => unknown =
 		input.setTimeout ?? setTimeout;
@@ -348,7 +353,8 @@ export function connectLocalRelayEvents(input: {
 	const scheduleReconnect = () => {
 		if (closed) return;
 		consecutiveFailures += 1;
-		if (consecutiveFailures >= RELAY_EVENTS_UNAVAILABLE_AFTER) markUnavailable();
+		if (consecutiveFailures >= RELAY_EVENTS_UNAVAILABLE_AFTER)
+			markUnavailable();
 		const delay = nextRelayEventReconnectDelay(attempt, random);
 		attempt += 1;
 		clearReconnect();

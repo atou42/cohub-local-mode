@@ -3,7 +3,7 @@ import "../../app.css";
 import { onMount } from "svelte";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
-import { clearFailedDynamicImportRecovery } from "$lib/asset-import-recovery";
+import { markCohubClientHealthy } from "$lib/asset-import-recovery";
 import { scheduleCacheCleanup } from "$lib/cache/cleanup";
 import BillingConversionCenter from "$lib/components/BillingConversionCenter.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -570,11 +570,7 @@ onMount(() => {
 	window.cohubDisableVConsole = disableVConsole;
 	window.cohubEnableVConsole = enableVConsole;
 	if (page.status < 400) {
-		try {
-			clearFailedDynamicImportRecovery(sessionStorage);
-		} catch {
-			// Storage policy must not prevent a successful app boot.
-		}
+		markCohubClientHealthy();
 	}
 
 	if (shouldEnableVConsole()) {

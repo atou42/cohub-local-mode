@@ -42,6 +42,10 @@ pattern = "cohub.atou.cc/sw.js"
 zone_name = "atou.cc"
 
 [[routes]]
+pattern = "cohub.atou.cc/preboot-recovery.js"
+zone_name = "atou.cc"
+
+[[routes]]
 pattern = "cohub.atou.cc/workbox-*"
 zone_name = "atou.cc"
 

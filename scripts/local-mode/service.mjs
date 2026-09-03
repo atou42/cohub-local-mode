@@ -25,6 +25,7 @@ import {
   waitForRelayHealth,
 } from "./relay-deployment.mjs";
 import {
+  RELAY_BROWSER_PROTOCOL_VERSION,
   RELAY_EVENT_SCHEMA_VERSION,
   RELAY_PROTOCOL_VERSION,
 } from "../../apps/local-relay/node/protocol-compat.mjs";
@@ -215,6 +216,7 @@ async function restart() {
     expected: {
       protocolVersion: RELAY_PROTOCOL_VERSION,
       eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+      browserProtocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
     },
   });
   const localVersion = await readLocalWebBuildVersion(repoRoot);
@@ -234,7 +236,15 @@ async function restart() {
     { cwd: join(repoRoot, "apps/web"), capture: true },
   );
   const deployments = JSON.parse(stdout);
-  assertWebDeploymentMatches({ localVersion, deployments });
+  assertWebDeploymentMatches({
+    localVersion,
+    compatibility: {
+      nodeProtocolVersion: RELAY_PROTOCOL_VERSION,
+      browserProtocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
+      eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+    },
+    deployments,
+  });
   // bootout gives child workers a SIGTERM path so in-flight agent turns can
   // drain. kickstart -k kills the service tree and can strand a running turn.
   await stopLoadedService();

@@ -95,7 +95,7 @@ export function assertRelaySecrets(secrets) {
 }
 
 export function assertRelayHealth(health, expected) {
-  if (!health || health.status !== "ready") {
+  if (health?.status !== "ready") {
     throw new Error("The public Local Mode Relay is not ready");
   }
   if (health.protocolVersion !== expected.protocolVersion) {
@@ -106,6 +106,11 @@ export function assertRelayHealth(health, expected) {
   if (health.eventSchemaVersion !== expected.eventSchemaVersion) {
     throw new Error(
       `The public Relay event schema mismatch: node=${expected.eventSchemaVersion} relay=${health.eventSchemaVersion ?? "missing"}`,
+    );
+  }
+  if (health.browserProtocolVersion !== expected.browserProtocolVersion) {
+    throw new Error(
+      `The public Relay browser protocol mismatch: web=${expected.browserProtocolVersion} relay=${health.browserProtocolVersion ?? "missing"}`,
     );
   }
 }
@@ -171,6 +176,7 @@ export async function readLocalRelaySourceVersion(repoRoot) {
     ...(await listProductionFiles(repoRoot, "apps/local-relay/node")),
     join(repoRoot, "apps/local-relay/package.json"),
     join(repoRoot, "apps/local-relay/wrangler.toml"),
+    join(repoRoot, "packages/protocol/src/local-relay-compatibility.ts"),
   ].sort();
   const hash = createHash("sha256");
   for (const path of files) {

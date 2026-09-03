@@ -3,6 +3,12 @@ type ServiceWorkerUpdateInput = {
 	reload: () => void;
 };
 
+type ThrottledWorkerUpdateCheckInput = {
+	check: () => Promise<unknown>;
+	now?: () => number;
+	minimumIntervalMs?: number;
+};
+
 const SERVICE_WORKER_URL = "/sw.js";
 
 /**
@@ -45,8 +51,37 @@ export async function registerCohubServiceWorker({
 	activateWaitingWorker();
 }
 
+export function createThrottledWorkerUpdateCheck({
+	check,
+	now = Date.now,
+	minimumIntervalMs = 30_000,
+}: ThrottledWorkerUpdateCheckInput) {
+	let lastCheckAt = Number.NEGATIVE_INFINITY;
+	return () => {
+		const currentTime = now();
+		if (currentTime - lastCheckAt < minimumIntervalMs) return;
+		lastCheckAt = currentTime;
+		void check().catch((error) => {
+			console.error("[ServiceWorker] lifecycle update failed", error);
+		});
+	};
+}
+
 export function installCohubServiceWorkerUpdateLifecycle() {
 	if (!("serviceWorker" in navigator)) return;
+	const checkForUpdate = createThrottledWorkerUpdateCheck({
+		check: async () => {
+			if (window.__cohubPrebootRecovery) {
+				await window.__cohubPrebootRecovery.checkForUpdate();
+				return;
+			}
+			const registration = await navigator.serviceWorker.getRegistration();
+			if (!registration) return;
+			registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+			await registration.update();
+			registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+		},
+	});
 	const start = () => {
 		void registerCohubServiceWorker({
 			container: navigator.serviceWorker,
@@ -59,9 +94,15 @@ export function installCohubServiceWorkerUpdateLifecycle() {
 			console.error("[ServiceWorker] update failed", error);
 		});
 	};
+	const checkWhenVisible = () => {
+		if (document.visibilityState === "visible") checkForUpdate();
+	};
 
 	if (document.readyState === "complete") start();
 	else window.addEventListener("load", start, { once: true });
+	window.addEventListener("pageshow", checkForUpdate);
+	window.addEventListener("online", checkForUpdate);
+	document.addEventListener("visibilitychange", checkWhenVisible);
 }
 
 declare global {

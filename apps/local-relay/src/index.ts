@@ -66,6 +66,7 @@ import {
 	parseNodeMessage,
 	parseActivityWatchPreferences,
 	parseActivityOwnerUserId,
+	RELAY_BROWSER_PROTOCOL_VERSION,
 	RELAY_EVENT_SCHEMA_VERSION,
 	RELAY_PROTOCOL_VERSION,
 	RelayProtocolError,
@@ -1487,7 +1488,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const { client, server } = websocketPair();
 		this.ctx.acceptWebSocket(server, ["browser"]);
 		sendSocket(server, {
-			protocolVersion: RELAY_PROTOCOL_VERSION,
+			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "snapshot",
 			commands: selectSnapshotCommands(await this.listCommands()),
 			events: selectSnapshotEvents(await this.listBrowserTurnEvents()),
@@ -1626,7 +1627,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	private broadcast(command: RelayCommand) {
 		const event: RelayBrowserEvent = {
-			protocolVersion: RELAY_PROTOCOL_VERSION,
+			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "command.updated",
 			command,
 		};
@@ -2167,7 +2168,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 		if (event.kind === "turn.completed") {
 			const browserEvent: RelayBrowserEvent = {
-				protocolVersion: RELAY_PROTOCOL_VERSION,
+				protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 				type: "turn.event",
 				event,
 			};
@@ -2804,13 +2805,14 @@ async function handleRequest(request: Request, env: RelayEnv) {
 		);
 		const storedActivityHealth = await activityHealth.json<Record<string, unknown>>();
 		if (storedActivityHealth.status === "error") activityPush = storedActivityHealth;
-		return json(
-			composeRelayHealth(
+		return json({
+			...composeRelayHealth(
 				RELAY_PROTOCOL_VERSION,
 				RELAY_EVENT_SCHEMA_VERSION,
 				activityPush,
 			),
-		);
+			browserProtocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
+		});
 	}
 	if (pathname.startsWith("/api/")) {
 		return handleFederatedApi({
