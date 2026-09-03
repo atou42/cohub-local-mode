@@ -39,7 +39,6 @@ const status: ModelStatusResponse = {
 			successRate24h: 100,
 			latencyAvgMs: 50,
 			latencyP90Ms: 80,
-			samples1h: 1,
 			checkedAt: null,
 			probeIntervalSeconds: 60,
 			history: null,
