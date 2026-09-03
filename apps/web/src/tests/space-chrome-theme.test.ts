@@ -147,8 +147,9 @@ test("the app shell opts into full-bleed viewport layout and protects its conten
 	assert.match(appHtml, /viewport-fit=cover/);
 	assert.match(
 		appHtml,
-		/<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" \/>/,
+		/<meta name="apple-mobile-web-app-status-bar-style" content="default" \/>/,
 	);
+	assert.match(appHtml, /<meta name="color-scheme" content="light dark" \/>/);
 	assert.doesNotMatch(
 		appHtml,
 		/querySelector\('meta\[name="apple-mobile-web-app-status-bar-style"\]'\)/,

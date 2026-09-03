@@ -7,9 +7,10 @@ Rebase the stable local `main` series onto the latest fetched `upstream/main`, r
 ## Locked Baseline
 
 - Pre-rebase local `main`: `c46f4a99103d2659a44b47852b5eabb8fc12771c`.
-- Upstream target: `bcd9e6b092164ab27cc559731bbb477dd90f1f82` (`v2.38.1`).
+- Initial upstream target: `bcd9e6b092164ab27cc559731bbb477dd90f1f82` (`v2.38.1`).
+- Final upstream target: `29da12fb00d2f56609149dd8ff2a8311aef301c5`; four commits landed during validation and were incorporated before completion.
 - Merge base: `ff9689ac1304456a7031f2414def32c8340ecf80`.
-- Divergence: 41 local-only commits and 34 upstream-only commits.
+- Initial divergence: 41 local-only commits and 34 upstream-only commits. The final target adds four more upstream commits.
 - Local recovery branch: `backup/pre-upstream-rebase-20260903`.
 - Independent alpha branch: `feat/cloudflare-personal-node-alpha` at `bb50e0591ee926a9850535508b80c37b0970b737`.
 - The worktree was clean before the rebase.
@@ -31,7 +32,7 @@ Rebase the stable local `main` series onto the latest fetched `upstream/main`, r
 
 ## Current Status
 
-The stable local `main` series has been rebased onto the locked upstream target. Upstream is an ancestor of `HEAD`, no upstream commits are missing, and the original stable local patch series remains intact. The rebased branch, recovery branch, atomic Cloudflare release, restored Mac service, public UI, all four harnesses, and both federated write directions have passed acceptance. This final evidence update is the only publication step still pending.
+The stable local `main` series is rebased onto final upstream target `29da12fb00d2f56609149dd8ff2a8311aef301c5`. Upstream is an ancestor of `HEAD`, no upstream commits are missing, and the original stable local patch series remains intact. The initial release and public acceptance passed against `v2.38.1`; the final four upstream commits and their two semantic conflict resolutions have passed SDK and Web validation. Final publication, release, and responsive acceptance remain pending.
 
 ## Evidence, Decisions, And Failures
 
@@ -39,6 +40,8 @@ Record every conflict decision, failed check, compatibility repair, commit mappi
 
 - The sequential 42-commit rebase completed without a textual conflict.
 - `git range-diff` maps every one of the 41 pre-rebase local commits one-to-one to the rebased series with `=` equivalence. No local patch changed or disappeared.
+- Upstream advanced by four commits during the release window. The complete 44-commit local series was rebased again onto `29da12fb`. Two conflicts were resolved semantically: upstream's light-aware PWA chrome defaults remain in `app.html`, while the Local per-Space status-bar synchronizer replaces the upstream generic synchronizer and keeps upstream's new style-change resync; the stale-client recovery script remains alongside those defaults. The second recovery point is `backup/pre-final-upstream-rebase-20260903` at `495cca667d799a0b9c69598d3705d2a761693a0f`.
+- The final `range-diff` maps all 44 local commits. Forty-two are patch-equivalent; the two intentional differences are exactly the PWA status-bar and stale-client conflict resolutions above. No commit disappeared.
 - The independent Personal Node Alpha branch remains at `bb50e0591ee926a9850535508b80c37b0970b737` and was not rebased or included in `main`.
 - Generated Alpha desktop artifacts were left untouched and locally excluded while validating stable `main`; they are not committed or treated as mainline source.
 - `pnpm install --frozen-lockfile` passed. `pnpm --filter @cohub/api db:generate` reported no schema changes.
@@ -60,7 +63,8 @@ Record every conflict decision, failed check, compatibility repair, commit mappi
 - Public Local-to-Cloud Session `7ed2c87b-d858-489c-9815-5d21cf27da3` wrote, read back, and deleted `rebase-local-to-cloud-1788404000.txt` in Cloud Space `5cfdff53-424b-483f-b114-c2d4a5e86338`; an independent Cloud CLI read confirmed cleanup.
 - A deliberately unregistered CLI-only Local mention in Cloud Session `d9ac51ea-1738-41fb-a3ac-22e5cbb8f1d9` failed closed with HTTP 403 `local_space_not_mentioned` and created no file. The same request with the deployed Web client's structured mention metadata and scoped bridge context passed in Cloud Session `e8c6cecd-42c1-4425-9937-86648c984b15`: it wrote, read back, and deleted `rebase-cloud-to-local-1788406000.txt`, and an independent local filesystem check confirmed cleanup.
 - Authenticated desktop 1440x900 and mobile 390x844 captures of Local Space `d5bb1cb3-2154-4037-944f-554e83200df5` rendered the application, workspace, Local identity, files, and composer without a blank/500 state or horizontal overflow. The desktop also shows the upstream Apps surface.
+- The final upstream delta adds live App shell context, light-aware PWA system chrome, and a consolidated General settings page. SDK tests and typecheck pass. The full 488-test Web suite passes. Web typecheck initially caught two stale Local test fixtures after the new protocol types were generated; the fixtures now follow the current model-status and Session contracts, the affected 15 tests pass, and Svelte reports zero errors and zero warnings with the Local build environment.
 
 ## Next Action
 
-Commit and push this final evidence plus the Cursor compatibility repair. Then verify the local and remote `main` hashes match and close the goal.
+Commit and lease-update the final rebase, run the atomic release against `29da12fb`, repeat public desktop/mobile and service checks, then record and publish the final deployment evidence.

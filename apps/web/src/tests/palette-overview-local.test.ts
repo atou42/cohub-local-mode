@@ -50,6 +50,7 @@ function makeSession(input: {
 		source: null,
 		status: null,
 		externalSessionId: null,
+		agentHarness: "pi",
 		meta: null,
 		latestMessageText: null,
 		lastMessageAt: input.lastMessageAt ?? null,
