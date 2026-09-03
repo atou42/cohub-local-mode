@@ -19,13 +19,13 @@ const GROK_ACP_EXECUTABLE_COMMANDS = new Set([
   "workflow",
   "goal",
 ]);
-const CURSOR_BUILTIN_COMMANDS: HarnessCapabilityCommand[] = [
+const CURSOR_BUILTIN_COMMANDS: HarnessCapabilityCommand[] = ([
   ["goal", "Set a goal that Cursor will pursue to completion", "<objective>"],
   ["loop", "Run a prompt or skill repeatedly", "<interval> <prompt>"],
   ["create-plan", "Create an implementation plan before editing", ""],
   ["create-rule", "Create persistent Cursor rules", ""],
   ["create-skill", "Create a Cursor Agent Skill", ""],
-].map(([name, description, argumentHint]): HarnessCapabilityCommand => ({
+] as const).map(([name, description, argumentHint]): HarnessCapabilityCommand => ({
   name,
   description,
   ...(argumentHint ? { argumentHint } : {}),
