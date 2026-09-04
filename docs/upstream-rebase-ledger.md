@@ -32,6 +32,17 @@ Rebase the local-mode work onto the latest `upstream/main` without losing local 
 - A separate Wrangler runtime served the rebased bundle successfully. `/` and `/spaces/release-health` returned HTML with status 200, the application-shell probe passed, Chrome loaded the page with the Cohub title, and every requested client asset returned successfully.
 - The failed build directories were preserved until their causes were confirmed, then moved outside the lint scope. The pre-rebase recovery branch remains untouched, and `feat/cloudflare-personal-node-alpha` was not modified.
 
+### Production Release
+
+- The authorized rewritten `main` history was published with an exact force-with-lease from `e01787d8f80beba6f3adc5f45b360e2ae156fdd3` and then advanced normally through the release repairs. The released code head is `6152ca779b6919636c753ef13460a64623a96fbd`.
+- The first release attempt stopped before deployment because the clean rebase worktree did not contain the currently published build `1788418457500` as its immutable-asset retention baseline. The public build was recovered through the authenticated production origin, every recovered asset was hashed, and the release gate accepted the restored baseline. No incomplete web build was published by the failed attempt.
+- `pnpm local:release` completed successfully. Cloudflare Relay deployment `32b09056-accc-4b21-870c-26bf383ef323` carries source marker `2a3abf4e5a9d2d789f8c846598d52c5f9ce233d23cde177a18fd53476345be26`. Cloudflare Web deployment `fa36da8d-c823-4eb1-bec7-0338bfa21ef5` carries build marker `1788520604900` with relay-node 3, relay-browser 2, and event-schema 1 compatibility markers.
+- The service restart refreshed the launchd definition before bootstrap. Both its program path and working directory now point to the rebased `cohub-main-rebase` worktree instead of the older feature worktree. The first launch attempt encountered a transient Wrangler startup failure and launchd restarted it; the release command remained blocked until the replacement process passed the complete readiness probe.
+- A delayed stability check reports Postgres, Redis, object storage, API, Gateway, Web, the application shell, private ingress, Cloudflare Relay, and all Docker services ready. The service remained running from the rebased worktree.
+- Authenticated production probes return build `1788520604900` and `{\"status\":\"ready\",\"origin\":\"local\"}`. The local Space loaded at its canonical production URL on desktop and mobile with the composer visible, no horizontal overflow, no blank screen, no visible 500 response, no runtime exception, and no failed resource request.
+- The retained pre-release asset `/_app/immutable/assets/BoardPanel.XGUQR7qO.css` returns 200 from production with the expected SHA-256 `952c696988b8aaf057b2846a82d922b42a4b0eef27971fb41add8878b7038b66`, proving an already-open client can still fetch an immutable asset from build `1788418457500` after the release.
+- Production release verdict: PASS. The official v2.40.0 history, preserved Local Mode changes, deployed edge workers, Mac mini host runtime, authenticated local-Space route, and stale-client asset path are all aligned and usable.
+
 ## 2026-09-01 Rebase
 
 - Local baseline: `bdbd353010995b79344f37a12275701cd9236f29`.
