@@ -160,6 +160,8 @@ function spaceToItem(
 		localScore: scored.score,
 		isPinned: space.isPinned ?? false,
 		spaceOrigin: getSpaceOrigin(space),
+		viewerRelation,
+		viewerTier: viewerTierForRelation(viewerRelation),
 		...scored,
 	};
 }

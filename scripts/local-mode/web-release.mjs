@@ -43,6 +43,28 @@ async function assertNonEmptyFile(buildDir, relativePath) {
   }
 }
 
+async function isGeneratedSvelteKitDirectory(buildDir) {
+  let tsconfigStat;
+  let generatedStat;
+  try {
+    [tsconfigStat, generatedStat] = await Promise.all([
+      stat(join(buildDir, "tsconfig.json")),
+      stat(join(buildDir, "generated")),
+    ]);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  if (!tsconfigStat.isFile() || !generatedStat.isDirectory()) return false;
+  try {
+    await access(join(buildDir, "cloudflare/_worker.js"));
+    return false;
+  } catch (error) {
+    if (error?.code === "ENOENT") return true;
+    throw error;
+  }
+}
+
 async function assertMatchingFile(buildDir, relativeDir, pattern, label) {
   const directory = join(buildDir, relativeDir);
   let entries;
@@ -426,7 +448,12 @@ export async function assertWebRetentionBaselineReady(buildDir) {
   );
 }
 
-export async function publishWebBuild({ currentDir, stagedDir, now = Date.now() }) {
+export async function publishWebBuild({
+  currentDir,
+  stagedDir,
+  now = Date.now(),
+  replaceGeneratedCurrent = false,
+}) {
   let hasCurrent = true;
   try {
     await access(currentDir);
@@ -434,7 +461,11 @@ export async function publishWebBuild({ currentDir, stagedDir, now = Date.now() 
     if (error?.code !== "ENOENT") throw error;
     hasCurrent = false;
   }
-  if (hasCurrent) {
+  const generatedCurrent =
+    hasCurrent &&
+    replaceGeneratedCurrent &&
+    (await isGeneratedSvelteKitDirectory(currentDir));
+  if (hasCurrent && !generatedCurrent) {
     const retention = await mergeRetainedImmutableAssets({
       currentDir,
       stagedDir,
