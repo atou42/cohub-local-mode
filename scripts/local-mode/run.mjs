@@ -262,7 +262,11 @@ async function buildWeb() {
         COHUB_WEB_WRANGLER_CONFIG: "wrangler.local-build.toml",
       },
     });
-    await publishWebBuild({ currentDir, stagedDir });
+    await publishWebBuild({
+      currentDir,
+      stagedDir,
+      replaceGeneratedCurrent: true,
+    });
   } catch (error) {
     throw new Error(
       `Web build was not published. The previous build is unchanged; staged evidence is at ${stagedDir}`,

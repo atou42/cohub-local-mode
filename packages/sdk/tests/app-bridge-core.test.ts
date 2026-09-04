@@ -180,28 +180,34 @@ test("legacy work token reuses the current app session path", async () => {
 });
 
 test("legacy work authorize and purchase replies preserve their protocol", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (() => Promise.reject(new Error("Purchase unavailable."))) as typeof fetch;
 	const config = makeConfig({ viewerUuid: "viewer-uuid" });
 	const core = createAppBridgeCore(config);
 
-	await core.handleMessage(
-		messageEvent({
-			type: "cohub.work.authorize",
-			requestId: "legacy-auth",
-			scopes: ["session.prompt.readonly"],
-		}),
-	);
-	core.cancelAuth();
-	assert.equal(config.replies[0].payload.type, "cohub.work.authorize.result");
-	assert.equal(config.replies[0].payload.token, null);
+	try {
+		await core.handleMessage(
+			messageEvent({
+				type: "cohub.work.authorize",
+				requestId: "legacy-auth",
+				scopes: ["session.prompt.readonly"],
+			}),
+		);
+		core.cancelAuth();
+		assert.equal(config.replies[0].payload.type, "cohub.work.authorize.result");
+		assert.equal(config.replies[0].payload.token, null);
 
-	await core.handleMessage(
-		messageEvent({
-			type: "cohub.work.purchase",
-			requestId: "legacy-purchase",
-			productKey: "pro-monthly",
-		}),
-	);
-	assert.equal(config.replies[1].payload.type, "cohub.work.error");
+		await core.handleMessage(
+			messageEvent({
+				type: "cohub.work.purchase",
+				requestId: "legacy-purchase",
+				productKey: "pro-monthly",
+			}),
+		);
+		assert.equal(config.replies[1].payload.type, "cohub.work.error");
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("context requests read the latest invocation and notify full snapshots", async () => {

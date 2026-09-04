@@ -106,6 +106,30 @@ test("refuses a release without the preboot recovery asset", async () => {
   }
 });
 
+test("replaces generated SvelteKit metadata without treating it as a release", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-web-release-test-"));
+  const currentDir = join(root, ".svelte-kit");
+  const stagedDir = join(root, ".svelte-kit-staged");
+  try {
+    await mkdir(join(currentDir, "generated"), { recursive: true });
+    await writeFile(join(currentDir, "tsconfig.json"), "{}\n");
+    await writeBuild(stagedDir, "staged");
+
+    await publishWebBuild({
+      currentDir,
+      stagedDir,
+      replaceGeneratedCurrent: true,
+    });
+
+    assert.equal(
+      await readFile(join(currentDir, "cloudflare/_worker.js"), "utf8"),
+      "worker:staged",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects a missing local retention baseline before release", async () => {
   const root = await mkdtemp(join(tmpdir(), "cohub-web-release-test-"));
   try {
