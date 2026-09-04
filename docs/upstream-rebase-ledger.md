@@ -4,6 +4,15 @@
 
 Rebase the local-mode work onto the latest `upstream/main` without losing local capabilities or adding unrelated design work. Publish the rebased history only after explicit authorization.
 
+## 2026-09-04 Rebase In Progress
+
+- Local baseline: `e01787d8f80beba6f3adc5f45b360e2ae156fdd3` (`origin/main`).
+- Locked upstream target: `dbf83380d6bb21cbcd46c56ecfafd7b2d5bda384` (`upstream/main`, v2.40.0 changelog).
+- Merge base: `fbb16f5dfad8`; divergence at lock time is 49 local-only commits and 16 upstream-only commits.
+- Recovery branch: `backup/pre-upstream-rebase-20260904`.
+- The rebase runs in a separate worktree. `feat/cloudflare-personal-node-alpha` and its Electron worktree are out of scope and must remain untouched.
+- Publication is authorized only after the rebased history passes the required build, focused regression, adversarial, runtime, and browser checks. A failed check blocks push and deployment.
+
 ## 2026-09-01 Rebase
 
 - Local baseline: `bdbd353010995b79344f37a12275701cd9236f29`.
