@@ -245,6 +245,10 @@ async function restart() {
     },
     deployments,
   });
+  // A release can run from a dedicated main worktree while development stays
+  // on another branch. Refresh the launchd definition before the restart so
+  // the host process cannot keep serving code from the previous worktree.
+  await writePlist();
   // bootout gives child workers a SIGTERM path so in-flight agent turns can
   // drain. kickstart -k kills the service tree and can strand a running turn.
   await stopLoadedService();
