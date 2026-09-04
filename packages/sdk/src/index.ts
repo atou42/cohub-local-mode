@@ -7,6 +7,7 @@ export { UsersApi } from "./apis/users.js";
 export { AppsApi } from "./apis/apps.js";
 export { DesktopCommandsApi } from "./apis/desktop-commands.js";
 export { HarnessCapabilitiesApi } from "./apis/harness-capabilities.js";
+export { HarnessReadinessApi } from "./apis/harness-readiness.js";
 export type { CreateDesktopCommandInput, WaitForDesktopCommandOptions } from "./apis/desktop-commands.js";
 export { AppSurfaceApi } from "./app-surface.js";
 export type { AppSurfaceHandler, AppSurfaceHandlerContext } from "./app-surface.js";

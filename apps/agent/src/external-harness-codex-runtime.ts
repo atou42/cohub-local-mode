@@ -13,6 +13,7 @@ import {
 import { claimCodexInterrupt } from "./external-harness-codex-interrupt.js";
 import { parseCodexGoalCommand } from "./codex-goal-command.js";
 import { localSpaceAccessKey } from "./local-space-access.js";
+import { resumeCodexThreadWithRetry } from "./codex-thread-resume.js";
 
 const SANDBOX_WORKSPACE = "/workspace";
 const PROCESS_TIMEOUT_SECONDS = 24 * 60 * 60;
@@ -621,7 +622,7 @@ function createRuntime(input: {
 	return entry;
 }
 
-function getOrCreateRuntime(input: {
+async function getOrCreateRuntime(input: {
 	spaceId: string;
 	sessionId: string;
 	connection: SandboxConnection;
@@ -646,7 +647,23 @@ function getOrCreateRuntime(input: {
 		existing.lastUsedAt = Date.now();
 		return { entry: existing, reused: true };
 	}
-	if (existing) closeEntry(existing, "Codex runtime configuration changed");
+	if (existing) {
+		const processId = existing.processId;
+		closeEntry(existing, "Codex runtime configuration changed");
+		if (processId) {
+			await tracedRpc(
+				input.connection,
+				"process.abort",
+				{ processId },
+				{ context: context(existing) },
+				false,
+			).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!/process not found/i.test(message)) throw error;
+			});
+			await new Promise<void>((resolve) => setTimeout(resolve, 2_500));
+		}
+	}
 	return {
 		entry: createRuntime({ ...input, key }),
 		reused: false,
@@ -659,6 +676,7 @@ async function ensureThread(
 		model: string;
 		accessMode: AccessMode;
 		serviceTier?: string | null;
+		abortSignal?: AbortSignal;
 	},
 ) {
 	await entry.readyPromise;
@@ -675,10 +693,20 @@ async function ensureThread(
 			: {}),
 	};
 	const result = entry.requestedThreadId
-		? await request(entry, "thread/resume", {
-				threadId: entry.requestedThreadId,
-				...params,
-				excludeTurns: true,
+		? await resumeCodexThreadWithRetry({
+				resume: () => request(entry, "thread/resume", {
+					threadId: entry.requestedThreadId as string,
+					...params,
+					excludeTurns: true,
+				}),
+				signal: input.abortSignal,
+				onRetry: ({ attempt, delayMs }) => {
+					emitRuntime(entry, {
+						kind: "status",
+						eventType: "runtime.previous_writer_closing",
+						message: `Previous Codex runtime is still closing; retrying in ${Math.ceil(delayMs / 1_000)}s (${attempt}/5)`,
+					});
+				},
 			})
 		: await request(entry, "thread/start", {
 				...params,
@@ -704,7 +732,7 @@ export async function prepareCodexForkSession(input: {
 	serviceTier?: string | null;
 	connection: SandboxConnection;
 }) {
-	const { entry } = getOrCreateRuntime({
+	const { entry } = await getOrCreateRuntime({
 		...input,
 		externalSessionId: input.parentThreadId,
 	});
@@ -756,7 +784,7 @@ export async function runCodexAppServerHarness(input: {
 	reducer: HarnessEventReducer;
 }): Promise<ExternalHarnessResult> {
 	const startedAt = performance.now();
-	const { entry, reused } = getOrCreateRuntime(input);
+	const { entry, reused } = await getOrCreateRuntime(input);
 	if (entry.activeTurn) throw new Error("Codex runtime already has an active turn");
 	const reducer = input.reducer;
 	const threadId = await ensureThread(entry, input);

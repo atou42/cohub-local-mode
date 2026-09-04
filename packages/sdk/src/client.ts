@@ -6,6 +6,7 @@ import { ModelsApi } from "./apis/models.js";
 import { PromptsApi } from "./apis/prompts.js";
 import { SkillsApi } from "./apis/skills.js";
 import { HarnessCapabilitiesApi } from "./apis/harness-capabilities.js";
+import { HarnessReadinessApi } from "./apis/harness-readiness.js";
 import { PublicAssetsApi } from "./apis/public-assets.js";
 import { SessionAccessApi } from "./apis/session-access.js";
 import { SearchApi } from "./apis/search.js";
@@ -49,6 +50,7 @@ export class CohubClient {
   readonly prompts: PromptsApi;
   readonly skills: SkillsApi;
   readonly harnessCapabilities: HarnessCapabilitiesApi;
+  readonly harnessReadiness: HarnessReadinessApi;
   readonly publicAssets: PublicAssetsApi;
   readonly sessionAccess: SessionAccessApi;
   readonly search: SearchApi;
@@ -141,6 +143,7 @@ export class CohubClient {
     this.prompts = new PromptsApi(this.transport);
     this.skills = new SkillsApi(this.transport);
     this.harnessCapabilities = new HarnessCapabilitiesApi(this.transport);
+    this.harnessReadiness = new HarnessReadinessApi(this.transport);
     this.publicAssets = new PublicAssetsApi(this.transport);
     this.sessionAccess = new SessionAccessApi(this.transport);
     this.search = new SearchApi(this.transport);

@@ -3,6 +3,7 @@ import type { ViewportContext } from "@cohub/protocol";
 import type {
 	AgentHarness,
 	HarnessCapabilityCatalog,
+	HarnessReadinessEntry,
 	PromptTemplateCatalogEntry,
 	SkillCatalogEntry,
 	VoiceInputClient,
@@ -15,9 +16,11 @@ import {
 	Mic,
 	Minimize2,
 	Plus,
+	RefreshCw,
 	X,
 } from "lucide-svelte";
 import { onMount } from "svelte";
+import { resolveAgentHarnessReadinessView } from "$lib/agent-harness-readiness";
 import AgentHarnessLogo from "$lib/components/AgentHarnessLogo.svelte";
 import ComposerModelTrigger from "$lib/components/composer/ComposerModelTrigger.svelte";
 import ComposerSubmitButton from "$lib/components/composer/ComposerSubmitButton.svelte";
@@ -121,6 +124,9 @@ type Props = {
 	showAgentHarness?: boolean;
 	agentHarness?: AgentHarness;
 	agentHarnessLocked?: boolean;
+	agentHarnessReadiness?: HarnessReadinessEntry[] | null;
+	agentHarnessReadinessError?: string | null;
+	onAgentHarnessRefresh?: () => void;
 	onAgentHarnessChange?: (harness: AgentHarness) => void;
 };
 
@@ -159,6 +165,9 @@ let {
 	showAgentHarness = false,
 	agentHarness = "pi",
 	agentHarnessLocked = false,
+	agentHarnessReadiness = null,
+	agentHarnessReadinessError = null,
+	onAgentHarnessRefresh,
 	onAgentHarnessChange,
 }: Props = $props();
 
@@ -199,6 +208,7 @@ let isComposerExpanded = $state(false);
 let hasTextareaOverflow = $state(false);
 let showModeMenu = $state(false);
 let showAgentHarnessMenu = $state(false);
+let expandedUnavailableHarness = $state<AgentHarness | null>(null);
 let voiceClient: VoiceInputClient | null = null;
 let voicePrefix = "";
 let voiceSuffix = "";
@@ -226,6 +236,30 @@ const agentHarnessLabel = $derived(
 	AGENT_HARNESS_OPTIONS.find((option) => option.value === agentHarness)
 		?.label ?? agentHarness,
 );
+const agentHarnessReadinessByHarness = $derived(
+	new Map((agentHarnessReadiness ?? []).map((entry) => [entry.harness, entry])),
+);
+
+function readinessFor(harness: AgentHarness) {
+	return agentHarnessReadinessByHarness.get(harness) ?? null;
+}
+
+function chooseHarness(option: AgentHarness) {
+	const readiness = readinessFor(option);
+	const view = resolveAgentHarnessReadinessView({
+		harness: option,
+		entry: readiness,
+		error: agentHarnessReadinessError,
+	});
+	if (!view.available) {
+		expandedUnavailableHarness =
+			expandedUnavailableHarness === option ? null : option;
+		return;
+	}
+	onAgentHarnessChange?.(option);
+	expandedUnavailableHarness = null;
+	showAgentHarnessMenu = false;
+}
 
 let isTextareaFocused = $state(false);
 let resizeFrame: number | null = null;
@@ -1605,19 +1639,50 @@ $effect(() => {
 									</button>
 									{#if showAgentHarnessMenu && !agentHarnessLocked}
 										<button type="button" class="fixed inset-0 z-30 cursor-default" aria-hidden="true" tabindex="-1" onclick={() => { showAgentHarnessMenu = false; }}></button>
-										<div class="absolute bottom-full left-0 z-40 mb-1.5 w-40 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg" role="menu" aria-label="Agent harness">
+										<div class="absolute bottom-full left-0 z-40 mb-1.5 w-72 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg" role="menu" aria-label="Agent harness">
 											{#each AGENT_HARNESS_OPTIONS as option}
+												{@const readiness = readinessFor(option.value)}
+												{@const readinessView = resolveAgentHarnessReadinessView({ harness: option.value, entry: readiness, error: agentHarnessReadinessError })}
+												{@const available = readinessView.available}
 												<button
 													type="button"
-													class={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors hover:bg-bg-hover ${agentHarness === option.value ? "text-text-primary" : "text-text-secondary"}`}
+													class={`flex min-h-11 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors hover:bg-bg-hover ${available ? (agentHarness === option.value ? "text-text-primary" : "text-text-secondary") : "text-text-tertiary"}`}
 													role="menuitemradio"
 													aria-checked={agentHarness === option.value}
-												onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
-											>
-												<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
-												<span class="flex-1">{option.label}</span>
-													{#if agentHarness === option.value}<Check class="h-3.5 w-3.5 text-brand" />{/if}
+													aria-disabled={!available}
+													onclick={() => chooseHarness(option.value)}
+												>
+													<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
+													<span class="min-w-0 flex-1">
+														<span class="block truncate">{option.label}</span>
+														<span class="block truncate text-[10px] leading-4 text-text-placeholder">{readinessView.label}</span>
+													</span>
+													{#if available && agentHarness === option.value}
+														<Check class="h-3.5 w-3.5 text-brand" />
+													{:else if !available}
+														<LockKeyhole class="h-3.5 w-3.5 text-text-placeholder" />
+													{/if}
 												</button>
+												{#if !available && expandedUnavailableHarness === option.value}
+													<div class="mx-2 mb-1 border-t border-border-subtle px-0.5 pb-2 pt-2 text-[11px] leading-4 text-text-tertiary">
+														<p>{readinessView.detail}</p>
+														{#if readiness?.action}
+															<p class="mt-1.5 font-medium text-text-secondary">{readiness.action.label}</p>
+															{#if readiness.action.command}
+																<code class="mt-1 block overflow-x-auto rounded bg-bg-surface px-2 py-1 font-mono text-[10px] text-text-primary">{readiness.action.command}</code>
+															{/if}
+															{#if readiness.action.href}
+																<a class="mt-1.5 inline-block text-brand hover:underline" href={readiness.action.href} target="_blank" rel="noreferrer">Open install guide</a>
+															{/if}
+														{/if}
+														{#if onAgentHarnessRefresh}
+															<button type="button" class="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded px-2 text-[11px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary" onclick={() => onAgentHarnessRefresh?.()}>
+																<RefreshCw class="h-3 w-3" />
+																Check again
+															</button>
+														{/if}
+													</div>
+												{/if}
 											{/each}
 										</div>
 									{/if}

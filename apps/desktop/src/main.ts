@@ -745,8 +745,16 @@ function processGroupAlive(pid: number) {
 
 async function terminateProcessGroup(pid: number) {
 	if (!processGroupAlive(pid)) return;
-	process.kill(-pid, "SIGTERM");
-	const deadline = Date.now() + 5_000;
+	try {
+		// Let the runtime manager drain workers before it stops Redis and
+		// Postgres. Signalling the whole group here tears every child down at
+		// once and turns a normal Connector restart into queue/database errors.
+		process.kill(pid, "SIGTERM");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		process.kill(-pid, "SIGTERM");
+	}
+	const deadline = Date.now() + 15_000;
 	while (processGroupAlive(pid) && Date.now() < deadline) await delay(100);
 	if (processGroupAlive(pid)) process.kill(-pid, "SIGKILL");
 }

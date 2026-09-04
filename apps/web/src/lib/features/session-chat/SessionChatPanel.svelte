@@ -441,6 +441,9 @@ async function handleDraftDrop(event: DragEvent) {
 					showAgentHarness={host.showAgentHarnessSelector}
 					agentHarness={host.activeAgentHarness}
 					agentHarnessLocked={host.agentHarnessLocked}
+					agentHarnessReadiness={host.agentHarnessReadiness}
+					agentHarnessReadinessError={host.agentHarnessReadinessError}
+					onAgentHarnessRefresh={host.refreshAgentHarnessReadiness}
 					onAgentHarnessChange={host.setAgentHarness}
 					thinkingLevelLabel={host.composerMode === "agent" ? host.activeSessionThinkingLevelLabel : null}
 					serviceTierLabel={host.composerMode === "agent" ? host.activeSessionServiceTierLabel : null}

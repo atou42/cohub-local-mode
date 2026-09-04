@@ -81,6 +81,35 @@ export type RegisterSessionInput = {
 export const AGENT_HARNESSES = ["pi", "codex", "grok_build", "cursor"] as const;
 export type AgentHarness = (typeof AGENT_HARNESSES)[number];
 
+export type HarnessReadinessState =
+  | "ready"
+  | "not_installed"
+  | "sign_in_required"
+  | "setup_required"
+  | "unavailable";
+
+export type HarnessReadinessAction = {
+  kind: "install" | "sign_in" | "repair";
+  label: string;
+  command?: string;
+  href?: string;
+};
+
+export type HarnessReadinessEntry = {
+  harness: AgentHarness;
+  label: string;
+  state: HarnessReadinessState;
+  bundled: boolean;
+  version?: string;
+  detail: string;
+  action?: HarnessReadinessAction;
+};
+
+export type HarnessReadinessResponse = {
+  checkedAt: string;
+  harnesses: HarnessReadinessEntry[];
+};
+
 export const parseAgentHarness = (value: unknown): AgentHarness | null =>
   typeof value === "string" && AGENT_HARNESSES.includes(value as AgentHarness)
     ? value as AgentHarness

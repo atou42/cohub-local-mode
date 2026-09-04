@@ -18,6 +18,12 @@ export type {
 } from "@cohub/protocol";
 
 export type { AgentHarness } from "@cohub/protocol/model";
+export type {
+	HarnessReadinessAction,
+	HarnessReadinessEntry,
+	HarnessReadinessResponse,
+	HarnessReadinessState,
+} from "@cohub/protocol/model";
 import type {
   ModelStatusEntry,
   ModelStatusResponse,

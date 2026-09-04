@@ -364,6 +364,7 @@ function buildEnvironment(state, cliPath) {
 		COHUB_NODE_ORIGIN: "local",
 		ENV: "prod",
 		NODE_ENV: "production",
+		NODE_COMPILE_CACHE: join(dataRoot, "node-compile-cache"),
 		SESSIONS_NAMESPACE: "cohub-local",
 		API_BASE_URL: apiOrigin,
 		INTERNAL_API_BASE_URL: apiOrigin,
@@ -478,24 +479,39 @@ async function syncLocalCatalogs(env) {
 async function stop(exitCode = 0) {
 	if (stopping) return;
 	stopping = true;
-	const running = [...children.values()].filter((child) => child.exitCode === null);
-	const exited = Promise.all(
-		running.map(
-			(child) =>
-				new Promise((resolvePromise) => {
-					child.once("exit", resolvePromise);
-				}),
-		),
-	);
-	for (const child of running) child.kill("SIGTERM");
-	await objectStore?.close().catch(() => undefined);
-	await Promise.race([
-		exited,
-		new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000)),
-	]);
-	for (const child of running) {
-		if (child.exitCode === null) child.kill("SIGKILL");
+	async function stopGroup(names, timeoutMs) {
+		const running = names
+			.map((name) => children.get(name))
+			.filter((child) => child?.exitCode === null);
+		if (running.length === 0) return;
+		const exited = Promise.all(
+			running.map(
+				(child) =>
+					new Promise((resolvePromise) => {
+						child.once("exit", resolvePromise);
+					}),
+			),
+		);
+		for (const child of running) child.kill("SIGTERM");
+		await Promise.race([
+			exited,
+			new Promise((resolvePromise) => setTimeout(resolvePromise, timeoutMs)),
+		]);
+		for (const child of running) {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}
 	}
+
+	// Drain request and queue processes before their databases disappear. This
+	// prevents a normal Connector quit or restart from looking like a runtime
+	// failure to BullMQ and the Session workers.
+	await stopGroup(
+		["sandbox-supervisor", "gateway", "agent", "worker", "system", "api"],
+		5_000,
+	);
+	await objectStore?.close().catch(() => undefined);
+	await stopGroup(["redis", "postgres"], 5_000);
+	await stopGroup([...children.keys()], 2_000);
 	process.exit(exitCode);
 }
 
@@ -539,7 +555,7 @@ if (await probe(`http://127.0.0.1:${ports.api}/healthz`)) {
 	startChild(
 		"api",
 		process.execPath,
-		["--import", nodeEntry("@cohub/api", "dist/register-otel-esm-hook.js"), nodeEntry("@cohub/api", "dist/index.js")],
+		[nodeEntry("@cohub/api", "dist/index.js")],
 		{ ...nodeEnv, PORT: String(ports.api) },
 		dirname(nodeEntry("@cohub/api", "package.json")),
 	);
