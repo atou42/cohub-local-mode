@@ -13,6 +13,25 @@ Rebase the local-mode work onto the latest `upstream/main` without losing local 
 - The rebase runs in a separate worktree. `feat/cloudflare-personal-node-alpha` and its Electron worktree are out of scope and must remain untouched.
 - Publication is authorized only after the rebased history passes the required build, focused regression, adversarial, runtime, and browser checks. A failed check blocks push and deployment.
 
+### Rebase Result
+
+- Rebase completed with `dbf83380d6bb21cbcd46c56ecfafd7b2d5bda384` as an ancestor of `main`. All 49 pre-existing local commits map across the rebase; the start-ledger commit and the integration repair commit leave the branch 51 commits ahead of the locked upstream target.
+- Conflict resolution retained upstream Generation SDK 0.1.24 while preserving the local CLI dependency, combined upstream atomic upload staging and sandbox capability recovery with the local host workspace mapping, kept the local relay queue UI beside the upstream composer layout, and retained the local TypeScript-compatible Board validation error shape.
+- The lockfile was regenerated from the rebased manifests. `pnpm install --frozen-lockfile --offline` passes.
+- A clean-worktree `pnpm local:build` failed because SvelteKit-generated metadata in `.svelte-kit` was mistaken for a previously published build. The release gate now recognizes only that exact generated shape, replaces it only after the staged build passes every existing integrity check, and still rejects malformed published builds. The new regression test and the same real build path pass with the repair.
+- Upstream's legacy commerce test attempted a real `.test` network request on this machine, and Node 25.3 predates the newer `mock.module({ exports })` API used by the upstream sandbox client test. Both tests now inject deterministic compatibility behavior and pass without weakening their assertions.
+- The rebase also restored upstream viewer relationship metadata on locally routed Space search results and resolved the pre-existing harness SVG accessibility lint failures.
+
+### Pre-Release Evidence
+
+- `pnpm lint` passes for all configured workspaces.
+- Web type checking passes with 0 errors and 0 warnings after generating SvelteKit types with the Local Mode public environment. Protocol, Identity, Database, Relay, Infra, Model Runtime, SDK, Gateway, CLI, Sandbox Client, and Sandbox Controller type checks pass.
+- Full TypeScript checking remains unavailable only where the hosted Billing source imports the unpublished private `@talesofai-billing/sdk@1.16.0`; npm returns 404 for that package. This is the same documented environment limitation as the prior release and does not affect Local Mode runtime coverage.
+- 1,453 JavaScript and TypeScript tests pass across Protocol, CLI, Relay, Infra, Web, SDK, Sandbox Client, Gateway, Sandbox Controller, Core, Worker, Agent, and API. Sandbox Go tests pass for every package.
+- The final `pnpm local:build` passes after the integration commit. It compiles the Sandbox binary and publishes a complete Cloudflare Web bundle through the atomic release gate while retaining the previous immutable assets.
+- A separate Wrangler runtime served the rebased bundle successfully. `/` and `/spaces/release-health` returned HTML with status 200, the application-shell probe passed, Chrome loaded the page with the Cohub title, and every requested client asset returned successfully.
+- The failed build directories were preserved until their causes were confirmed, then moved outside the lint scope. The pre-rebase recovery branch remains untouched, and `feat/cloudflare-personal-node-alpha` was not modified.
+
 ## 2026-09-01 Rebase
 
 - Local baseline: `bdbd353010995b79344f37a12275701cd9236f29`.
