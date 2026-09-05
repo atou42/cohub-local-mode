@@ -35,6 +35,7 @@ type ActiveTurn = {
 	resolve: (result: ExternalHarnessResult) => void;
 	reject: (error: Error) => void;
 	abortRequested: boolean;
+	interruptSent: boolean;
 	usage: Record<string, unknown> | null;
 };
 
@@ -305,6 +306,19 @@ function notify(
 	return writePayload(entry, { method, params });
 }
 
+function interruptTurn(entry: RuntimeEntry, active: ActiveTurn) {
+	if (entry.closed || entry.activeTurn !== active || !active.turnId || active.interruptSent) return;
+	active.interruptSent = true;
+	void request(entry, "turn/interrupt", {
+		threadId: active.threadId,
+		turnId: active.turnId,
+	}).catch((error) => {
+		// A late reply must not close a runtime already serving the next turn.
+		if (entry.activeTurn !== active) return;
+		closeEntry(entry, error instanceof Error ? error.message : String(error));
+	});
+}
+
 function respondToServerRequest(
 	entry: RuntimeEntry,
 	payload: Record<string, unknown>,
@@ -374,12 +388,7 @@ function handleNotification(entry: RuntimeEntry, payload: Record<string, unknown
 		active.turnId = text(turn?.id) || text(params.turnId) || active.turnId;
 		emit(entry, { type: "thread.started", thread_id: active.threadId });
 		emit(entry, { type: "turn.started", turn_id: active.turnId });
-		if (active.abortRequested && active.turnId) {
-			void request(entry, "turn/interrupt", {
-				threadId: active.threadId,
-				turnId: active.turnId,
-			});
-		}
+		if (active.abortRequested) interruptTurn(entry, active);
 		return;
 	}
 	if (method === "item/agentMessage/delta") {
@@ -821,6 +830,7 @@ export async function runCodexAppServerHarness(input: {
 			resolve,
 			reject,
 			abortRequested: input.abortSignal.aborted,
+			interruptSent: false,
 			usage: null,
 		};
 		entry.activeTurn = active;
@@ -829,11 +839,7 @@ export async function runCodexAppServerHarness(input: {
 
 		const abort = () => {
 			active.abortRequested = true;
-			if (!active.turnId) return;
-			void request(entry, "turn/interrupt", {
-				threadId,
-				turnId: active.turnId,
-			});
+			interruptTurn(entry, active);
 		};
 		input.abortSignal.addEventListener("abort", abort, { once: true });
 
