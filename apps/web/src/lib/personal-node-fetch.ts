@@ -7,10 +7,8 @@ import {
 	buildPersonalNodeReadCommand,
 	isPersonalNodeCommandTerminal,
 	type PersonalNodeDevice,
-	type PersonalNodeReadProjection,
 	type PersonalNodeRelayCommand,
 	personalNodeCommandResponse,
-	personalNodeProjectionResponse,
 	selectPersonalNodeDevice,
 } from "$lib/personal-node-transport-core";
 
@@ -31,6 +29,7 @@ let statusCache: {
 	resolvedAt: number;
 } | null = null;
 const inFlightReads = new Map<string, Promise<Response>>();
+let readGeneration = 0;
 
 function errorResponse(code: string, message: string, status: number) {
 	return Response.json({ code, message }, { status });
@@ -71,12 +70,23 @@ export async function resolvePersonalNodeDevice(authorization: string) {
 		headers: { authorization },
 		cache: "no-store",
 	});
-	if (!response.ok) return null;
-	const payload = (await response.json().catch(() => null)) as {
+	if (!response.ok) {
+		throw new Error(`Personal Node devices returned HTTP ${response.status}`);
+	}
+	const payload = (await response.json()) as {
 		devices?: PersonalNodeDevice[];
 	} | null;
+	if (
+		!Array.isArray(payload?.devices) ||
+		payload.devices.some((device) =>
+			!device || typeof device.id !== "string" ||
+			!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(device.id) ||
+			typeof device.displayName !== "string" ||
+			!["active", "revoked"].includes(device.status)
+		)
+	) throw new Error("Personal Node device list is invalid");
 	const device = selectPersonalNodeDevice(
-		Array.isArray(payload?.devices) ? payload.devices : [],
+		payload.devices,
 		preferredDeviceId(),
 	);
 	if (!device) return null;
@@ -156,7 +166,7 @@ async function waitForCommand(input: {
 	);
 }
 
-async function executeRequest(request: Request) {
+async function executeRequest(request: Request, selectedDevice?: PersonalNodeDevice) {
 	const authorization = authorizationHeader(request);
 	if (!authorization) {
 		return errorResponse(
@@ -165,7 +175,7 @@ async function executeRequest(request: Request) {
 			401,
 		);
 	}
-	const device = await resolvePersonalNodeDevice(authorization);
+	const device = selectedDevice ?? await resolvePersonalNodeDevice(authorization);
 	if (!device) {
 		return errorResponse(
 			"personal_node_missing",
@@ -212,50 +222,26 @@ async function executeRequest(request: Request) {
 	});
 }
 
-async function cachedRead(input: {
-	request: Request;
-	deviceId: string;
-	authorization: string;
-}) {
-	const url = new URL(input.request.url);
-	const path = `${url.pathname}${url.search}`;
-	const response = await fetch(
-		`/api/alpha/v1/nodes/${encodeURIComponent(input.deviceId)}/read?path=${encodeURIComponent(path)}`,
-		{ headers: { authorization: input.authorization }, cache: "no-store" },
-	);
-	if (!response.ok) return null;
-	const payload = (await response.json().catch(() => null)) as {
-		projection?: PersonalNodeReadProjection;
-	} | null;
-	return payload?.projection
-		? personalNodeProjectionResponse(payload.projection)
-		: null;
-}
-
 export const personalNodeFetch: typeof fetch = async (input, init) => {
 	const request = new Request(input, init);
-	if (request.method !== "GET") return executeRequest(request);
+	if (request.method !== "GET") {
+		// Reads issued after a mutation must not reuse a pre-mutation request.
+		readGeneration += 1;
+		try {
+			return await executeRequest(request);
+		} finally {
+			readGeneration += 1;
+		}
+	}
 	const authorization = authorizationHeader(request) ?? "";
-	const key = `${authorization}\0${request.url}`;
+	const device = authorization
+		? await resolvePersonalNodeDevice(authorization)
+		: null;
+	if (!device) return executeRequest(request);
+	const key = `${authorization}\0${device.id}\0${readGeneration}\0${request.url}`;
 	const existing = inFlightReads.get(key);
 	if (existing) return (await existing).clone();
-	const operation = (async () => {
-		const device = authorization
-			? await resolvePersonalNodeDevice(authorization)
-			: null;
-		const cached = device
-			? await cachedRead({
-					request,
-					deviceId: device.id,
-					authorization,
-				})
-			: null;
-		if (cached) {
-			void executeRequest(request).catch(() => undefined);
-			return cached;
-		}
-		return executeRequest(request);
-	})().finally(() => {
+	const operation = executeRequest(request, device).finally(() => {
 		inFlightReads.delete(key);
 	});
 	inFlightReads.set(key, operation);

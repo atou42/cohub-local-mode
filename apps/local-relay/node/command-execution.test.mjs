@@ -84,6 +84,7 @@ async function startScenario(
     disconnectBeforeClaimAck = false,
     sendReady = true,
     parallelRead = false,
+    holdReads = false,
   } = {},
 ) {
   const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-command-test-"));
@@ -94,6 +95,8 @@ async function startScenario(
   ]));
 
   let promptCalls = 0;
+  let readCalls = 0;
+  const heldReads = [];
   const desktopSecrets = [];
   const localApi = createServer(async (request, response) => {
     desktopSecrets.push(request.headers["x-cohub-desktop-secret"] ?? null);
@@ -112,6 +115,11 @@ async function startScenario(
       return;
     }
     if (request.url === `/api/spaces/${SPACE_ID}/state`) {
+      readCalls += 1;
+      if (holdReads) {
+        heldReads.push(() => jsonResponse(response, { state: "ready" }));
+        return;
+      }
       jsonResponse(response, { state: "ready" });
       return;
     }
@@ -177,8 +185,14 @@ async function startScenario(
       body: "",
     },
   };
+  const readCommands = Array.from({ length: holdReads ? 5 : 1 }, (_, i) => ({
+    ...readCommand,
+    id: i === 0 ? readCommand.id : `relay-command-test-read-${i + 1}`,
+    sequence: readCommand.sequence + i,
+    idempotencyKey: `relay-idempotency-test-read-${i + 1}`,
+  }));
   const deliveredCommands = parallelRead
-    ? [command, readCommand]
+    ? [command, ...readCommands]
     : [command];
 
   const frames = [];
@@ -201,7 +215,7 @@ async function startScenario(
     client.on("message", (raw) => {
       const frame = JSON.parse(raw.toString());
       frames.push({ connection, ...frame });
-      const claimedCommand = [command, secondCommand, readCommand].find(
+      const claimedCommand = [command, secondCommand, ...readCommands].find(
         (item) => item.id === frame.commandId,
       );
       if (frame.type === "claim" && claimedCommand) {
@@ -321,6 +335,7 @@ async function startScenario(
   t.after(async () => {
     await stopChild(child);
     await closeServer(relay);
+    localApi.closeAllConnections();
     await new Promise((resolve) => localApi.close(resolve));
   });
 
@@ -331,6 +346,8 @@ async function startScenario(
     frames,
     get connectionCount() { return connectionCount; },
     get promptCalls() { return promptCalls; },
+    get readCalls() { return readCalls; },
+    heldReads,
     get claimCount() { return claimCount; },
     desktopSecrets,
     ipcStatuses,
@@ -357,6 +374,22 @@ test("runs an independent GET while a mutation remains blocked", async (t) => {
     ),
     false,
   );
+});
+
+test("bounds real local API reads at four while a mutation runs independently", async (t) => {
+  const scenario = await startScenario(t, {
+    parallelRead: true, holdReads: true, timeoutCommand: true, commandTimeoutMs: 10_000,
+  });
+  await waitFor(() => scenario.readCalls === 4 && scenario.promptCalls === 1, 10_000);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(scenario.readCalls, 4);
+  assert.equal(scenario.frames.filter((frame) => frame.type === "claim").length, 5);
+  scenario.heldReads.shift()();
+  await waitFor(() => scenario.readCalls === 5);
+  for (const release of scenario.heldReads.splice(0)) release();
+  await waitFor(() => scenario.frames.filter((frame) => frame.type === "result").length === 5);
+  assert.equal(scenario.promptCalls, 1);
+  assert.equal(scenario.frames.some((frame) => frame.type === "failed"), false);
 });
 
 test("does not report a WebSocket as connected before a matching ready message", async (t) => {
