@@ -114,6 +114,7 @@ import {
 	readCreateModelPreference,
 	saveCreateModelPreference,
 } from "$lib/stores/create-model-preference";
+import { harnessReadinessStore } from "$lib/stores/harness-readiness.svelte";
 import { createModelsCatalogStore } from "$lib/stores/models-catalog.svelte";
 import {
 	readSessionComposerDraftText,
@@ -410,6 +411,10 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		activeSessionState?.session?.agentHarness ?? draftAgentHarness,
 	);
 	const agentHarnessLocked = $derived(Boolean(activeSessionState?.session));
+	const agentHarnessReadiness = $derived(harnessReadinessStore.entries);
+	const activeAgentHarnessReadiness = $derived(
+		harnessReadinessStore.entry(activeAgentHarness),
+	);
 
 	function setAgentHarness(next: AgentHarness) {
 		if (!showAgentHarnessSelector || agentHarnessLocked) return;
@@ -427,6 +432,11 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			.catch((error) => {
 				console.error("Failed to load harness models catalog:", error);
 			});
+	}
+	function refreshAgentHarnessReadiness() {
+		void harnessReadinessStore.load({ force: true }).catch((error) => {
+			console.error("Failed to refresh local Agent readiness:", error);
+		});
 	}
 	let createModelId = $state<string | null>(null);
 	let createModelPreferenceRequest = 0;
@@ -1051,12 +1061,35 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		const currentSpaceId = spaceId;
 		const origin = resolveSpaceOrigin(currentSpaceId);
 		const agentHarness = activeAgentHarness;
+		const readiness = activeAgentHarnessReadiness;
 		untrack(() => {
 			if (!currentSpaceId) return;
+			if (
+				origin === "local" &&
+				agentHarness !== "pi" &&
+				readiness?.state !== "ready"
+			)
+				return;
 			void modelsCatalogStore.load({ origin, agentHarness }).catch((error) => {
 				console.error("Failed to load models catalog:", error);
 			});
 		});
+	});
+	$effect(() => {
+		if (!showAgentHarnessSelector) return;
+		untrack(() => {
+			void harnessReadinessStore.load().catch((error) => {
+				console.error("Failed to load local Agent readiness:", error);
+			});
+		});
+	});
+	$effect(() => {
+		const readiness = agentHarnessReadiness;
+		const harness = activeAgentHarness;
+		if (!readiness || agentHarnessLocked || harness === "pi") return;
+		const entry = readiness.find((item) => item.harness === harness);
+		if (entry?.state === "ready") return;
+		untrack(() => setAgentHarness("pi"));
 	});
 	$effect(() => {
 		const key = nextComposerDraftKey;
@@ -1469,6 +1502,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	$effect(() => {
 		const sessionId = activeSessionId;
 		generationRealtime.syncActiveSubscription(Boolean(spaceId && sessionId));
+		generationRealtime.syncPersonalNodeProgressPolling(
+			Boolean(
+				spaceId &&
+					sessionId &&
+					activeSessionIsRunning &&
+					relayStatus === "connected" &&
+					options.isLocalSpace?.(),
+			),
+		);
 	});
 
 	// ── Chat methods (extracted from SpaceWorkspacePage) ──
@@ -5486,6 +5528,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get agentHarnessLocked() {
 			return agentHarnessLocked;
 		},
+		get agentHarnessReadiness() {
+			return agentHarnessReadiness;
+		},
+		get agentHarnessReadinessError() {
+			return harnessReadinessStore.error;
+		},
+		refreshAgentHarnessReadiness,
 		get generationModelsCatalog() {
 			return generationModelsCatalog;
 		},

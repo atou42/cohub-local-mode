@@ -76,6 +76,7 @@ import {
 	assertRelayAttachmentFresh,
 	assertRelayOwnerOrigin,
 	browserTurnEvents,
+	isAlphaLocalApiRequest,
 	parseNodeMessage,
 	parseActivityWatchPreferences,
 	parseActivityOwnerUserId,
@@ -98,12 +99,27 @@ import {
 	validateRelayAttachmentCreateInput,
 	validateRelayCommandInput,
 } from "./protocol";
+import {
+	bindRelayNodeRequest,
+	decideRelayNodeIdentity,
+	RELAY_NODE_IDENTITY_HEADER,
+	RELAY_NODE_IDENTITY_STORAGE_KEY,
+} from "./node-identity.ts";
+import {
+	alphaProjectionStorageKey,
+	createAlphaReadProjection,
+	type AlphaReadProjection,
+} from "./alpha-projection.ts";
+export type RelayAttachmentEnv = {
+	ATTACHMENTS: R2Bucket;
+	ATTACHMENT_MAX_BYTES: string;
+	ATTACHMENT_TTL_MS: string;
+};
 
-type RelayEnv = {
+type RelayEnv = RelayAttachmentEnv & {
 	NODES: DurableObjectNamespace<LocalNodeRelay>;
 	COMMAND_WAKEUPS: Queue<RelayWakeupMessage>;
 	ACTIVITY_PUSHES: Queue<ActivityPushQueueMessage>;
-	ATTACHMENTS: R2Bucket;
 	ALLOWED_ORIGIN: string;
 	NODE_ID: string;
 	NODE_TOKEN: string;
@@ -114,8 +130,6 @@ type RelayEnv = {
 	CLOUD_API_ORIGIN: string;
 	COMMAND_LEASE_MS: string;
 	COMMAND_MAX_BODY_BYTES: string;
-	ATTACHMENT_MAX_BYTES: string;
-	ATTACHMENT_TTL_MS: string;
 	ACTIVITY_STALE_SECONDS: string;
 	ACTIVITY_REGISTRATION_TTL_SECONDS: string;
 	APNS_TEAM_ID?: string;
@@ -144,7 +158,25 @@ const ACTIVITY_PREFERENCE_PREFIX = "activity-preference:";
 const ACTIVITY_WATCH_SNAPSHOT_KEY = "meta:activity-watch-snapshot";
 const ACTIVITY_WATCH_ACK_KEY = "meta:activity-watch-ack";
 const TURN_EVENT_SEEN_PREFIX = "turnevent-seen:";
+const CONNECTOR_STATUS_KEY = "meta:connector-status";
 const ACTIVITY_OUTBOX_TERMINAL_TTL_MS = 24 * 60 * 60 * 1_000;
+
+type StoredConnectorStatus = {
+	state:
+		| "signed-out"
+		| "initializing"
+		| "local-runtime-unavailable"
+		| "connecting"
+		| "connected"
+		| "recovering"
+		| "error"
+		| "stopped";
+	message: string | null;
+	attempt: number | null;
+	maxAttempts: number | null;
+	appVersion: string;
+	updatedAt: string;
+};
 
 type ActivityPushQueueMessage = {
 	kind: "activity-push";
@@ -352,8 +384,12 @@ function websocketPair() {
 	};
 }
 
-function websocketResponse(client: WebSocket) {
-	return new Response(null, { status: 101, webSocket: client });
+function websocketResponse(client: WebSocket, protocol?: string | null) {
+	return new Response(null, {
+		status: 101,
+		webSocket: client,
+		...(protocol ? { headers: { "sec-websocket-protocol": protocol } } : {}),
+	});
 }
 
 function parseJsonMessage(message: string | ArrayBuffer) {
@@ -377,6 +413,7 @@ function sendSocket(socket: WebSocket, message: RelayToNodeMessage | RelayBrowse
 export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	private readonly leaseMs: number;
 	private commandIndexesReady: Promise<void> | null = null;
+	private boundNodeId: string | null = null;
 	private apnsProviderToken: { value: string; issuedAtMs: number } | null = null;
 
 	constructor(state: DurableObjectState, env: RelayEnv) {
@@ -386,6 +423,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	async fetch(request: Request) {
 		try {
+			await this.resolveNodeId(request);
 			const url = new URL(request.url);
 			if (request.method === "GET" && url.pathname === "/internal/node") {
 				return this.connectNode(request);
@@ -399,11 +437,23 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (request.method === "GET" && url.pathname === "/internal/status") {
 				return this.getStatus();
 			}
+			if (request.method === "POST" && url.pathname === "/internal/connector-status") {
+				return await this.putConnectorStatus(request);
+			}
+			if (request.method === "GET" && url.pathname === "/internal/projection") {
+				return this.getAlphaProjection(url.searchParams.get("path") ?? "");
+			}
 			if (request.method === "POST" && url.pathname === "/internal/attachments") {
 				return await this.createAttachment(request);
 			}
 			if (request.method === "POST" && url.pathname === "/internal/wake") {
 				await this.dispatchNext();
+				return json({ ok: true });
+			}
+			if (request.method === "POST" && url.pathname === "/internal/revoke") {
+				for (const socket of this.ctx.getWebSockets()) {
+					socket.close(1008, "Personal Node credential revoked");
+				}
 				return json({ ok: true });
 			}
 			if (request.method === "GET" && url.pathname === "/internal/activity-health") {
@@ -463,7 +513,33 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 	}
 
+	private async resolveNodeId(request?: Request) {
+		const requested = request?.headers.get(RELAY_NODE_IDENTITY_HEADER) ?? null;
+		if (this.boundNodeId) {
+			return decideRelayNodeIdentity({
+				stored: this.boundNodeId,
+				requested,
+				configured: this.env.NODE_ID,
+			}).nodeId;
+		}
+		const stored =
+			(await this.ctx.storage.get<string>(RELAY_NODE_IDENTITY_STORAGE_KEY)) ?? null;
+		const decision = decideRelayNodeIdentity({
+			stored,
+			requested,
+			configured: this.env.NODE_ID,
+		});
+		if (decision.shouldPersist) {
+			await this.ctx.storage.put(RELAY_NODE_IDENTITY_STORAGE_KEY, decision.nodeId);
+		}
+		this.boundNodeId = decision.nodeId;
+		return decision.nodeId;
+	}
+
 	private async getStatus() {
+		const nodeId = await this.resolveNodeId();
+		const connector =
+			(await this.ctx.storage.get<StoredConnectorStatus>(CONNECTOR_STATUS_KEY)) ?? null;
 		const [indexed] = await this.listCommandIndex(COMMAND_ACTIVE_PREFIX, 1);
 		const active = indexed ? await this.ctx.storage.get<RelayCommand>(commandKeyForEntry(indexed)) : undefined;
 		if (indexed && (!active || active.id !== indexed.id || active.sequence !== indexed.sequence || active.status !== indexed.status)) {
@@ -471,14 +547,107 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 		return json({
 			protocolVersion: RELAY_PROTOCOL_VERSION,
-			nodeId: this.env.NODE_ID,
+			nodeId,
 			connected: this.ctx.getWebSockets("node").length > 0,
 			activeCommandId: active?.id ?? null,
 			activeCommandStatus: active?.status ?? null,
+			connector,
 		});
 	}
 
+	private async putConnectorStatus(request: Request) {
+		const payload = await request.json().catch(() => null);
+		if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status must be a JSON object",
+			);
+		}
+		const state = Reflect.get(payload, "state");
+		if (
+			typeof state !== "string" ||
+			![
+				"signed-out",
+				"initializing",
+				"local-runtime-unavailable",
+				"connecting",
+				"connected",
+				"recovering",
+				"error",
+				"stopped",
+			].includes(state)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid state",
+			);
+		}
+		const rawMessage = Reflect.get(payload, "message");
+		if (
+			rawMessage !== null &&
+			(typeof rawMessage !== "string" || rawMessage.length > 2_048)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid message",
+			);
+		}
+		const optionalInteger = (field: string) => {
+			const value = Reflect.get(payload, field);
+			if (value === undefined || value === null) return null;
+			if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100) {
+				throw new RelayProtocolError(
+					"connector_status_invalid",
+					`Connector status has an invalid ${field}`,
+				);
+			}
+			return Number(value);
+		};
+		const appVersion = Reflect.get(payload, "appVersion");
+		if (
+			typeof appVersion !== "string" ||
+			!appVersion.trim() ||
+			appVersion.length > 64 ||
+			/[\r\n\0]/.test(appVersion)
+		) {
+			throw new RelayProtocolError(
+				"connector_status_invalid",
+				"Connector status has an invalid appVersion",
+			);
+		}
+		const connector: StoredConnectorStatus = {
+			state: state as StoredConnectorStatus["state"],
+			message: rawMessage as string | null,
+			attempt: optionalInteger("attempt"),
+			maxAttempts: optionalInteger("maxAttempts"),
+			appVersion: appVersion.trim(),
+			updatedAt: new Date().toISOString(),
+		};
+		await this.ctx.storage.put(CONNECTOR_STATUS_KEY, connector);
+		return json({ ok: true, connector });
+	}
+
+	private async getAlphaProjection(path: string) {
+		if (!isAlphaLocalApiRequest("GET", path)) {
+			throw new RelayProtocolError(
+				"path_not_allowed",
+				"Local API route is not available through Personal Node Alpha",
+				403,
+			);
+		}
+		const projection = await this.ctx.storage.get<AlphaReadProjection>(
+			alphaProjectionStorageKey(path),
+		);
+		return projection
+			? json({ projection })
+			: json(
+					{ code: "alpha_projection_not_found", message: "Cached Local API response not found" },
+					404,
+				);
+	}
+
 	private async createAttachment(request: Request) {
+		const nodeId = await this.resolveNodeId(request);
 		const input = validateRelayAttachmentCreateInput(await parseJsonBody(request), {
 			maxBytes: parsePositiveInteger(
 				this.env.ATTACHMENT_MAX_BYTES,
@@ -491,8 +660,8 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const now = new Date(nowMs).toISOString();
 		const attachment: StoredRelayAttachment = {
 			id,
-			nodeId: this.env.NODE_ID,
-			objectKey: `nodes/${this.env.NODE_ID}/attachments/${id}`,
+			nodeId,
+			objectKey: `nodes/${nodeId}/attachments/${id}`,
 			...input,
 			state: "pending",
 			createdAt: now,
@@ -619,6 +788,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async putActivityPreference(request: Request) {
+		const nodeId = await this.resolveNodeId(request);
 		const body = await parseJsonBody<{
 			identity?: ActivityOwnerIdentity;
 			ownerUserId?: string;
@@ -672,7 +842,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				(await storage.get<StoredActivityWatchPreference>(key)) ?? null;
 			const preference = await upsertActivityWatchPreference({
 				existing,
-				nodeId: this.env.NODE_ID,
+				nodeId,
 				installationId,
 				ownerSubject: identity.subject,
 				ownerEmail: identity.email,
@@ -809,6 +979,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async putActivityRegistration(request: Request) {
+		const nodeId = await this.resolveNodeId(request);
 		const body = await parseJsonBody<{
 			identity?: ActivityOwnerIdentity;
 			kind?: ActivityRegistrationKind;
@@ -863,7 +1034,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				id: crypto.randomUUID(),
 				revocationEpoch,
 				kind,
-				nodeId: this.env.NODE_ID,
+				nodeId,
 				ownerSubject: identity.subject,
 				ownerEmail: identity.email,
 				installationId,
@@ -1464,7 +1635,8 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		return dead;
 	}
 
-	private connectNode(request: Request) {
+	private async connectNode(request: Request) {
+		const nodeId = await this.resolveNodeId(request);
 		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
 			throw new RelayProtocolError(
 				"upgrade_required",
@@ -1480,7 +1652,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		sendSocket(server, {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "ready",
-			nodeId: this.env.NODE_ID,
+			nodeId,
 			eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
 		});
 		this.ctx.waitUntil(
@@ -1509,10 +1681,17 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			commands: selectSnapshotCommands(await this.listCommands()),
 			events: selectSnapshotEvents(await this.listBrowserTurnEvents()),
 		});
-		return websocketResponse(client);
+		const protocols = (request.headers.get("sec-websocket-protocol") ?? "")
+			.split(",")
+			.map((value) => value.trim());
+		return websocketResponse(
+			client,
+			protocols.includes("cohub-alpha-v1") ? "cohub-alpha-v1" : null,
+		);
 	}
 
 	private async createCommand(request: Request) {
+		const nodeId = await this.resolveNodeId(request);
 		const input = validateRelayCommandInput(await request.json(), {
 			maxBodyBytes: parsePositiveInteger(
 				this.env.COMMAND_MAX_BODY_BYTES,
@@ -1575,7 +1754,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			const now = new Date().toISOString();
 			const command: RelayCommand = {
 				id,
-				nodeId: this.env.NODE_ID,
+				nodeId,
 				sequence,
 				idempotencyKey: input.idempotencyKey,
 				request: input.request,
@@ -1608,7 +1787,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				Promise.all([
 					this.env.COMMAND_WAKEUPS.send({
 						protocolVersion: RELAY_PROTOCOL_VERSION,
-						nodeId: this.env.NODE_ID,
+						nodeId,
 						commandId: accepted.command.id,
 					}).catch((error) => {
 						console.error("[relay] queue wakeup enqueue failed", error);
@@ -1910,6 +2089,13 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			leaseExpiresAt: null,
 		};
 		await this.putCommand(completed);
+		const projection = createAlphaReadProjection(completed, now);
+		if (projection) {
+			await this.ctx.storage.put(
+				alphaProjectionStorageKey(projection.path),
+				projection,
+			);
+		}
 		sendSocket(socket, {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "ack",
@@ -2000,6 +2186,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async acceptTurnEvent(socket: WebSocket, event: RelayTurnEvent) {
+		const nodeId = await this.resolveNodeId();
 		const [existingKey, seen] = await Promise.all([
 			this.ctx.storage.get<string>(`${TURN_EVENT_ID_PREFIX}${event.id}`),
 			this.ctx.storage.get<{ seenAt: string }>(`${TURN_EVENT_SEEN_PREFIX}${event.id}`),
@@ -2015,7 +2202,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			});
 			return;
 		}
-		if (event.kind === "turn.lifecycle" && event.nodeId !== this.env.NODE_ID) {
+		if (event.kind === "turn.lifecycle" && event.nodeId !== nodeId) {
 			throw new RelayProtocolError(
 				"node_identity_mismatch",
 				"Turn lifecycle event node does not match the fixed relay node",
@@ -2232,6 +2419,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async enqueuePendingActivityOutboxes(eventId?: string) {
+		const nodeId = await this.resolveNodeId();
 		const records = await this.ctx.storage.list<StoredActivityOutbox>({
 			prefix: ACTIVITY_OUTBOX_PREFIX,
 		});
@@ -2248,7 +2436,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			try {
 				await this.env.ACTIVITY_PUSHES.send({
 					kind: "activity-push",
-					nodeId: this.env.NODE_ID,
+					nodeId,
 					outboxId: outbox.id,
 				});
 				await this.ctx.storage.put(key, {
@@ -2559,7 +2747,17 @@ function nodeStub(env: RelayEnv, nodeId: string) {
 	if (nodeId !== env.NODE_ID) {
 		throw new RelayProtocolError("node_not_found", "Local node not found", 404);
 	}
-	return env.NODES.getByName(nodeId);
+	const stub = env.NODES.getByName(nodeId);
+	return new Proxy(stub, {
+		get(target, property, receiver) {
+			if (property === "fetch") {
+				return (input: RequestInfo | URL, init?: RequestInit) =>
+					target.fetch(bindRelayNodeRequest(input, init, nodeId));
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
 }
 
 async function readInternalAttachment(
@@ -2584,11 +2782,12 @@ async function readInternalAttachment(
 	};
 }
 
-async function createAttachmentPlan(input: {
+export async function createAttachmentPlan(input: {
 	request: Request;
 	url: URL;
-	stub: DurableObjectStub<LocalNodeRelay>;
+	stub: Pick<DurableObjectStub<LocalNodeRelay>, "fetch">;
 	nodeId: string;
+	publicBasePath?: string;
 }) {
 	const created = await input.stub.fetch(
 		new Request("https://relay.internal/internal/attachments", input.request),
@@ -2602,9 +2801,11 @@ async function createAttachmentPlan(input: {
 	if (!created.ok || !payload.attachment || !payload.uploadToken) {
 		return json(payload, created.status);
 	}
-	const prefix = input.url.pathname.startsWith("/relay/") ? "/relay" : "";
+	const publicBasePath =
+		input.publicBasePath ??
+		`${input.url.pathname.startsWith("/relay/") ? "/relay" : ""}/v1/nodes/${encodeURIComponent(input.nodeId)}`;
 	const uploadUrl = new URL(
-		`${prefix}/v1/nodes/${encodeURIComponent(input.nodeId)}/attachments/${encodeURIComponent(payload.attachment.id)}/content`,
+		`${publicBasePath}/attachments/${encodeURIComponent(payload.attachment.id)}/content`,
 		input.url.origin,
 	);
 	uploadUrl.searchParams.set("uploadToken", payload.uploadToken);
@@ -2630,10 +2831,10 @@ function attachmentContentDisposition(name: string) {
 	return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-async function handleAttachmentUpload(input: {
+export async function handleAttachmentUpload(input: {
 	request: Request;
-	env: RelayEnv;
-	stub: DurableObjectStub<LocalNodeRelay>;
+	env: RelayAttachmentEnv;
+	stub: Pick<DurableObjectStub<LocalNodeRelay>, "fetch">;
 	nodeId: string;
 	attachmentId: string;
 }) {
@@ -2710,9 +2911,9 @@ async function handleAttachmentUpload(input: {
 	return json({ attachment: ready.attachment, deduplicated: false }, 201);
 }
 
-async function handleAttachmentDownload(input: {
-	env: RelayEnv;
-	stub: DurableObjectStub<LocalNodeRelay>;
+export async function handleAttachmentDownload(input: {
+	env: RelayAttachmentEnv;
+	stub: Pick<DurableObjectStub<LocalNodeRelay>, "fetch">;
 	attachmentId: string;
 }) {
 	const response = await input.stub.fetch(

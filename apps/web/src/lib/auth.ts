@@ -8,11 +8,20 @@ import {
 } from "$lib/auth-refresh-coordinator";
 import { localNodeFetch } from "$lib/local-node-route";
 import { runAuthInvalidationCleanup } from "$lib/native-activity/auth-invalidation";
+import {
+	clearPersonalNodeAuthSession,
+	getPersonalNodeIdToken,
+	readPersonalNodeAuthSession,
+	resolvePersonalNodeAccessToken,
+} from "$lib/personal-node-auth";
 
 const IS_DEV =
 	(typeof location !== "undefined" && location.hostname.startsWith("dev")) ||
 	Boolean(import.meta.env?.DEV);
 export const IS_COHUB_LOCAL_MODE = env.PUBLIC_COHUB_LOCAL_MODE === "true";
+export const IS_PERSONAL_NODE_ALPHA = env.PUBLIC_PERSONAL_NODE_ALPHA === "true";
+const USES_LOCAL_HOST_AUTH = IS_COHUB_LOCAL_MODE && !IS_PERSONAL_NODE_ALPHA;
+const USES_PERSONAL_NODE_AUTH = IS_PERSONAL_NODE_ALPHA;
 
 /**
  * Official hosted defaults. Self-hosted deployments should override via
@@ -31,13 +40,11 @@ const OFFICIAL = IS_DEV
 		};
 
 export const API_RESOURCE =
-	import.meta.env?.PUBLIC_LOGTO_API_RESOURCE?.trim() || OFFICIAL.resource;
+	env.PUBLIC_LOGTO_API_RESOURCE?.trim() || OFFICIAL.resource;
 
-const LOGTO_ENDPOINT =
-	import.meta.env?.PUBLIC_LOGTO_ENDPOINT?.trim() || OFFICIAL.endpoint;
+const LOGTO_ENDPOINT = env.PUBLIC_LOGTO_ENDPOINT?.trim() || OFFICIAL.endpoint;
 
-const LOGTO_APP_ID =
-	import.meta.env?.PUBLIC_LOGTO_APP_ID?.trim() || OFFICIAL.appId;
+const LOGTO_APP_ID = env.PUBLIC_LOGTO_APP_ID?.trim() || OFFICIAL.appId;
 
 /**
  * Lazy browser-only client. Safe to import on the server; construction and
@@ -86,7 +93,8 @@ const OPAQUE_TOKEN_RECHECK_MS = 30_000;
 const TOKEN_EXPIRY_SKEW_MS = 1_000;
 
 function hasLogtoSessionResidue(): boolean {
-	if (IS_COHUB_LOCAL_MODE) return Boolean(getAuthSessionSnapshot().token);
+	if (USES_LOCAL_HOST_AUTH) return Boolean(getAuthSessionSnapshot().token);
+	if (USES_PERSONAL_NODE_AUTH) return Boolean(readPersonalNodeAuthSession());
 	if (typeof localStorage === "undefined") return false;
 	try {
 		// Logto BrowserStorage keys: logto:<appId>:<item>
@@ -95,7 +103,8 @@ function hasLogtoSessionResidue(): boolean {
 			localStorage.getItem(`${prefix}refreshToken`) ||
 				localStorage.getItem(`${prefix}idToken`),
 		);
-	} catch {
+	} catch (error) {
+		if (USES_PERSONAL_NODE_AUTH) throw error;
 		return false;
 	}
 }
@@ -121,7 +130,8 @@ export function hasLocalSessionHint(): boolean {
 			return true;
 		}
 		return false;
-	} catch {
+	} catch (error) {
+		if (USES_PERSONAL_NODE_AUTH) throw error;
 		return false;
 	}
 }
@@ -171,6 +181,8 @@ export function clearAuthJustCompleted() {
 const isAuthEndpointPath = (pathname: string) =>
 	pathname === "/callback" ||
 	pathname.startsWith("/callback/") ||
+	pathname === "/device-auth" ||
+	pathname.startsWith("/device-auth/") ||
 	pathname === "/app-auth" ||
 	pathname.startsWith("/app-auth/");
 
@@ -266,10 +278,19 @@ async function resolveLocalModeAccessToken(forceRefresh: boolean) {
 	);
 }
 
+async function resolvePersonalNodeAuthAccessToken(forceRefresh: boolean) {
+	return resolvePersonalNodeAccessToken({
+		apiOrigin: (env.PUBLIC_API_ORIGIN ?? "").trim(),
+		forceRefresh,
+	});
+}
+
 const resolveAuthAccessToken = (forceRefresh: boolean) =>
-	IS_COHUB_LOCAL_MODE
+	USES_LOCAL_HOST_AUTH
 		? resolveLocalModeAccessToken(forceRefresh)
-		: resolveLogtoAccessToken(forceRefresh);
+		: USES_PERSONAL_NODE_AUTH
+			? resolvePersonalNodeAuthAccessToken(forceRefresh)
+			: resolveLogtoAccessToken(forceRefresh);
 
 function readLegacyAuthToken(): string | null {
 	if (typeof localStorage === "undefined") return null;
@@ -389,7 +410,7 @@ function isReusableAuthSnapshot(snapshot: AuthSessionSnapshot) {
 	if (
 		!snapshot.token ||
 		!snapshot.lastResolutionSucceeded ||
-		(!IS_COHUB_LOCAL_MODE && !hasLogtoSessionResidue())
+		(!USES_LOCAL_HOST_AUTH && !hasLogtoSessionResidue())
 	) {
 		return false;
 	}
@@ -434,7 +455,11 @@ const authRefreshCoordinator = createAuthRefreshCoordinator({
 	resolveToken: resolveAuthAccessToken,
 	clearSession: async () => {
 		await runAuthInvalidationCleanup();
-		if (IS_COHUB_LOCAL_MODE) return;
+		if (USES_LOCAL_HOST_AUTH) return;
+		if (USES_PERSONAL_NODE_AUTH) {
+			clearPersonalNodeAuthSession();
+			return;
+		}
 		try {
 			await getLogtoClient().clearAllTokens();
 		} catch {
@@ -484,7 +509,7 @@ export const getAuthToken = async (
 		return token;
 	} catch (error) {
 		logEmptyTokenResolution(options);
-		if (IS_COHUB_LOCAL_MODE) throw error;
+		if (USES_LOCAL_HOST_AUTH || USES_PERSONAL_NODE_AUTH) throw error;
 		console.warn("[auth] Failed to resolve access token:", error);
 		return null;
 	}
@@ -493,8 +518,23 @@ export const getAuthToken = async (
 export const getCurrentIdTokenClaims =
 	async (): Promise<IdTokenClaims | null> => {
 		if (typeof window === "undefined") return null;
-		if (IS_COHUB_LOCAL_MODE) {
+		if (USES_LOCAL_HOST_AUTH) {
 			const token = getAuthSessionSnapshot().token;
+			if (!token) return null;
+			const payload = token.split(".")[1];
+			if (!payload) return null;
+			try {
+				const padded = payload
+					.replace(/-/g, "+")
+					.replace(/_/g, "/")
+					.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+				return JSON.parse(atob(padded)) as IdTokenClaims;
+			} catch {
+				return null;
+			}
+		}
+		if (USES_PERSONAL_NODE_AUTH) {
+			const token = getPersonalNodeIdToken() ?? getAuthSessionSnapshot().token;
 			if (!token) return null;
 			const payload = token.split(".")[1];
 			if (!payload) return null;
@@ -517,7 +557,8 @@ export const getCurrentIdTokenClaims =
 
 export const hasRecoverableAuthSession = async (): Promise<boolean> => {
 	if (typeof window === "undefined") return false;
-	if (IS_COHUB_LOCAL_MODE) return true;
+	if (USES_LOCAL_HOST_AUTH) return true;
+	if (USES_PERSONAL_NODE_AUTH) return Boolean(readPersonalNodeAuthSession());
 	const client = getLogtoClient();
 	const [hasIdToken, refreshToken] = await Promise.all([
 		client.isAuthenticated().catch(() => false),
@@ -583,8 +624,13 @@ export const completeSignInCallback = async (
 	callbackUri: string,
 ): Promise<string | null> =>
 	authRefreshCoordinator.runExclusiveMutation(async () => {
-		if (IS_COHUB_LOCAL_MODE) {
+		if (USES_LOCAL_HOST_AUTH) {
 			throw new Error("Local Mode authentication is managed by the Cohub CLI");
+		}
+		if (USES_PERSONAL_NODE_AUTH) {
+			throw new Error(
+				"Personal Node authentication does not use redirect callbacks",
+			);
 		}
 		const client = getLogtoClient();
 		await client.handleSignInCallback(callbackUri);
@@ -613,7 +659,7 @@ const createRedirectState = (redirectPath?: string) => {
  * auth check can re-enter Logto with a still-valid SSO cookie and loop.
  */
 export const signInWithRedirectPath = async (redirectPath?: string) => {
-	if (IS_COHUB_LOCAL_MODE) {
+	if (USES_LOCAL_HOST_AUTH) {
 		const params = new URLSearchParams();
 		if (redirectPath) {
 			params.set("redirect_path", sanitizeRedirectPath(redirectPath));
@@ -621,6 +667,14 @@ export const signInWithRedirectPath = async (redirectPath?: string) => {
 		window.location.assign(
 			`/local-mode/connect${params.size ? `?${params}` : ""}`,
 		);
+		return;
+	}
+	if (USES_PERSONAL_NODE_AUTH) {
+		const params = new URLSearchParams();
+		if (redirectPath) {
+			params.set("redirect_path", sanitizeRedirectPath(redirectPath));
+		}
+		window.location.assign(`/device-auth${params.size ? `?${params}` : ""}`);
 		return;
 	}
 	const client = getLogtoClient();
@@ -645,7 +699,13 @@ export const signInAfterUnauthorized = async (
 ): Promise<boolean> =>
 	authRefreshCoordinator.runGuardedMutation(guard, async () => {
 		await runAuthInvalidationCleanup();
-		if (IS_COHUB_LOCAL_MODE) {
+		if (USES_LOCAL_HOST_AUTH) {
+			clearAuthToken();
+			await signInWithRedirectPath(redirectPath);
+			return;
+		}
+		if (USES_PERSONAL_NODE_AUTH) {
+			clearPersonalNodeAuthSession();
 			clearAuthToken();
 			await signInWithRedirectPath(redirectPath);
 			return;
@@ -666,4 +726,19 @@ export const ensureAuth = async (options?: { redirectPath?: string }) => {
 		return false;
 	}
 	return true;
+};
+
+export const signOutWithRedirect = async (redirectUri: string) => {
+	if (USES_PERSONAL_NODE_AUTH) {
+		clearPersonalNodeAuthSession();
+		clearAuthToken();
+		window.location.assign(redirectUri);
+		return;
+	}
+	if (USES_LOCAL_HOST_AUTH) {
+		clearAuthToken();
+		window.location.assign(redirectUri);
+		return;
+	}
+	await getLogtoClient().signOut(redirectUri);
 };

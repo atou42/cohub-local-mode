@@ -65,43 +65,43 @@
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./http": {
-      "types": "./src/http.ts",
-      "import": "./src/http.ts"
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
     },
     "./websocket": {
-      "types": "./src/websocket.ts",
-      "import": "./src/websocket.ts"
+      "types": "./dist/websocket.d.ts",
+      "import": "./dist/websocket.js"
     },
     "./voice-input": {
-      "types": "./src/voice-input.ts",
-      "import": "./src/voice-input.ts"
+      "types": "./dist/voice-input.d.ts",
+      "import": "./dist/voice-input.js"
     },
     "./debugger": {
-      "types": "./src/debugger.ts",
-      "import": "./src/debugger.ts"
+      "types": "./dist/debugger.d.ts",
+      "import": "./dist/debugger.js"
     },
     "./board": {
-      "types": "./src/board/index.ts",
-      "import": "./src/board/index.ts"
+      "types": "./dist/board/index.d.ts",
+      "import": "./dist/board/index.js"
     },
     "./board/render": {
-      "types": "./src/board/render/index.ts",
-      "import": "./src/board/render/index.ts"
+      "types": "./dist/board/render/index.d.ts",
+      "import": "./dist/board/render/index.js"
     },
     "./board/export": {
-      "types": "./src/board/export/index.ts",
-      "import": "./src/board/export/index.ts"
+      "types": "./dist/board/export/index.d.ts",
+      "import": "./dist/board/export/index.js"
     },
     "./board/headless": {
-      "types": "./src/board/headless/index.ts",
-      "import": "./src/board/headless/index.ts"
+      "types": "./dist/board/headless/index.d.ts",
+      "import": "./dist/board/headless/index.js"
     }
   },
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "README.md",

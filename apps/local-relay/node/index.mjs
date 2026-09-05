@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import WebSocket from "ws";
+import { compatibleFetch } from "./fetch.mjs";
 import {
   executeRelayCommandUntilAvailable,
   RelayNodeError,
@@ -21,6 +22,7 @@ import {
   RELAY_EVENT_SCHEMA_VERSION,
   RELAY_PROTOCOL_VERSION,
 } from "./protocol-compat.mjs";
+import { SerialCommandBuffer } from "./serial-command-buffer.mjs";
 
 const PROTOCOL_VERSION = RELAY_PROTOCOL_VERSION;
 const nodeId = process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
@@ -44,6 +46,9 @@ const maxResponseBytes = Number(
 );
 const maxAttachmentBytes = Number(
   process.env.COHUB_LOCAL_RELAY_ATTACHMENT_MAX_BYTES?.trim() || "104857600",
+);
+const commandTimeoutMs = Number(
+  process.env.COHUB_LOCAL_RELAY_COMMAND_TIMEOUT_MS?.trim() || "60000",
 );
 const keychainService =
   process.env.COHUB_LOCAL_RELAY_KEYCHAIN_SERVICE?.trim() ||
@@ -74,6 +79,7 @@ for (const [name, value] of [
   ["COHUB_LOCAL_RELAY_HEARTBEAT_MS", heartbeatMs],
   ["COHUB_LOCAL_RELAY_MAX_RESPONSE_BYTES", maxResponseBytes],
   ["COHUB_LOCAL_RELAY_ATTACHMENT_MAX_BYTES", maxAttachmentBytes],
+  ["COHUB_LOCAL_RELAY_COMMAND_TIMEOUT_MS", commandTimeoutMs],
 ]) {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
@@ -121,6 +127,7 @@ let reconnectAttempt = 0;
 let reconnectTimer = null;
 let current = null;
 let pendingOutcome = null;
+const deferredCommands = new SerialCommandBuffer();
 let statusWrite = Promise.resolve();
 let activityWatchUpdate = Promise.resolve();
 
@@ -132,6 +139,7 @@ const watcher = createTurnWatcher({
   relayNodeToken: nodeToken,
   maxAttachmentBytes,
   nodeId,
+  fetcher: compatibleFetch,
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -145,8 +153,9 @@ const pulseWatcher = createPulseWatcher({
     local: { apiOrigin: localApiOrigin, gatewayOrigin: localGatewayOrigin },
     cloud: { apiOrigin: cloudApiOrigin, gatewayOrigin: cloudGatewayOrigin },
   },
+  fetcher: compatibleFetch,
   getAccessToken: (forceRefresh = false) =>
-    resolveLocalAccessToken(fetch, localApiOrigin, undefined, { forceRefresh }),
+    resolveLocalAccessToken(compatibleFetch, localApiOrigin, undefined, { forceRefresh }),
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -194,12 +203,33 @@ function send(message) {
   return true;
 }
 
+function activateCommand(command) {
+  current = {
+    command,
+    attempt: null,
+    heartbeat: null,
+    abort: new AbortController(),
+  };
+  if (send({ type: "claim", commandId: command.id })) return;
+  current = null;
+  deferredCommands.defer(command, null);
+}
+
+function drainDeferredCommand() {
+  if (current || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const command = deferredCommands.shift();
+  if (command) activateCommand(command);
+}
+
 function clearCurrent({ abort = true } = {}) {
+  const commandId = current?.command.id ?? null;
   if (current?.heartbeat) clearInterval(current.heartbeat);
   if (abort) {
     current?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
   }
   current = null;
+  if (commandId) deferredCommands.delete(commandId);
+  queueMicrotask(drainDeferredCommand);
 }
 
 function sendOutcome(outcome) {
@@ -230,9 +260,10 @@ async function runClaimedCommand(attempt) {
   }, heartbeatMs);
   try {
     const { result, watch } = await executeRelayCommandUntilAvailable(state.command, {
+      fetcher: compatibleFetch,
       localApiOrigin,
-      maxAttachmentBytes,
       maxResponseBytes,
+      requestTimeoutMs: commandTimeoutMs,
       relayNodeBaseUrl,
       relayNodeToken: nodeToken,
       spaceStorageRoot,
@@ -322,6 +353,7 @@ function handleMessage(raw) {
     if (pendingOutcome) sendOutcome(pendingOutcome);
     watcher.flushPending();
     pulseWatcher.flushPending();
+    drainDeferredCommand();
     return;
   }
   if (message.type === "turn-event-ack" && typeof message.eventId === "string") {
@@ -360,19 +392,16 @@ function handleMessage(raw) {
   }
   if (message.type === "command") {
     if (current) {
-      if (current.command.id === message.command?.id) return;
-      console.error(
-        `[relay-node] rejected concurrent command ${message.command?.id ?? "unknown"}`,
-      );
+      const result = deferredCommands.defer(message.command, current.command.id);
+      if (result === "queued") {
+        console.warn(
+          `[relay-node] deferred command ${message.command.id} while ${current.command.id} is active`,
+        );
+      }
       return;
     }
-    current = {
-      command: message.command,
-      attempt: null,
-      heartbeat: null,
-      abort: new AbortController(),
-    };
-    send({ type: "claim", commandId: message.command.id });
+    deferredCommands.delete(message.command.id);
+    activateCommand(message.command);
     return;
   }
   if (
@@ -381,6 +410,13 @@ function handleMessage(raw) {
     current.attempt === null
   ) {
     void runClaimedCommand(message.attempt);
+    return;
+  }
+  if (message.type === "ack") {
+    deferredCommands.delete(message.commandId);
+    if (current?.command.id === message.commandId) {
+      clearCurrent({ abort: false });
+    }
     return;
   }
   if (message.type === "error") {
