@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	buildRelaySessionCreation,
 	decideRelayCommandReconcile,
 	decideRelayTurnEvent,
 	findOptimisticTurnForRelayCommand,
@@ -9,6 +10,7 @@ import {
 	queuedRelayCancelTargets,
 	RELAY_TURN_EVENT_DEDUP_CAP,
 	rememberRelayEventId,
+	shouldCreateRelaySession,
 } from "../lib/features/session-chat/local-relay-event-plane";
 import type { LocalRelayEventCommand } from "../lib/local-relay-events";
 
@@ -38,6 +40,102 @@ function succeededBody(turnStatus: string, extras: Record<string, unknown> = {})
 		}),
 	};
 }
+
+test("a first relay send requests Session creation", () => {
+	assert.equal(shouldCreateRelaySession(null), true);
+	assert.equal(shouldCreateRelaySession(undefined), true);
+});
+
+test("a real Session does not request relay creation", () => {
+	assert.equal(shouldCreateRelaySession({}), false);
+	assert.equal(shouldCreateRelaySession({ meta: null }), false);
+	assert.equal(shouldCreateRelaySession({ meta: { relayPending: false } }), false);
+	assert.equal(shouldCreateRelaySession({ meta: { relayPending: "true" } }), false);
+});
+
+test("failed relay reconciliation preserves the provisional Session for creation on retry", () => {
+	const session = {
+		id: pending.sessionId,
+		meta: { relayPending: true, relayCommandId: "command-1" },
+	};
+	const decision = decideRelayCommandReconcile(pending, command("failed"));
+	assert.deepEqual(decision, { action: "failed" });
+	const retry = {
+		sessionId: session.id,
+		createSession: shouldCreateRelaySession(session),
+	};
+	assert.deepEqual(retry, { sessionId: pending.sessionId, createSession: true });
+	assert.deepEqual(session.meta, {
+		relayPending: true,
+		relayCommandId: "command-1",
+	});
+});
+
+test("a successful relay result replaces the provisional Session and stops requesting creation", () => {
+	const provisional = { id: pending.sessionId, meta: { relayPending: true } };
+	assert.equal(shouldCreateRelaySession(provisional), true);
+	const decision = decideRelayCommandReconcile(
+		pending,
+		command("succeeded", succeededBody("running")),
+	);
+	assert.equal(decision.action, "succeeded");
+	if (decision.action !== "succeeded") throw new Error("Expected relay success");
+	assert.equal(decision.session.id, provisional.id);
+	assert.equal(shouldCreateRelaySession(decision.session), false);
+});
+
+for (const agentHarness of ["codex", "grok", "cursor"] as const) {
+	test(`a failed provisional ${agentHarness} Session retries with its original harness`, () => {
+		const session = {
+			id: pending.sessionId,
+			agentHarness,
+			meta: { relayPending: true },
+		};
+		assert.deepEqual(decideRelayCommandReconcile(pending, command("failed")), {
+			action: "failed",
+		});
+		assert.deepEqual(
+			{
+				sessionId: session.id,
+				...buildRelaySessionCreation(session, "pi"),
+			},
+			{ sessionId: pending.sessionId, createSession: true, agentHarness },
+		);
+	});
+}
+
+test("first relay creation uses the selected harness", () => {
+	assert.deepEqual(buildRelaySessionCreation(null, "cursor"), {
+		createSession: true,
+		agentHarness: "cursor",
+	});
+});
+
+test("a real relay Session omits the harness even when the picker differs", () => {
+	assert.deepEqual(
+		buildRelaySessionCreation({ agentHarness: "codex", meta: {} }, "cursor"),
+		{ createSession: false },
+	);
+});
+
+test("relay success removes creation fields from the next send", () => {
+	const decision = decideRelayCommandReconcile(
+		pending,
+		command("succeeded", succeededBody("running", {
+			session: { id: pending.sessionId, agentHarness: "codex", meta: {} },
+		})),
+	);
+	assert.equal(decision.action, "succeeded");
+	if (decision.action !== "succeeded") throw new Error("Expected relay success");
+	assert.equal(decision.session.agentHarness, "codex");
+	assert.deepEqual(
+		buildRelaySessionCreation(
+			decision.session as { agentHarness: "codex"; meta: Record<string, unknown> },
+			"cursor",
+		),
+		{ createSession: false },
+	);
+});
 
 test("succeeded with a running turn does not complete generation", () => {
 	const decision = decideRelayCommandReconcile(
