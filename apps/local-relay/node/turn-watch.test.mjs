@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { parseNodeMessage } from "../src/protocol.ts";
+import { relayReturnedArtifacts } from "./core.mjs";
+import { rewriteRelayArtifactProjection } from "../../api/src/local-mode/relay-artifacts.ts";
+import { normalizeWorkspaceFileLink } from "../../web/src/lib/workspace-file-links.ts";
 import {
   atomicWriteJson,
   createTurnWatcher,
@@ -1021,9 +1025,139 @@ test("relays assistant-linked files when the watched turn completes", async (t) 
   assert.deepEqual(persistedProjection, {
     sessionId,
     turnId,
-    replacements: [{ from: "output/report.txt", to: relayPath }],
+    replacements: [{ from: "output/report.txt", to: "/workspace/output/report.txt" }],
   });
   assert.doesNotMatch(JSON.stringify(completed), new RegExp(workspaceRoot));
+});
+
+test("persists encoded workspace links independently of the temporary relay download", async (t) => {
+  for (const [relativePath, workspacePath] of [
+    ["output/report (final).txt", "/workspace/output/report%20%28final%29.txt"],
+    ["output/report#1?.txt", "/workspace/output/report%231%3F.txt"],
+    ["output/note:7", "/workspace/output/note%3A7"],
+    ["output/literal%2e.txt", "/workspace/output/literal%252e.txt"],
+    ["output/trailing space ", "/workspace/output/trailing%20space%20"],
+  ]) await t.test(relativePath, async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-artifact-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const realRoot = join(dataDir, "real-workspace");
+  const workspaceRoot = join(dataDir, "workspace-alias");
+  await mkdir(join(realRoot, "output"), { recursive: true });
+  await symlink(realRoot, workspaceRoot);
+  await writeFile(join(realRoot, relativePath), "durable file", "utf8");
+  const source = pathToFileURL(join(workspaceRoot, relativePath)).href;
+  const original = {
+    session: { id: sessionId },
+    turn: {
+      id: turnId,
+      assistantContent: [{ text: `[report](<${source}>)` }],
+      assistantText: `[report](<${source}>)`,
+      summary: { text: `[report](<${source}>)` },
+    },
+  };
+  const attachmentId = "a6d6ae8f-205b-4e91-bdc4-e46f818ad505";
+  const relayPath = `/relay/v1/nodes/mac-mini/attachments/${attachmentId}/content`;
+  let projected;
+  let upload;
+  let expired = false;
+  const options = {
+    localApiOrigin: "http://127.0.0.1:8787",
+    localAccessToken: "host-access-token",
+    relayNodeBaseUrl: "https://relay.example/v1/nodes/mac-mini",
+    relayNodeToken: "node-secret",
+    maxAttachmentBytes: 1024,
+    fetcher: async (url, init = {}) => {
+      const target = String(url);
+      if (target.endsWith("/attachments")) {
+        return Response.json({
+          attachment: { id: attachmentId, nodeId: "mac-mini" },
+          upload: { url: `https://relay.example/v1/nodes/mac-mini/attachments/${attachmentId}/content` },
+        });
+      }
+      if (target.includes(`/attachments/${attachmentId}/content`)) {
+        if (init.method === "PUT") {
+          const chunks = [];
+          for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+          upload = Buffer.concat(chunks);
+          return Response.json({ ok: true });
+        }
+        return expired ? new Response(null, { status: 410 }) : new Response(upload);
+      }
+      if (target.endsWith("/api/local-mode/relay-artifacts")) {
+        const { replacements } = JSON.parse(init.body);
+        assert.deepEqual(replacements, [{ from: source, to: workspacePath }]);
+        projected = rewriteRelayArtifactProjection(original.turn, replacements);
+        return Response.json({ ok: true });
+      }
+      throw new Error(`Unexpected fetch ${target}`);
+    },
+  };
+  const response = JSON.parse(await relayReturnedArtifacts(
+    JSON.stringify(original), { nodeId: "mac-mini" }, options, workspaceRoot,
+  ));
+  assert.equal(response.turn.assistantText, `[report](<${relayPath}>)`);
+  assert.equal(await (await options.fetcher(relayPath)).text(), "durable file");
+  assert.equal(projected.assistantText, `[report](<${workspacePath}>)`);
+  assert.deepEqual(projected.assistantContent, [{ text: `[report](<${workspacePath}>)` }]);
+  assert.deepEqual(projected.summary, { text: `[report](<${workspacePath}>)` });
+  expired = true;
+  assert.equal((await options.fetcher(relayPath)).status, 410);
+  const persistedTarget = projected.assistantText.match(/\]\(<([^>]+)>\)/)[1];
+  assert.equal(normalizeWorkspaceFileLink(persistedTarget), relativePath);
+  assert.equal(await readFile(join(realRoot, normalizeWorkspaceFileLink(persistedTarget)), "utf8"), "durable file");
+  assert.equal(JSON.stringify(projected).includes(dataDir), false);
+  });
+});
+
+test("does not upload traversals or symlinked returned artifacts", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-artifact-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const workspaceRoot = join(dataDir, "workspace");
+  await mkdir(workspaceRoot);
+  await writeFile(join(dataDir, "secret.txt"), "private", "utf8");
+  await symlink(join(dataDir, "secret.txt"), join(workspaceRoot, "secret-link.txt"));
+  await symlink(dataDir, join(workspaceRoot, "external-dir"));
+  let calls = 0;
+  const options = { maxAttachmentBytes: 1024, fetcher: async () => { calls += 1; throw new Error("must not upload"); } };
+  for (const target of ["../secret.txt", "%2e%2e/secret.txt", join(dataDir, "secret.txt"), "secret-link.txt"]) {
+    const body = JSON.stringify({ turn: { assistantText: `[secret](${target})` } });
+    assert.equal(await relayReturnedArtifacts(body, { nodeId: "mac-mini" }, options, workspaceRoot), body);
+  }
+  await assert.rejects(
+    relayReturnedArtifacts(JSON.stringify({ turn: { assistantText: "[secret](external-dir/secret.txt)" } }), { nodeId: "mac-mini" }, options, workspaceRoot),
+    { code: "returned_attachment_path_invalid" },
+  );
+  assert.equal(calls, 0);
+});
+
+test("does not return success when artifact projection fails", async (t) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "cohub-relay-artifact-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+  await writeFile(join(workspaceRoot, "report.txt"), "report", "utf8");
+  const attachmentId = "a6d6ae8f-205b-4e91-bdc4-e46f818ad505";
+  const body = JSON.stringify({ session: { id: sessionId }, turn: { id: turnId, assistantText: "[report](report.txt)" } });
+  for (const status of [400, 503, "network-error"]) {
+    await assert.rejects(relayReturnedArtifacts(body, { nodeId: "mac-mini" }, {
+      localApiOrigin: "http://127.0.0.1:8787",
+      localAccessToken: "host-access-token",
+      relayNodeBaseUrl: "https://relay.example/v1/nodes/mac-mini",
+      relayNodeToken: "node-secret",
+      maxAttachmentBytes: 1024,
+      fetcher: async (url, init = {}) => {
+        if (String(url).endsWith("/attachments")) return Response.json({
+          attachment: { id: attachmentId, nodeId: "mac-mini" },
+          upload: { url: `https://relay.example/v1/nodes/mac-mini/attachments/${attachmentId}/content` },
+        });
+        if (init.method === "PUT") {
+          for await (const chunk of init.body) assert.equal(chunk.toString(), "report");
+          return Response.json({ ok: true });
+        }
+        assert.equal(String(url), "http://127.0.0.1:8787/api/local-mode/relay-artifacts");
+        if (status === "network-error") throw new Error("projection unavailable");
+        return new Response(null, { status });
+      },
+    }, workspaceRoot), { code: status === 400 ? "returned_attachment_projection_rejected" : "local_artifact_projection_failed" });
+  }
 });
 
 test("does not relay assistant links outside the Space workspace", async (t) => {

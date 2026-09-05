@@ -74,3 +74,52 @@ test("rejects relay destinations outside the private attachment route", () => {
       error.code === "artifact_destination_invalid",
   );
 });
+
+test("persists valid encoded workspace destinations", () => {
+  for (const destination of [
+    "/workspace/output/report.txt",
+    "/workspace/output/report%20%28final%29.txt",
+    "/workspace/%E6%8A%A5%E5%91%8A.txt",
+    "/workspace/report%231%3F.txt",
+    "/workspace/note%3A7",
+    "/workspace/literal%252e.txt",
+    "/workspace/trailing%20space%20",
+    "/workspace/%252e%252e/secret",
+    "/workspace/file%2500.txt",
+  ]) {
+    const projection = {
+      assistantContent: [{ text: "[download](report.txt)" }],
+      assistantText: "[download](report.txt)",
+      summary: { text: "[download](report.txt)" },
+    };
+    const replacements = [{ from: "report.txt", to: destination }];
+    const result = rewriteRelayArtifactProjection(projection, replacements);
+    assert.equal(result.assistantText, `[download](${destination})`);
+    assert.deepEqual(result.assistantContent, [{ text: `[download](${destination})` }]);
+    assert.deepEqual(result.summary, { text: `[download](${destination})` });
+    assert.equal(result.changed, true);
+    assert.equal(rewriteRelayArtifactProjection(result, replacements).changed, false);
+    assert.throws(() => rewriteRelayArtifactProjection({ ...projection, assistantContent: null, assistantText: "missing", summary: null }, replacements),
+      (error: unknown) => error instanceof RelayArtifactProjectionError && error.code === "artifact_target_missing");
+  }
+});
+
+test("rejects malformed and escaped workspace destinations", () => {
+  for (const destination of [
+    "/workspace", "/workspace/", "workspace/file.txt", "//workspace/file.txt",
+    "/workspace//file.txt", "/workspace/file.txt/", "/workspace/./file.txt",
+    "/workspace/../secret", "/workspace/a/../secret", "/workspace/%2e%2e/secret",
+    "/workspace/%2E./secret", "/workspace/a%2f..%2fsecret",
+    "/workspace/%5csecret", "/workspace/a\\secret", "/workspace/file?token=1", "/workspace/file#hash",
+    "/workspace/file%3Ftoken=1", "/workspace/file\n.txt",
+    "/workspace/file\u0000.txt", "/workspace/file%0a.txt", "/workspace/file%7F.txt",
+    "/workspace/file%ZZ.txt", "/workspace/file%.txt",
+    "/workspace/file name.txt", "/workspace/file(final).txt", "/workspace/file.txt:12",
+  ]) {
+    assert.throws(
+      () => rewriteRelayArtifactProjection({ assistantContent: null, assistantText: "[download](report.txt)", summary: null }, [{ from: "report.txt", to: destination }]),
+      (error: unknown) => error instanceof RelayArtifactProjectionError && error.code === "artifact_destination_invalid",
+      destination,
+    );
+  }
+});

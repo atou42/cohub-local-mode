@@ -25,6 +25,33 @@ type TurnProjection = {
   summary: unknown;
 };
 
+function isWorkspaceArtifactDestination(value: unknown): boolean {
+  if (typeof value !== "string" || !value.startsWith("/workspace/")) return false;
+  const segments = value.slice("/workspace/".length).split("/");
+  for (const segment of segments) {
+    if (!/^(?:[A-Za-z0-9._~-]|%[0-9a-fA-F]{2})+$/.test(segment)) return false;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    if (
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\") ||
+      [...decoded].some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validateReplacements(replacements: RelayArtifactReplacement[]) {
   if (replacements.length === 0 || replacements.length > 20) {
     throw new RelayArtifactProjectionError(
@@ -45,7 +72,10 @@ function validateReplacements(replacements: RelayArtifactReplacement[]) {
         "A returned artifact source is invalid",
       );
     }
-    if (!RELAY_ATTACHMENT_CONTENT_PATH.test(replacement.to)) {
+    if (
+      !RELAY_ATTACHMENT_CONTENT_PATH.test(replacement.to) &&
+      !isWorkspaceArtifactDestination(replacement.to)
+    ) {
       throw new RelayArtifactProjectionError(
         "artifact_destination_invalid",
         "A returned artifact destination is invalid",

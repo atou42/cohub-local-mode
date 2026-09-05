@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
-import { basename, extname, resolve, sep } from "node:path";
+import { basename, extname, relative, resolve, sep } from "node:path";
 
 const PROMPT_PATH_PATTERN = /^\/api\/spaces\/([0-9a-f-]{36})\/prompt$/i;
 const FEDERATED_FS_PATH_PATTERN =
@@ -417,6 +417,13 @@ async function resolveReturnedArtifact(target, workspaceRoot, maxBytes) {
   for await (const chunk of createReadStream(realCandidate)) hash.update(chunk);
   return {
     path: realCandidate,
+    workspaceTarget: `/workspace/${relative(realRoot, realCandidate)
+      .split(sep)
+      .map((segment) => encodeURIComponent(segment).replace(
+        /[!'()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+      ))
+      .join("/")}`,
     name: basename(realCandidate),
     size: info.size,
     contentType:
@@ -568,6 +575,7 @@ export async function relayReturnedArtifacts(body, command, options, workspaceRo
   collectMarkdownLinkTargets(assistantFields, targets);
   if (targets.size === 0) return body;
   const replacements = new Map();
+  const projectionReplacements = new Map();
   for (const target of targets) {
     const artifact = await resolveReturnedArtifact(
       target,
@@ -579,9 +587,10 @@ export async function relayReturnedArtifacts(body, command, options, workspaceRo
       target,
       await uploadReturnedArtifact(artifact, command, options),
     );
+    projectionReplacements.set(target, artifact.workspaceTarget);
   }
   if (replacements.size === 0) return body;
-  await persistReturnedArtifactProjection(payload, replacements, options);
+  await persistReturnedArtifactProjection(payload, projectionReplacements, options);
   const nextFields = replaceMarkdownLinkTargets(assistantFields, replacements);
   payload.turn.assistantContent = nextFields.assistantContent;
   payload.turn.assistantText = nextFields.assistantText;
