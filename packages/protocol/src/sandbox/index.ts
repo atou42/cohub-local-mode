@@ -386,6 +386,8 @@ export type ProcessStartParams = {
   timeoutSecs?: number;
   cwd?: string;
   env?: Record<string, string>;
+  /** Start with stdin at EOF. Defaults to false for interactive processes. */
+  closeStdin?: boolean;
 };
 
 export type ProcessTerminationReason = "exited" | "timed_out" | "aborted";

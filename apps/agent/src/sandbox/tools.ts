@@ -579,6 +579,7 @@ function createRemoteBashOperations(): BashOperations {
                   "process.start",
                   {
                     command,
+                    closeStdin: true,
                     timeoutSecs: timeout,
                     cwd: sandboxCwd,
                     env: Object.keys(injectedEnv).length > 0 ? injectedEnv : undefined,
