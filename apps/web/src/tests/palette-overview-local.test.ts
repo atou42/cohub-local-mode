@@ -4,7 +4,84 @@ import type { SessionRecord, SpaceRecord } from "@neta-art/cohub";
 import {
 	buildLocalPaletteOverview,
 	mergeLocalOverviewIntoSnapshot,
+	mergeLocalSpacesIntoFreshOverview,
 } from "../lib/command-palette/palette-overview-local.ts";
+
+test("local synthesis and cached snapshot merge preserve Space origins", () => {
+	const local = buildLocalPaletteOverview({
+		spaces: [
+			{ ...makeSpace({ id: "origin-local", name: "Local" }), origin: "local" },
+			{ ...makeSpace({ id: "origin-cloud", name: "Cloud" }), origin: "cloud" },
+		],
+		sessionLists: [],
+		turnRecords: [],
+		viewerUserUuid: "viewer",
+	});
+	assert.deepEqual(
+		local.spaces.map((space) => space.origin),
+		["local", "cloud"],
+	);
+	const snapshot = {
+		generatedAt: "2026-09-05T00:00:00Z",
+		spaces: local.spaces.map((space) => ({ ...space, origin: undefined })),
+		recentSessions: [],
+	};
+	assert.deepEqual(
+		mergeLocalOverviewIntoSnapshot(snapshot, local).spaces.map(
+			(space) => space.origin,
+		),
+		["local", "cloud"],
+	);
+});
+
+test("fresh cloud overview retains local Spaces without resurrecting stale cloud data", () => {
+	const local = buildLocalPaletteOverview({
+		spaces: [
+			{ ...makeSpace({ id: "node", name: "Local" }), origin: "local" },
+			{
+				...makeSpace({ id: "cloud", name: "Stale name", isPinned: true }),
+				origin: "cloud",
+			},
+			makeSpace({ id: "removed-cloud", name: "Removed" }),
+		],
+		sessionLists: [],
+		turnRecords: [],
+		viewerUserUuid: "viewer",
+	});
+	const cloud = {
+		...local.spaces[1],
+		origin: undefined,
+		name: "Current name",
+		isPinned: false,
+	};
+	const fresh = {
+		generatedAt: "2026-09-05T01:00:00Z",
+		spaces: [cloud],
+		recentSessions: [],
+	};
+	const result = mergeLocalSpacesIntoFreshOverview(fresh, local);
+	assert.deepEqual(
+		result.spaces.map((space) => space.id),
+		["cloud", "node"],
+	);
+	assert.equal(result.spaces[1]?.origin, "local");
+	assert.equal(result.spaces[0], cloud);
+	assert.equal(result.spaces[0]?.isPinned, false);
+	assert.equal(result.generatedAt, fresh.generatedAt);
+	assert.equal(result.recentSessions, fresh.recentSessions);
+	assert.deepEqual(fresh.spaces, [cloud]);
+	assert.deepEqual(
+		mergeLocalSpacesIntoFreshOverview(
+			{ ...fresh, spaces: [] },
+			local,
+		).spaces.map((s) => s.id),
+		["node"],
+	);
+	assert.deepEqual(
+		mergeLocalSpacesIntoFreshOverview(result, local).spaces.map((s) => s.id),
+		["cloud", "node"],
+	);
+});
 
 let nextId = 0;
 
