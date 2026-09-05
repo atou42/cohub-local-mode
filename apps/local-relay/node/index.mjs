@@ -50,6 +50,12 @@ const maxAttachmentBytes = Number(
 const commandTimeoutMs = Number(
   process.env.COHUB_LOCAL_RELAY_COMMAND_TIMEOUT_MS?.trim() || "60000",
 );
+const outcomeAckTimeoutMs = Number(
+  process.env.COHUB_LOCAL_RELAY_OUTCOME_ACK_TIMEOUT_MS?.trim() ||
+    String(Math.max(1_000, heartbeatMs * 2)),
+);
+const desktopInstanceSecret =
+  process.env.COHUB_DESKTOP_INSTANCE_SECRET?.trim() || "";
 const keychainService =
   process.env.COHUB_LOCAL_RELAY_KEYCHAIN_SERVICE?.trim() ||
   "Cohub Local Mode Relay Node";
@@ -80,6 +86,7 @@ for (const [name, value] of [
   ["COHUB_LOCAL_RELAY_MAX_RESPONSE_BYTES", maxResponseBytes],
   ["COHUB_LOCAL_RELAY_ATTACHMENT_MAX_BYTES", maxAttachmentBytes],
   ["COHUB_LOCAL_RELAY_COMMAND_TIMEOUT_MS", commandTimeoutMs],
+  ["COHUB_LOCAL_RELAY_OUTCOME_ACK_TIMEOUT_MS", outcomeAckTimeoutMs],
 ]) {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
@@ -127,9 +134,44 @@ let reconnectAttempt = 0;
 let reconnectTimer = null;
 let current = null;
 let pendingOutcome = null;
+const settledCommandIds = new Set();
 const deferredCommands = new SerialCommandBuffer();
 let statusWrite = Promise.resolve();
 let activityWatchUpdate = Promise.resolve();
+let statusHeartbeat = null;
+
+const TERMINAL_COMMAND_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+const localApiOriginUrl = new URL(localApiOrigin);
+
+function relayFetcher(input, init = {}) {
+  if (!desktopInstanceSecret) return compatibleFetch(input, init);
+  let target;
+  try {
+    target = new URL(
+      typeof input === "string" ? input : input?.url ?? String(input),
+    );
+  } catch {
+    return compatibleFetch(input, init);
+  }
+  if (target.origin !== localApiOriginUrl.origin) {
+    const headers = new Headers(init.headers ?? input?.headers);
+    if (headers.has("x-cohub-desktop-secret")) {
+      headers.delete("x-cohub-desktop-secret");
+      return compatibleFetch(input, { ...init, headers });
+    }
+    return compatibleFetch(input, init);
+  }
+  const headers = new Headers(init.headers ?? input?.headers);
+  headers.set("x-cohub-desktop-secret", desktopInstanceSecret);
+  // Do not let node-fetch carry the instance secret through a cross-origin
+  // redirect. The API's local endpoints never need redirect following.
+  return compatibleFetch(input, { ...init, headers, redirect: "manual" });
+}
 
 const watcher = createTurnWatcher({
   dataDir,
@@ -139,7 +181,7 @@ const watcher = createTurnWatcher({
   relayNodeToken: nodeToken,
   maxAttachmentBytes,
   nodeId,
-  fetcher: compatibleFetch,
+  fetcher: relayFetcher,
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -153,9 +195,9 @@ const pulseWatcher = createPulseWatcher({
     local: { apiOrigin: localApiOrigin, gatewayOrigin: localGatewayOrigin },
     cloud: { apiOrigin: cloudApiOrigin, gatewayOrigin: cloudGatewayOrigin },
   },
-  fetcher: compatibleFetch,
+  fetcher: relayFetcher,
   getAccessToken: (forceRefresh = false) =>
-    resolveLocalAccessToken(compatibleFetch, localApiOrigin, undefined, { forceRefresh }),
+    resolveLocalAccessToken(relayFetcher, localApiOrigin, undefined, { forceRefresh }),
   onEvent: (event) => {
     send({ type: "turn-event", event });
   },
@@ -182,6 +224,19 @@ function writeStatus(state, details = {}) {
     updatedAt: new Date().toISOString(),
     ...details,
   };
+  if (typeof process.send === "function") {
+    try {
+      process.send({ type: "relay-status", ...payload }, (error) => {
+        if (error) {
+          console.error(`[relay-node] failed to send IPC status: ${error.message}`);
+        }
+      });
+    } catch (error) {
+      console.error(
+        `[relay-node] failed to send IPC status: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   statusWrite = statusWrite
     .then(async () => {
       await mkdir(dirname(statusFile), { recursive: true });
@@ -199,18 +254,119 @@ function writeStatus(state, details = {}) {
 
 function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-  socket.send(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...message }));
-  return true;
+  try {
+    socket.send(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...message }));
+    return true;
+  } catch (error) {
+    console.error(
+      `[relay-node] failed to send ${message.type ?? "message"}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+}
+
+function connectionState() {
+  if (stopping) return "stopping";
+  if (
+    !socket ||
+    socket.readyState === WebSocket.CLOSED ||
+    socket.readyState === WebSocket.CLOSING
+  ) {
+    return "disconnected";
+  }
+  if (socket.readyState === WebSocket.OPEN) return "connected";
+  return "connecting";
+}
+
+function stopHeartbeat(state) {
+  if (!state?.heartbeat) return;
+  clearInterval(state.heartbeat);
+  state.heartbeat = null;
+}
+
+function stopAckTimer(state) {
+  if (!state?.ackTimer) return;
+  clearTimeout(state.ackTimer);
+  state.ackTimer = null;
+  state.ackKind = null;
+}
+
+function armAckTimer(state, kind) {
+  if (!state || current !== state) return;
+  stopAckTimer(state);
+  state.ackKind = kind;
+  state.ackTimer = setTimeout(() => {
+    state.ackTimer = null;
+    if (current !== state || state.ackKind !== kind) return;
+    state.ackKind = null;
+    const commandId = state.command.id;
+    const detail = {
+      commandId,
+      attempt: state.attempt,
+      lastErrorCode: `${kind}_ack_timeout`,
+    };
+    console.error(
+      `[relay-node] ${kind} acknowledgement timed out for command ${commandId}`,
+    );
+    writeStatus("disconnected", detail);
+    if (socket &&
+        (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      socket.close(4008, `${kind} acknowledgement timeout`);
+    } else {
+      scheduleReconnect();
+    }
+  }, outcomeAckTimeoutMs);
+  state.ackTimer.unref?.();
+}
+
+function sendClaim(state) {
+  if (!state || current !== state) return false;
+  const sent = send({ type: "claim", commandId: state.command.id });
+  if (sent) armAckTimer(state, "claim");
+  else scheduleReconnect();
+  return sent;
+}
+
+function ensureHeartbeat(state) {
+  if (!state || current !== state || state.outcome || state.heartbeat) return;
+  state.heartbeat = setInterval(() => {
+    if (current !== state || state.attempt === null || state.outcome) return;
+    send({
+      type: "heartbeat",
+      commandId: state.command.id,
+      attempt: state.attempt,
+    });
+  }, heartbeatMs);
+  state.heartbeat.unref?.();
+}
+
+function sendStarted(state) {
+  if (!state || current !== state || state.attempt === null || state.outcome) return false;
+  const sent = send({
+    type: "started",
+    commandId: state.command.id,
+    attempt: state.attempt,
+  });
+  ensureHeartbeat(state);
+  if (!sent) scheduleReconnect();
+  return sent;
 }
 
 function activateCommand(command) {
+  if (settledCommandIds.has(command.id)) {
+    console.warn(`[relay-node] ignoring duplicate terminal command ${command.id}`);
+    return;
+  }
   current = {
     command,
     attempt: null,
     heartbeat: null,
+    ackTimer: null,
+    ackKind: null,
+    outcome: null,
     abort: new AbortController(),
   };
-  if (send({ type: "claim", commandId: command.id })) return;
+  if (sendClaim(current)) return;
   current = null;
   deferredCommands.defer(command, null);
 }
@@ -222,45 +378,64 @@ function drainDeferredCommand() {
 }
 
 function clearCurrent({ abort = true } = {}) {
-  const commandId = current?.command.id ?? null;
-  if (current?.heartbeat) clearInterval(current.heartbeat);
+  const state = current;
+  const commandId = state?.command.id ?? null;
+  stopHeartbeat(state);
+  stopAckTimer(state);
   if (abort) {
-    current?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
+    state?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
   }
+  if (pendingOutcome?.commandId === commandId) pendingOutcome = null;
   current = null;
   if (commandId) deferredCommands.delete(commandId);
   queueMicrotask(drainDeferredCommand);
 }
 
 function sendOutcome(outcome) {
-  if (send(outcome)) {
-    pendingOutcome = null;
+  pendingOutcome = outcome;
+  const state = current;
+  if (state?.command.id === outcome.commandId) {
+    state.outcome = outcome;
+    stopHeartbeat(state);
+  }
+  const sent = send(outcome);
+  if (sent && state?.command.id === outcome.commandId) {
+    armAckTimer(state, "outcome");
+  } else if (!sent) {
+    scheduleReconnect();
+  }
+  return sent;
+}
+
+function resumeCurrentCommand() {
+  const state = current;
+  if (!state) return false;
+  if (pendingOutcome?.commandId === state.command.id) {
+    sendOutcome(pendingOutcome);
     return true;
   }
-  pendingOutcome = outcome;
-  return false;
+  if (state.attempt !== null) {
+    sendStarted(state);
+    return true;
+  }
+  sendClaim(state);
+  return true;
 }
 
 async function runClaimedCommand(attempt) {
   const state = current;
   if (!state || state.attempt !== null) return;
   state.attempt = attempt;
+  stopAckTimer(state);
   writeStatus("executing", {
     commandId: state.command.id,
     attempt,
     commandStatus: "claimed",
   });
-  send({ type: "started", commandId: state.command.id, attempt });
-  state.heartbeat = setInterval(() => {
-    send({
-      type: "heartbeat",
-      commandId: state.command.id,
-      attempt,
-    });
-  }, heartbeatMs);
+  sendStarted(state);
   try {
     const { result, watch } = await executeRelayCommandUntilAvailable(state.command, {
-      fetcher: compatibleFetch,
+      fetcher: relayFetcher,
       localApiOrigin,
       maxResponseBytes,
       requestTimeoutMs: commandTimeoutMs,
@@ -281,12 +456,13 @@ async function runClaimedCommand(attempt) {
       },
     });
     if (state.abort.signal.aborted || current !== state) return;
-    sendOutcome({
+    const outcome = {
       type: "result",
       commandId: state.command.id,
       attempt,
       result,
-    });
+    };
+    sendOutcome(outcome);
     if (watch) {
       void watcher.watch({
         eventId: randomUUID(),
@@ -294,7 +470,7 @@ async function runClaimedCommand(attempt) {
         ...watch,
       });
     }
-    writeStatus("connected", {
+    writeStatus(connectionState(), {
       lastCommandId: state.command.id,
       lastCommandStatus:
         result.status >= 200 && result.status < 300 ? "succeeded" : "failed",
@@ -304,24 +480,24 @@ async function runClaimedCommand(attempt) {
     const code =
       error instanceof RelayNodeError ? error.code : "node_execution_failed";
     const message = error instanceof Error ? error.message : String(error);
-    sendOutcome({
+    const outcome = {
       type: "failed",
       commandId: state.command.id,
       attempt,
       code,
       message,
-    });
-    writeStatus("connected", {
+    };
+    sendOutcome(outcome);
+    writeStatus(connectionState(), {
       lastCommandId: state.command.id,
       lastCommandStatus: "failed",
       lastErrorCode: code,
     });
-  } finally {
-    if (current === state) clearCurrent({ abort: false });
   }
 }
 
-function handleMessage(raw) {
+function handleMessage(raw, sourceSocket = socket) {
+  if (sourceSocket && socket && sourceSocket !== socket) return;
   let message;
   try {
     message = JSON.parse(raw.toString());
@@ -350,7 +526,7 @@ function handleMessage(raw) {
     }
     console.log(`[relay-node] connected as ${message.nodeId}`);
     writeStatus("connected");
-    if (pendingOutcome) sendOutcome(pendingOutcome);
+    resumeCurrentCommand();
     watcher.flushPending();
     pulseWatcher.flushPending();
     drainDeferredCommand();
@@ -391,6 +567,10 @@ function handleMessage(raw) {
     return;
   }
   if (message.type === "command") {
+    if (settledCommandIds.has(message.command?.id)) {
+      console.warn(`[relay-node] ignoring duplicate terminal command ${message.command.id}`);
+      return;
+    }
     if (current) {
       const result = deferredCommands.defer(message.command, current.command.id);
       if (result === "queued") {
@@ -409,14 +589,18 @@ function handleMessage(raw) {
     current?.command.id === message.commandId &&
     current.attempt === null
   ) {
+    stopAckTimer(current);
     void runClaimedCommand(message.attempt);
     return;
   }
   if (message.type === "ack") {
+    if (!TERMINAL_COMMAND_STATUSES.has(message.status)) return;
+    const state = current?.command.id === message.commandId ? current : null;
+    // The relay's terminal record is authoritative. A command may be
+    // cancelled or failed after the node has already sent its outcome.
+    settledCommandIds.add(message.commandId);
     deferredCommands.delete(message.commandId);
-    if (current?.command.id === message.commandId) {
-      clearCurrent({ abort: false });
-    }
+    if (state) clearCurrent({ abort: false });
     return;
   }
   if (message.type === "error") {
@@ -424,10 +608,21 @@ function handleMessage(raw) {
       `[relay-node] ${message.code ?? "relay_error"}: ${message.message ?? "unknown relay error"}`,
     );
     if (message.code === "stale_attempt") {
-      if (pendingOutcome?.commandId === message.commandId) pendingOutcome = null;
       if (message.commandId && current?.command.id === message.commandId) {
         clearCurrent();
       }
+      return;
+    }
+    if (
+      message.code === "command_already_claimed" &&
+      message.commandId &&
+      current?.command.id === message.commandId &&
+      current.attempt === null
+    ) {
+      console.error(
+        `[relay-node] command ${message.commandId} is already claimed; waiting for lease recovery`,
+      );
+      armAckTimer(current, "claim");
       return;
     }
     if (message.commandId && current?.command.id === message.commandId) {
@@ -457,12 +652,13 @@ function connect() {
   next.on("open", () => {
     reconnectAttempt = 0;
   });
-  next.on("message", handleMessage);
+  next.on("message", (raw) => handleMessage(raw, next));
   next.on("error", (error) => {
     console.error(`[relay-node] connection error: ${error.message}`);
   });
   next.on("close", (code, reason) => {
-    if (socket === next) socket = null;
+    if (socket !== next) return;
+    socket = null;
     console.error(
       `[relay-node] disconnected (${code}${reason.length ? `: ${reason.toString()}` : ""})`,
     );
@@ -476,6 +672,7 @@ async function shutdown() {
   stopping = true;
   writeStatus("stopping");
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (statusHeartbeat) clearInterval(statusHeartbeat);
   clearCurrent();
   socket?.close(1000, "node shutting down");
   const forcedExit = setTimeout(() => process.exit(1), 5_000);
@@ -492,4 +689,6 @@ async function shutdown() {
 
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
+statusHeartbeat = setInterval(() => writeStatus(connectionState()), 15_000);
+statusHeartbeat.unref?.();
 connect();

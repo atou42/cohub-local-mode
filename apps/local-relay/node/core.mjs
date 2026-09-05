@@ -673,6 +673,8 @@ export async function executeRelayCommandUntilAvailable(command, {
   retryMinDelayMs = 500,
   retryMaxDelayMs = 10_000,
   onRetry,
+  requestTimeoutMs = DEFAULT_LOCAL_REQUEST_TIMEOUT_MS,
+  deadlineAt,
   ...options
 } = {}) {
   if (
@@ -683,10 +685,28 @@ export async function executeRelayCommandUntilAvailable(command, {
   ) {
     throw new Error("Relay retry delays are invalid");
   }
+  if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error("Relay local request timeout must be a positive integer");
+  }
+  const commandDeadlineAt = deadlineAt ?? Date.now() + requestTimeoutMs;
+  if (!Number.isFinite(commandDeadlineAt)) {
+    throw new Error("Relay command deadline is invalid");
+  }
   let retryDelayMs = retryMinDelayMs;
   for (;;) {
+    const remainingMs = commandDeadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new RelayNodeError(
+        "local_api_timeout",
+        `Local Cohub command exceeded its ${requestTimeoutMs}ms deadline`,
+      );
+    }
     try {
-      return await executeRelayCommand(command, options);
+      return await executeRelayCommand(command, {
+        ...options,
+        requestTimeoutMs: Math.max(1, Math.ceil(remainingMs)),
+        deadlineAt: commandDeadlineAt,
+      });
     } catch (error) {
       if (
         !(error instanceof RelayNodeError) ||
@@ -696,7 +716,14 @@ export async function executeRelayCommandUntilAvailable(command, {
         throw error;
       }
       onRetry?.({ code: error.code, message: error.message, retryDelayMs });
-      await delay(retryDelayMs, options.signal);
+      const waitMs = Math.min(retryDelayMs, Math.max(1, commandDeadlineAt - Date.now()));
+      await delay(waitMs, options.signal);
+      if (commandDeadlineAt <= Date.now()) {
+        throw new RelayNodeError(
+          "local_api_timeout",
+          `Local Cohub command exceeded its ${requestTimeoutMs}ms deadline`,
+        );
+      }
       retryDelayMs = Math.min(retryMaxDelayMs, retryDelayMs * 2);
     }
   }
@@ -737,6 +764,7 @@ export async function executeRelayCommand(command, {
   localApiOrigin = "http://127.0.0.1:8787",
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
 	requestTimeoutMs = DEFAULT_LOCAL_REQUEST_TIMEOUT_MS,
+	deadlineAt,
 	relayNodeBaseUrl,
 	relayNodeToken,
   spaceStorageRoot,
@@ -747,6 +775,18 @@ export async function executeRelayCommand(command, {
   }
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
     throw new Error("Relay local request timeout must be a positive integer");
+  }
+  if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) {
+    throw new Error("Relay command deadline is invalid");
+  }
+  const effectiveTimeoutMs = deadlineAt === undefined
+    ? requestTimeoutMs
+    : Math.ceil(deadlineAt - Date.now());
+  if (effectiveTimeoutMs <= 0) {
+    throw new RelayNodeError(
+      "local_api_timeout",
+      `Local Cohub command exceeded its ${requestTimeoutMs}ms deadline`,
+    );
   }
   const request = command.request;
   const promptPathMatch =
@@ -784,42 +824,43 @@ export async function executeRelayCommand(command, {
       "Non-prompt relay commands cannot carry attachments",
     );
   }
-  const accessToken = await resolveLocalAccessToken(
-    fetcher,
-    localApiOrigin,
-    signal,
-  );
-  const preparedPrompt = promptPathMatch
-    ? await preparePromptBody(command, {
-        fetcher,
-        attachmentRoot: spaceStorageRoot
-          ? resolve(
-              spaceStorageRoot,
-              promptPathMatch[1],
-              "workspace",
-              ".cohub",
-              "relay-attachments",
-            )
-          : null,
-        relayNodeBaseUrl,
-        relayNodeToken,
-        signal,
-      })
-    : { body: request.body, responseReplacements: new Map() };
   const timeoutController = new AbortController();
   const timeout = setTimeout(
     () =>
       timeoutController.abort(
         new DOMException("Local API request timed out", "TimeoutError"),
       ),
-    requestTimeoutMs,
+    effectiveTimeoutMs,
   );
   const requestSignal = signal
     ? AbortSignal.any([signal, timeoutController.signal])
     : timeoutController.signal;
   let response;
   let body;
+  let preparedPrompt;
   try {
+    const accessToken = await resolveLocalAccessToken(
+      fetcher,
+      localApiOrigin,
+      requestSignal,
+    );
+    preparedPrompt = promptPathMatch
+      ? await preparePromptBody(command, {
+          fetcher,
+          attachmentRoot: spaceStorageRoot
+            ? resolve(
+                spaceStorageRoot,
+                promptPathMatch[1],
+                "workspace",
+                ".cohub",
+                "relay-attachments",
+              )
+            : null,
+          relayNodeBaseUrl,
+          relayNodeToken,
+          signal: requestSignal,
+        })
+      : { body: request.body, responseReplacements: new Map() };
     response = await fetcher(`${localApiOrigin}${request.path}`, {
       method: request.method,
       headers: {
@@ -841,7 +882,7 @@ export async function executeRelayCommand(command, {
     if (timeoutController.signal.aborted && !signal?.aborted) {
       throw new RelayNodeError(
         "local_api_timeout",
-        `Local Cohub endpoint did not respond within ${requestTimeoutMs}ms`,
+        `Local Cohub endpoint did not respond within ${effectiveTimeoutMs}ms`,
         { cause: error },
       );
     }
