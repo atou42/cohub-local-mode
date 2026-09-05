@@ -129,12 +129,12 @@ const dataDir =
   join(homedir(), ".cohub-local-mode");
 
 let socket = null;
+let readyAccepted = false;
 let stopping = false;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let current = null;
 let pendingOutcome = null;
-const settledCommandIds = new Set();
 const deferredCommands = new SerialCommandBuffer();
 let statusWrite = Promise.resolve();
 let activityWatchUpdate = Promise.resolve();
@@ -253,7 +253,7 @@ function writeStatus(state, details = {}) {
 }
 
 function send(message) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  if (!readyAccepted || !socket || socket.readyState !== WebSocket.OPEN) return false;
   try {
     socket.send(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, ...message }));
     return true;
@@ -274,7 +274,7 @@ function connectionState() {
   ) {
     return "disconnected";
   }
-  if (socket.readyState === WebSocket.OPEN) return "connected";
+  if (socket.readyState === WebSocket.OPEN && readyAccepted) return "connected";
   return "connecting";
 }
 
@@ -353,10 +353,6 @@ function sendStarted(state) {
 }
 
 function activateCommand(command) {
-  if (settledCommandIds.has(command.id)) {
-    console.warn(`[relay-node] ignoring duplicate terminal command ${command.id}`);
-    return;
-  }
   current = {
     command,
     attempt: null,
@@ -372,7 +368,12 @@ function activateCommand(command) {
 }
 
 function drainDeferredCommand() {
-  if (current || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (
+    current ||
+    !readyAccepted ||
+    !socket ||
+    socket.readyState !== WebSocket.OPEN
+  ) return;
   const command = deferredCommands.shift();
   if (command) activateCommand(command);
 }
@@ -497,24 +498,32 @@ async function runClaimedCommand(attempt) {
 }
 
 function handleMessage(raw, sourceSocket = socket) {
-  if (sourceSocket && socket && sourceSocket !== socket) return;
+  if (sourceSocket && sourceSocket !== socket) return;
   let message;
   try {
     message = JSON.parse(raw.toString());
   } catch {
     console.error("[relay-node] relay sent invalid JSON");
+    readyAccepted = false;
     socket?.close(1002, "invalid relay message");
     return;
   }
   if (message.protocolVersion !== PROTOCOL_VERSION) {
     console.error("[relay-node] relay protocol mismatch");
+    readyAccepted = false;
     socket?.close(1002, "relay protocol mismatch");
     return;
   }
   if (message.type === "ready") {
     try {
       assertRelayReadyCompatibility(message);
+      if (message.nodeId !== nodeId) {
+        throw new Error(
+          `relay node mismatch: expected ${nodeId}, got ${message.nodeId ?? "missing"}`,
+        );
+      }
     } catch (error) {
+      readyAccepted = false;
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[relay-node] ${detail}`);
       writeStatus("incompatible", {
@@ -524,6 +533,7 @@ function handleMessage(raw, sourceSocket = socket) {
       socket?.close(1002, "relay event schema mismatch");
       return;
     }
+    readyAccepted = true;
     console.log(`[relay-node] connected as ${message.nodeId}`);
     writeStatus("connected");
     resumeCurrentCommand();
@@ -547,6 +557,11 @@ function handleMessage(raw, sourceSocket = socket) {
       console.error(
         `[relay-node] ${error instanceof Error ? error.message : String(error)}`,
       );
+      readyAccepted = false;
+      writeStatus("incompatible", {
+        lastErrorCode: "invalid_activity_watch_replacement",
+        lastErrorMessage: error instanceof Error ? error.message : String(error),
+      });
       socket?.close(1002, "invalid Activity watch replacement");
       return;
     }
@@ -567,10 +582,6 @@ function handleMessage(raw, sourceSocket = socket) {
     return;
   }
   if (message.type === "command") {
-    if (settledCommandIds.has(message.command?.id)) {
-      console.warn(`[relay-node] ignoring duplicate terminal command ${message.command.id}`);
-      return;
-    }
     if (current) {
       const result = deferredCommands.defer(message.command, current.command.id);
       if (result === "queued") {
@@ -598,7 +609,6 @@ function handleMessage(raw, sourceSocket = socket) {
     const state = current?.command.id === message.commandId ? current : null;
     // The relay's terminal record is authoritative. A command may be
     // cancelled or failed after the node has already sent its outcome.
-    settledCommandIds.add(message.commandId);
     deferredCommands.delete(message.commandId);
     if (state) clearCurrent({ abort: false });
     return;
@@ -643,6 +653,7 @@ function scheduleReconnect() {
 
 function connect() {
   if (stopping) return;
+  readyAccepted = false;
   writeStatus("connecting");
   const next = new WebSocket(relayUrl, {
     headers: { authorization: `Bearer ${nodeToken}` },
@@ -654,10 +665,18 @@ function connect() {
   });
   next.on("message", (raw) => handleMessage(raw, next));
   next.on("error", (error) => {
+    if (socket === next) {
+      readyAccepted = false;
+      writeStatus("disconnected", {
+        lastErrorCode: "relay_socket_error",
+        lastErrorMessage: error.message,
+      });
+    }
     console.error(`[relay-node] connection error: ${error.message}`);
   });
   next.on("close", (code, reason) => {
     if (socket !== next) return;
+    readyAccepted = false;
     socket = null;
     console.error(
       `[relay-node] disconnected (${code}${reason.length ? `: ${reason.toString()}` : ""})`,
