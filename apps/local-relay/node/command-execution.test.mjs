@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { fork } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -82,6 +82,7 @@ async function startScenario(
     timeoutCommand = false,
     commandTimeoutMs = 2_000,
     disconnectBeforeClaimAck = false,
+    sendReady = true,
   } = {},
 ) {
   const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-command-test-"));
@@ -169,12 +170,14 @@ async function startScenario(
   relay.on("connection", (client) => {
     connectionCount += 1;
     const connection = connectionCount;
-    client.send(JSON.stringify({
-      protocolVersion: RELAY_PROTOCOL_VERSION,
-      type: "ready",
-      nodeId: "test-node",
-      eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
-    }));
+    if (sendReady) {
+      client.send(JSON.stringify({
+        protocolVersion: RELAY_PROTOCOL_VERSION,
+        type: "ready",
+        nodeId: "test-node",
+        eventSchemaVersion: RELAY_EVENT_SCHEMA_VERSION,
+      }));
+    }
     client.on("message", (raw) => {
       const frame = JSON.parse(raw.toString());
       frames.push({ connection, ...frame });
@@ -256,7 +259,7 @@ async function startScenario(
         }));
       }
     });
-    if (!commandSent) {
+    if (sendReady && !commandSent) {
       commandSent = true;
       client.send(JSON.stringify({
         protocolVersion: RELAY_PROTOCOL_VERSION,
@@ -268,7 +271,8 @@ async function startScenario(
 
   const output = [];
   const errors = [];
-  const child = spawn(process.execPath, [INDEX_PATH], {
+  const ipcStatuses = [];
+  const child = fork(INDEX_PATH, [], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -284,10 +288,13 @@ async function startScenario(
       COHUB_LOCAL_RELAY_STATUS_FILE: join(dataDir, "relay-status.json"),
       SPACE_STORAGE_ROOT: spaceStorageRoot,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    silent: true,
   });
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));
   child.stderr.on("data", (chunk) => errors.push(chunk.toString()));
+  child.on("message", (message) => {
+    if (message?.type === "relay-status") ipcStatuses.push(message);
+  });
   t.after(async () => {
     await stopChild(child);
     await closeServer(relay);
@@ -302,10 +309,22 @@ async function startScenario(
     get promptCalls() { return promptCalls; },
     get claimCount() { return claimCount; },
     desktopSecrets,
+    ipcStatuses,
     output,
     errors,
   };
 }
+
+test("does not report a WebSocket as connected before a matching ready message", async (t) => {
+  const scenario = await startScenario(t, { sendReady: false });
+  await waitFor(() => scenario.ipcStatuses.length > 0, 10_000);
+  assert.equal(
+    scenario.ipcStatuses.some((status) => status.state === "connected"),
+    false,
+  );
+  assert.ok(scenario.ipcStatuses.some((status) => status.state === "connecting"));
+  assert.ok(scenario.ipcStatuses.every((status) => status.nodeId === "test-node"));
+});
 
 test("keeps the real result after delayed and duplicate nonterminal acknowledgements", async (t) => {
   const scenario = await startScenario(t);
