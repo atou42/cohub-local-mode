@@ -456,7 +456,9 @@ function createRuntime(input: {
 			clientInfo: { name: "cohub-local", version: "1.0.0" },
 		});
 	})();
-	entry.readyPromise.catch(() => undefined);
+	void entry.readyPromise.catch((error) => {
+		closeEntry(entry, error instanceof Error ? error.message : String(error));
+	});
 	runtimes.set(entry.key, entry);
 	return entry;
 }
