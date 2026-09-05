@@ -108,7 +108,8 @@ function assertString(value, path) {
 }
 
 async function listQueueNames(name) {
-	const { accountId, payload } = await cloudflareApi(
+	const { accountId } = requireCloudflareCredentials();
+	const { payload } = await cloudflareApi(
 		`/accounts/${encodeURIComponent(accountId)}/queues?name=${encodeURIComponent(name)}&page=1`,
 	);
 	if (!Array.isArray(payload.result)) {
@@ -123,7 +124,8 @@ async function listQueueNames(name) {
 }
 
 async function listBucketNames() {
-	const { accountId, payload } = await cloudflareApi(
+	const { accountId } = requireCloudflareCredentials();
+	const { payload } = await cloudflareApi(
 		`/accounts/${encodeURIComponent(accountId)}/r2/buckets`,
 	);
 	assertObject(payload.result, "r2.result");
