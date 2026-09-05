@@ -12,6 +12,20 @@ import {
 const firstId = "3bb14c9d-7c86-47eb-88ef-e8db2acd4875";
 const secondId = "669526bb-bf65-4013-a825-4f61adf199f8";
 
+test("empty-body HTTP statuses remain successful relay responses", async () => {
+	for (const status of [204, 205, 304]) {
+		const result = {status, headers: {etag: "test-etag"}, body: ""};
+		const command = personalNodeCommandResponse({id:"empty",status:"succeeded",result,errorCode:null,errorMessage:null});
+		const projection = personalNodeProjectionResponse({path:"/api/spaces",result,updatedAt:"2026-09-05T00:00:00Z"});
+		for (const response of [command, projection]) {
+			assert.equal(response.status, status);
+			assert.equal(response.body, null);
+			assert.equal(response.headers.get("etag"), "test-etag");
+		}
+		assert.throws(() => personalNodeCommandResponse({id:"invalid",status:"succeeded",result:{...result,body:"unexpected"},errorCode:null,errorMessage:null}));
+	}
+});
+
 test("selects an active preferred Personal Node and ignores revoked devices", () => {
 	const devices = [
 		{

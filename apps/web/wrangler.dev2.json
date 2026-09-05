@@ -7,7 +7,8 @@
   "workers_dev": true,
   "assets": {
     "directory": ".svelte-kit/cloudflare/assets",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": ["/", "/spaces"]
   },
   "vars": {
     "PUBLIC_COHUB_LOCAL_MODE": "true",

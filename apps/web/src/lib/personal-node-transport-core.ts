@@ -86,7 +86,7 @@ export function buildPersonalNodeApiCommand(input: {
 
 export function personalNodeCommandResponse(command: PersonalNodeRelayCommand) {
 	if (command.result) {
-		return new Response(command.result.body, {
+		return new Response(relayResponseBody(command.result), {
 			status: command.result.status,
 			headers: command.result.headers,
 		});
@@ -103,13 +103,19 @@ export function personalNodeCommandResponse(command: PersonalNodeRelayCommand) {
 	);
 }
 
+function relayResponseBody(result: PersonalNodeRelayResult) {
+	return result.body === "" && [204, 205, 304].includes(result.status)
+		? null
+		: result.body;
+}
+
 export function personalNodeProjectionResponse(
 	projection: PersonalNodeReadProjection,
 ) {
 	const headers = new Headers(projection.result.headers);
 	headers.set("x-cohub-personal-node-cache", "hit");
 	headers.set("x-cohub-personal-node-cache-updated-at", projection.updatedAt);
-	return new Response(projection.result.body, {
+	return new Response(relayResponseBody(projection.result), {
 		status: projection.result.status,
 		headers,
 	});

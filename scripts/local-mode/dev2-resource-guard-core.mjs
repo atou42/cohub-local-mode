@@ -267,9 +267,10 @@ function validateWeb(config) {
 	assertExactString(config.compatibility_date, "2026-08-25", "web.compatibility_date");
 	assertExactStringArray(config.compatibility_flags, ["nodejs_compat"], "web.compatibility_flags");
 	assertExactBoolean(config.workers_dev, true, "web.workers_dev");
-	assertKeys(config.assets, ["directory", "binding"], ["directory", "binding"], "web.assets");
+	assertKeys(config.assets, ["directory", "binding", "run_worker_first"], ["directory", "binding", "run_worker_first"], "web.assets");
 	assertExactString(config.assets.directory, ".svelte-kit/cloudflare/assets", "web.assets.directory");
 	assertExactString(config.assets.binding, "ASSETS", "web.assets.binding");
+	assertExactStringArray(config.assets.run_worker_first, ["/", "/spaces"], "web.assets.run_worker_first");
 	assertVars(config.vars, WEB_VAR_VALUES, "web.vars");
 	assertWebRoutes(config.routes);
 }

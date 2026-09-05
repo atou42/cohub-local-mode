@@ -210,9 +210,9 @@ await run(
 		...deployArgs,
 		"--config",
 		"wrangler.dev2.json",
-		...varArg("LOGTO_APP_ID"),
+		...varArg("PUBLIC_LOGTO_APP_ID"),
 	],
-	{ cwd: resolve(repoRoot, "apps/local-relay") },
+	{ cwd: resolve(repoRoot, "apps/web") },
 );
 await run(
 	"pnpm",
@@ -222,7 +222,7 @@ await run(
 		...deployArgs,
 		"--config",
 		"wrangler.dev2.json",
-		...varArg("PUBLIC_LOGTO_APP_ID"),
+		...varArg("LOGTO_APP_ID"),
 	],
-	{ cwd: resolve(repoRoot, "apps/web") },
+	{ cwd: resolve(repoRoot, "apps/local-relay") },
 );

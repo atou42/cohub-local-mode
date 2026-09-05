@@ -41,6 +41,7 @@ import { appendFileSync } from "node:fs";
 
 const record = {
   args: process.argv.slice(2),
+  cwd: process.cwd(),
   webTarget: process.env.COHUB_WEB_TARGET ?? null,
   webConfig: process.env.COHUB_WEB_WRANGLER_CONFIG ?? null,
   buildOutDir: process.env.COHUB_WEB_BUILD_OUT_DIR ?? null,
@@ -239,6 +240,8 @@ test("deploy checks exact resource names through structured API responses", asyn
 				({ args }) => args[0] === "exec" && args[1] === "wrangler",
 			);
 			assert.equal(deployCalls.length, 2);
+			assert.equal(deployCalls[0].cwd, resolve(repoRoot, "apps/web"));
+			assert.equal(deployCalls[1].cwd, resolve(repoRoot, "apps/local-relay"));
 			for (const call of deployCalls) {
 				assert.equal(call.args.includes("--dry-run"), false);
 				assert.equal(call.args.includes("wrangler.dev2.json"), true);

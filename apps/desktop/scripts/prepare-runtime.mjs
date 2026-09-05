@@ -6,15 +6,10 @@ import {
 	access,
 	chmod,
 	copyFile,
-	cp,
-	lstat,
 	mkdir,
 	readFile,
-	readlink,
-	readdir,
 	rm,
 	stat,
-	unlink,
 	writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -87,7 +82,6 @@ await run("pnpm", [
 	"tsc",
 	"-p",
 	"tsconfig.build.json",
-	"--noCheck",
 ]);
 await run("node", [join(desktopRoot, "scripts", "prepare-native-runtime.mjs")]);
 await mkdir(nativeBuild, { recursive: true });
@@ -115,41 +109,6 @@ await Promise.all([
 ]);
 await rm(output, { recursive: true, force: true });
 await run("pnpm", ["--filter", "@cohub/desktop-runtime", "deploy", "--prod", output]);
-const virtualStore = join(output, "node_modules", ".pnpm");
-const optionalBillingLinks = [
-	join(virtualStore, "node_modules", "@talesofai-billing", "sdk"),
-	...(await readdir(virtualStore, { withFileTypes: true }))
-		.filter((entry) => entry.isDirectory())
-		.map((entry) =>
-			join(
-				virtualStore,
-				entry.name,
-				"node_modules",
-				"@talesofai-billing",
-				"sdk",
-			),
-		),
-];
-for (const optionalBillingLink of optionalBillingLinks) {
-	try {
-		const stat = await lstat(optionalBillingLink);
-		if (!stat.isSymbolicLink()) {
-			throw new Error("The optional billing SDK path must be a symlink");
-		}
-		const target = resolve(
-			dirname(optionalBillingLink),
-			await readlink(optionalBillingLink),
-		);
-		try {
-			await access(target);
-		} catch (error) {
-			if (error?.code !== "ENOENT") throw error;
-			await unlink(optionalBillingLink);
-		}
-	} catch (error) {
-		if (error?.code !== "ENOENT") throw error;
-	}
-}
 const sdkPackagePath = join(output, "node_modules", "@neta-art", "cohub", "package.json");
 const sdkPackage = JSON.parse(await readFile(sdkPackagePath, "utf8"));
 if (!sdkPackage.publishConfig?.exports || !sdkPackage.publishConfig?.types) {
