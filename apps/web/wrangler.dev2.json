@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cohub-personal-node-dev2-web",
+  "main": "worker.local-mode.js",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": ".svelte-kit/cloudflare/assets",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "PUBLIC_COHUB_LOCAL_MODE": "true",
+    "PUBLIC_PERSONAL_NODE_ALPHA": "true",
+    "PUBLIC_API_ORIGIN": "https://dev2-cohub.atou.cc",
+    "PUBLIC_CLOUD_API_ORIGIN": "https://api.cohub.live",
+    "PUBLIC_CLOUD_GATEWAY_ORIGIN": "wss://gateway.cohub.live/ws",
+    "PUBLIC_LOCAL_RELAY_ENABLED": "true",
+    "PUBLIC_LOGTO_ENDPOINT": "https://auth.neta.art",
+    "PUBLIC_LOGTO_API_RESOURCE": "https://api.talesofai"
+  },
+  "routes": [
+    {
+      "pattern": "dev2-cohub.atou.cc",
+      "custom_domain": true
+    }
+  ]
+}

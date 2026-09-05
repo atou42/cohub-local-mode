@@ -1,0 +1,76 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cohub-personal-node-dev2-relay",
+  "main": "src/alpha.ts",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "dev2-cohub.atou.cc/api/alpha/*",
+      "zone_name": "atou.cc"
+    },
+    {
+      "pattern": "dev2-cohub.atou.cc/healthz",
+      "zone_name": "atou.cc"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ACCOUNTS",
+        "class_name": "PersonalAccount"
+      },
+      {
+        "name": "NODES",
+        "class_name": "LocalNodeRelay"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "dev2-v1",
+      "new_sqlite_classes": ["PersonalAccount"]
+    },
+    {
+      "tag": "dev2-v2",
+      "new_sqlite_classes": ["LocalNodeRelay"]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "COMMAND_WAKEUPS",
+        "queue": "cohub-personal-node-dev2-wakeups"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cohub-personal-node-dev2-wakeups",
+        "max_batch_size": 10,
+        "max_batch_timeout": 1,
+        "max_retries": 5
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "cohub-personal-node-dev2-attachments"
+    }
+  ],
+  "vars": {
+    "ALLOWED_ORIGIN": "https://dev2-cohub.atou.cc",
+    "LOGTO_ENDPOINT": "https://auth.neta.art",
+    "LOGTO_API_RESOURCE": "https://api.talesofai",
+    "COMMAND_LEASE_MS": "60000",
+    "COMMAND_MAX_BODY_BYTES": "1048576",
+    "ATTACHMENT_MAX_BYTES": "104857600",
+    "ATTACHMENT_TTL_MS": "604800000",
+    "ACTIVITY_STALE_SECONDS": "120",
+    "ACTIVITY_REGISTRATION_TTL_SECONDS": "86400"
+  }
+}
