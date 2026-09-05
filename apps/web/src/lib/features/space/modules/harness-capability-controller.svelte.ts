@@ -19,8 +19,16 @@ export function createHarnessCapabilityController() {
 	let refreshError = $state<string | null>(null);
 	let refreshInFlight: Promise<void> | null = null;
 	let refreshInFlightFor: string | null = null;
+	let refreshEpoch = 0;
+
+	function invalidateRefresh() {
+		refreshEpoch += 1;
+		refreshInFlight = null;
+		refreshInFlightFor = null;
+	}
 
 	function reset() {
+		invalidateRefresh();
 		catalog = null;
 		loaded = true;
 		loadedFor = null;
@@ -28,6 +36,7 @@ export function createHarnessCapabilityController() {
 	}
 
 	function restore(target: Target) {
+		invalidateRefresh();
 		const key = targetKey(target);
 		const cached = readCachedHarnessCapabilities(
 			target.spaceId,
@@ -42,19 +51,21 @@ export function createHarnessCapabilityController() {
 	async function refresh(target: Target) {
 		const key = targetKey(target);
 		if (refreshInFlight && refreshInFlightFor === key) return refreshInFlight;
+		const epoch = ++refreshEpoch;
+		refreshInFlightFor = key;
 		const run = (async () => {
 			try {
 				const response = await sdkForSpaceOrigin(
 					resolveSpaceOrigin(target.spaceId),
 				).harnessCapabilities.list(target);
+				if (refreshEpoch !== epoch) return;
 				writeCachedHarnessCapabilities(target.spaceId, response);
-				if (refreshInFlightFor !== key) return;
 				catalog = response;
 				loaded = true;
 				loadedFor = key;
 				refreshError = null;
 			} catch (error) {
-				if (refreshInFlightFor !== key) return;
+				if (refreshEpoch !== epoch) return;
 				loaded = true;
 				loadedFor = key;
 				refreshError =
@@ -64,19 +75,18 @@ export function createHarnessCapabilityController() {
 			}
 		})();
 		const tracked = run.finally(() => {
-			if (refreshInFlight === tracked) {
+			if (refreshEpoch === epoch && refreshInFlight === tracked) {
 				refreshInFlight = null;
 				refreshInFlightFor = null;
 			}
 		});
 		refreshInFlight = tracked;
-		refreshInFlightFor = key;
 		return tracked;
 	}
 
 	function load(target: Target) {
 		const key = targetKey(target);
-		if (loadedFor !== key) restore(target);
+		if (loadedFor !== key && refreshInFlightFor !== key) restore(target);
 		return refresh(target);
 	}
 
