@@ -2,10 +2,14 @@ import { fileURLToPath, URL } from "node:url";
 import adapter from "@sveltejs/adapter-cloudflare";
 
 const wranglerConfig = process.env.COHUB_WEB_WRANGLER_CONFIG?.trim();
+// Keep adapter output separate from the hand-written deployment wrapper.
+const adapterConfig = wranglerConfig === "wrangler.dev2.json"
+	? "wrangler.dev2-build.json"
+	: wranglerConfig;
 const desktopBuild = process.env.COHUB_WEB_TARGET === "desktop";
 const selectedAdapter = desktopBuild
 	? (await import("@sveltejs/adapter-node")).default({ out: "build", precompress: true })
-	: adapter(wranglerConfig ? { config: wranglerConfig } : undefined);
+	: adapter(adapterConfig ? { config: adapterConfig } : undefined);
 
 const protocolDir = fileURLToPath(
 	new URL("../../packages/protocol/src", import.meta.url),

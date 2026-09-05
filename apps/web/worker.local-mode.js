@@ -2,8 +2,11 @@ import app from "./.svelte-kit/cloudflare/_worker.js";
 
 export default {
 	async fetch(request, env, ctx) {
-		const response = await app.fetch(request, env, ctx);
 		const pathname = new URL(request.url).pathname;
+		if ((pathname === "/" || pathname === "/spaces") && env.PUBLIC_PERSONAL_NODE_ALPHA === "true") {
+			return Response.redirect(new URL("/sessions", request.url), 302);
+		}
+		const response = await app.fetch(request, env, ctx);
 
 		if (pathname.startsWith("/_app/immutable/") && !response.ok) {
 			const headers = new Headers(response.headers);

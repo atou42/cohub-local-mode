@@ -280,7 +280,7 @@ async function openLocalCohub() {
 		}
 	});
 	mainWindow.on("closed", () => { mainWindow = null; });
-	await mainWindow.loadURL(`${localWebOrigin}/spaces`);
+	await mainWindow.loadURL(`${localWebOrigin}/sessions`);
 }
 
 async function sha256File(path: string) {
@@ -318,7 +318,7 @@ async function validateInstalledRuntime(directory: string) {
 	for (const relative of [
 		"manager.mjs",
 		"web-entry.mjs",
-		"web/handler.js",
+		"node_modules/web/build/handler.js",
 		"node_modules/s3rver/package.json",
 		"node_modules/postgres/package.json",
 		"node_modules/@embedded-postgres/darwin-arm64/package.json",

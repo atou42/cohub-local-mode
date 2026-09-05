@@ -18,6 +18,7 @@ import S3rver from "s3rver";
 import sqlClient from "postgres";
 import nodeFetch from "node-fetch";
 import { initdb, postgres as postgresBinary } from "@embedded-postgres/darwin-arm64";
+import { withoutHostedBilling } from "./billing-env.mjs";
 
 const runtimeRoot = dirname(fileURLToPath(import.meta.url));
 const dataRoot = resolve(process.env.COHUB_LOCAL_DATA_DIR || join(homedir(), ".cohub-personal-node"));
@@ -120,7 +121,7 @@ async function assertServicePortsAvailable() {
 function startChild(name, executable, args, env, cwd = runtimeRoot) {
 	const child = spawn(executable, args, {
 		cwd,
-		env: { ...process.env, ...env },
+		env: withoutHostedBilling({ ...process.env, ...env }),
 		stdio: ["ignore", "pipe", "pipe"],
 		detached: false,
 	});
@@ -150,7 +151,7 @@ async function runChild(name, executable, args, env, cwd = runtimeRoot) {
 	await new Promise((resolvePromise, reject) => {
 		const child = spawn(executable, args, {
 			cwd,
-			env: { ...process.env, ...env },
+			env: withoutHostedBilling({ ...process.env, ...env }),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let stderr = "";
@@ -195,7 +196,6 @@ async function ensurePostgres(state) {
 			await rm(passwordFile, { force: true });
 		}
 	}
-	await mkdir(join(dataRoot, "postgres-socket"), { recursive: true });
 	startChild("postgres", postgresBinary, [
 		"-D",
 		pgData,
@@ -204,7 +204,7 @@ async function ensurePostgres(state) {
 		"-p",
 		String(ports.postgres),
 		"-k",
-		join(dataRoot, "postgres-socket"),
+		"",
 	], {});
 	await waitForTcp(ports.postgres);
 	const sql = sqlClient(
