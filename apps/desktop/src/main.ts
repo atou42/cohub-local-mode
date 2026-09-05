@@ -12,23 +12,23 @@ import {
 } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { app, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
-	isTrustedLegacyRuntimeCommand,
+	verifyRuntimeIdentity,
 	nextRuntimeRestart,
 	runtimeRestartLimit,
 	statusPresentation,
 	type ConnectorStatus,
 } from "./connector-core.js";
 
-const alphaOrigin = "https://dev-cohub.atou.cc";
+const alphaOrigin = "https://dev2-cohub.atou.cc";
 const stateVersion = 2;
-const keychainService = "Cohub Personal Node";
-const cloudAuthKeychainService = "Cohub Personal Node Cloud Auth";
+const keychainService = "Cohub Dev2 Personal Node";
+const cloudAuthKeychainService = "Cohub Dev2 Cloud Auth";
 const cloudAuthKeychainAccount = "current";
 const testPortOffset = Number(
-	process.env.COHUB_PERSONAL_NODE_TEST_PORT_OFFSET ?? "0",
+	process.env.COHUB_PERSONAL_NODE_TEST_PORT_OFFSET ?? "4000",
 );
 if (
 	!Number.isInteger(testPortOffset) ||
@@ -41,13 +41,18 @@ if (
 }
 const localApiOrigin = `http://127.0.0.1:${8_787 + testPortOffset}`;
 const localGatewayOrigin = `ws://127.0.0.1:${8_788 + testPortOffset}/ws`;
+const localWebOrigin = `http://127.0.0.1:${4_173 + testPortOffset}`;
 const localServicePorts = [
 	54_329 + testPortOffset,
 	6_380 + testPortOffset,
 	9_000 + testPortOffset,
 	8_787 + testPortOffset,
 	8_788 + testPortOffset,
+	4_173 + testPortOffset,
 ] as const;
+
+app.setName("Cohub Dev2");
+app.setPath("userData", process.env.COHUB_DESKTOP_TEST_HOME ?? join(app.getPath("appData"), "Cohub Dev2"));
 
 type StoredState = {
 	version: typeof stateVersion;
@@ -69,6 +74,9 @@ let tray: Tray | null = null;
 let relayProcess: ChildProcess | null = null;
 let relayStartPromise: Promise<void> | null = null;
 let runtimeProcess: ChildProcess | null = null;
+let runtimeIdentity: { id: string; secret: string } | null = null;
+let mainWindow: BrowserWindow | null = null;
+let lastRelayStatusAt = 0;
 let localRuntimeReady = false;
 let relayConnected = false;
 let lastRelayError: string | null = null;
@@ -179,6 +187,10 @@ function refreshTrayMenu() {
 			{ type: "separator" },
 			{
 				label: "Open Cohub",
+				click: () => void openLocalCohub().catch(publishConnectorError),
+			},
+			{
+				label: "Open Remote Access",
 				click: () => void shell.openExternal(alphaOrigin).catch(publishConnectorError),
 			},
 			...(currentStatus.state === "signed-out"
@@ -227,6 +239,49 @@ async function showDiagnostics() {
 	shell.showItemInFolder(connectorLogPath());
 }
 
+async function openLocalCohub() {
+	await startRuntime();
+	if (!localRuntimeReady || !runtimeIdentity) throw new Error("Local Cohub is not ready");
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		mainWindow.show();
+		mainWindow.focus();
+		return;
+	}
+	mainWindow = new BrowserWindow({
+		width: 1280, height: 850, minWidth: 760, minHeight: 520,
+		title: "Cohub Dev2", backgroundColor: "#F8F8FA",
+		webPreferences: {
+			preload: join(app.getAppPath(), "build", "preload.cjs"),
+			nodeIntegration: false, contextIsolation: true, sandbox: true,
+			partition: "persist:cohub-dev2",
+		},
+	});
+	const contents = mainWindow.webContents;
+	contents.session.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
+		const headers = { ...details.requestHeaders };
+		for (const key of Object.keys(headers)) {
+			if (key.toLowerCase() === "x-cohub-desktop-secret") delete headers[key];
+		}
+		const url = new URL(details.url);
+		if (runtimeIdentity && url.host === new URL(localWebOrigin).host && ["http:", "ws:"].includes(url.protocol)) {
+			headers["X-Cohub-Desktop-Secret"] = runtimeIdentity.secret;
+		}
+		callback({ requestHeaders: headers });
+	});
+	contents.setWindowOpenHandler(({ url }) => {
+		if (new URL(url).protocol === "https:") void shell.openExternal(url).catch(publishConnectorError);
+		return { action: "deny" };
+	});
+	contents.on("will-navigate", (event, url) => {
+		if (new URL(url).origin !== localWebOrigin) {
+			event.preventDefault();
+			if (new URL(url).protocol === "https:") void shell.openExternal(url).catch(publishConnectorError);
+		}
+	});
+	mainWindow.on("closed", () => { mainWindow = null; });
+	await mainWindow.loadURL(`${localWebOrigin}/spaces`);
+}
+
 async function sha256File(path: string) {
 	const hash = createHash("sha256");
 	for await (const chunk of createReadStream(path)) hash.update(chunk);
@@ -261,6 +316,8 @@ async function extractRuntime(archive: string, destination: string) {
 async function validateInstalledRuntime(directory: string) {
 	for (const relative of [
 		"manager.mjs",
+		"web-entry.mjs",
+		"web/handler.js",
 		"node_modules/s3rver/package.json",
 		"node_modules/postgres/package.json",
 		"node_modules/@embedded-postgres/darwin-arm64/package.json",
@@ -673,7 +730,7 @@ async function beginConnectorSignIn() {
 					Date.now() + validPositiveNumber(token.expiresInSeconds, "expiresInSeconds") * 1_000,
 				scope: validString(token.scope, "scope", 1_024),
 			});
-			await shell.openExternal(alphaOrigin);
+			await openLocalCohub();
 			return;
 		}
 		if (!quitting) throw new Error("Personal Node sign-in expired");
@@ -694,20 +751,22 @@ async function beginConnectorSignIn() {
 }
 
 type RuntimeOwner = {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	pid: number;
 	startedAt: string;
+	processFingerprint: string;
 };
 
 async function readRuntimeOwner(): Promise<RuntimeOwner | null> {
 	try {
 		const owner = JSON.parse(await readFile(runtimeOwnerPath(), "utf8")) as Partial<RuntimeOwner>;
 		if (
-			owner.schemaVersion !== 1 ||
+			owner.schemaVersion !== 2 ||
 			typeof owner.pid !== "number" ||
 			!Number.isInteger(owner.pid) ||
 			owner.pid <= 1 ||
-			typeof owner.startedAt !== "string"
+			typeof owner.startedAt !== "string" ||
+			typeof owner.processFingerprint !== "string" || !owner.processFingerprint.trim()
 		) {
 			throw new Error("Personal Node runtime owner state is invalid");
 		}
@@ -719,11 +778,13 @@ async function readRuntimeOwner(): Promise<RuntimeOwner | null> {
 }
 
 async function writeRuntimeOwner(pid: number) {
+	const processFingerprint = await execFileText("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="]);
+	if (!processFingerprint.trim()) throw new Error("Cannot identify the started runtime process");
 	await mkdir(dataDir(), { recursive: true });
 	const temporary = `${runtimeOwnerPath()}.${process.pid}.tmp`;
 	await writeFile(
 		temporary,
-		`${JSON.stringify({ schemaVersion: 1, pid, startedAt: new Date().toISOString() })}\n`,
+		`${JSON.stringify({ schemaVersion: 2, pid, startedAt: new Date().toISOString(), processFingerprint })}\n`,
 		{ mode: 0o600, flag: "wx" },
 	);
 	await rename(temporary, runtimeOwnerPath());
@@ -767,6 +828,12 @@ async function clearRuntimeOwner(pid: number) {
 async function stopOwnedRuntime() {
 	const owner = await readRuntimeOwner();
 	if (!owner) return;
+	if (processGroupAlive(owner.pid)) {
+		const fingerprint = await execFileText("/bin/ps", ["-p", String(owner.pid), "-o", "lstart=", "-o", "command="]);
+		if (fingerprint !== owner.processFingerprint) {
+			throw new Error("Recorded runtime no longer matches its owner; refusing to stop another process");
+		}
+	}
 	await terminateProcessGroup(owner.pid);
 	await clearRuntimeOwner(owner.pid);
 }
@@ -793,41 +860,12 @@ async function legacyListenerPids() {
 }
 
 async function cleanupLegacyRuntime() {
-	if (await readRuntimeOwner()) return;
 	const pids = await legacyListenerPids();
 	if (pids.length === 0) return;
-	const trustedRoot = app.getPath("userData");
-	for (const pid of pids) {
-		const command = await execFileText("/bin/ps", ["-p", String(pid), "-o", "command="]);
-		if (!isTrustedLegacyRuntimeCommand(command, trustedRoot)) {
-			throw new Error(
-				`Local service port is occupied by another process (${pid}: ${truncateMenuText(command)})`,
-			);
-		}
-		logMessage("recovery", `Stopping stale Personal Node process ${pid}: ${command}`);
-		try {
-			process.kill(pid, "SIGTERM");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-		}
-	}
-	const deadline = Date.now() + 5_000;
-	while ((await legacyListenerPids()).length > 0 && Date.now() < deadline) await delay(100);
-	const remaining = await legacyListenerPids();
-	for (const pid of remaining) {
-		const command = await execFileText("/bin/ps", ["-p", String(pid), "-o", "command="]);
-		if (!isTrustedLegacyRuntimeCommand(command, trustedRoot)) {
-			throw new Error(`Local service port remained occupied by another process (${pid})`);
-		}
-		process.kill(pid, "SIGKILL");
-	}
+	throw new Error(`Local service ports are occupied by unowned processes (${pids.join(", ")}); no process was stopped`);
 }
 
 async function startRuntimeOnce() {
-	if (await localApiReady()) {
-		localRuntimeReady = true;
-		return;
-	}
 	localRuntimeReady = false;
 	await stopOwnedRuntime();
 	await cleanupLegacyRuntime();
@@ -841,6 +879,7 @@ async function startRuntimeOnce() {
 	});
 	const runtimeScript = await resolveRuntimeScript();
 	await access(runtimeScript);
+	runtimeIdentity = { id: randomUUID(), secret: randomBytes(32).toString("base64url") };
 	const finderPath = [
 		join(process.env.HOME ?? "", ".local", "bin"),
 		"/opt/homebrew/bin",
@@ -856,6 +895,9 @@ async function startRuntimeOnce() {
 			ELECTRON_RUN_AS_NODE: "1",
 			NODE_ENV: "production",
 			COHUB_LOCAL_DATA_DIR: dataDir(),
+			COHUB_PERSONAL_NODE_TEST_PORT_OFFSET: String(testPortOffset),
+			COHUB_DESKTOP_INSTANCE_ID: runtimeIdentity.id,
+			COHUB_DESKTOP_INSTANCE_SECRET: runtimeIdentity.secret,
 			COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_SERVICE:
 				cloudAuthKeychainService,
 			COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_ACCOUNT:
@@ -863,14 +905,13 @@ async function startRuntimeOnce() {
 			COHUB_PERSONAL_NODE_AUTH_ORIGIN: alphaOrigin,
 			PATH: finderPath,
 		},
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: ["ignore", "pipe", "pipe", "ipc"],
 	});
 	if (!child.pid) throw new Error("Local Cohub runtime did not start");
 	const childPid = child.pid;
 	runtimeProcess = child;
 	await writeRuntimeOwner(childPid);
 	lastRuntimeError = null;
-	let stdoutTail = "";
 	let stderrTail = "";
 	let runtimeHasReady = false;
 	await new Promise<void>((resolvePromise, reject) => {
@@ -881,11 +922,16 @@ async function startRuntimeOnce() {
 		child.stdout?.on("data", (chunk) => {
 			const message = String(chunk);
 			logMessage("runtime", message);
-			stdoutTail = `${stdoutTail}${message}`.slice(-8_192);
-			if (runtimeHasReady || !stdoutTail.includes("[runtime] ready")) return;
-			runtimeHasReady = true;
-			clearTimeout(startupTimeout);
-			resolvePromise();
+		});
+		child.on("message", (message) => {
+			if (!message || typeof message !== "object" || Reflect.get(message, "type") !== "runtime-ready") return;
+			if (runtimeHasReady || Reflect.get(message, "instanceId") !== runtimeIdentity?.id) return;
+			void localApiReady().then((ready) => {
+				if (!ready) throw new Error("Runtime identity check failed");
+				runtimeHasReady = true;
+				clearTimeout(startupTimeout);
+				resolvePromise();
+			}).catch(reject);
 		});
 		child.stderr?.on("data", (chunk) => {
 			const message = String(chunk);
@@ -929,8 +975,7 @@ async function startRuntimeOnce() {
 }
 
 async function startRuntime() {
-	if (await localApiReady()) {
-		localRuntimeReady = true;
+	if (localRuntimeReady && await localApiReady()) {
 		return;
 	}
 	if (runtimeStartPromise) return runtimeStartPromise;
@@ -942,13 +987,16 @@ async function startRuntime() {
 
 async function ensureRuntimeAndRelay(state: StoredState, credential?: string) {
 	try {
-		await startRelay(state, credential);
 		await startRuntime();
-		if (relayConnected) {
-			publishStatus({ state: "connected", deviceId: state.deviceId, message: null });
-		}
 	} catch (error) {
 		if (!quitting) await scheduleRuntimeRecovery(error);
+		return;
+	}
+	try {
+		await startRelay(state, credential);
+		if (relayConnected) publishStatus({ state: "connected", deviceId: state.deviceId, message: null });
+	} catch (error) {
+		if (!quitting) await scheduleRelayRecovery(state, error instanceof Error ? error.message : String(error));
 	}
 }
 
@@ -990,13 +1038,19 @@ async function scheduleRuntimeRecovery(error: unknown) {
 }
 
 async function localApiReady() {
+	if (!runtimeIdentity || !runtimeProcess || runtimeProcess.exitCode !== null) return false;
+	const challenge = randomBytes(32).toString("base64url");
 	try {
-		const response = await fetch(`${localApiOrigin}/healthz`, {
+		const response = await fetch(`${localApiOrigin}/api/local-mode/instance?challenge=${challenge}`, {
 			signal: AbortSignal.timeout(1_500),
 		});
-		return response.ok;
-	} catch {
-		return false;
+		if (!response.ok || !verifyRuntimeIdentity(await response.json(), runtimeIdentity.id, runtimeIdentity.secret, challenge)) {
+			throw new Error("Local API belongs to a different runtime instance");
+		}
+		return true;
+	} catch (error) {
+		if ((error as { cause?: { code?: string } }).cause?.code === "ECONNREFUSED") return false;
+		throw error;
 	}
 }
 
@@ -1028,18 +1082,24 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 			SPACE_STORAGE_ROOT: join(dataDir(), "spaces"),
 			COHUB_LOCAL_RELAY_API_ORIGIN: localApiOrigin,
 			COHUB_LOCAL_RELAY_GATEWAY_ORIGIN: localGatewayOrigin,
+			COHUB_DESKTOP_INSTANCE_SECRET: runtimeIdentity?.secret,
 			PUBLIC_CLOUD_API_ORIGIN: "https://api.cohub.live",
 			PUBLIC_CLOUD_GATEWAY_ORIGIN: "wss://gateway.cohub.live/ws",
 		},
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: ["ignore", "pipe", "pipe", "ipc"],
 	});
 	relayProcess = child;
 	lastRelayError = null;
 	child.stdout?.on("data", (chunk) => {
 		const message = String(chunk);
 		logMessage("relay", message);
-		if (message.includes("connected as")) {
-			relayConnected = true;
+	});
+	child.on("message", (message) => {
+		if (!message || typeof message !== "object" || Reflect.get(message, "type") !== "relay-status" || Reflect.get(message, "nodeId") !== state.deviceId || Reflect.get(message, "pid") !== child.pid) return;
+		lastRelayStatusAt = Date.now();
+		const relayState = Reflect.get(message, "state");
+		relayConnected = ["connected", "executing", "waiting-for-local-api"].includes(String(relayState));
+		if (relayConnected) {
 			relayRecoveryAttempt = 0;
 			publishStatus(
 				localRuntimeReady
@@ -1050,6 +1110,8 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 							message: "Cloud connection ready; starting local services",
 						},
 			);
+		} else {
+			publishStatus({ state: "connecting", deviceId: state.deviceId, message: localRuntimeReady ? "Local Cohub is ready. Remote access is disconnected." : "Remote access is disconnected." });
 		}
 	});
 	child.stderr?.on("data", (chunk) => {
@@ -1179,6 +1241,14 @@ function createTray() {
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+ipcMain.handle("cohub-desktop:sign-in", async (event) => {
+	if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame || new URL(event.senderFrame.url).origin !== localWebOrigin) {
+		throw new Error("Sign-in must be requested by the local Cohub window");
+	}
+	await beginConnectorSignIn();
+	if (!await readState()) throw new Error("Sign-in did not complete");
+});
+app.on("window-all-closed", () => { /* Background tasks belong to the client, not its window. */ });
 if (!hasSingleInstanceLock) {
 	app.quit();
 } else {
@@ -1202,12 +1272,8 @@ if (!hasSingleInstanceLock) {
 			if (restored) {
 				registeredState = restored;
 				registeredCredential = await readCredential(restored.installationId);
-				statusHeartbeatTimer = setInterval(
-					() => queueRemoteStatus(currentStatus),
-					15_000,
-				);
 			}
-			if (!restored && !app.getLoginItemSettings().openAtLogin) {
+			if (!process.env.COHUB_DESKTOP_TEST_HOME && !restored && !app.getLoginItemSettings().openAtLogin) {
 				app.setLoginItemSettings({ openAtLogin: true });
 				refreshTrayMenu();
 			}
@@ -1227,6 +1293,14 @@ if (!hasSingleInstanceLock) {
 				publishStatus({ state: "signed-out", deviceId: null, message: null });
 			} else void beginConnectorSignIn();
 		}
+		statusHeartbeatTimer = setInterval(() => {
+			if (relayConnected && Date.now() - lastRelayStatusAt > 45000) {
+				relayConnected = false;
+				publishStatus({ state: "connecting", deviceId: registeredState?.deviceId ?? null, message: "Remote connection stopped responding. Local Cohub is still available." });
+			}
+			queueRemoteStatus(currentStatus);
+		}, 15000);
+		void openLocalCohub().catch(publishConnectorError);
 	});
 }
 

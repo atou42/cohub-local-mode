@@ -23,7 +23,7 @@ const runtimeRoot = dirname(fileURLToPath(import.meta.url));
 const dataRoot = resolve(process.env.COHUB_LOCAL_DATA_DIR || join(homedir(), ".cohub-personal-node"));
 const statePath = join(dataRoot, "runtime-state.json");
 const stateVersion = 1;
-const portOffset = Number(process.env.COHUB_PERSONAL_NODE_TEST_PORT_OFFSET || "0");
+const portOffset = Number(process.env.COHUB_PERSONAL_NODE_TEST_PORT_OFFSET ?? "4000");
 if (!Number.isInteger(portOffset) || portOffset < 0 || portOffset > 10_000) {
 	throw new Error("COHUB_PERSONAL_NODE_TEST_PORT_OFFSET must be an integer from 0 to 10000");
 }
@@ -33,6 +33,7 @@ const ports = {
 	objects: 9_000 + portOffset,
 	api: 8_787 + portOffset,
 	gateway: 8_788 + portOffset,
+	web: 4_173 + portOffset,
 };
 const children = new Map();
 let objectStore = null;
@@ -90,12 +91,29 @@ function waitForTcp(port, timeoutMs = 30_000) {
 	});
 }
 
-async function probe(url, timeoutMs = 1_500) {
+async function probe(url, timeoutMs = 1_500, headers) {
 	try {
-		const response = await nodeFetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+		const response = await nodeFetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
 		return response.ok;
 	} catch {
 		return false;
+	}
+}
+
+async function assertServicePortsAvailable() {
+	for (const port of Object.values(ports)) {
+		await new Promise((resolvePromise, reject) => {
+			const socket = createConnection({ host: "127.0.0.1", port });
+			socket.once("connect", () => {
+				socket.destroy();
+				reject(new Error(`Local service port ${port} is occupied; refusing to attach to another instance`));
+			});
+			socket.once("error", (error) => {
+				if (error.code === "ECONNREFUSED") resolvePromise();
+				else reject(error);
+			});
+			socket.setTimeout(1500, () => { socket.destroy(); reject(new Error(`Could not inspect local port ${port}`)); });
+		});
 	}
 }
 
@@ -372,9 +390,14 @@ function buildEnvironment(state, cliPath) {
 		COHUB_RELAY_URL: `ws://127.0.0.1:${ports.gateway}/sandbox/relay`,
 		HOST: "127.0.0.1",
 		PORT: "",
-		WEB_ORIGIN: "https://dev-cohub.atou.cc",
-		PUBLIC_API_ORIGIN: "https://dev-cohub.atou.cc",
-		PUBLIC_GATEWAY_ORIGIN: "wss://dev-cohub.atou.cc/api/alpha/events",
+		WEB_ORIGIN: `http://127.0.0.1:${ports.web}`,
+		ORIGIN: `http://127.0.0.1:${ports.web}`,
+		PUBLIC_API_ORIGIN: `http://127.0.0.1:${ports.web}`,
+		PUBLIC_GATEWAY_ORIGIN: `ws://127.0.0.1:${ports.web}/ws`,
+		PUBLIC_DESKTOP_CLIENT: "true",
+		PUBLIC_PERSONAL_NODE_ALPHA: "false",
+		PUBLIC_LOGTO_ENDPOINT: "https://auth.neta.art",
+		LOGTO_ENDPOINT: "https://auth.neta.art",
 		PUBLIC_COHUB_LOCAL_MODE: "true",
 		PUBLIC_CLOUD_API_ORIGIN: "https://api.cohub.live",
 		PUBLIC_CLOUD_GATEWAY_ORIGIN: "wss://gateway.cohub.live/ws",
@@ -506,7 +529,7 @@ async function stop(exitCode = 0) {
 	// prevents a normal Connector quit or restart from looking like a runtime
 	// failure to BullMQ and the Session workers.
 	await stopGroup(
-		["sandbox-supervisor", "gateway", "agent", "worker", "system", "api"],
+		["web", "sandbox-supervisor", "gateway", "agent", "worker", "system", "api"],
 		5_000,
 	);
 	await objectStore?.close().catch(() => undefined);
@@ -526,10 +549,12 @@ process.once("unhandledRejection", (error) => {
 	void stop(1);
 });
 
-if (await probe(`http://127.0.0.1:${ports.api}/healthz`)) {
-	process.stdout.write("[runtime] ready external\n");
-	setInterval(() => {}, 60_000);
-} else {
+await assertServicePortsAvailable();
+if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "") ||
+	!/^[a-f0-9-]{36}$/.test(process.env.COHUB_DESKTOP_INSTANCE_ID ?? "")) {
+	throw new Error("The desktop client must supply a valid instance identity");
+}
+{
 	const state = await readOrCreateState();
 	for (const path of ["spaces", "system", "checkpoints", "sessions", "configs", "git", "logs"]) {
 		await mkdir(join(dataRoot, path), { recursive: true });
@@ -589,5 +614,11 @@ if (await probe(`http://127.0.0.1:${ports.api}/healthz`)) {
 		[join(runtimeRoot, "sandbox-supervisor.mjs")],
 		nodeEnv,
 	);
+	startChild("web", process.execPath, [join(runtimeRoot, "web-entry.mjs")], nodeEnv);
+	await waitForTcp(ports.web, 30000);
+	if (!(await probe(`http://127.0.0.1:${ports.web}/healthz`, 5000, {
+		"x-cohub-desktop-secret": process.env.COHUB_DESKTOP_INSTANCE_SECRET,
+	}))) throw new Error("Local Web application failed its readiness check");
 	process.stdout.write("[runtime] ready bundled\n");
+	process.send?.({ type: "runtime-ready", instanceId: process.env.COHUB_DESKTOP_INSTANCE_ID });
 }

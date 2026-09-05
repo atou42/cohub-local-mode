@@ -16,8 +16,14 @@ import {
   hasTrustedLocalModeEntry,
 } from "../local-mode/access.js";
 import { resolvePersonalNodeCloudAccessTokenFromEnvironment } from "../local-mode/personal-node-cloud-auth.js";
+import { desktopInstanceResponse, hasDesktopAccess } from "../local-mode/desktop-instance.js";
 
 const router = new Hono();
+
+router.get("/instance", (c) => {
+  if (config.nodeOrigin !== "local") return c.json({ message: "not found" }, 404);
+  return desktopInstanceResponse(c.req.raw);
+});
 
 router.get("/route-health", (c) => {
   if (config.nodeOrigin !== "local") {
@@ -31,7 +37,7 @@ router.get("/route-health", (c) => {
 router.get("/auth", async (c) => {
   if (config.nodeOrigin !== "local")
     return c.json({ message: "not found" }, 404);
-  if (!hasTrustedLocalModeEntry(c.req.raw)) {
+  if (!hasTrustedLocalModeEntry(c.req.raw) || !hasDesktopAccess(c.req.raw)) {
     return c.json(
       { message: "Cloudflare Access authentication is required" },
       403,

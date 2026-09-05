@@ -6,6 +6,7 @@ import {
 	access,
 	chmod,
 	copyFile,
+	cp,
 	lstat,
 	mkdir,
 	readFile,
@@ -26,6 +27,21 @@ const output = join(desktopRoot, "resources", "runtime");
 const nativeBuild = join(desktopRoot, "resources", "native-build");
 const runtimeArchive = join(desktopRoot, "resources", "runtime.tar");
 const runtimeManifest = join(desktopRoot, "resources", "runtime-manifest.json");
+
+const desktopWebEnv = {
+	COHUB_WEB_TARGET: "desktop",
+	PUBLIC_COHUB_ENV: "prod",
+	PUBLIC_COHUB_LOCAL_MODE: "true",
+	PUBLIC_PERSONAL_NODE_ALPHA: "false",
+	PUBLIC_DESKTOP_CLIENT: "true",
+	PUBLIC_API_ORIGIN: "",
+	PUBLIC_GATEWAY_ORIGIN: "",
+	PUBLIC_MARKETPLACE_APP_ID: "",
+	PUBLIC_PREVIEW_ORIGIN: "",
+	PUBLIC_CLOUD_API_ORIGIN: "https://api.cohub.live",
+	PUBLIC_CLOUD_GATEWAY_ORIGIN: "wss://gateway.cohub.live/ws",
+	PUBLIC_LOGTO_ENDPOINT: "https://auth.neta.art",
+};
 
 function run(program, args, options = {}) {
 	return new Promise((resolvePromise, reject) => {
@@ -62,6 +78,9 @@ for (const packages of [
 		packages.flatMap((name) => ["--filter", name]).concat("build"),
 	);
 }
+await run("pnpm", ["--filter", "web", "build"], { env: desktopWebEnv });
+await rm(join(runtimePackage, "web"), { recursive: true, force: true });
+await cp(join(repoRoot, "apps", "web", "build"), join(runtimePackage, "web"), { recursive: true });
 await run("pnpm", [
 	"--filter",
 	"@cohub/api",
@@ -78,7 +97,7 @@ await run(
 	[
 		"build",
 		"-ldflags",
-		"-X main.buildVersion=personal-node-alpha",
+		"-X main.buildVersion=dev2",
 		"-o",
 		join(nativeBuild, "cohub-sandboxd"),
 		".",

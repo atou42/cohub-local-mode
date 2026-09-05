@@ -1,3 +1,14 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verifyRuntimeIdentity(value: unknown, id: string, secret: string, challenge: string) {
+	if (!value || typeof value !== "object") return false;
+	const record = value as Record<string, unknown>;
+	if (record.schemaVersion !== 1 || record.instanceId !== id || typeof record.proof !== "string") return false;
+	const expected = createHmac("sha256", secret).update(`cohub-desktop-v1:${id}:${challenge}`).digest();
+	const received = Buffer.from(record.proof, "base64url");
+	return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
 export type ConnectorStatus = {
 	state:
 		| "signed-out"
