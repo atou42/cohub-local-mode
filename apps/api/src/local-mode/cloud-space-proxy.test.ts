@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ContentBlock } from "@cohub/protocol/core";
+import type { ExecutionAuthPrincipal } from "../auth.js";
 import { createCloudSpaceProxy } from "./cloud-space-proxy.js";
 
 const sourceSpaceId = "11111111-1111-4111-8111-111111111111";
@@ -8,9 +9,14 @@ const targetSpaceId = "22222222-2222-4222-8222-222222222222";
 const sessionId = "33333333-3333-4333-8333-333333333333";
 const actorUserId = "44444444-4444-4444-8444-444444444444";
 
-const execution = {
+const execution: ExecutionAuthPrincipal = {
   type: "execution" as const,
   actorUserId,
+  viewerUserId: null,
+  appId: null,
+  appVersionId: null,
+  action: null,
+  taskRunId: null,
   spaceId: sourceSpaceId,
   sessionId,
   turnId: "55555555-5555-4555-8555-555555555555",
@@ -32,6 +38,43 @@ function mention(origin?: "cloud" | "local"): ContentBlock[] {
 function activeTurn(userContent: ContentBlock[]) {
   return [{ status: "running", userUuid: actorUserId, userContent }];
 }
+
+test("an App Action without a Session cannot borrow the host cloud account", async () => {
+  let dependencyCalls = 0;
+  const unexpected = async () => {
+    dependencyCalls += 1;
+    throw new Error("App Action must be rejected before accessing host context");
+  };
+  const proxy = createCloudSpaceProxy({
+    nodeOrigin: "local",
+    cloudApiOrigin: "https://api.cohub.test",
+    loadRecentSessionTurns: unexpected,
+    resolveAccessToken: unexpected,
+    fetch: unexpected,
+  });
+  const response = await proxy({
+    execution: {
+      ...execution,
+      source: "app_action",
+      sessionId: null,
+      viewerUserId: "66666666-6666-4666-8666-666666666666",
+      appId: "app-test",
+      appVersionId: "version-test",
+      action: "inspect",
+      taskRunId: "task-test",
+    },
+    targetSpaceId,
+    endpoint: "file",
+    path: "README.md",
+  });
+  assert.ok(response);
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    code: "cloud_proxy_context_invalid",
+    message: "Cloud Space access requires an actor-bound Session execution.",
+  });
+  assert.equal(dependencyCalls, 0);
+});
 
 test("an execution-bound external harness can read an explicitly mentioned cloud Space", async () => {
   const requests: Request[] = [];

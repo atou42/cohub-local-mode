@@ -30,7 +30,7 @@ export async function listMergedSpaces(
 			if (!Array.isArray(result.value) || result.value.some((space) => !space || typeof space.id !== "string" || !space.id.trim())) {
 				throw new TypeError(`${origin} space list is invalid`);
 			}
-			spaces.push(...result.value.map((space) => ({ ...space, origin })));
+			spaces.push(...result.value.map<SpaceRecord>((space) => ({ ...space, origin })));
 		}
 	}
 	registerSpaceOrigins(spaces);
