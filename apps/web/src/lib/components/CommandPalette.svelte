@@ -31,7 +31,10 @@ import {
 	getPaletteOverviewSnapshot,
 	refreshPaletteOverview,
 } from "$lib/command-palette/palette-overview";
-import { mergeLocalOverviewIntoSnapshot } from "$lib/command-palette/palette-overview-local";
+import {
+	mergeLocalOverviewIntoSnapshot,
+	mergeLocalSpacesIntoFreshOverview,
+} from "$lib/command-palette/palette-overview-local";
 import { parseCommandPaletteQuery } from "$lib/command-palette/query";
 import {
 	getRecentCommandItems,
@@ -664,11 +667,16 @@ function scheduleSearch(plan: typeof searchPlan, spaceId: string | null) {
 			if (snapshot.isStale || !snapshot.data) {
 				// Detached from the search signal: the refetch survives tab/query
 				// changes (aborting it here previously delayed the correct list by a
-				// full re-request cycle). The fresh server response is authoritative
-				// and replaces the merged frame in place.
+				// full re-request cycle). Cloud fields are authoritative, but the
+				// refreshed overview cannot enumerate this node's Spaces.
 				void refreshPaletteOverview().then((fresh) => {
 					if (!fresh || token !== searchToken) return;
-					return buildDefaults(fresh)
+					return getLocalPaletteOverview({
+						signal: defaultSignal,
+						viewerUserUuid: myUserUuid,
+					})
+						.then((local) => mergeLocalSpacesIntoFreshOverview(fresh, local))
+						.then(buildDefaults)
 						.then((items) => {
 							if (token === searchToken) defaultItems = items;
 						})

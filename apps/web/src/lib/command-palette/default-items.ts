@@ -24,7 +24,11 @@ import { buildSpaceLandingRoute } from "$lib/space-routes";
 import { getRecentSpaces } from "$lib/stores/recent-space";
 import { getCachedSpaceList } from "$lib/stores/space-list-cache";
 import { commandItemKey } from "./merge-results";
-import { buildLocalPaletteOverview } from "./palette-overview-local";
+import {
+	buildLocalPaletteOverview,
+	type OriginAwareOverview,
+	type OriginAwareOverviewSpace,
+} from "./palette-overview-local";
 import { getViewerTurnActivityBySpace } from "./personal-activity";
 import { allowsResourceType, type CommandPaletteSearchPlan } from "./scope";
 import { recencyScore } from "./score";
@@ -163,7 +167,7 @@ async function getLocalSpaces(
 export async function getLocalPaletteOverview(options?: {
 	signal?: AbortSignal;
 	viewerUserUuid?: string | null;
-}): Promise<PaletteOverviewResponse> {
+}): Promise<OriginAwareOverview> {
 	const userKey = getCacheUserKey();
 	const [spaces, sessionLists, turnRecords] = await Promise.all([
 		getLocalSpaces(userKey, options),
@@ -201,7 +205,7 @@ function defaultScore(rank: number, updatedAt: string | null | undefined) {
 
 /** Overview space: rank mirrors the personal-activity order. */
 function overviewSpaceToItem(
-	space: PaletteOverviewSpace,
+	space: OriginAwareOverviewSpace,
 	rank: number,
 	personalActivityAt?: string | null,
 ): CommandPaletteItem {
@@ -211,10 +215,12 @@ function overviewSpaceToItem(
 	const displayUpdatedAt =
 		personalActivityAt ?? space.lastParticipatedAt ?? space.updatedAt;
 	const score = defaultScore(rank, displayUpdatedAt);
+	const origin = getSpaceOrigin(space);
 	return {
 		type: "space",
 		id: space.id,
 		spaceId: space.id,
+		spaceOrigin: origin,
 		sessionId: null,
 		turnId: null,
 		sequence: null,
@@ -225,7 +231,7 @@ function overviewSpaceToItem(
 		spaceProfile: space.spaceProfile ?? null,
 		sessionTitle: null,
 		matchedField: "name",
-		href: buildSpaceLandingRoute(space.id),
+		href: routeWithSpaceOrigin(buildSpaceLandingRoute(space.id), origin),
 		updatedAt: displayUpdatedAt,
 		source: "default",
 		localScore: score.score,
