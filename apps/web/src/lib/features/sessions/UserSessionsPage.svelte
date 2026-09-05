@@ -33,6 +33,7 @@ import {
 	setLastUserSessionId,
 } from "$lib/stores/last-user-session";
 import { modelsCatalogStore } from "$lib/stores/models-catalog.svelte";
+import { PartialSpaceListError } from "$lib/merged-space-list";
 import {
 	fetchSpaceListWithCache,
 	getCachedSpaceList,
@@ -266,7 +267,11 @@ async function ensureDraftSpace(spaceId: string): Promise<SpaceRecord | null> {
 	} catch (error) {
 		if (seq !== draftSpaceLookupSeq) return null;
 		console.warn("[sessions] failed to resolve draft space", error);
-		return null;
+		if (!(error instanceof PartialSpaceListError)) return null;
+		const available = getCachedSpaceList();
+		const found = available?.find((space) => space.id === spaceId) ?? null;
+		if (found) draftSpace = found;
+		return found;
 	}
 }
 

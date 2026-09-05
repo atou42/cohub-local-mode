@@ -57,6 +57,7 @@ import { authStore } from "$lib/stores/auth.svelte";
 import {
 	fetchSpaceListWithCache,
 	getCachedSpaceListMeta,
+	getSpaceListLoadError,
 	onSpaceListCacheUpdated,
 } from "$lib/stores/space-list-cache";
 import {
@@ -121,6 +122,7 @@ let defaultDone = $state(true);
 let legacyDefaultDone = $state(true);
 let refreshingSpaces = $state(false);
 let remoteError = $state<string | null>(null);
+let spaceListError = $state<string | null>(getSpaceListLoadError());
 let debounceTimer: number | null = null;
 let localController: AbortController | null = null;
 let remoteController: AbortController | null = null;
@@ -310,6 +312,7 @@ const showingSpaceRefreshStatus = $derived(
 );
 const runBlocks = $derived(runResult ?? runProgress ?? []);
 const statusText = $derived.by(() => {
+	if (spaceListError) return spaceListError;
 	const label = typeLabel ?? m.command_type_default({}, { locale });
 	if (trimmedQuery.length < MIN_QUERY_LENGTH && !hasLabelScope) {
 		if (showingSpaceRefreshStatus)
@@ -575,11 +578,13 @@ async function refreshSpaceListForDefaultItems(
 			await fetchSpaceListWithCache(async () => await sdk.spaces.list(), {
 				force,
 			});
+			spaceListError = null;
 		} finally {
 			if (activeSpaceListRefreshId === refreshId) refreshingSpaces = false;
 		}
 	} catch (error) {
 		console.warn("[command-palette] space list refresh failed", error);
+		spaceListError = getSpaceListLoadError() ?? "Spaces could not be refreshed.";
 		return;
 	}
 
@@ -968,6 +973,7 @@ onMount(() => {
 	// Refresh space items when the space list cache changes (e.g. pin toggle)
 	// so the palette reflects the new isPinned state immediately.
 	const offSpaceListCache = onSpaceListCacheUpdated(() => {
+		spaceListError = getSpaceListLoadError();
 		if (open && !runMode) spaceListRefreshToken += 1;
 	});
 	return () => {

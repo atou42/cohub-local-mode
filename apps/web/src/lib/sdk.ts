@@ -5,6 +5,7 @@ import {
 	type SpaceRecord,
 } from "@neta-art/cohub";
 import { env } from "$env/dynamic/public";
+import { listMergedSpaces } from "$lib/merged-space-list";
 import { PUBLIC_API_ORIGIN, PUBLIC_GATEWAY_ORIGIN } from "$env/static/public";
 import {
 	clearAuthToken,
@@ -183,16 +184,10 @@ function createMergedSpacesApi() {
 		get(target, property, receiver) {
 			if (property === "list") {
 				return async (customFetch?: typeof fetch) => {
-					const [localSpaces, cloudSpaces] = await Promise.all([
-						localSdk.spaces.list(customFetch),
-						cloudSdk.spaces.list(customFetch),
-					]);
-					const merged = [
-						...tagSpaces(localSpaces, "local"),
-						...tagSpaces(cloudSpaces, "cloud"),
-					];
-					registerSpaceOrigins(merged);
-					return merged;
+					return listMergedSpaces(
+						() => localSdk.spaces.list(customFetch),
+						() => cloudSdk.spaces.list(customFetch),
+					);
 				};
 			}
 			if (property === "get") {

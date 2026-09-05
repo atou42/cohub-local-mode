@@ -186,6 +186,7 @@ import {
 	fetchSpaceListWithCache,
 	getCachedSpaceList,
 	getCachedSpaceListMeta,
+	getSpaceListLoadError,
 	onSpaceListCacheUpdated,
 } from "$lib/stores/space-list-cache";
 import {
@@ -231,6 +232,7 @@ let showUserMenu = $state(false);
 // space on first paint instead of flashing the empty "Select a space" state
 // while loadSpaces() awaits auth + IndexedDB + network. Only use a non-guest
 // partition when identity is already known; otherwise start empty.
+let spaceListError = $state<string | null>(getSpaceListLoadError());
 let spaces = $state<SpaceRecord[]>(
 	canUseUserScopedCache() ? (getCachedSpaceList() ?? []) : [],
 );
@@ -933,11 +935,15 @@ async function loadSpaces(force = false) {
 			{ force },
 		);
 		spaces = mergeSpaceListWithCurrent(listedSpaces);
+		spaceListError = null;
 	} catch (error) {
 		if (await handleUnauthorizedError(error)) {
 			return;
 		}
 		console.warn("[sidebar] Failed to load spaces", error);
+		spaceListError = getSpaceListLoadError() ?? "Spaces could not be refreshed.";
+		const available = getCachedSpaceList();
+		if (available) spaces = mergeSpaceListWithCurrent(available);
 	} finally {
 		refreshingSpaces = false;
 	}
@@ -3109,6 +3115,7 @@ onMount(() => {
 			({ spaces: nextSpaces }) => {
 				if (!authStore.isAuthenticated) return;
 				spaces = mergeSpaceListWithCurrent(nextSpaces);
+				spaceListError = getSpaceListLoadError();
 			},
 		);
 		offSessionListCacheUpdated = onSessionListCacheUpdated(
@@ -4217,6 +4224,10 @@ $effect(() => {
         <ChevronDown class="w-3.5 h-3.5 text-text-tertiary shrink-0 transition-transform duration-150 group-hover:text-text-secondary" />
       </button>
     </div>
+
+    {#if spaceListError}
+      <p role="status" class="px-2 py-1 text-[11px] text-error-soft break-words">{spaceListError}</p>
+    {/if}
 
     <!-- Action Buttons -->
     {#if currentSpace}
