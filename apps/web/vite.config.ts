@@ -31,7 +31,6 @@ export default defineConfig(({ mode }) => {
 		loadEnv(mode, process.cwd(), "").PUBLIC_COHUB_ENV === "prod";
 
 	return {
-		ssr: process.env.COHUB_WEB_TARGET === "desktop" ? { noExternal: true } : undefined,
 		resolve: {
 			// Workspace package aliases (@cohub/protocol, @neta-art/cohub) live in
 			// svelte.config.js `kit.alias`, which SvelteKit injects into Vite for us.

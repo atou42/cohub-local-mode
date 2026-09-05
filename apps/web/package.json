@@ -3,6 +3,7 @@
 	"private": true,
 	"version": "0.1.44",
 	"type": "module",
+	"files": ["build"],
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build && node ./scripts/ensure-i18n.mjs --stamp",

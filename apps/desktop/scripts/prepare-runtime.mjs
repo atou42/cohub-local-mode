@@ -69,6 +69,7 @@ for (const packages of [
 	["@cohub/protocol", "@cohub/identity"],
 	["@cohub/db", "@cohub/infra", "@cohub/model-runtime"],
 	["@cohub/sandbox-controller", "@cohub/sandbox-client"],
+	["@cohub/billing"],
 	["@cohub/core", "@neta-art/cohub"],
 	["@neta-art/cohub-cli"],
 	["@cohub/worker", "@cohub/agent", "@cohub/gateway"],
@@ -79,8 +80,6 @@ for (const packages of [
 	);
 }
 await run("pnpm", ["--filter", "web", "build"], { env: desktopWebEnv });
-await rm(join(runtimePackage, "web"), { recursive: true, force: true });
-await cp(join(repoRoot, "apps", "web", "build"), join(runtimePackage, "web"), { recursive: true });
 await run("pnpm", [
 	"--filter",
 	"@cohub/api",

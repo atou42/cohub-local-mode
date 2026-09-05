@@ -1,4 +1,4 @@
-import { handler } from "./web/handler.js";
+import { handler } from "web/build/handler.js";
 import { createDesktopWebServer } from "./web-server.mjs";
 
 const origin = new URL(process.env.PUBLIC_API_ORIGIN);
