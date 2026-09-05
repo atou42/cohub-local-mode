@@ -505,7 +505,9 @@ function createRuntime(input: {
       STARTUP_REQUEST_TIMEOUT_MS,
     );
   })();
-  entry.readyPromise.catch(() => undefined);
+  void entry.readyPromise.catch((error) => {
+    closeEntry(entry, error instanceof Error ? error.message : String(error));
+  });
   runtimes.set(entry.key, entry);
   return entry;
 }
