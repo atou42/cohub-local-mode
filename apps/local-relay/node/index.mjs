@@ -133,9 +133,11 @@ let readyAccepted = false;
 let stopping = false;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
-let current = null;
-let pendingOutcome = null;
+let mutationState = null;
+const readStates = new Map();
 const deferredCommands = new SerialCommandBuffer();
+const deferredMutationIds = new Set();
+const deferredReads = new Map();
 let statusWrite = Promise.resolve();
 let activityWatchUpdate = Promise.resolve();
 let statusHeartbeat = null;
@@ -278,6 +280,42 @@ function connectionState() {
   return "connecting";
 }
 
+const MAX_READ_COMMANDS = 4;
+const COMMAND_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+function commandLane(command) {
+  return command?.request?.method === "GET" ? "read" : "mutation";
+}
+
+function isExecutableCommand(command) {
+  if (!command || typeof command !== "object" || Array.isArray(command)) return false;
+  if (typeof command.id !== "string" || !command.id) return false;
+  if (command.status !== "queued") return false;
+  const request = command.request;
+  return Boolean(
+    request &&
+      typeof request === "object" &&
+      !Array.isArray(request) &&
+      COMMAND_METHODS.has(request.method) &&
+      typeof request.path === "string" &&
+      request.path.startsWith("/") &&
+      typeof request.body === "string",
+  );
+}
+
+function activeState(commandId) {
+  if (mutationState?.command.id === commandId) return mutationState;
+  return readStates.get(commandId) ?? null;
+}
+
+function stateIsActive(state) {
+  return state && activeState(state.command.id) === state;
+}
+
+function allActiveStates() {
+  return mutationState ? [mutationState, ...readStates.values()] : [...readStates.values()];
+}
+
 function stopHeartbeat(state) {
   if (!state?.heartbeat) return;
   clearInterval(state.heartbeat);
@@ -292,12 +330,12 @@ function stopAckTimer(state) {
 }
 
 function armAckTimer(state, kind) {
-  if (!state || current !== state) return;
+  if (!state || !stateIsActive(state)) return;
   stopAckTimer(state);
   state.ackKind = kind;
   state.ackTimer = setTimeout(() => {
     state.ackTimer = null;
-    if (current !== state || state.ackKind !== kind) return;
+    if (!stateIsActive(state) || state.ackKind !== kind) return;
     state.ackKind = null;
     const commandId = state.command.id;
     const detail = {
@@ -320,7 +358,7 @@ function armAckTimer(state, kind) {
 }
 
 function sendClaim(state) {
-  if (!state || current !== state) return false;
+  if (!state || !stateIsActive(state)) return false;
   const sent = send({ type: "claim", commandId: state.command.id });
   if (sent) armAckTimer(state, "claim");
   else scheduleReconnect();
@@ -328,9 +366,9 @@ function sendClaim(state) {
 }
 
 function ensureHeartbeat(state) {
-  if (!state || current !== state || state.outcome || state.heartbeat) return;
+  if (!state || !stateIsActive(state) || state.outcome || state.heartbeat) return;
   state.heartbeat = setInterval(() => {
-    if (current !== state || state.attempt === null || state.outcome) return;
+    if (!stateIsActive(state) || state.attempt === null || state.outcome) return;
     send({
       type: "heartbeat",
       commandId: state.command.id,
@@ -341,7 +379,7 @@ function ensureHeartbeat(state) {
 }
 
 function sendStarted(state) {
-  if (!state || current !== state || state.attempt === null || state.outcome) return false;
+  if (!state || !stateIsActive(state) || state.attempt === null || state.outcome) return false;
   const sent = send({
     type: "started",
     commandId: state.command.id,
@@ -353,8 +391,13 @@ function sendStarted(state) {
 }
 
 function activateCommand(command) {
-  current = {
+  if (!isExecutableCommand(command)) return false;
+  const lane = commandLane(command);
+  if (lane === "mutation" && mutationState) return false;
+  if (lane === "read" && readStates.size >= MAX_READ_COMMANDS) return false;
+  const state = {
     command,
+    lane,
     attempt: null,
     heartbeat: null,
     ackTimer: null,
@@ -362,45 +405,107 @@ function activateCommand(command) {
     outcome: null,
     abort: new AbortController(),
   };
-  if (sendClaim(current)) return;
-  current = null;
-  deferredCommands.defer(command, null);
+  if (lane === "mutation") mutationState = state;
+  else readStates.set(command.id, state);
+  if (sendClaim(state)) return true;
+  detachState(state, { abort: false });
+  deferCommand(command);
+  return false;
+}
+
+function deferCommand(command) {
+  const lane = commandLane(command);
+  if (lane === "read") {
+    if (!deferredReads.has(command.id)) deferredReads.set(command.id, command);
+    return;
+  }
+  if (deferredMutationIds.has(command.id)) return;
+  const result = deferredCommands.defer(command, null);
+  if (result === "queued") deferredMutationIds.add(command.id);
+}
+
+function removeDeferredCommand(commandId) {
+  deferredReads.delete(commandId);
+  if (deferredMutationIds.delete(commandId)) deferredCommands.delete(commandId);
 }
 
 function drainDeferredCommand() {
   if (
-    current ||
     !readyAccepted ||
     !socket ||
     socket.readyState !== WebSocket.OPEN
   ) return;
-  const command = deferredCommands.shift();
-  if (command) activateCommand(command);
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    if (!mutationState) {
+      const command = deferredCommands.shift();
+      if (command) {
+        deferredMutationIds.delete(command.id);
+        if (!activateCommand(command)) return;
+        progressed = true;
+      }
+    }
+    while (readStates.size < MAX_READ_COMMANDS) {
+      const entry = deferredReads.entries().next();
+      if (entry.done) break;
+      const [commandId, command] = entry.value;
+      deferredReads.delete(commandId);
+      if (!activateCommand(command)) {
+        deferredReads.set(commandId, command);
+        return;
+      }
+      progressed = true;
+    }
+  }
 }
 
-function clearCurrent({ abort = true } = {}) {
-  const state = current;
-  const commandId = state?.command.id ?? null;
+function detachState(state, { abort = true } = {}) {
+  if (!state || !stateIsActive(state)) return false;
   stopHeartbeat(state);
   stopAckTimer(state);
   if (abort) {
     state?.abort.abort(new DOMException("Relay command stopped", "AbortError"));
   }
-  if (pendingOutcome?.commandId === commandId) pendingOutcome = null;
-  current = null;
-  if (commandId) deferredCommands.delete(commandId);
+  if (state.lane === "mutation") mutationState = null;
+  else readStates.delete(state.command.id);
+  removeDeferredCommand(state.command.id);
+  return true;
+}
+
+function clearState(state, { abort = true } = {}) {
+  detachState(state, { abort });
   queueMicrotask(drainDeferredCommand);
 }
 
-function sendOutcome(outcome) {
-  pendingOutcome = outcome;
-  const state = current;
-  if (state?.command.id === outcome.commandId) {
-    state.outcome = outcome;
-    stopHeartbeat(state);
+function clearAllStates() {
+  for (const state of allActiveStates()) detachState(state);
+  deferredReads.clear();
+  deferredMutationIds.clear();
+}
+
+function enqueueCommand(command) {
+  if (!isExecutableCommand(command)) {
+    console.error("[relay-node] relay sent an invalid command; execution skipped");
+    return;
   }
+  if (
+    activeState(command.id) ||
+    deferredReads.has(command.id) ||
+    deferredMutationIds.has(command.id)
+  ) {
+    return;
+  }
+  deferCommand(command);
+  queueMicrotask(drainDeferredCommand);
+}
+
+function sendOutcome(state, outcome) {
+  if (!stateIsActive(state)) return false;
+  state.outcome = outcome;
+  stopHeartbeat(state);
   const sent = send(outcome);
-  if (sent && state?.command.id === outcome.commandId) {
+  if (sent) {
     armAckTimer(state, "outcome");
   } else if (!sent) {
     scheduleReconnect();
@@ -408,24 +513,16 @@ function sendOutcome(outcome) {
   return sent;
 }
 
-function resumeCurrentCommand() {
-  const state = current;
-  if (!state) return false;
-  if (pendingOutcome?.commandId === state.command.id) {
-    sendOutcome(pendingOutcome);
-    return true;
+function resumeActiveCommands() {
+  for (const state of allActiveStates()) {
+    if (state.outcome) sendOutcome(state, state.outcome);
+    else if (state.attempt !== null) sendStarted(state);
+    else sendClaim(state);
   }
-  if (state.attempt !== null) {
-    sendStarted(state);
-    return true;
-  }
-  sendClaim(state);
-  return true;
 }
 
-async function runClaimedCommand(attempt) {
-  const state = current;
-  if (!state || state.attempt !== null) return;
+async function runClaimedCommand(state, attempt) {
+  if (!stateIsActive(state) || state.attempt !== null || !Number.isInteger(attempt) || attempt < 1) return;
   state.attempt = attempt;
   stopAckTimer(state);
   writeStatus("executing", {
@@ -456,14 +553,14 @@ async function runClaimedCommand(attempt) {
         });
       },
     });
-    if (state.abort.signal.aborted || current !== state) return;
+    if (state.abort.signal.aborted || !stateIsActive(state)) return;
     const outcome = {
       type: "result",
       commandId: state.command.id,
       attempt,
       result,
     };
-    sendOutcome(outcome);
+    sendOutcome(state, outcome);
     if (watch) {
       void watcher.watch({
         eventId: randomUUID(),
@@ -477,7 +574,7 @@ async function runClaimedCommand(attempt) {
         result.status >= 200 && result.status < 300 ? "succeeded" : "failed",
     });
   } catch (error) {
-    if (state.abort.signal.aborted || current !== state) return;
+    if (state.abort.signal.aborted || !stateIsActive(state)) return;
     const code =
       error instanceof RelayNodeError ? error.code : "node_execution_failed";
     const message = error instanceof Error ? error.message : String(error);
@@ -488,7 +585,7 @@ async function runClaimedCommand(attempt) {
       code,
       message,
     };
-    sendOutcome(outcome);
+    sendOutcome(state, outcome);
     writeStatus(connectionState(), {
       lastCommandId: state.command.id,
       lastCommandStatus: "failed",
@@ -504,6 +601,12 @@ function handleMessage(raw, sourceSocket = socket) {
     message = JSON.parse(raw.toString());
   } catch {
     console.error("[relay-node] relay sent invalid JSON");
+    readyAccepted = false;
+    socket?.close(1002, "invalid relay message");
+    return;
+  }
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    console.error("[relay-node] relay sent an invalid message");
     readyAccepted = false;
     socket?.close(1002, "invalid relay message");
     return;
@@ -536,7 +639,7 @@ function handleMessage(raw, sourceSocket = socket) {
     readyAccepted = true;
     console.log(`[relay-node] connected as ${message.nodeId}`);
     writeStatus("connected");
-    resumeCurrentCommand();
+    resumeActiveCommands();
     watcher.flushPending();
     pulseWatcher.flushPending();
     drainDeferredCommand();
@@ -582,35 +685,28 @@ function handleMessage(raw, sourceSocket = socket) {
     return;
   }
   if (message.type === "command") {
-    if (current) {
-      const result = deferredCommands.defer(message.command, current.command.id);
-      if (result === "queued") {
-        console.warn(
-          `[relay-node] deferred command ${message.command.id} while ${current.command.id} is active`,
-        );
-      }
-      return;
-    }
-    deferredCommands.delete(message.command.id);
-    activateCommand(message.command);
+    enqueueCommand(message.command);
     return;
   }
   if (
     message.type === "claimed" &&
-    current?.command.id === message.commandId &&
-    current.attempt === null
+    typeof message.commandId === "string" &&
+    Number.isInteger(message.attempt) &&
+    message.attempt > 0
   ) {
-    stopAckTimer(current);
-    void runClaimedCommand(message.attempt);
+    const state = activeState(message.commandId);
+    if (!state || state.attempt !== null) return;
+    stopAckTimer(state);
+    void runClaimedCommand(state, message.attempt);
     return;
   }
   if (message.type === "ack") {
     if (!TERMINAL_COMMAND_STATUSES.has(message.status)) return;
-    const state = current?.command.id === message.commandId ? current : null;
+    const state = activeState(message.commandId);
     // The relay's terminal record is authoritative. A command may be
     // cancelled or failed after the node has already sent its outcome.
-    deferredCommands.delete(message.commandId);
-    if (state) clearCurrent({ abort: false });
+    removeDeferredCommand(message.commandId);
+    if (state) clearState(state, { abort: false });
     return;
   }
   if (message.type === "error") {
@@ -618,26 +714,27 @@ function handleMessage(raw, sourceSocket = socket) {
       `[relay-node] ${message.code ?? "relay_error"}: ${message.message ?? "unknown relay error"}`,
     );
     if (message.code === "stale_attempt") {
-      if (message.commandId && current?.command.id === message.commandId) {
-        clearCurrent();
-      }
+      const state = typeof message.commandId === "string"
+        ? activeState(message.commandId)
+        : null;
+      if (state) clearState(state);
       return;
     }
+    const state = typeof message.commandId === "string"
+      ? activeState(message.commandId)
+      : null;
     if (
       message.code === "command_already_claimed" &&
-      message.commandId &&
-      current?.command.id === message.commandId &&
-      current.attempt === null
+      state &&
+      state.attempt === null
     ) {
       console.error(
         `[relay-node] command ${message.commandId} is already claimed; waiting for lease recovery`,
       );
-      armAckTimer(current, "claim");
+      armAckTimer(state, "claim");
       return;
     }
-    if (message.commandId && current?.command.id === message.commandId) {
-      clearCurrent();
-    }
+    if (state) clearState(state);
   }
 }
 
@@ -692,7 +789,7 @@ async function shutdown() {
   writeStatus("stopping");
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (statusHeartbeat) clearInterval(statusHeartbeat);
-  clearCurrent();
+  clearAllStates();
   socket?.close(1000, "node shutting down");
   const forcedExit = setTimeout(() => process.exit(1), 5_000);
   forcedExit.unref();

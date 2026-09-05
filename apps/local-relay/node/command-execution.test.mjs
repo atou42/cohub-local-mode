@@ -83,6 +83,7 @@ async function startScenario(
     commandTimeoutMs = 2_000,
     disconnectBeforeClaimAck = false,
     sendReady = true,
+    parallelRead = false,
   } = {},
 ) {
   const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-command-test-"));
@@ -108,6 +109,10 @@ async function startScenario(
       }
       await new Promise((resolve) => setTimeout(resolve, 80));
       jsonResponse(response, { mode: "immediate", ok: true }, 202);
+      return;
+    }
+    if (request.url === `/api/spaces/${SPACE_ID}/state`) {
+      jsonResponse(response, { state: "ready" });
       return;
     }
     jsonResponse(response, { code: "not_found" }, 404);
@@ -160,6 +165,21 @@ async function startScenario(
       body: command.request.body.replace("hello", "second command"),
     },
   };
+  const readCommand = {
+    ...command,
+    id: "relay-command-test-read-1",
+    sequence: 3,
+    idempotencyKey: "relay-idempotency-test-read-1",
+    request: {
+      method: "GET",
+      path: `/api/spaces/${SPACE_ID}/state`,
+      headers: {},
+      body: "",
+    },
+  };
+  const deliveredCommands = parallelRead
+    ? [command, readCommand]
+    : [command];
 
   const frames = [];
   let firstResultSocket = null;
@@ -181,7 +201,7 @@ async function startScenario(
     client.on("message", (raw) => {
       const frame = JSON.parse(raw.toString());
       frames.push({ connection, ...frame });
-      const claimedCommand = [command, secondCommand].find(
+      const claimedCommand = [command, secondCommand, readCommand].find(
         (item) => item.id === frame.commandId,
       );
       if (frame.type === "claim" && claimedCommand) {
@@ -261,11 +281,13 @@ async function startScenario(
     });
     if (sendReady && !commandSent) {
       commandSent = true;
-      client.send(JSON.stringify({
-        protocolVersion: RELAY_PROTOCOL_VERSION,
-        type: "command",
-        command,
-      }));
+      for (const deliveredCommand of deliveredCommands) {
+        client.send(JSON.stringify({
+          protocolVersion: RELAY_PROTOCOL_VERSION,
+          type: "command",
+          command: deliveredCommand,
+        }));
+      }
     }
   });
 
@@ -274,6 +296,7 @@ async function startScenario(
   const ipcStatuses = [];
   const child = fork(INDEX_PATH, [], {
     cwd: REPO_ROOT,
+    execArgv: [],
     env: {
       ...process.env,
       NODE_ENV: "test",
@@ -304,6 +327,7 @@ async function startScenario(
   return {
     child,
     command,
+    readCommand,
     frames,
     get connectionCount() { return connectionCount; },
     get promptCalls() { return promptCalls; },
@@ -314,6 +338,26 @@ async function startScenario(
     errors,
   };
 }
+
+test("runs an independent GET while a mutation remains blocked", async (t) => {
+  const scenario = await startScenario(t, { parallelRead: true, timeoutCommand: true });
+  await waitFor(
+    () => scenario.frames.some(
+      (frame) => frame.type === "result" && frame.commandId === scenario.readCommand.id,
+    ),
+    10_000,
+  ).catch((error) => {
+    error.message += `\nstdout: ${scenario.output.join("")}\nstderr: ${scenario.errors.join("")}\nframes: ${JSON.stringify(scenario.frames)}`;
+    throw error;
+  });
+  assert.equal(scenario.promptCalls, 1);
+  assert.equal(
+    scenario.frames.some(
+      (frame) => frame.type === "failed" && frame.commandId === scenario.command.id,
+    ),
+    false,
+  );
+});
 
 test("does not report a WebSocket as connected before a matching ready message", async (t) => {
   const scenario = await startScenario(t, { sendReady: false });

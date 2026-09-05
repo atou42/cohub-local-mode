@@ -59,6 +59,7 @@ import {
 	selectSnapshotEvents,
 	selectTerminalCommandsForGc,
 } from "./lifecycle";
+import { selectDispatchableCommands } from "./command-lanes.ts";
 import {
 	assertRelayAttachmentFresh,
 	assertRelayOwnerOrigin,
@@ -1859,16 +1860,13 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const socket = sockets[0];
 		if (!socket) return;
 		const commands = await this.listCommands();
-		if (commands.some((command) => command.status === "claimed" || command.status === "running")) {
-			return;
+		for (const command of selectDispatchableCommands(commands)) {
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "command",
+				command,
+			});
 		}
-		const next = commands.find((command) => command.status === "queued");
-		if (!next) return;
-		sendSocket(socket, {
-			protocolVersion: RELAY_PROTOCOL_VERSION,
-			type: "command",
-			command: next,
-		});
 	}
 
 	async webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer) {
