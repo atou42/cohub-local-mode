@@ -81,6 +81,7 @@ import {
 	createAppMutationBuffer,
 	upsertAppSnapshot,
 } from "$lib/features/app/app-realtime";
+import { appActionName } from "$lib/features/space/modules/task-run-utils";
 import { withSidebarMainWindow } from "$lib/features/space/modules/window-route";
 import { extractGenerationPromptPreview } from "$lib/generation-task-media";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -727,6 +728,8 @@ function getTaskRunTitle(run: TaskRunRecord) {
 		return m.sidebar_send_message({}, { locale });
 	}
 	if (run.taskType === "run_command") {
+		const action = appActionName(run);
+		if (action) return m.task_type_app_action({ action }, { locale });
 		const command = readTaskString(data, ["command", "rawText"]);
 		return command
 			? compactTaskText(command)

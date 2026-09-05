@@ -28,6 +28,10 @@ export function createClient(): CohubHttpClient {
   return new CohubHttpClient(clientOptions());
 }
 
+export function createClientWithAccessToken(token: string): CohubHttpClient {
+  return new CohubHttpClient({ ...clientOptions(), getAccessToken: () => token });
+}
+
 export function createRealtimeClient(): CohubClient {
   return new CohubClient(clientOptions());
 }

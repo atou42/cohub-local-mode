@@ -4,8 +4,20 @@ All notable changes to Cohub are documented in this file.
 
 <!-- Generated from apps/web/src/lib/changelog/entries.json. Do not edit. -->
 
+## v2.41 — 2026-09-04
+
+- **Owner-funded App Actions**: Published apps can now expose server-side entrypoints under `.cohub/actions/` and run them via `cohub.app.actions.run()` in the SDK or `cohub apps actions run` in the CLI. Cohub downloads the immutable, version-pinned app artifact into the Space sandbox and executes TypeScript/JavaScript (Node 24 with native type stripping) or any executable, passing JSON input on stdin and capturing output into the Task Run. Actions execute with the app owner as actor and platform cost owner, while entitlement checks and credit metering apply to the signed-in viewer — action code can use the SDK or CLI with no credential management.
+- **Verified checkout returns**: Payment redirects now carry a server-appended outcome and product key, and a new checkout-confirmation endpoint reconciles each return against the provider's settlement state. The UI confirms success only when an order or subscription is actually paid or active, so forged URLs can no longer claim a purchase and stale redirects resolve to the correct product state.
+- **Campaign-driven first-purchase discounts**: The billing catalog now surfaces viewer-independent promotions — discount percent and end date — so anonymous and ineligible visitors see the incentive on pricing pages, while priced offers are applied server-side only to eligible signed-in users. Campaign parameters are read from provider discount configuration instead of a hard-coded 50%.
+- **Pricing and purchase UX overhaul**: The public pricing page, billing settings, and conversion center were rebuilt around reusable checkout components — product cards, interval toggle, and a live order summary — with plan vs. balance-pack selection, per-month equivalents, first-order offer states with countdowns, promo codes, and an FAQ section.
+
+### Bug Fixes
+
+- App Action runs now report precise failure reasons — timeouts, aborts, and exit codes — via a shared execution-source contract, and task-run privacy metadata is sanitized consistently for viewers.
+
 ## v2.40 — 2026-09-04
 
+- **MiniMax H3 model support**: Upgraded the generation SDK across API, worker, infra, protocol, and CLI to @neta-art/generation 0.1.25, bringing MiniMax H3 model declarations to generation endpoints and pipelines.
 - **Live Apps on Boards**: Apps are now first-class board items — an embedded app renders its real, interactive surface inside a board frame, with the full app runtime shell and navigation context forwarded through the board runtime so it behaves exactly as in its own window. Frames track pan, zoom, rotation, and selection, and can be repositioned by dragging their title bar.
 - **Drag-and-Drop App Placement**: Apps in the sidebar (installed-apps panel and app list) are now drop sources — native HTML5 drag on desktop, pointer-based drag on touch — and boards advertise an "Add App to Board" drop affordance. Releasing spawns an app frame at the drop point, stacks multi-app drops cleanly, and selects the result for immediate arrangement.
 - **Zoom-aware App Rendering**: Embedded apps stay cheap at any zoom — iframe content mounts lazily and only while a frame is on-screen at a readable size, otherwise collapsing to a lightweight title bar, while camera updates are coalesced to a single layout pass per animation frame.

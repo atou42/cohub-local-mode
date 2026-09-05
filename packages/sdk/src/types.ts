@@ -269,6 +269,12 @@ export type BillingDiscountOffer = {
   pricing: BillingDiscountPricing;
 };
 
+export type BillingProductPromotion = {
+  kind: "first_purchase";
+  percentOff: number;
+  endsAt: string | null;
+};
+
 export type BillingProductDisplay = {
   description: string | null;
   benefits: string[];
@@ -304,6 +310,7 @@ export type BillingCatalogProduct = {
   kind: BillingProductKind;
   interval: BillingProductBillingInterval;
   pricing: BillingProductPricing;
+  promotion: BillingProductPromotion | null;
   offer: BillingDiscountOffer | null;
   display: BillingProductDisplay;
   isDefaultPlan: boolean;
@@ -487,6 +494,14 @@ export type BillingCheckoutResult = {
   orderId: string | null;
   subscriptionId: string | null;
   reused: boolean;
+};
+
+export type BillingCheckoutConfirmation = {
+  productKey: string;
+  settled: boolean;
+  status: string | null;
+  pending: boolean;
+  productName: string | null;
 };
 
 export type BillingPromotionCodePreview = {

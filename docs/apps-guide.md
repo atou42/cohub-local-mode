@@ -244,6 +244,63 @@ For a focused commerce example, see:
 - `docs/examples/app-capability-lab/commerce-demo.md`
 - `docs/examples/app-capability-lab/commerce-demo.html`
 
+## Run App Actions
+
+Directory Apps can expose server-side-style entrypoints under `.cohub/actions/`:
+
+```text
+my-app/
+├── index.html
+└── .cohub/
+    └── actions/
+        ├── summarize.ts
+        └── convert.sh
+```
+
+The frontend invokes a published Action by file stem:
+
+```ts
+const task = await cohub.app.actions.run({
+  action: "summarize",
+  input: { text: "Long document..." },
+});
+
+const result = await cohub.tasks.get(task.taskRunId);
+```
+
+The host downloads and caches the immutable App version, then runs `.ts` and
+`.js` entrypoints with the Sandbox's Node.js 24 runtime. TypeScript uses Node's
+native type stripping: erasable type syntax works, while syntax that requires
+transformation, such as enums, namespaces, and parameter properties, does not.
+Other files run directly through their executable bit, shebang, or binary
+format. Input arrives as JSON on stdin; stdout and stderr are captured by the
+existing Run Command Task Run. Action input is
+stored with that Task Run and is visible to the App owner and Space members who
+can inspect the Task, so do not treat it as a secret transport.
+
+Actions run in the App home Space Sandbox with the existing
+`COHUB_EXECUTION_TOKEN`. The execution actor and platform cost owner are the App
+owner, while App Commerce entitlement reads and credit consumption apply to the
+signed-in viewer. Action code can use the regular Cohub SDK or CLI without
+managing credentials:
+
+```bash
+cohub apps commerce entitlements --json
+cohub generate "Summarize the JSON received on stdin" --model <model>
+cohub apps commerce credits consume --amount 1 --operation-id "$(uuidgen)"
+```
+
+No manifest is required. An Action key must use lowercase letters, numbers,
+`-`, or `_`, and exactly one matching entrypoint may exist. The `.cohub`
+directory is part of the downloadable App artifact. Authors who need private
+implementation details can keep the published Action thin and call a script in
+the home Space or an external API. An Action cannot invoke
+`cohub.app.actions.run()` from inside another Action; call the underlying script
+or Cohub API directly instead.
+
+See `docs/examples/app-capability-lab/` for a browser probe backed by
+`.cohub/actions/inspect-ts.ts` and `.cohub/actions/inspect-bash.sh`.
+
 ## Preview an App Inside the Workspace
 
 A detail page offers two ways to open the published result:

@@ -42,8 +42,14 @@ export type AgentRunCommandJobData = {
   taskRunId: string;
   command: string;
   cwd: string;
+  source?: string | null;
   timeout?: number;
   userId?: string | null;
+  /** App Action viewer context; execution actor remains userId. */
+  viewerUserId?: string | null;
+  appId?: string | null;
+  appVersionId?: string | null;
+  action?: string | null;
   sourceClientId?: string | null;
   model?: { provider: string; id: string } | null;
   generationPolicy?: GenerationPolicy | null;

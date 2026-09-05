@@ -84,7 +84,7 @@ test("a successful relay result replaces the provisional Session and stops reque
 	assert.equal(shouldCreateRelaySession(decision.session), false);
 });
 
-for (const agentHarness of ["codex", "grok", "cursor"] as const) {
+for (const agentHarness of ["codex", "grok_build", "cursor", "pi"] as const) {
 	test(`a failed provisional ${agentHarness} Session retries with its original harness`, () => {
 		const session = {
 			id: pending.sessionId,
