@@ -251,6 +251,7 @@ type processStartParams struct {
 	TimeoutSecs int               `json:"timeoutSecs"`
 	CWD         string            `json:"cwd"`
 	Env         map[string]string `json:"env"`
+	CloseStdin  bool              `json:"closeStdin"`
 }
 
 type processAbortParams struct {
@@ -1152,6 +1153,7 @@ func (d *Dispatcher) handleProcessStart(request protocol.RPCRequest, opID string
 		CWD:         resolved.path,
 		TimeoutSecs: params.TimeoutSecs,
 		Env:         params.Env,
+		CloseStdin:  params.CloseStdin,
 	}
 	if commandProvided {
 		if sandboxArgv := localCommandSandboxArgv(d.cfg, params.Command); len(sandboxArgv) > 0 {

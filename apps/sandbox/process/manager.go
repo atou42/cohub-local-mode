@@ -105,6 +105,7 @@ type StartOptions struct {
 	CWD         string
 	TimeoutSecs int
 	Env         map[string]string
+	CloseStdin  bool
 }
 
 func (m *Manager) Start(ownerIdentity string, command string, cwd string, timeoutSecs int, extraEnv map[string]string) (string, io.ReadCloser, io.ReadCloser, <-chan ExitInfo, error) {
@@ -173,10 +174,14 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 		cmd.Env = inheritedEnv
 	}
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return "", nil, nil, nil, fmt.Errorf("stdin pipe: %w", err)
+	// A nil stdin gives non-interactive commands EOF without a managed writer.
+	var stdin io.WriteCloser
+	if !options.CloseStdin {
+		var err error
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			return "", nil, nil, nil, fmt.Errorf("stdin pipe: %w", err)
+		}
 	}
 
 	// io.Pipe (instead of StdoutPipe/StderrPipe) keeps output consumption
@@ -204,7 +209,7 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 
 	m.startedTotal.Add(1)
 	processID := uuid.NewString()
-	managed := &ManagedProcess{ID: processID, OwnerIdentity: ownerIdentity, Cmd: cmd, Cancel: cancel, Stdin: stdin}
+	managed := &ManagedProcess{ID: processID, OwnerIdentity: ownerIdentity, Cmd: cmd, Cancel: cancel, Stdin: stdin, stdinClosed: options.CloseStdin}
 
 	m.mu.Lock()
 	m.processes[processID] = managed
