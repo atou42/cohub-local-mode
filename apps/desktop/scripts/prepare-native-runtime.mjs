@@ -34,17 +34,25 @@ async function download(url, destination) {
 await mkdir(outputDir, { recursive: true });
 const output = join(outputDir, "valkey-server");
 const manifestPath = join(outputDir, "manifest.json");
+let manifest;
 try {
-	const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+	manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+} catch (error) {
+	if (error?.code !== "ENOENT") throw error;
+}
+if (manifest !== undefined) {
 	if (
-		manifest.valkeyVersion === valkeyVersion &&
-		manifest.sourceSha256 === valkeySha256 &&
-		(await sha256(output)) === manifest.binarySha256
-	) {
+		!manifest || typeof manifest !== "object" || Array.isArray(manifest) ||
+		typeof manifest.valkeyVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(manifest.valkeyVersion) ||
+		typeof manifest.sourceSha256 !== "string" || !/^[a-f0-9]{64}$/.test(manifest.sourceSha256) ||
+		typeof manifest.binarySha256 !== "string" || !/^[a-f0-9]{64}$/.test(manifest.binarySha256)
+	) throw new Error("Native build manifest is invalid; existing files were preserved");
+	if ((await sha256(output)) !== manifest.binarySha256) {
+		throw new Error("Native binary checksum mismatch; existing files were preserved");
+	}
+	if (manifest.valkeyVersion === valkeyVersion && manifest.sourceSha256 === valkeySha256) {
 		process.exit(0);
 	}
-} catch (error) {
-	if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
 }
 
 const temporary = await mkdtemp(join(tmpdir(), "cohub-valkey-build-"));
