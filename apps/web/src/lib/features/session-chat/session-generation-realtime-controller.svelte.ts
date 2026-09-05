@@ -1,5 +1,6 @@
 import type { GenerationStreamEvent } from "@neta-art/cohub";
 import { tick } from "svelte";
+import { IS_PERSONAL_NODE_ALPHA } from "$lib/auth";
 import { sessionTurnsRepo } from "$lib/cache/repositories/session-turns-repo";
 import { sdk } from "$lib/sdk";
 import { sessionGenerationStore } from "$lib/stores/session-generation.svelte";
@@ -10,6 +11,7 @@ import {
 } from "$lib/stores/session-generation-realtime";
 import { SessionRecoveryCoordinator } from "$lib/stores/session-recovery-coordinator";
 import { subscribeGenerationChannel } from "./generation-channel";
+import { createPersonalNodeProgressPoller } from "./personal-node-progress-poll";
 import type { SessionScrollAnchor } from "./session-scroll-controller.svelte";
 import { areSessionTurnsEqual, preserveSessionTurnRefs } from "./session-utils";
 import type { SessionViewState } from "./session-workspace-controller.svelte";
@@ -285,6 +287,32 @@ export function createSessionGenerationRealtimeController(options: {
 		},
 		onExhausted: options.onExhausted,
 	});
+	const personalNodeProgressPoller = createPersonalNodeProgressPoller({
+		poll: async (key) => {
+			const separator = key.indexOf("\0");
+			if (separator < 1 || separator === key.length - 1) {
+				throw new Error("Personal Node progress poll key is invalid");
+			}
+			const spaceId = key.slice(0, separator);
+			const sessionId = key.slice(separator + 1);
+			if (!sessionGenerationStore.isGenerating(sessionId)) return;
+			const applied = await restoreSessionStreamSnapshot(sessionId, {
+				force: true,
+				spaceId,
+			});
+			if (
+				applied &&
+				sessionId === options.getActiveSessionId() &&
+				options.shouldAutoFollow()
+			) {
+				await tick();
+				options.requestBottomFollow();
+			}
+		},
+		onError: (error) => {
+			console.warn("[PersonalNodeProgress] Snapshot refresh failed:", error);
+		},
+	});
 
 	function schedulePostSendRecoveryCheck(sessionId: string) {
 		clearPostSendRecovery(sessionId);
@@ -539,6 +567,18 @@ export function createSessionGenerationRealtimeController(options: {
 		}
 	}
 
+	function syncPersonalNodeProgressPolling(enabled: boolean) {
+		if (!IS_PERSONAL_NODE_ALPHA || !enabled) {
+			personalNodeProgressPoller.clear();
+			return;
+		}
+		const spaceId = options.getSpaceId();
+		const sessionId = options.getActiveSessionId();
+		personalNodeProgressPoller.sync(
+			spaceId && sessionId ? `${spaceId}\0${sessionId}` : null,
+		);
+	}
+
 	function clearStreamSnapshotRecoveryCooldowns() {
 		lastStreamSnapshotRecoveryByTurn.clear();
 	}
@@ -548,6 +588,7 @@ export function createSessionGenerationRealtimeController(options: {
 		// controller's subscription + local cooldowns. Shared finalized/post-send
 		// timers are session-keyed and safe across space switches.
 		clearActiveGenerationSubscription();
+		personalNodeProgressPoller.clear();
 		clearAllPostSendRecovery();
 		lastStreamSnapshotRecoveryByTurn.clear();
 	}
@@ -555,6 +596,7 @@ export function createSessionGenerationRealtimeController(options: {
 	function dispose() {
 		// Do not clear process-wide finalized/snapshot maps: another host may still own them.
 		clearActiveGenerationSubscription();
+		personalNodeProgressPoller.dispose();
 		clearAllPostSendRecovery();
 		recoveryCoordinator.dispose();
 		lastStreamSnapshotRecoveryByTurn.clear();
@@ -567,6 +609,7 @@ export function createSessionGenerationRealtimeController(options: {
 		clearAllPostSendRecovery,
 		schedulePostSendRecoveryCheck,
 		syncActiveSubscription,
+		syncPersonalNodeProgressPolling,
 		clearStreamSnapshotRecoveryCooldowns,
 		resetForSpaceChange,
 		reconcileAfterReconnect: (sessionId: string | null) =>

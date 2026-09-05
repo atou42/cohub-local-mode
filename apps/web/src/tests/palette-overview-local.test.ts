@@ -126,6 +126,7 @@ function makeSession(input: {
 		title: null,
 		source: null,
 		status: null,
+		agentHarness: "codex",
 		externalSessionId: null,
 		agentHarness: "pi",
 		meta: null,

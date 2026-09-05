@@ -16,7 +16,9 @@ export type CohubModel<TApi extends Api = Api> = Model<TApi> & {
 function resolveApiKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const envValue = process.env[value];
-  return envValue && envValue.trim().length > 0 ? envValue.trim() : value;
+  if (envValue && envValue.trim().length > 0) return envValue.trim();
+  if (/^[A-Z][A-Z0-9_]+$/.test(value)) return undefined;
+  return value;
 }
 
 function finiteNumberOrZero(value: unknown): number {

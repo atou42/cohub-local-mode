@@ -1,0 +1,6 @@
+/build/
+/release/
+/resources/relay-node.mjs
+/resources/runtime.tar
+/resources/native-build/
+/resources/runtime/

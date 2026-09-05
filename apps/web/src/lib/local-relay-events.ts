@@ -313,7 +313,8 @@ export function connectLocalRelayEvents(input: {
 	url: string;
 	handlers: LocalRelayEventHandlers;
 	signal?: AbortSignal;
-	WebSocket?: new (url: string) => EventSocket;
+	protocols?: string[];
+	WebSocket?: new (url: string, protocols?: string | string[]) => EventSocket;
 	random?: () => number;
 	setTimeout?: (fn: () => void, ms: number) => unknown;
 	clearTimeout?: (handle: unknown) => void;
@@ -323,6 +324,7 @@ export function connectLocalRelayEvents(input: {
 		(globalThis.WebSocket as unknown as
 			| (new (
 					url: string,
+					protocols?: string | string[],
 			  ) => EventSocket)
 			| undefined);
 	const setTimeoutFn: (fn: () => void, ms: number) => unknown =
@@ -409,7 +411,7 @@ export function connectLocalRelayEvents(input: {
 		detachSocket();
 		let next: EventSocket;
 		try {
-			next = new WebSocketImpl(input.url);
+			next = new WebSocketImpl(input.url, input.protocols);
 		} catch (error) {
 			console.warn("[local-relay] event socket failed to open", error);
 			scheduleReconnect();

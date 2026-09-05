@@ -19,6 +19,7 @@ import {
 	buildCodexAppServerArgv,
 	buildCodexThreadForkParams,
 } from "../external-harness-codex-config.js";
+import { claimCodexInterrupt } from "../external-harness-codex-interrupt.js";
 import { buildGrokAppServerArgv } from "../external-harness-grok-config.js";
 import { createExternalProgressPublisher } from "../external-progress-publisher.js";
 import {
@@ -684,6 +685,20 @@ test("Codex app-server uses the configured context and native compaction limits"
 		argv.includes("model_auto_compact_token_limit=400000"),
 		true,
 	);
+});
+
+test("Codex abort sends at most one interrupt for duplicate turn-start signals", () => {
+	const state = {
+		abortRequested: true,
+		interruptRequested: false,
+		threadId: "thread-1",
+		turnId: "turn-1",
+	};
+	assert.deepEqual(claimCodexInterrupt(state), {
+		threadId: "thread-1",
+		turnId: "turn-1",
+	});
+	assert.equal(claimCodexInterrupt(state), null);
 });
 
 test("Grok Build app-server receives the local Codex user rules", async () => {

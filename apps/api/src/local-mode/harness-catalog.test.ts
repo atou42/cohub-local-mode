@@ -4,6 +4,7 @@ import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  bundledCursorModelsCatalog,
   HarnessCatalogError,
   getCatalogEfforts,
   parseCodexModelsCache,
@@ -125,6 +126,34 @@ test("Cursor catalog exposes only the selected models with exact ACP ids and rea
   assert.deepEqual(getCatalogEfforts(fable), ["low", "medium", "high", "xhigh", "max"]);
 });
 
+test("Cursor has an immediate bundled catalog while live discovery warms", () => {
+  const catalog = bundledCursorModelsCatalog();
+  assert.deepEqual(
+    catalog.map((entry) => entry.id),
+    [
+      "grok-4.6[effort=high,fast=true]",
+      "claude-fable-5-1[thinking=true,context=300k,effort=high]",
+    ],
+  );
+  const grok = catalog[0];
+  const fable = catalog[1];
+  assert.ok(grok);
+  assert.ok(fable);
+  assert.deepEqual(getCatalogEfforts(grok), [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+  assert.deepEqual(getCatalogEfforts(fable), [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+});
+
 test("Cursor catalog survives an API restart through the local disk cache", async () => {
   const root = await mkdtemp(join(tmpdir(), "cohub-cursor-catalog-cache-"));
   const executable = join(root, "fake-agent.mjs");
@@ -150,7 +179,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   try {
     const first = await loadExternalHarnessCatalog("cursor");
     assert.deepEqual(first.map((entry) => entry.model.name), ["grok-4.6", "claude-fable-5-1"]);
-    const persisted = await readFile(join(root, "cache", "cursor-models.v2.json"), "utf8");
+    const cachePath = join(root, "cache", "cursor-models.v2.json");
+    let persisted = "";
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try {
+        persisted = await readFile(cachePath, "utf8");
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    assert.ok(persisted, "Cursor discovery should persist the warmed catalog");
     assert.match(persisted, /"version":4/);
 
     clearCursorModelCatalogCacheForTests();
