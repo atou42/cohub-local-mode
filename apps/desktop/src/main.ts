@@ -21,6 +21,7 @@ import {
 	statusPresentation,
 	type ConnectorStatus,
 } from "./connector-core.js";
+import { waitForRuntimeStartup } from "./runtime-startup.js";
 
 const alphaOrigin = "https://dev2-cohub.atou.cc";
 const stateVersion = 2;
@@ -879,7 +880,8 @@ async function startRuntimeOnce() {
 	});
 	const runtimeScript = await resolveRuntimeScript();
 	await access(runtimeScript);
-	runtimeIdentity = { id: randomUUID(), secret: randomBytes(32).toString("base64url") };
+	const identity = { id: randomUUID(), secret: randomBytes(32).toString("base64url") };
+	runtimeIdentity = identity;
 	const finderPath = [
 		join(process.env.HOME ?? "", ".local", "bin"),
 		"/opt/homebrew/bin",
@@ -896,8 +898,8 @@ async function startRuntimeOnce() {
 			NODE_ENV: "production",
 			COHUB_LOCAL_DATA_DIR: dataDir(),
 			COHUB_PERSONAL_NODE_TEST_PORT_OFFSET: String(testPortOffset),
-			COHUB_DESKTOP_INSTANCE_ID: runtimeIdentity.id,
-			COHUB_DESKTOP_INSTANCE_SECRET: runtimeIdentity.secret,
+			COHUB_DESKTOP_INSTANCE_ID: identity.id,
+			COHUB_DESKTOP_INSTANCE_SECRET: identity.secret,
 			COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_SERVICE:
 				cloudAuthKeychainService,
 			COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_ACCOUNT:
@@ -914,54 +916,67 @@ async function startRuntimeOnce() {
 	lastRuntimeError = null;
 	let stderrTail = "";
 	let runtimeHasReady = false;
-	await new Promise<void>((resolvePromise, reject) => {
-		const startupTimeout = setTimeout(() => {
-			reject(new Error("Local Cohub runtime did not become ready within 120 seconds"));
-			void terminateProcessGroup(childPid);
-		}, 120_000);
-		child.stdout?.on("data", (chunk) => {
-			const message = String(chunk);
-			logMessage("runtime", message);
-		});
-		child.on("message", (message) => {
-			if (!message || typeof message !== "object" || Reflect.get(message, "type") !== "runtime-ready") return;
-			if (runtimeHasReady || Reflect.get(message, "instanceId") !== runtimeIdentity?.id) return;
-			void localApiReady().then((ready) => {
-				if (!ready) throw new Error("Runtime identity check failed");
-				runtimeHasReady = true;
-				clearTimeout(startupTimeout);
-				resolvePromise();
-			}).catch(reject);
-		});
-		child.stderr?.on("data", (chunk) => {
-			const message = String(chunk);
-			logMessage("runtime-error", message);
-			stderrTail = `${stderrTail}${message}`.slice(-16_384);
-			lastRuntimeError =
-				message
-					.trim()
-					.split("\n")
-					.filter(Boolean)
-					.at(-1) ?? lastRuntimeError;
-		});
-		child.once("error", (error) => {
-			clearTimeout(startupTimeout);
-			if (!runtimeHasReady) reject(error);
-		});
-		child.once("exit", (code, signal) => {
-			clearTimeout(startupTimeout);
-			const ownedByConnector = runtimeProcess === child;
-			if (ownedByConnector) runtimeProcess = null;
-			if (!processGroupAlive(childPid)) void clearRuntimeOwner(childPid);
+	child.stdout?.on("data", (chunk) => {
+		const message = String(chunk);
+		logMessage("runtime", message);
+	});
+	child.stderr?.on("data", (chunk) => {
+		const message = String(chunk);
+		logMessage("runtime-error", message);
+		stderrTail = `${stderrTail}${message}`.slice(-16_384);
+		lastRuntimeError =
+			message
+				.trim()
+				.split("\n")
+				.filter(Boolean)
+				.at(-1) ?? lastRuntimeError;
+	});
+	child.on("error", (error) => {
+		logMessage("runtime-error", error.message);
+		lastRuntimeError = error.message;
+	});
+	child.once("exit", (code, signal) => {
+		const ownedByConnector = runtimeProcess === child;
+		if (ownedByConnector) runtimeProcess = null;
+		const failureLines = stderrTail.trim().split("\n").filter(Boolean);
+		const detail =
+			failureLines.findLast((line) => line.includes("[runtime]")) ||
+			failureLines.at(-1) ||
+			`Local Cohub runtime stopped (${signal ?? code ?? "unknown"})`;
+		const error = new Error(detail);
+		if (!runtimeHasReady) return;
+		void (async () => {
+			try {
+				if (!processGroupAlive(childPid)) await clearRuntimeOwner(childPid);
+			} catch (cleanupError) {
+				const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+				lastRuntimeError = message;
+				logMessage("runtime-cleanup-error", message);
+			}
+		})();
+		if (ownedByConnector && !quitting) void handleRuntimeFailure(error);
+	});
+	await waitForRuntimeStartup({
+		child,
+		instanceId: identity.id,
+		verifyReady: () => localApiReady(identity, child),
+		isCurrent: () => runtimeProcess === child && runtimeIdentity === identity,
+		onReady: () => {
+			runtimeHasReady = true;
+		},
+		cleanup: async () => {
+			await terminateProcessGroup(childPid);
+			await clearRuntimeOwner(childPid);
+			if (runtimeProcess === child) runtimeProcess = null;
+		},
+		describeExit: (code, signal) => {
 			const failureLines = stderrTail.trim().split("\n").filter(Boolean);
 			const detail =
 				failureLines.findLast((line) => line.includes("[runtime]")) ||
 				failureLines.at(-1) ||
 				`Local Cohub runtime stopped (${signal ?? code ?? "unknown"})`;
-			const error = new Error(detail);
-			if (!runtimeHasReady) reject(error);
-			else if (ownedByConnector && !quitting) void handleRuntimeFailure(error);
-		});
+			return new Error(detail);
+		},
 	});
 	if (runtimeStableTimer) clearTimeout(runtimeStableTimer);
 	localRuntimeReady = true;
@@ -1037,17 +1052,30 @@ async function scheduleRuntimeRecovery(error: unknown) {
 	}, restart.delayMs);
 }
 
-async function localApiReady() {
-	if (!runtimeIdentity || !runtimeProcess || runtimeProcess.exitCode !== null) return false;
+async function localApiReady(
+	expectedIdentity = runtimeIdentity,
+	expectedProcess = runtimeProcess,
+) {
+	if (
+		!expectedIdentity ||
+		!expectedProcess ||
+		runtimeIdentity !== expectedIdentity ||
+		runtimeProcess !== expectedProcess ||
+		expectedProcess.exitCode !== null
+	) return false;
 	const challenge = randomBytes(32).toString("base64url");
 	try {
 		const response = await fetch(`${localApiOrigin}/api/local-mode/instance?challenge=${challenge}`, {
 			signal: AbortSignal.timeout(1_500),
 		});
-		if (!response.ok || !verifyRuntimeIdentity(await response.json(), runtimeIdentity.id, runtimeIdentity.secret, challenge)) {
+		if (!response.ok || !verifyRuntimeIdentity(await response.json(), expectedIdentity.id, expectedIdentity.secret, challenge)) {
 			throw new Error("Local API belongs to a different runtime instance");
 		}
-		return true;
+		return (
+			runtimeIdentity === expectedIdentity &&
+			runtimeProcess === expectedProcess &&
+			expectedProcess.exitCode === null
+		);
 	} catch (error) {
 		if ((error as { cause?: { code?: string } }).cause?.code === "ECONNREFUSED") return false;
 		throw error;
