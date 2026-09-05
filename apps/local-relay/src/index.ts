@@ -60,6 +60,7 @@ import {
 	selectSnapshotEvents,
 	selectTerminalCommandsForGc,
 } from "./lifecycle";
+import { selectDispatchableCommands } from "./command-lanes.ts";
 import {
 	COMMAND_ACTIVE_PREFIX,
 	COMMAND_PENDING_PREFIX,
@@ -1904,16 +1905,14 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const sockets = this.ctx.getWebSockets("node");
 		const socket = sockets[0];
 		if (!socket) return;
-		if ((await this.listCommandIndex(COMMAND_ACTIVE_PREFIX, 1)).length > 0) return;
-		const [indexed] = await this.listCommandIndex(COMMAND_PENDING_PREFIX, 1);
-		if (!indexed) return;
-		const next = await this.getCommandById(indexed.id);
-		if (!next || next.status !== "queued") throw new Error("Pending relay command index is inconsistent");
-		sendSocket(socket, {
-			protocolVersion: RELAY_PROTOCOL_VERSION,
-			type: "command",
-			command: next,
-		});
+		const commands = await this.listCommands();
+		for (const command of selectDispatchableCommands(commands)) {
+			sendSocket(socket, {
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "command",
+				command,
+			});
+		}
 	}
 
 	async webSocketMessage(socket: WebSocket, raw: string | ArrayBuffer) {
