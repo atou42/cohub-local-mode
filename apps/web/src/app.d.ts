@@ -2,6 +2,7 @@
 // for information about these interfaces
 declare global {
 	interface Window {
+		cohubDesktop?: { signIn(): Promise<void> };
 		cohubDisableVConsole?: () => void;
 		cohubEnableVConsole?: () => Promise<void>;
 		cohubPersonalNode?: {

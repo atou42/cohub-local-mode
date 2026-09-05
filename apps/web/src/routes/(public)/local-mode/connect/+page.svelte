@@ -1,5 +1,6 @@
 <script lang="ts">
-import { RefreshCw, TerminalSquare } from "lucide-svelte";
+import { LogIn, RefreshCw, TerminalSquare } from "lucide-svelte";
+import { env } from "$env/dynamic/public";
 import { onMount } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
@@ -7,6 +8,22 @@ import { getAuthToken, sanitizeRedirectPath } from "$lib/auth";
 
 let checking = $state(false);
 let error = $state("");
+const desktop = env.PUBLIC_DESKTOP_CLIENT === "true";
+
+async function signIn() {
+	checking = true;
+	error = "";
+	try {
+		if (!window.cohubDesktop) throw new Error("Open this page in the Cohub desktop client.");
+		await window.cohubDesktop.signIn();
+	} catch (cause) {
+		error = cause instanceof Error ? cause.message : "Sign-in failed";
+		return;
+	} finally {
+		checking = false;
+	}
+	await checkConnection();
+}
 
 async function checkConnection() {
 	if (checking) return;
@@ -44,9 +61,9 @@ onMount(() => {
 		<span class="font-mono text-[12px] font-medium uppercase">Local Mode</span>
 	</div>
 	<h1 class="mt-5 text-2xl font-semibold text-text-primary">Connect your Cohub account</h1>
-	<p class="mt-3 max-w-md text-[14px] leading-6 text-text-tertiary">
+	{#if !desktop}<p class="mt-3 max-w-md text-[14px] leading-6 text-text-tertiary">
 		Run <code class="rounded-[4px] bg-bg-surface px-1.5 py-0.5 font-mono text-[13px] text-text-secondary">cohub auth login</code> on the Mac mini, then check again.
-	</p>
+	</p>{/if}
 	{#if error}
 		<p class="mt-4 text-[13px] text-error-soft" role="alert">{error}</p>
 	{/if}
@@ -54,9 +71,9 @@ onMount(() => {
 		type="button"
 		class="mt-6 inline-flex min-h-9 w-fit items-center gap-2 rounded-[6px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg hover:bg-brand-hover disabled:opacity-50"
 		disabled={checking}
-		onclick={checkConnection}
+		onclick={desktop ? signIn : checkConnection}
 	>
-		<RefreshCw class={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
-		{checking ? "Checking" : "Check again"}
+		{#if desktop}<LogIn class="h-3.5 w-3.5" />{:else}<RefreshCw class={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />{/if}
+		{checking ? "Connecting" : desktop ? "Sign in" : "Check again"}
 	</button>
 </main>

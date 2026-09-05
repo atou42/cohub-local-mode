@@ -1,15 +1,16 @@
 {
 	"name": "@cohub/desktop",
 	"private": true,
-	"version": "0.2.0-alpha.4",
-	"description": "Cohub Connector for macOS",
+	"version": "0.3.0-dev2.1",
+	"description": "Cohub Dev2 for macOS",
 	"author": "Cohub",
 	"type": "module",
 	"main": "build/main.js",
 	"scripts": {
 		"build:node": "esbuild ../local-relay/node/index.mjs --bundle --platform=node --format=esm --target=node22 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=resources/relay-node.mjs",
 		"build:runtime": "node scripts/prepare-runtime.mjs",
-		"build": "pnpm build:node && pnpm build:runtime && tsc -p tsconfig.json",
+		"build:client": "tsc -p tsconfig.json && esbuild src/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=build/preload.cjs",
+		"build": "pnpm build:node && pnpm build:runtime && pnpm build:client",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"package:dir": "ulimit -n 65536 && pnpm build && electron-builder --dir --mac --arm64",
 		"package": "ulimit -n 65536 && pnpm build && electron-builder --mac dmg --arm64",
@@ -26,8 +27,8 @@
 		"typescript": "7.0.2"
 	},
 	"build": {
-		"appId": "cc.atou.cohub.personal-node",
-		"productName": "Cohub Personal Node",
+		"appId": "cc.atou.cohub.dev2",
+		"productName": "Cohub Dev2",
 		"asar": true,
 		"directories": {
 			"output": "release"
@@ -38,6 +39,7 @@
 			"!node_modules/**/*"
 		],
 		"extraResources": [
+			{ "from": "assets/Cohub.icns", "to": "icon.icns" },
 			{
 				"from": "resources",
 				"to": ".",
@@ -62,7 +64,7 @@
 			"gatekeeperAssess": false
 		},
 		"dmg": {
-			"artifactName": "Cohub-Connector-${version}-${arch}.${ext}"
+			"artifactName": "Cohub-Dev2-${version}-${arch}.${ext}"
 		}
 	}
 }

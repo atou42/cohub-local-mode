@@ -44,6 +44,8 @@ const record = {
   webTarget: process.env.COHUB_WEB_TARGET ?? null,
   webConfig: process.env.COHUB_WEB_WRANGLER_CONFIG ?? null,
   buildOutDir: process.env.COHUB_WEB_BUILD_OUT_DIR ?? null,
+  desktopClient: process.env.PUBLIC_DESKTOP_CLIENT ?? null,
+  marketplaceAppId: process.env.PUBLIC_MARKETPLACE_APP_ID ?? null,
 };
 appendFileSync(process.env.MOCK_PNPM_LOG, JSON.stringify(record) + "\\n");
 `,
@@ -149,6 +151,8 @@ test("default release is a Dev2-only dry run and fixes web build inputs", async 
 		assert.equal(webBuild.webTarget, "cloudflare");
 		assert.equal(webBuild.webConfig, "wrangler.dev2.json");
 		assert.equal(webBuild.buildOutDir, null);
+		assert.equal(webBuild.desktopClient, "false");
+		assert.equal(webBuild.marketplaceAppId, "");
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 
 import {
 	isTrustedLegacyRuntimeCommand,
 	nextRuntimeRestart,
 	statusPresentation,
+	verifyRuntimeIdentity,
 	type ConnectorStatus,
 } from "./connector-core.ts";
 
@@ -67,4 +69,16 @@ test("connected and stopped states remain unambiguous", () => {
 		statusPresentation({ state: "stopped", deviceId: "device-1", message: null }),
 		{ label: "Stopped", connected: false, detail: null },
 	);
+});
+test("runtime readiness rejects another instance, a replay, and a false healthy response", () => {
+	const id = randomUUID();
+	const secret = randomBytes(32).toString("base64url");
+	const challenge = randomBytes(32).toString("base64url");
+	const proof = createHmac("sha256", secret).update(`cohub-desktop-v1:${id}:${challenge}`).digest("base64url");
+	const value = { schemaVersion: 1, instanceId: id, proof };
+	assert.equal(verifyRuntimeIdentity(value, id, secret, challenge), true);
+	assert.equal(verifyRuntimeIdentity(value, randomUUID(), secret, challenge), false);
+	assert.equal(verifyRuntimeIdentity(value, id, secret, randomBytes(32).toString("base64url")), false);
+	assert.equal(verifyRuntimeIdentity({ status: "healthy" }, id, secret, challenge), false);
+	assert.equal(verifyRuntimeIdentity({ ...value, proof: "not-a-proof" }, id, secret, challenge), false);
 });

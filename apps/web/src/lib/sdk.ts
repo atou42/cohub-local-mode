@@ -6,7 +6,7 @@ import {
 } from "@neta-art/cohub";
 import { env } from "$env/dynamic/public";
 import { listMergedSpaces } from "$lib/merged-space-list";
-import { PUBLIC_API_ORIGIN, PUBLIC_GATEWAY_ORIGIN } from "$env/static/public";
+import { PUBLIC_API_ORIGIN as BUILD_API_ORIGIN, PUBLIC_GATEWAY_ORIGIN as BUILD_GATEWAY_ORIGIN } from "$env/static/public";
 import {
 	clearAuthToken,
 	getAuthSessionSnapshot,
@@ -26,6 +26,9 @@ import {
 	createLocalNodeWebSocket,
 	localNodeFetch,
 } from "$lib/local-node-route";
+
+const PUBLIC_API_ORIGIN = env.PUBLIC_DESKTOP_CLIENT === "true" ? env.PUBLIC_API_ORIGIN : BUILD_API_ORIGIN;
+const PUBLIC_GATEWAY_ORIGIN = env.PUBLIC_DESKTOP_CLIENT === "true" ? env.PUBLIC_GATEWAY_ORIGIN : BUILD_GATEWAY_ORIGIN;
 
 type UnauthorizedContext = Parameters<
 	NonNullable<CohubClientOptions["onUnauthorized"]>

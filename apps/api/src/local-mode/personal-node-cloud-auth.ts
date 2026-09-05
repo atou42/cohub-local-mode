@@ -143,6 +143,7 @@ async function refreshCloudAuth(origin: string, refreshToken: string) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ refreshToken }),
     cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

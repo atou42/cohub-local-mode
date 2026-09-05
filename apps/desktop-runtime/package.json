@@ -6,6 +6,9 @@
 	"files": [
 		"fetch-polyfill.mjs",
 		"manager.mjs",
+		"web-entry.mjs",
+		"web-server.mjs",
+		"web",
 		"sandbox-supervisor.mjs",
 		"sandbox-supervisor-core.mjs"
 	],
