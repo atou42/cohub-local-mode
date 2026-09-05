@@ -148,6 +148,7 @@ import { turnRecordToIndexItem } from "$lib/turn-nav-preview";
 import type { LocalUploadEntry } from "$lib/upload-entries";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import {
+	buildRelaySessionCreation,
 	decideRelayCommandReconcile,
 	decideRelayTurnEvent,
 	findOptimisticTurnForRelayCommand,
@@ -4050,8 +4051,11 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			const promptBody = {
 				// Relay-first chats select their Session id before the Mac is online.
 				...(sessionId ? { sessionId } : {}),
-				...(isNewChat && showAgentHarnessSelector ? { agentHarness } : {}),
-				...(useLocalRelay ? { createSession: isNewChat } : {}),
+				...(useLocalRelay
+					? buildRelaySessionCreation(targetSessionState?.session, agentHarness)
+					: isNewChat && showAgentHarnessSelector
+						? { agentHarness }
+						: {}),
 				content,
 				model: model?.id,
 				provider: model?.provider,

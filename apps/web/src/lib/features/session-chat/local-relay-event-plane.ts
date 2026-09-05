@@ -1,3 +1,4 @@
+import type { AgentHarness } from "@neta-art/cohub";
 import type {
 	LocalRelayEventCommand,
 	LocalRelayTurnEvent,
@@ -46,6 +47,28 @@ export type RelayTurnEventAction =
 
 export function isTerminalRelayTurnStatus(status: unknown): boolean {
 	return typeof status === "string" && TERMINAL_RELAY_TURN_STATUSES.has(status);
+}
+
+export function shouldCreateRelaySession(
+	session: { meta?: Record<string, unknown> | null } | null | undefined,
+): boolean {
+	return !session || session.meta?.relayPending === true;
+}
+
+export function buildRelaySessionCreation(
+	session:
+		| { agentHarness: AgentHarness; meta?: Record<string, unknown> | null }
+		| null
+		| undefined,
+	selectedHarness: AgentHarness,
+): { createSession: boolean; agentHarness?: AgentHarness } {
+	const createSession = shouldCreateRelaySession(session);
+	return {
+		createSession,
+		...(createSession
+			? { agentHarness: session ? session.agentHarness : selectedHarness }
+			: {}),
+	};
 }
 
 export function rememberRelayEventId(
