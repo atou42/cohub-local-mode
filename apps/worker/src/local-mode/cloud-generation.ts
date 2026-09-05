@@ -4,15 +4,10 @@ import { config } from "../config.js";
 
 const POLL_INTERVAL_MS = 1_500;
 const POLL_TIMEOUT_MS = 30 * 60 * 1_000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
-type CloudTaskDetail = {
-  run?: {
-    taskType?: unknown;
-    status?: unknown;
-    result?: unknown;
-    errorMessage?: unknown;
-  };
-};
+class CloudRequestTransportError extends Error {}
+class RetryableCloudPollError extends Error {}
 
 type CloudGenerationInput = {
   userId: string;
@@ -78,6 +73,9 @@ async function cloudRequest(userId: string, path: string, init: RequestInit = {}
   const request = () => fetch(new URL(path, config.cloudApiOrigin), {
     ...init,
     headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+  }).catch((cause: unknown) => {
+    // Only request transport failures are retryable, never account verification.
+    throw new CloudRequestTransportError(cause instanceof Error ? cause.message : String(cause), { cause });
   });
   let response = await request();
   if (response.status === 401) {
@@ -118,16 +116,34 @@ export async function runCloudGeneration(input: CloudGenerationInput): Promise<G
     throw new Error(bodyMessage(createdBody, `Cloud generation request returned HTTP ${createdResponse.status}.`));
   }
 
+  const taskRunId = createdBody.taskRunId;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-    const response = await cloudRequest(input.userId, `/api/tasks/${encodeURIComponent(createdBody.taskRunId)}`);
-    const detail = await response.json().catch(() => null) as CloudTaskDetail | null;
-    if (!response.ok) throw new Error(bodyMessage(detail, `Cloud generation task returned HTTP ${response.status}.`));
-    const run = detail?.run;
-    if (run?.taskType !== "generation") throw new Error("Cloud task is not a generation task.");
-    if (run.status === "completed") return parseTaskResult(run.result, input.model);
-    if (run.status === "failed") throw new Error(typeof run.errorMessage === "string" && run.errorMessage ? run.errorMessage : "Cloud generation task failed.");
-    await sleep(POLL_INTERVAL_MS);
+  let consecutiveFailures = 0;
+  try {
+    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      try {
+        const response = await cloudRequest(input.userId, `/api/tasks/${encodeURIComponent(taskRunId)}`);
+        if (response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599)) {
+          throw new RetryableCloudPollError(`Cloud generation task returned HTTP ${response.status}.`);
+        }
+        const detail: unknown = await response.json();
+        if (!response.ok) throw new Error(bodyMessage(detail, `Cloud generation task returned HTTP ${response.status}.`));
+        const run = asRecord(asRecord(detail)?.run);
+        if (run?.taskType !== "generation") throw new Error("Cloud task is not a generation task.");
+        if (run.status === "completed") return parseTaskResult(run.result, input.model);
+        if (run.status === "failed") throw new Error(typeof run.errorMessage === "string" && run.errorMessage ? run.errorMessage : "Cloud generation task failed.");
+        if (run.status !== "pending" && run.status !== "queued" && run.status !== "running") throw new Error("Cloud generation task returned an invalid status.");
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (!(error instanceof CloudRequestTransportError) && !(error instanceof RetryableCloudPollError)) throw error;
+        consecutiveFailures += 1;
+        console.warn(`Cloud generation task ${taskRunId} poll failure ${consecutiveFailures}/${MAX_CONSECUTIVE_POLL_FAILURES}: ${error.message}`);
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw error;
+      }
+      await sleep(POLL_INTERVAL_MS);
+    }
+    throw new Error(`Cloud generation task timed out after ${POLL_TIMEOUT_MS}ms.`);
+  } catch (cause) {
+    throw new Error(`Cloud generation task ${taskRunId}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  throw new Error(`Cloud generation task timed out after ${POLL_TIMEOUT_MS}ms.`);
 }
