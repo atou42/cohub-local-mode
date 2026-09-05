@@ -8,7 +8,6 @@
 		"manager.mjs",
 		"web-entry.mjs",
 		"web-server.mjs",
-		"web",
 		"sandbox-supervisor.mjs",
 		"sandbox-supervisor-core.mjs"
 	],
@@ -22,7 +21,8 @@
 		"@neta-art/cohub-cli": "workspace:*",
 		"node-fetch": "3.3.2",
 		"postgres": "3.4.9",
-		"s3rver": "3.7.1"
+		"s3rver": "3.7.1",
+		"web": "workspace:*"
 	},
 	"license": "Apache-2.0"
 }

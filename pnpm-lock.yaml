@@ -309,7 +309,7 @@ importers:
         version: file:apps/api(@cloudflare/workers-types@5.20260708.1)(kysely@0.28.17)
       '@cohub/gateway':
         specifier: workspace:*
-        version: file:apps/gateway(bullmq-otel@2.0.1)
+        version: file:apps/gateway(bullmq-otel@2.0.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260708.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(postgres@3.4.9))
       '@cohub/worker':
         specifier: workspace:*
         version: file:apps/worker(@cloudflare/workers-types@5.20260708.1)(kysely@0.28.17)(zod@4.5.4)
@@ -331,6 +331,9 @@ importers:
       s3rver:
         specifier: 3.7.1
         version: 3.7.1
+      web:
+        specifier: workspace:*
+        version: file:apps/web(@napi-rs/canvas@1.0.8)(svelte@5.57.0)
 
   apps/gateway:
     dependencies:
@@ -8309,6 +8312,9 @@ packages:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
 
+  web@file:apps/web:
+    resolution: {directory: apps/web, type: directory}
+
   webcrypto-core@1.9.2:
     resolution: {integrity: sha512-gsXecm82UQNlTBURJGuqOWy1Ww08S3kZUcr3aOJS02Pk0xLtkfeUAVC0u0xhgdonFme80edSJUIJyuvL/7250Q==}
 
@@ -10115,7 +10121,7 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@cohub/gateway@file:apps/gateway(bullmq-otel@2.0.1)':
+  '@cohub/gateway@file:apps/gateway(bullmq-otel@2.0.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260708.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(postgres@3.4.9))':
     dependencies:
       '@cohub/identity': file:packages/identity
       '@cohub/infra': file:packages/infra(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260708.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(postgres@3.4.9))
@@ -16352,6 +16358,49 @@ snapshots:
       xml-name-validator: 5.0.0
 
   web-streams-polyfill@3.3.3: {}
+
+  web@file:apps/web(@napi-rs/canvas@1.0.8)(svelte@5.57.0):
+    dependencies:
+      '@codemirror/autocomplete': 6.20.3
+      '@codemirror/commands': 6.11.0
+      '@codemirror/lang-css': 6.3.1
+      '@codemirror/lang-html': 6.4.12
+      '@codemirror/lang-javascript': 6.2.5
+      '@codemirror/lang-json': 6.0.2
+      '@codemirror/lang-markdown': 6.5.2
+      '@codemirror/lang-python': 6.2.1
+      '@codemirror/lang-xml': 6.1.0
+      '@codemirror/lang-yaml': 6.1.3
+      '@codemirror/language': 6.12.4
+      '@codemirror/search': 6.7.1
+      '@codemirror/state': 6.7.1
+      '@codemirror/view': 6.43.9
+      '@cohub/protocol': file:packages/protocol
+      '@fontsource/geist': 5.3.0
+      '@fontsource/geist-mono': 5.3.0
+      '@lezer/highlight': 1.2.3
+      '@logto/browser': 3.0.13
+      '@neta-art/cohub': file:packages/sdk(@napi-rs/canvas@1.0.8)(pixi.js@8.20.1)
+      '@shikijs/langs': 4.4.3
+      '@shikijs/themes': 4.4.3
+      bowser: 2.14.1
+      codemirror: 6.0.2
+      isomorphic-dompurify: 3.23.0(@noble/hashes@2.4.0)
+      lucide-svelte: 1.0.1(svelte@5.57.0)
+      marked: 18.0.11
+      mermaid: 11.17.2
+      pdfjs-dist: 6.3.289
+      pixi.js: 8.20.1
+      remend: 1.3.1
+      shiki: 4.4.3
+      uqr: 0.1.3
+      vconsole: 3.15.1
+      zod: 4.5.4
+    transitivePeerDependencies:
+      - '@napi-rs/canvas'
+      - '@noble/hashes'
+      - canvas
+      - svelte
 
   webcrypto-core@1.9.2:
     dependencies:
