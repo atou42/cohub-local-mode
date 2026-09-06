@@ -15,6 +15,25 @@ function fakeChild() {
 	return new FakeRuntimeChild();
 }
 
+test("cancellation cleans the runtime and rejects a late authenticated ready", async () => {
+	const child = fakeChild();
+	const controller = new AbortController();
+	let cleanupCalls = 0;
+	let readyCalls = 0;
+	const startup = waitForRuntimeStartup({
+		child, instanceId: "instance-1", signal: controller.signal,
+		verifyReady: () => true,
+		cleanup: async () => { cleanupCalls += 1; },
+		onReady: () => { readyCalls += 1; },
+		timeoutMs: 100,
+	});
+	controller.abort(new Error("Startup stopped"));
+	child.emit("message", { type: "runtime-ready", instanceId: "instance-1" });
+	await assert.rejects(startup, /Startup stopped/);
+	assert.equal(cleanupCalls, 1);
+	assert.equal(readyCalls, 0);
+});
+
 test("identity failure is cleaned once and ignores a late ready message", async () => {
 	const child = fakeChild();
 	let verifyCalls = 0;
@@ -43,12 +62,14 @@ test("identity failure is cleaned once and ignores a late ready message", async 
 test("a ready verification that finishes after exit cannot succeed", async () => {
 	const child = fakeChild();
 	let resolveVerification!: (ready: boolean) => void;
+	const verificationStarted = Promise.withResolvers<void>();
 	let cleanupCalls = 0;
 	const startup = waitForRuntimeStartup({
 		child,
 		instanceId: "instance-1",
 		verifyReady: () => new Promise<boolean>((resolve) => {
 			resolveVerification = resolve;
+			verificationStarted.resolve();
 		}),
 		cleanup: async () => {
 			cleanupCalls += 1;
@@ -56,12 +77,13 @@ test("a ready verification that finishes after exit cannot succeed", async () =>
 		timeoutMs: 100,
 	});
 
+	const rejected = assert.rejects(startup, /stopped/);
 	child.emit("message", { type: "runtime-ready", instanceId: "instance-1" });
-	await new Promise((resolve) => setImmediate(resolve));
+	await verificationStarted.promise;
 	child.emit("exit", 1, null);
 	resolveVerification(true);
 
-	await assert.rejects(startup, /stopped/);
+	await rejected;
 	assert.equal(cleanupCalls, 1);
 });
 

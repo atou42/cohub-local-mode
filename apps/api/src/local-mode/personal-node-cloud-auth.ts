@@ -1,7 +1,15 @@
 import { execFile } from "node:child_process";
+import { userInfo } from "node:os";
 
 const AUTH_SCHEMA_VERSION = 1;
 const EXPIRY_SKEW_MS = 60_000;
+
+export async function selectLocalModeAccessToken(
+  desktopToken: string | null | undefined,
+  resolveHostToken: () => Promise<string | null>,
+) {
+  return desktopToken === undefined ? await resolveHostToken() : desktopToken;
+}
 
 type StoredCloudAuth = {
   schemaVersion: typeof AUTH_SCHEMA_VERSION;
@@ -115,7 +123,9 @@ function runSecurity(args: string[], missingIsNull = false) {
     execFile(
       "/usr/bin/security",
       args,
-      { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
+      { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024,
+        env: { ...process.env, HOME: userInfo().homedir },
+      },
       (error, stdout, stderr) => {
         if (!error) {
           resolve(stdout.trim());

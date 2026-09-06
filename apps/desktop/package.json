@@ -1,7 +1,7 @@
 {
 	"name": "@cohub/desktop",
 	"private": true,
-	"version": "0.3.0-dev2.1",
+	"version": "0.3.0-dev2.2",
 	"description": "Cohub Dev2 for macOS",
 	"author": "Cohub",
 	"type": "module",

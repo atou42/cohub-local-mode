@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolvePersonalNodeCloudAccessToken } from "./personal-node-cloud-auth.js";
+import { resolvePersonalNodeCloudAccessToken, selectLocalModeAccessToken } from "./personal-node-cloud-auth.js";
+
+test("a signed-out desktop cannot inherit another account from host CLI authentication", async () => {
+  let fallbackCalls = 0;
+  const fallback = async () => { fallbackCalls++; return "other-host-account"; };
+  assert.equal(await selectLocalModeAccessToken(null, fallback), null);
+  assert.equal(fallbackCalls, 0);
+  assert.equal(await selectLocalModeAccessToken("desktop-account", fallback), "desktop-account");
+  assert.equal(fallbackCalls, 0);
+  assert.equal(await selectLocalModeAccessToken(undefined, fallback), "other-host-account");
+  assert.equal(fallbackCalls, 1);
+});
 
 const now = Date.parse("2026-09-03T00:00:00.000Z");
 

@@ -7,6 +7,7 @@
 		"billing-env.mjs",
 		"fetch-polyfill.mjs",
 		"manager.mjs",
+		"skills-path.mjs",
 		"web-entry.mjs",
 		"web-server.mjs",
 		"sandbox-supervisor.mjs",
