@@ -1,4 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+
+export function personalNodeId(identity: { accountId: string; deviceId: string }) {
+	return createHash("sha256").update(`node\0${identity.accountId}\0${identity.deviceId}`).digest("hex");
+}
 
 export function verifyRuntimeIdentity(value: unknown, id: string, secret: string, challenge: string) {
 	if (!value || typeof value !== "object") return false;

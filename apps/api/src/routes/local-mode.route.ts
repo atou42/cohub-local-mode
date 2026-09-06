@@ -15,7 +15,7 @@ import {
   hasLoopbackLocalModeEntry,
   hasTrustedLocalModeEntry,
 } from "../local-mode/access.js";
-import { resolvePersonalNodeCloudAccessTokenFromEnvironment } from "../local-mode/personal-node-cloud-auth.js";
+import { resolvePersonalNodeCloudAccessTokenFromEnvironment, selectLocalModeAccessToken } from "../local-mode/personal-node-cloud-auth.js";
 import { desktopInstanceResponse, hasDesktopAccess } from "../local-mode/desktop-instance.js";
 
 const router = new Hono();
@@ -47,13 +47,14 @@ router.get("/auth", async (c) => {
   const forceRefresh = c.req.query("refresh") === "1";
   const personalNodeAccessToken =
     await resolvePersonalNodeCloudAccessTokenFromEnvironment(forceRefresh);
-  const accessToken =
-    personalNodeAccessToken ??
-    (await resolveAccessToken({ forceRefresh }).catch((error) => {
+  const accessToken = await selectLocalModeAccessToken(
+    personalNodeAccessToken,
+    () => resolveAccessToken({ forceRefresh }).catch((error) => {
       if (error instanceof Error && error.name === "AuthRequiredError")
         return null;
       throw error;
-    }));
+    }),
+  );
   if (!accessToken) {
     return c.json(
       {

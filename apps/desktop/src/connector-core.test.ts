@@ -1,14 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { alphaNodeId } from "../../local-relay/src/alpha-auth.ts";
 
 import {
 	isTrustedLegacyRuntimeCommand,
 	nextRuntimeRestart,
+	personalNodeId,
 	statusPresentation,
 	verifyRuntimeIdentity,
 	type ConnectorStatus,
 } from "./connector-core.ts";
+
+test("desktop handshake identity matches the relay and remains account scoped", async () => {
+	const identity = { accountId: randomBytes(32).toString("hex"), deviceId: randomUUID() };
+	assert.equal(personalNodeId(identity), await alphaNodeId(identity));
+	assert.notEqual(personalNodeId(identity), personalNodeId({ ...identity, accountId: randomBytes(32).toString("hex") }));
+	assert.notEqual(personalNodeId(identity), personalNodeId({ ...identity, deviceId: randomUUID() }));
+});
 
 test("runtime recovery is bounded and exposes every retry", () => {
 	assert.deepEqual(nextRuntimeRestart(1), { attempt: 1, delayMs: 1_000 });

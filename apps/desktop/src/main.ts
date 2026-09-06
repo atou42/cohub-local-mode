@@ -1,5 +1,4 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import {
 	access,
 	appendFile,
@@ -10,18 +9,21 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
-import { hostname } from "node:os";
+import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
 	verifyRuntimeIdentity,
+	personalNodeId,
 	nextRuntimeRestart,
 	runtimeRestartLimit,
 	statusPresentation,
 	type ConnectorStatus,
 } from "./connector-core.js";
 import { waitForRuntimeStartup } from "./runtime-startup.js";
+import { installRuntime } from "./runtime-installation.js";
+import { prepareDeviceRegistration } from "./registration-state.js";
 
 const alphaOrigin = "https://dev2-cohub.atou.cc";
 const stateVersion = 2;
@@ -89,6 +91,7 @@ let statusHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeRecoveryAttempt = 0;
 let relayRecoveryAttempt = 0;
 let runtimeStartPromise: Promise<void> | null = null;
+let runtimeStartAbort: AbortController | null = null;
 let signInPromise: Promise<void> | null = null;
 let logWrite = Promise.resolve();
 let statusReportWrite = Promise.resolve();
@@ -283,120 +286,12 @@ async function openLocalCohub() {
 	await mainWindow.loadURL(`${localWebOrigin}/sessions`);
 }
 
-async function sha256File(path: string) {
-	const hash = createHash("sha256");
-	for await (const chunk of createReadStream(path)) hash.update(chunk);
-	return hash.digest("hex");
-}
-
-async function extractRuntime(archive: string, destination: string) {
-	await new Promise<void>((resolve, reject) => {
-		const child = spawn(
-			"/usr/bin/tar",
-			["-xf", archive, "-C", destination],
-			{ stdio: ["ignore", "ignore", "pipe"] },
-		);
-		let stderr = "";
-		child.stderr?.on("data", (chunk) => {
-			stderr = `${stderr}${String(chunk)}`.slice(-16_384);
-		});
-		child.once("error", reject);
-		child.once("exit", (code, signal) => {
-			if (code === 0) resolve();
-			else {
-				reject(
-					new Error(
-						`Bundled runtime extraction failed (${signal ?? code ?? "unknown"})${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
-					),
-				);
-			}
-		});
-	});
-}
-
-async function validateInstalledRuntime(directory: string) {
-	for (const relative of [
-		"manager.mjs",
-		"web-entry.mjs",
-		"node_modules/web/build/handler.js",
-		"node_modules/s3rver/package.json",
-		"node_modules/postgres/package.json",
-		"node_modules/@embedded-postgres/darwin-arm64/package.json",
-		"native/valkey-server",
-		"native/cohub-sandboxd",
-	]) {
-		await access(join(directory, relative));
-	}
-}
-
-async function resolveRuntimeScript() {
+async function resolveRuntimeScript(signal: AbortSignal) {
+	signal.throwIfAborted();
 	if (!app.isPackaged) {
 		return join(app.getAppPath(), "resources", "runtime", "manager.mjs");
 	}
-	const archive = join(process.resourcesPath, "runtime.tar");
-	const manifestPath = join(process.resourcesPath, "runtime-manifest.json");
-	const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-		schemaVersion?: unknown;
-		sha256?: unknown;
-		size?: unknown;
-	};
-	if (
-		manifest.schemaVersion !== 1 ||
-		typeof manifest.sha256 !== "string" ||
-		!/^[0-9a-f]{64}$/.test(manifest.sha256) ||
-		typeof manifest.size !== "number" ||
-		!Number.isSafeInteger(manifest.size) ||
-		manifest.size <= 0
-	) {
-		throw new Error("Bundled runtime manifest is invalid");
-	}
-	const archiveStat = await stat(archive);
-	if (archiveStat.size !== manifest.size) {
-		throw new Error("Bundled runtime archive size does not match its manifest");
-	}
-	if ((await sha256File(archive)) !== manifest.sha256) {
-		throw new Error("Bundled runtime archive checksum does not match its manifest");
-	}
-
-	const parent = join(app.getPath("userData"), "runtime");
-	const installed = join(parent, manifest.sha256);
-	let installedExists = true;
-	try {
-		await access(installed);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		installedExists = false;
-	}
-	if (installedExists) {
-		let marker: { schemaVersion?: unknown; sha256?: unknown };
-		try {
-			marker = JSON.parse(
-				await readFile(join(installed, ".cohub-runtime.json"), "utf8"),
-			) as { schemaVersion?: unknown; sha256?: unknown };
-		} catch (error) {
-			throw new Error("Installed runtime marker cannot be read", {
-				cause: error,
-			});
-		}
-		if (marker.schemaVersion !== 1 || marker.sha256 !== manifest.sha256) {
-			throw new Error("Installed runtime marker is invalid");
-		}
-		await validateInstalledRuntime(installed);
-		return join(installed, "manager.mjs");
-	}
-
-	await mkdir(parent, { recursive: true });
-	const temporary = `${installed}.${process.pid}.tmp`;
-	await mkdir(temporary);
-	await extractRuntime(archive, temporary);
-	await validateInstalledRuntime(temporary);
-	await writeFile(
-		join(temporary, ".cohub-runtime.json"),
-		`${JSON.stringify({ schemaVersion: 1, sha256: manifest.sha256 })}\n`,
-		{ mode: 0o600, flag: "wx" },
-	);
-	await rename(temporary, installed);
-	return join(installed, "manager.mjs");
+	return installRuntime(process.resourcesPath, app.getPath("userData"), signal, (message) => logMessage("runtime-install", message));
 }
 
 function publishStatus(status: PublicStatus) {
@@ -427,7 +322,7 @@ function queueRemoteStatus(status: PublicStatus) {
 	});
 	statusReportWrite = statusReportWrite
 		.then(async () => {
-			const response = await fetch(
+			const response = await cloudFetch(
 				`${alphaOrigin}/api/alpha/v1/nodes/${state.accountId}/${state.deviceId}/status`,
 				{
 					method: "POST",
@@ -478,7 +373,10 @@ function runSecurity(args: string[]) {
 		execFile(
 			"/usr/bin/security",
 			args,
-			{ encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
+			{ encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024,
+				// Keychain belongs to the login user, not an overridden runtime HOME.
+				env: { ...process.env, HOME: userInfo().homedir },
+			},
 			(error, stdout, stderr) => {
 				if (!error) {
 					resolve(stdout.trim());
@@ -569,8 +467,23 @@ async function writeCloudAuth(input: RegistrationInput) {
 	]);
 }
 
+async function cloudFetch(url: string, init?: RequestInit) {
+	if (new URL(url).origin !== alphaOrigin) throw new Error("Unexpected cloud request origin");
+	try {
+		return await net.fetch(url, {
+			...init,
+			credentials: "omit",
+			redirect: "error",
+			signal: init?.signal ?? AbortSignal.timeout(30_000),
+		});
+	} catch (error) {
+		const code = (error as { cause?: { code?: string } }).cause?.code;
+		throw new Error(`Request to ${new URL(url).pathname} failed: ${error instanceof Error ? error.message : String(error)}${code ? ` (${code})` : ""}`, { cause: error });
+	}
+}
+
 async function requestJson(url: string, accessToken: string, init?: RequestInit) {
-	const response = await fetch(url, {
+	const response = await cloudFetch(url, {
 		...init,
 		headers: {
 			...Object.fromEntries(new Headers(init?.headers).entries()),
@@ -591,10 +504,6 @@ async function requestJson(url: string, accessToken: string, init?: RequestInit)
 
 async function registerDevice(input: RegistrationInput) {
 	const existing = await readState();
-	const credential = existing
-		? await readCredential(existing.installationId)
-		: randomBytes(32).toString("base64url");
-	const installationId = existing?.installationId ?? randomUUID();
 	const account = await requestJson(
 		`${alphaOrigin}/api/alpha/v1/account`,
 		input.accessToken,
@@ -602,9 +511,10 @@ async function registerDevice(input: RegistrationInput) {
 	if (typeof account.accountId !== "string" || !/^[0-9a-f]{64}$/.test(account.accountId)) {
 		throw new Error("Personal Node account response is invalid");
 	}
-	if (existing && existing.accountId !== account.accountId) {
-		throw new Error("This Personal Node is already registered to another account");
-	}
+	const { credential, installationId } = await prepareDeviceRegistration({
+		userDataPath: app.getPath("userData"), accountId: account.accountId,
+		existing, readCredential, writeCredential,
+	});
 	const registration = await requestJson(`${alphaOrigin}/api/alpha/v1/devices`, input.accessToken, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -668,7 +578,7 @@ async function beginConnectorSignIn() {
 	if (signInPromise) return signInPromise;
 	signInPromise = (async () => {
 		publishStatus({ state: "signed-out", deviceId: null, message: "Preparing sign-in" });
-		const response = await fetch(`${alphaOrigin}/api/alpha/v1/auth/device`, {
+		const response = await cloudFetch(`${alphaOrigin}/api/alpha/v1/auth/device`, {
 			method: "POST",
 			cache: "no-store",
 		});
@@ -699,12 +609,19 @@ async function beginConnectorSignIn() {
 		while (!quitting && Date.now() < expiresAt) {
 			await delay(intervalMs);
 			if (quitting) return;
-			const tokenResponse = await fetch(`${alphaOrigin}/api/alpha/v1/auth/token`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ deviceCode }),
-				cache: "no-store",
-			});
+			let tokenResponse: Response;
+			try {
+				tokenResponse = await cloudFetch(`${alphaOrigin}/api/alpha/v1/auth/token`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ deviceCode }),
+					cache: "no-store",
+				});
+			} catch (error) {
+				logMessage("sign-in-network-error", error instanceof Error ? error.message : String(error));
+				if (!quitting) publishStatus({ state: "signed-out", deviceId: null, message: `Sign-in service unavailable. Retrying code ${userCode}` });
+				continue;
+			}
 			if (tokenResponse.status === 202) continue;
 			if (tokenResponse.status === 429) {
 				intervalMs += 5_000;
@@ -866,7 +783,7 @@ async function cleanupLegacyRuntime() {
 	throw new Error(`Local service ports are occupied by unowned processes (${pids.join(", ")}); no process was stopped`);
 }
 
-async function startRuntimeOnce() {
+async function startRuntimeOnce(signal: AbortSignal) {
 	localRuntimeReady = false;
 	await stopOwnedRuntime();
 	await cleanupLegacyRuntime();
@@ -878,8 +795,9 @@ async function startRuntimeOnce() {
 			? { attempt: runtimeRecoveryAttempt, maxAttempts: runtimeRestartLimit }
 			: {}),
 	});
-	const runtimeScript = await resolveRuntimeScript();
+	const runtimeScript = await resolveRuntimeScript(signal);
 	await access(runtimeScript);
+	signal.throwIfAborted();
 	const identity = { id: randomUUID(), secret: randomBytes(32).toString("base64url") };
 	runtimeIdentity = identity;
 	const finderPath = [
@@ -958,6 +876,7 @@ async function startRuntimeOnce() {
 	});
 	await waitForRuntimeStartup({
 		child,
+		signal,
 		instanceId: identity.id,
 		verifyReady: () => localApiReady(identity, child),
 		isCurrent: () => runtimeProcess === child && runtimeIdentity === identity,
@@ -990,12 +909,17 @@ async function startRuntimeOnce() {
 }
 
 async function startRuntime() {
+	if (quitting) throw new Error("Local Cohub is stopping");
 	if (localRuntimeReady && await localApiReady()) {
 		return;
 	}
+	if (quitting) throw new Error("Local Cohub is stopping");
 	if (runtimeStartPromise) return runtimeStartPromise;
-	runtimeStartPromise = startRuntimeOnce().finally(() => {
+	const controller = new AbortController();
+	runtimeStartAbort = controller;
+	runtimeStartPromise = startRuntimeOnce(controller.signal).finally(() => {
 		runtimeStartPromise = null;
+		if (runtimeStartAbort === controller) runtimeStartAbort = null;
 	});
 	return runtimeStartPromise;
 }
@@ -1097,6 +1021,7 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 		: join(app.getAppPath(), "resources", "relay-node.mjs");
 	await access(relayScript);
 	const relayCredential = credential ?? await readCredential(state.installationId);
+	const nodeId = personalNodeId(state);
 	publishStatus({ state: "connecting", deviceId: state.deviceId, message: null });
 	const child = spawn(process.execPath, [relayScript], {
 		env: {
@@ -1104,7 +1029,7 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 			ELECTRON_RUN_AS_NODE: "1",
 			NODE_ENV: "production",
 			COHUB_LOCAL_RELAY_URL: `${alphaOrigin.replace("https:", "wss:")}/api/alpha/v1/nodes/${state.accountId}/${state.deviceId}/connect`,
-			COHUB_LOCAL_RELAY_NODE_ID: state.deviceId,
+			COHUB_LOCAL_RELAY_NODE_ID: nodeId,
 			COHUB_LOCAL_RELAY_NODE_TOKEN: relayCredential,
 			COHUB_LOCAL_DATA_DIR: dataDir(),
 			SPACE_STORAGE_ROOT: join(dataDir(), "spaces"),
@@ -1123,7 +1048,7 @@ async function startRelayOnce(state: StoredState, credential?: string) {
 		logMessage("relay", message);
 	});
 	child.on("message", (message) => {
-		if (!message || typeof message !== "object" || Reflect.get(message, "type") !== "relay-status" || Reflect.get(message, "nodeId") !== state.deviceId || Reflect.get(message, "pid") !== child.pid) return;
+		if (!message || typeof message !== "object" || Reflect.get(message, "type") !== "relay-status" || Reflect.get(message, "nodeId") !== nodeId || Reflect.get(message, "pid") !== child.pid) return;
 		lastRelayStatusAt = Date.now();
 		const relayState = Reflect.get(message, "state");
 		relayConnected = ["connected", "executing", "waiting-for-local-api"].includes(String(relayState));
@@ -1214,10 +1139,11 @@ async function stopRuntime() {
 		runtimeStableTimer = null;
 	}
 	const pendingStart = runtimeStartPromise;
+	runtimeStartAbort?.abort(new Error("Local Cohub startup stopped"));
 	runtimeProcess = null;
 	localRuntimeReady = false;
-	await stopOwnedRuntime();
 	await pendingStart?.catch(() => undefined);
+	await stopOwnedRuntime();
 }
 
 async function reconnectConnector() {

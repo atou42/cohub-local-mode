@@ -1,5 +1,8 @@
-import { handler } from "web/build/handler.js";
 import { createDesktopWebServer } from "./web-server.mjs";
+
+const loadingAt = performance.now();
+const { handler } = await import("web/build/handler.js");
+process.stdout.write(`[web] bundle loaded in ${Math.round(performance.now() - loadingAt)}ms\n`);
 
 const origin = new URL(process.env.PUBLIC_API_ORIGIN);
 const server = createDesktopWebServer({

@@ -14,6 +14,7 @@ export type RuntimeStartupOptions = {
 	onReady?: () => void;
 	describeExit?: (code: number | null, signal: NodeJS.Signals | null) => Error;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 };
 
 function asError(value: unknown) {
@@ -34,6 +35,7 @@ export function waitForRuntimeStartup({
 	onReady,
 	describeExit = defaultExitError,
 	timeoutMs = 120_000,
+	signal,
 }: RuntimeStartupOptions): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
 		let settled = false;
@@ -91,11 +93,13 @@ export function waitForRuntimeStartup({
 		const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
 			void fail(describeExit(code, signal));
 		};
+		const onAbort = () => { void fail(signal?.reason ?? new Error("Runtime startup cancelled")); };
 
 		const detach = () => {
 			child.removeListener("message", onMessage);
 			child.removeListener("error", onError);
 			child.removeListener("exit", onExit);
+			signal?.removeEventListener("abort", onAbort);
 		};
 
 		const settleSuccess = () => {
@@ -130,5 +134,7 @@ export function waitForRuntimeStartup({
 		child.on("message", onMessage);
 		child.on("error", onError);
 		child.on("exit", onExit);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
 	});
 }

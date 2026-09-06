@@ -19,6 +19,7 @@ import sqlClient from "postgres";
 import nodeFetch from "node-fetch";
 import { initdb, postgres as postgresBinary } from "@embedded-postgres/darwin-arm64";
 import { withoutHostedBilling } from "./billing-env.mjs";
+import { resolveSkillsPath } from "./skills-path.mjs";
 
 const runtimeRoot = dirname(fileURLToPath(import.meta.url));
 const dataRoot = resolve(process.env.COHUB_LOCAL_DATA_DIR || join(homedir(), ".cohub-personal-node"));
@@ -459,25 +460,6 @@ function buildEnvironment(state, cliPath) {
 	return values;
 }
 
-async function resolveSkillsPath() {
-	for (const candidate of [
-		process.env.COHUB_PERSONAL_NODE_SKILLS_PATH,
-		join(homedir(), ".agents", "skills"),
-		join(homedir(), ".codex", "skills"),
-	]) {
-		if (!candidate) continue;
-		try {
-			await access(candidate);
-			return candidate;
-		} catch (error) {
-			if (error?.code !== "ENOENT") throw error;
-		}
-	}
-	const emptySkills = join(dataRoot, "skills");
-	await mkdir(emptySkills, { recursive: true });
-	return emptySkills;
-}
-
 async function syncLocalCatalogs(env) {
 	Object.assign(process.env, env);
 	const workerDist = join(runtimeRoot, "node_modules", "@cohub", "worker", "dist");
@@ -563,7 +545,7 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 	await Promise.all([ensurePostgres(state), ensureRedis(state), ensureObjectStore()]);
 	const cliPath = await writeCliWrapper();
 	const env = buildEnvironment(state, cliPath);
-	env.LOCAL_AGENT_SKILLS_PATH = await resolveSkillsPath();
+	env.LOCAL_AGENT_SKILLS_PATH = await resolveSkillsPath(dataRoot, homedir(), process.env.COHUB_PERSONAL_NODE_SKILLS_PATH);
 	await runChild(
 		"db-migrate",
 		process.execPath,
@@ -577,6 +559,8 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 		ELECTRON_RUN_AS_NODE: "1",
 		NODE_OPTIONS: `--import=${pathToFileURL(join(runtimeRoot, "fetch-polyfill.mjs")).href}`,
 	};
+	// The Web bundle can load while the API starts; readiness still requires both.
+	startChild("web", process.execPath, [join(runtimeRoot, "web-entry.mjs")], nodeEnv);
 	startChild(
 		"api",
 		process.execPath,
@@ -600,6 +584,12 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 	);
 	await Promise.all([
 		(async () => {
+			await waitForTcp(ports.web, 90_000);
+			if (!(await probe(`http://127.0.0.1:${ports.web}/healthz`, 5_000, {
+				"x-cohub-desktop-secret": process.env.COHUB_DESKTOP_INSTANCE_SECRET,
+			}))) throw new Error("Local Web application failed its readiness check");
+		})(),
+		(async () => {
 			await waitForTcp(ports.api, 90_000);
 			if (!(await probe(`http://127.0.0.1:${ports.api}/healthz`, 5_000))) throw new Error("Local API health check failed");
 		})(),
@@ -614,11 +604,6 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 		[join(runtimeRoot, "sandbox-supervisor.mjs")],
 		nodeEnv,
 	);
-	startChild("web", process.execPath, [join(runtimeRoot, "web-entry.mjs")], nodeEnv);
-	await waitForTcp(ports.web, 30000);
-	if (!(await probe(`http://127.0.0.1:${ports.web}/healthz`, 5000, {
-		"x-cohub-desktop-secret": process.env.COHUB_DESKTOP_INSTANCE_SECRET,
-	}))) throw new Error("Local Web application failed its readiness check");
 	process.stdout.write("[runtime] ready bundled\n");
 	process.send?.({ type: "runtime-ready", instanceId: process.env.COHUB_DESKTOP_INSTANCE_ID });
 }
