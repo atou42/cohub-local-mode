@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { publishWebBuild } from "./web-release.mjs";
+import { webBuildEnvironment } from "./web-build-env.mjs";
 import { probeLocalAppShell } from "./web-health.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -112,7 +113,9 @@ function run(program, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(program, args, {
       cwd: options.cwd ?? repoRoot,
-      env: { ...process.env, ...options.env },
+      env: options.webBuild
+        ? webBuildEnvironment({ ...process.env, ...options.env })
+        : { ...process.env, ...options.env },
       stdio: "inherit",
       shell: false,
     });
@@ -257,6 +260,7 @@ async function buildWeb() {
   }
   try {
     await run("pnpm", ["--filter", "web", "build"], {
+      webBuild: true,
       env: {
         COHUB_WEB_BUILD_OUT_DIR: stagedName,
         COHUB_WEB_WRANGLER_CONFIG: "wrangler.local-build.toml",
