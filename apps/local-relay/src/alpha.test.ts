@@ -553,6 +553,58 @@ test("browser attachment plans stay on the owner-scoped Alpha route", async () =
 	);
 });
 
+test("attachment preflight permits verified binary PUT only for the configured origin", async () => {
+	const handler = createAlphaHandler({ authorizeUser: async () => identity });
+	const env = environment(async () => Response.json({ ok: true }), async () => { throw new Error("Preflight must not access node storage"); });
+	const url = "https://dev-cohub.atou.cc/api/alpha/v1/nodes/669526bb-bf65-4013-a825-4f61adf199f8/attachments/e3548945-9376-41ad-b337-a2b3904fcc59/content";
+	const response = await handler.fetch(new Request(url, { method: "OPTIONS", headers: { origin: "https://dev-cohub.atou.cc", "access-control-request-method": "PUT", "access-control-request-headers": "authorization,content-type,x-cohub-content-sha256" } }), env);
+	assert.equal(response.status, 204);
+	assert.match(response.headers.get("access-control-allow-methods") ?? "", /PUT/);
+	assert.match(response.headers.get("access-control-allow-headers") ?? "", /x-cohub-content-sha256/);
+	const denied = await handler.fetch(new Request(url, { method: "OPTIONS", headers: { origin: "https://unrelated.test" } }), env);
+	assert.equal(denied.status, 403);
+	assert.notEqual(denied.headers.get("access-control-allow-origin"), "https://unrelated.test");
+});
+
+for (const route of ["browser", "device"] as const) {
+	test(`${route} attachment upload preserves internal POST methods, bodies and node identity`, async () => {
+		const deviceId = "669526bb-bf65-4013-a825-4f61adf199f8";
+		const attachmentId = "e3548945-9376-41ad-b337-a2b3904fcc59";
+		const nodeId = await alphaNodeId({ accountId: identity.accountId, deviceId });
+		const bytes = new Uint8Array([0, 128, 255, 1]);
+		const checksum = await crypto.subtle.digest("SHA-256", bytes);
+		const sha256 = Buffer.from(checksum).toString("hex");
+		const attachment = { id: attachmentId, nodeId, objectKey: `nodes/${nodeId}/attachments/${attachmentId}`, name: "body.bin", size: bytes.length, contentType: "application/octet-stream", sha256, state: "pending", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+		const observed: { method: string; path: string; body: unknown }[] = [];
+		let puts = 0;
+		const env = Object.assign(environment(async () => Response.json({ ok: true }), async (request) => {
+			const path = new URL(request.url).pathname;
+			observed.push({ method: request.method, path, body: request.method === "POST" ? await request.json() : null });
+			assert.equal(request.headers.get(RELAY_NODE_IDENTITY_HEADER), nodeId);
+			assert.equal(request.headers.get("authorization"), null);
+			if (request.method !== "POST") return Response.json({ code: "not_found" }, { status: 404 });
+			return Response.json({ attachment: { ...attachment, state: path.endsWith("/complete") ? "ready" : "pending" }, alreadyUploaded: false });
+		}), { ATTACHMENTS: { async put(key: string, body: ReadableStream, options: { httpMetadata: unknown; customMetadata: unknown; sha256: string }) {
+			puts += 1;
+			assert.equal(key, attachment.objectKey);
+			assert.deepEqual(new Uint8Array(await new Response(body).arrayBuffer()), bytes);
+			assert.equal(options.sha256, sha256);
+			return { size: bytes.length, checksums: { sha256: checksum }, ...options };
+		} } });
+		const handler = createAlphaHandler({ authorizeUser: async () => identity });
+		const prefix = route === "device" ? `${identity.accountId}/${deviceId}` : deviceId;
+		const response = await handler.fetch(new Request(`https://dev-cohub.atou.cc/api/alpha/v1/nodes/${prefix}/attachments/${attachmentId}/content?uploadToken=upload-secret`, {
+			method: "PUT", headers: { authorization: "Bearer token", "content-type": attachment.contentType, "content-length": String(bytes.length), "x-cohub-content-sha256": sha256, ...(route === "device" ? { "x-cohub-relay-node": "1" } : {}) }, body: bytes,
+		}), env);
+		assert.equal(response.status, 201, JSON.stringify(await response.json()));
+		assert.equal(puts, 1);
+		assert.deepEqual(observed, [
+			{ method: "POST", path: `/internal/attachments/${attachmentId}/authorize-upload`, body: { token: "upload-secret", size: bytes.length, contentType: attachment.contentType, sha256 } },
+			{ method: "POST", path: `/internal/attachments/${attachmentId}/complete`, body: { objectKey: attachment.objectKey, size: bytes.length, contentType: attachment.contentType, sha256 } },
+		]);
+	});
+}
+
 test("a browser cannot create a channel for a missing or revoked device", async () => {
 	const deviceId = "669526bb-bf65-4013-a825-4f61adf199f8";
 	let nodeRouted = false;

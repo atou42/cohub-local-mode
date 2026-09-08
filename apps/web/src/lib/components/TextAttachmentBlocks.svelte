@@ -3,6 +3,7 @@ import type { ContentBlock } from "@cohub/protocol/core";
 import { ArrowUpRight } from "lucide-svelte";
 import Dialog from "$lib/components/Dialog.svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { protectedRelayMedia, publicMediaSource } from "$lib/protected-relay-media";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -106,7 +107,7 @@ function openImagePreview(block: ImageBlock) {
 					title={m.attach_preview_image({}, { locale })}
 					aria-label={m.attach_preview_named({ name: getFilename(block, index) }, { locale })}
 				>
-					<img src={getImageSrc(block)} alt={getFilename(block, index)} class="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.02]" />
+					<img src={publicMediaSource(getImageSrc(block))} use:protectedRelayMedia={getImageSrc(block)} alt={getFilename(block, index)} class="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.02]" />
 				</button>
 			{/if}
 		{/each}

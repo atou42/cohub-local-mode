@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { parseNodeMessage } from "../src/protocol.ts";
+import { RELAY_PROTOCOL_VERSION } from "./protocol-compat.mjs";
 import { relayReturnedArtifacts } from "./core.mjs";
 import { rewriteRelayArtifactProjection } from "../../api/src/local-mode/relay-artifacts.ts";
 import { normalizeWorkspaceFileLink } from "../../web/src/lib/workspace-file-links.ts";
@@ -427,7 +428,7 @@ test("emits a lifecycle fixture accepted by the Relay protocol at database limit
   const lifecycle = events.find((event) => event.kind === "turn.lifecycle");
   assert.ok(lifecycle);
   const parsed = parseNodeMessage({
-    protocolVersion: 3,
+    protocolVersion: RELAY_PROTOCOL_VERSION,
     type: "turn-event",
     event: lifecycle,
   });

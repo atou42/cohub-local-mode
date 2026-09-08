@@ -11,6 +11,7 @@ import {
 	clearAuthToken,
 	getAuthSessionSnapshot,
 	getAuthToken as resolveAccessToken,
+	getCloudAuthToken,
 	setAuthToken,
 } from "$lib/auth";
 import { getCurrentRedirectPath, redirectToSignIn } from "$lib/auth-redirect";
@@ -165,12 +166,20 @@ const localSdk = localModeEnabled
 const cloudSdk = localModeEnabled
 	? createWebSdk({
 			baseUrl: env.PUBLIC_CLOUD_API_ORIGIN?.trim() || "https://api.cohub.live",
+			...(env.PUBLIC_DESKTOP_CLIENT === "true" ? {
+				getAccessToken: getCloudAuthToken,
+				setStoredAuthToken: () => {},
+				clearStoredAuthToken: () => {},
+				onUnauthorized: () => {},
+			} : {}),
 			websocket: {
+				getAccessToken: getCloudAuthToken,
 				url:
 					env.PUBLIC_CLOUD_GATEWAY_ORIGIN?.trim() ||
 					"wss://gateway.cohub.live/ws",
 			},
 			voice: {
+				getAccessToken: getCloudAuthToken,
 				url:
 					env.PUBLIC_CLOUD_GATEWAY_ORIGIN?.trim() ||
 					"wss://gateway.cohub.live/asr/ws",

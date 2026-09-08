@@ -40,6 +40,20 @@ const ports = {
 const children = new Map();
 let objectStore = null;
 let stopping = false;
+const bootStartedAt = performance.now();
+
+async function startupStage(stage, action) {
+	const startedAt = performance.now();
+	process.send?.({ type: "runtime-progress", instanceId: process.env.COHUB_DESKTOP_INSTANCE_ID, stage });
+	try {
+		const value = await action();
+		process.stdout.write(`[runtime-stage] ${JSON.stringify({ stage, durationMs: Math.round(performance.now() - startedAt), elapsedMs: Math.round(performance.now() - bootStartedAt), status: "ready" })}\n`);
+		return value;
+	} catch (error) {
+		process.stderr.write(`[runtime-stage] ${JSON.stringify({ stage, durationMs: Math.round(performance.now() - startedAt), elapsedMs: Math.round(performance.now() - bootStartedAt), status: "failed" })}\n`);
+		throw error;
+	}
+}
 
 function secret() {
 	return randomBytes(32).toString("base64url");
@@ -252,7 +266,7 @@ async function ensureRedis(state) {
 
 async function ensureObjectStore() {
 	const cors = Buffer.from(
-		`<CORSConfiguration><CORSRule><AllowedOrigin>https://dev-cohub.atou.cc</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod><AllowedMethod>POST</AllowedMethod><AllowedMethod>DELETE</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader></CORSRule></CORSConfiguration>`,
+		`<CORSConfiguration><CORSRule><AllowedOrigin>http://127.0.0.1:${ports.web}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod><AllowedMethod>POST</AllowedMethod><AllowedMethod>DELETE</AllowedMethod><AllowedHeader>content-type</AllowedHeader><AllowedHeader>x-oss-forbid-overwrite</AllowedHeader><ExposeHeader>ETag</ExposeHeader></CORSRule></CORSConfiguration>`,
 	);
 	await mkdir(join(dataRoot, "objects"), { recursive: true });
 	objectStore = new S3rver({
@@ -542,18 +556,22 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 		await mkdir(join(dataRoot, path), { recursive: true });
 	}
 	await ensurePlatformConfig();
-	await Promise.all([ensurePostgres(state), ensureRedis(state), ensureObjectStore()]);
+	await Promise.all([
+		startupStage("Database", () => ensurePostgres(state)),
+		startupStage("Task queue", () => ensureRedis(state)),
+		startupStage("File storage", () => ensureObjectStore()),
+	]);
 	const cliPath = await writeCliWrapper();
 	const env = buildEnvironment(state, cliPath);
 	env.LOCAL_AGENT_SKILLS_PATH = await resolveSkillsPath(dataRoot, homedir(), process.env.COHUB_PERSONAL_NODE_SKILLS_PATH);
-	await runChild(
+	await startupStage("Database migration", () => runChild(
 		"db-migrate",
 		process.execPath,
 		[nodeEntry("@cohub/api", "dist/db/migrate.js")],
 		{ ...env, ELECTRON_RUN_AS_NODE: "1" },
 		dirname(nodeEntry("@cohub/api", "package.json")),
-	);
-	await syncLocalCatalogs(env);
+	));
+	await startupStage("Local catalogs", () => syncLocalCatalogs(env));
 	const nodeEnv = {
 		...env,
 		ELECTRON_RUN_AS_NODE: "1",
@@ -583,20 +601,20 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(process.env.COHUB_DESKTOP_INSTANCE_SECRET ?? "")
 		{ ...nodeEnv, PORT: String(ports.gateway) },
 	);
 	await Promise.all([
-		(async () => {
+		startupStage("Web application", async () => {
 			await waitForTcp(ports.web, 90_000);
 			if (!(await probe(`http://127.0.0.1:${ports.web}/healthz`, 5_000, {
 				"x-cohub-desktop-secret": process.env.COHUB_DESKTOP_INSTANCE_SECRET,
 			}))) throw new Error("Local Web application failed its readiness check");
-		})(),
-		(async () => {
+		}),
+		startupStage("API", async () => {
 			await waitForTcp(ports.api, 90_000);
 			if (!(await probe(`http://127.0.0.1:${ports.api}/healthz`, 5_000))) throw new Error("Local API health check failed");
-		})(),
-		(async () => {
+		}),
+		startupStage("Gateway", async () => {
 			await waitForTcp(ports.gateway, 90_000);
 			if (!(await probe(`http://127.0.0.1:${ports.gateway}/healthz`, 5_000))) throw new Error("Local Gateway health check failed");
-		})(),
+		}),
 	]);
 	startChild(
 		"sandbox-supervisor",

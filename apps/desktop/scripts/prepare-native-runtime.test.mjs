@@ -12,6 +12,7 @@ const exec = promisify(execFile);
 const bytes = "cached native binary fixture";
 const manifest = {
 	valkeyVersion: "9.1.2",
+	macosDeploymentTarget: "13.0",
 	sourceSha256: "8e8557da7426a51b4e0fb514a65ef6241dc7c85cb408243af389070abf379cec",
 	binarySha256: createHash("sha256").update(bytes).digest("hex"),
 };
@@ -35,9 +36,23 @@ test("reuses a native binary only when its manifest and digest agree", async (t)
 	await run();
 });
 
+for (const target of [undefined, "26.0"]) {
+	test(`rebuilds a native cache for an incompatible deployment target (${target ?? "legacy"})`, async (t) => {
+		const previous = JSON.stringify({ ...manifest, macosDeploymentTarget: target });
+		const { run, output } = await fixture(t, previous);
+		await assert.rejects(run(), (failure) => {
+			assert.match(failure.stderr, /Unexpected network request/);
+			return true;
+		});
+		assert.equal(await readFile(join(output, "manifest.json"), "utf8"), previous);
+		assert.equal(await readFile(join(output, "valkey-server"), "utf8"), bytes);
+	});
+}
+
 for (const [name, value, binary, error] of [
 	["malformed JSON", "{corrupt", bytes, /SyntaxError/],
 	["missing fields", "{}", bytes, /manifest is invalid/],
+	["invalid deployment target", JSON.stringify({ ...manifest, macosDeploymentTarget: "latest" }), bytes, /manifest is invalid/],
 	["changed binary", JSON.stringify(manifest), "damaged", /checksum mismatch/],
 ]) {
 	test(`preserves and rejects ${name} without downloading a replacement`, async (t) => {

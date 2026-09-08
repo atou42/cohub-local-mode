@@ -1,11 +1,11 @@
-import { CoreV1Api, CustomObjectsApi, KubeConfig } from "@kubernetes/client-node";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { createLogger } from "@cohub/infra/logging";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
-const createKubeConfig = () => {
+const createKubernetesClients = async () => {
+  const { CoreV1Api, CustomObjectsApi, Exec, KubeConfig } = await import("@kubernetes/client-node");
   const kubeConfig = new KubeConfig();
 
   let kubeconfigPath = process.env.KUBECONFIG;
@@ -26,10 +26,15 @@ const createKubeConfig = () => {
     kubeConfig.loadFromDefault();
   }
 
-  return kubeConfig;
+  return {
+    kubeConfig,
+    k8sCoreApi: kubeConfig.makeApiClient(CoreV1Api),
+    k8sCustomObjectsApi: kubeConfig.makeApiClient(CustomObjectsApi),
+    k8sExec: new Exec(kubeConfig),
+  };
 };
 
-export const kubeConfig = createKubeConfig();
+let clients: ReturnType<typeof createKubernetesClients> | undefined;
 
-export const k8sCoreApi = kubeConfig.makeApiClient(CoreV1Api);
-export const k8sCustomObjectsApi = kubeConfig.makeApiClient(CustomObjectsApi);
+// Local nodes never use Kubernetes. Keep its generated SDK off their startup path.
+export const getKubernetesClients = () => clients ??= createKubernetesClients();

@@ -251,7 +251,9 @@ export async function uploadSpaceEntries({
 			importedFiles: 0,
 			totalFiles,
 		});
-		if (planned.uploadUrl) {
+		if (planned.uploadUrl === `/api/spaces/${spaceId}/fs/uploads/${plan.uploadId}/entries/${encodeURIComponent(id)}`) {
+			await sdk.space(spaceId).files.uploadEntry(plan.uploadId, id, entry.file, { signal });
+		} else if (planned.uploadUrl) {
 			await putWithProgress(
 				entry.file,
 				planned.uploadUrl,

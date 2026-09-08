@@ -273,8 +273,14 @@ let resizeFrame: number | null = null;
 
 const hasDraft = $derived(hasVisibleDraftText(value) || attachments.length > 0);
 const showAbort = $derived(Boolean(isRunning && !hasDraft));
+const selectedHarnessReadiness = $derived(resolveAgentHarnessReadinessView({
+	harness: agentHarness,
+	entry: readinessFor(agentHarness),
+	error: agentHarnessReadinessError,
+}));
 const submitDisabled = $derived(
-	disabled || sending || (!hasDraft && !showAbort),
+	disabled || sending || (!hasDraft && !showAbort) ||
+	(showAgentHarness && mode === "agent" && !selectedHarnessReadiness.available),
 );
 const modelControlLabel = $derived(
 	currentModel?.name ?? currentModel?.id ?? m.composer_model({}, { locale }),
@@ -1638,7 +1644,7 @@ $effect(() => {
 										aria-label={`Agent harness ${agentHarnessLabel}${agentHarnessLocked ? ", locked for this Session" : ""}`}
 										aria-expanded={showAgentHarnessMenu}
 										aria-haspopup="menu"
-										title={agentHarnessLocked ? `${agentHarnessLabel} is locked after the first turn` : "Choose agent harness"}
+										title={!selectedHarnessReadiness.available ? selectedHarnessReadiness.detail : agentHarnessLocked ? `${agentHarnessLabel} is locked after the first turn` : "Choose agent harness"}
 										onclick={() => { showAgentHarnessMenu = !showAgentHarnessMenu; }}
 										onkeydown={(event) => { if (event.key === "Escape") showAgentHarnessMenu = false; }}
 									>

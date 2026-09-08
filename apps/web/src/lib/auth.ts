@@ -249,9 +249,12 @@ async function resolveLogtoAccessToken(forceRefresh: boolean) {
 	return refreshWithToken.call(client, API_RESOURCE);
 }
 
-async function resolveLocalModeAccessToken(forceRefresh: boolean) {
+async function resolveLocalModeAccessToken(forceRefresh: boolean, desktop = env.PUBLIC_DESKTOP_CLIENT === "true") {
 	const baseUrl = (env.PUBLIC_API_ORIGIN ?? "").trim().replace(/\/+$/, "");
-	const query = forceRefresh ? "?refresh=1" : "";
+	const params = new URLSearchParams();
+	if (forceRefresh) params.set("refresh", "1");
+	if (desktop) params.set("desktop", "1");
+	const query = params.size ? `?${params}` : "";
 	const response = await localNodeFetch(
 		`${baseUrl}/api/local-mode/auth${query}`,
 		{
@@ -514,6 +517,11 @@ export const getAuthToken = async (
 		return null;
 	}
 };
+
+export async function getCloudAuthToken(options?: AuthTokenRequestOptions) {
+	if (USES_LOCAL_HOST_AUTH && env.PUBLIC_DESKTOP_CLIENT === "true") return resolveLocalModeAccessToken(Boolean(options?.forceRefresh), false);
+	return getAuthToken(options);
+}
 
 export const getCurrentIdTokenClaims =
 	async (): Promise<IdTokenClaims | null> => {

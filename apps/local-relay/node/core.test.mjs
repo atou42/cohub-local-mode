@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -331,7 +332,7 @@ test("stops retrying a claimed command when its lease is abandoned", async () =>
   assert.equal(retries, 1);
 });
 
-test("times out a local API request that never completes", { timeout: 500 }, async () => {
+test("reports an unknown outcome when a sent write request times out", { timeout: 500 }, async () => {
   let calls = 0;
   await assert.rejects(
     () =>
@@ -352,9 +353,98 @@ test("times out a local API request that never completes", { timeout: 500 }, asy
         },
       }),
     (error) =>
-      error instanceof RelayNodeError && error.code === "local_api_timeout",
+      error instanceof RelayNodeError && error.code === "local_api_outcome_unknown",
   );
   assert.equal(calls, 2);
+});
+
+for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+  for (const failure of ["request", "response"]) {
+    test(`does not replay ${method} after a ${failure} failure following a side effect`, async () => {
+      let writes = 0;
+      const mutation = { ...command, request: { ...command.request, method, path: "/api/test-mutation", body: "{}" } };
+      await assert.rejects(executeRelayCommandUntilAvailable(mutation, {
+        retryMinDelayMs: 1,
+        retryMaxDelayMs: 1,
+        fetcher: async (url) => {
+          if (String(url).endsWith("/api/local-mode/auth")) return Response.json({ accessToken: "test-token" });
+          writes += 1;
+          if (writes > 1) return Response.json({ ok: true });
+          if (failure === "request") throw new TypeError("Connection closed after commit");
+          return new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"ok":'));
+              controller.error(new TypeError("Response interrupted after commit"));
+            },
+          }));
+        },
+      }), (error) => error instanceof RelayNodeError && error.code === "local_api_outcome_unknown");
+      assert.equal(writes, 1);
+    });
+  }
+}
+
+test("read-only requests can retry a lost response", async () => {
+  let reads = 0;
+  const query = { ...command, request: { ...command.request, method: "GET", path: "/api/spaces", body: "" } };
+  const result = await executeRelayCommandUntilAvailable(query, {
+    retryMinDelayMs: 1,
+    retryMaxDelayMs: 1,
+    fetcher: async (url) => {
+      if (String(url).endsWith("/api/local-mode/auth")) return Response.json({ accessToken: "test-token" });
+      reads += 1;
+      if (reads === 1) throw new TypeError("Connection reset");
+      return Response.json({ spaces: [] });
+    },
+  });
+  assert.equal(reads, 2);
+  assert.deepEqual(JSON.parse(result.result.body), { spaces: [] });
+});
+
+test("external cancellation remains cancellation after a write is sent", async () => {
+  const controller = new AbortController();
+  const reason = new DOMException("Lease abandoned", "AbortError");
+  let writes = 0;
+  await assert.rejects(executeRelayCommandUntilAvailable(command, {
+    signal: controller.signal,
+    fetcher: async (url) => {
+      if (String(url).endsWith("/api/local-mode/auth")) return Response.json({ accessToken: "test-token" });
+      writes += 1;
+      controller.abort(reason);
+      throw reason;
+    },
+  }), (error) => error === reason);
+  assert.equal(writes, 1);
+});
+
+test("a real HTTP write is not repeated when the server commits then drops the socket", async () => {
+  let writes = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/api/local-mode/auth") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ accessToken: "test-token" }));
+      return;
+    }
+    request.resume();
+    request.on("end", () => {
+      writes += 1;
+      if (writes === 1) response.destroy();
+      else response.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    await assert.rejects(executeRelayCommandUntilAvailable(command, {
+      localApiOrigin: `http://127.0.0.1:${port}`,
+      retryMinDelayMs: 1,
+      retryMaxDelayMs: 1,
+    }), (error) => error instanceof RelayNodeError && error.code === "local_api_outcome_unknown");
+    assert.equal(writes, 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("includes local authentication in the command deadline", { timeout: 500 }, async () => {
@@ -398,7 +488,8 @@ test("rejects an oversized local API response instead of truncating it", async (
       }),
     (error) =>
       error instanceof RelayNodeError &&
-      error.code === "local_response_too_large",
+      error.code === "local_api_outcome_unknown" &&
+      error.cause?.code === "local_response_too_large",
   );
 });
 

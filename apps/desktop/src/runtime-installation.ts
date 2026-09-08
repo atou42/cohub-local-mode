@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { parseRuntimeIntegrity, verifyRuntimeIntegrity } from "./runtime-integrity.ts";
 
 async function sha256File(path: string, signal?: AbortSignal) {
 	const hash = createHash("sha256");
@@ -78,25 +79,24 @@ export async function installRuntime(
 		schemaVersion?: unknown;
 		sha256?: unknown;
 		size?: unknown;
+		filesSha256?: unknown;
 	};
 	if (
-		manifest.schemaVersion !== 1 ||
+		manifest.schemaVersion !== 2 ||
 		typeof manifest.sha256 !== "string" ||
 		!/^[0-9a-f]{64}$/.test(manifest.sha256) ||
 		typeof manifest.size !== "number" ||
 		!Number.isSafeInteger(manifest.size) ||
-		manifest.size <= 0
+		manifest.size <= 0 ||
+		typeof manifest.filesSha256 !== "string" ||
+		!/^[0-9a-f]{64}$/.test(manifest.filesSha256)
 	) {
 		throw new Error("Bundled runtime manifest is invalid");
 	}
-	const archiveStat = await stat(archive);
-	if (archiveStat.size !== manifest.size) {
-		throw new Error("Bundled runtime archive size does not match its manifest");
-	}
-	if ((await sha256File(archive, signal)) !== manifest.sha256) {
-		throw new Error("Bundled runtime archive checksum does not match its manifest");
-	}
-	stage("Runtime archive verified");
+	const fileManifest = await readFile(join(resourcesPath, "runtime-files.json"));
+	if (createHash("sha256").update(fileManifest).digest("hex") !== manifest.filesSha256) throw new Error("Bundled runtime integrity manifest checksum mismatch");
+	const expectedFiles = parseRuntimeIntegrity(JSON.parse(fileManifest.toString("utf8")));
+	stage("Runtime manifest verified");
 
 	const parent = join(userDataPath, "runtime");
 	const installed = join(parent, manifest.sha256);
@@ -122,10 +122,15 @@ export async function installRuntime(
 			throw new Error("Installed runtime marker is invalid");
 		}
 		await validateInstalledRuntime(installed);
+		await verifyRuntimeIntegrity(installed, expectedFiles, signal);
 		signal?.throwIfAborted();
 		stage("Existing runtime verified");
 		return join(installed, "manager.mjs");
 	}
+	const archiveStat = await stat(archive);
+	if (archiveStat.size !== manifest.size) throw new Error("Bundled runtime archive size does not match its manifest");
+	if ((await sha256File(archive, signal)) !== manifest.sha256) throw new Error("Bundled runtime archive checksum does not match its manifest");
+	stage("Runtime archive verified");
 
 	await mkdir(parent, { recursive: true });
 	signal?.throwIfAborted();
@@ -135,6 +140,7 @@ export async function installRuntime(
 		await extractRuntime(archive, temporary, signal);
 		stage("Runtime extracted");
 		await validateInstalledRuntime(temporary);
+		await verifyRuntimeIntegrity(temporary, expectedFiles, signal);
 		signal?.throwIfAborted();
 		await writeFile(
 			join(temporary, ".cohub-runtime.json"),

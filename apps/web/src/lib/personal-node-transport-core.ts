@@ -1,3 +1,5 @@
+import type { PersonalNodeBodyPart } from "./personal-node-http-body";
+
 export type PersonalNodeDevice = {
 	id: string;
 	displayName: string;
@@ -9,6 +11,8 @@ export type PersonalNodeRelayResult = {
 	status: number;
 	headers: Record<string, string>;
 	body: string;
+	bodyEncoding?: "base64";
+	bodyParts?: PersonalNodeBodyPart[];
 };
 
 export type PersonalNodeRelayCommand = {
@@ -43,8 +47,7 @@ export function selectPersonalNodeDevice(
 		(device) => device.status === "active" && UUID_PATTERN.test(device.id),
 	);
 	if (preferredId) {
-		const preferred = active.find((device) => device.id === preferredId);
-		if (preferred) return preferred;
+		return active.find((device) => device.id === preferredId) ?? null;
 	}
 	return (
 		active.sort((left, right) =>
@@ -53,14 +56,18 @@ export function selectPersonalNodeDevice(
 	);
 }
 
-export function buildPersonalNodeReadCommand(path: string) {
-	return buildPersonalNodeApiCommand({ method: "GET", path, body: "" });
+export function buildPersonalNodeReadCommand(path: string, headers?: HeadersInit) {
+	return buildPersonalNodeApiCommand({ method: "GET", path, body: "", headers });
 }
 
 export function buildPersonalNodeApiCommand(input: {
 	method: string;
 	path: string;
 	body: string;
+	bodyEncoding?: "base64";
+	bodyParts?: PersonalNodeBodyPart[];
+	headers?: HeadersInit;
+	idempotencyKey?: string;
 }) {
 	const method = input.method.toUpperCase();
 	if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
@@ -71,22 +78,28 @@ export function buildPersonalNodeApiCommand(input: {
 	if (url.origin !== "https://alpha.internal" || !path.startsWith("/api/")) {
 		throw new Error("Personal Node requests require a local API path");
 	}
-	const idempotencyKey = crypto.randomUUID();
+	const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
+	if (!UUID_PATTERN.test(idempotencyKey)) throw new Error("Personal Node operation identity must be a UUID");
+	const headers = new Headers(input.headers);
+	const allowed = ["content-type", "accept", "range", "if-match", "if-none-match", "if-modified-since", "x-cohub-fs-mutation-id"];
 	return {
 		kind: "alpha_api",
 		idempotencyKey,
 		request: {
 			method,
 			path: `${url.pathname}${url.search}`,
-			headers: {},
+			headers: Object.fromEntries(allowed.flatMap((name) => headers.has(name) ? [[name, headers.get(name)!]] : [])),
 			body: input.body,
+			...(input.bodyEncoding ? { bodyEncoding: input.bodyEncoding } : {}),
+			...(input.bodyParts ? { bodyParts: input.bodyParts } : {}),
 		},
 	};
 }
 
-export function personalNodeCommandResponse(command: PersonalNodeRelayCommand) {
+export function personalNodeCommandResponse(command: PersonalNodeRelayCommand, transferredBody?: BodyInit) {
 	if (command.result) {
-		return new Response(relayResponseBody(command.result), {
+		if (command.result.bodyParts && !transferredBody) throw new Error("Personal Node response body must be downloaded before use");
+		return new Response(transferredBody ?? relayResponseBody(command.result), {
 			status: command.result.status,
 			headers: command.result.headers,
 		});
@@ -104,9 +117,29 @@ export function personalNodeCommandResponse(command: PersonalNodeRelayCommand) {
 }
 
 function relayResponseBody(result: PersonalNodeRelayResult) {
+	if (result.bodyEncoding !== undefined) {
+		if (result.bodyEncoding !== "base64") throw new Error("Personal Node response encoding is invalid");
+		const decoded = atob(result.body);
+		if (btoa(decoded) !== result.body) throw new Error("Personal Node response body is invalid base64");
+		if (!decoded && [204, 205, 304].includes(result.status)) return null;
+		return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+	}
 	return result.body === "" && [204, 205, 304].includes(result.status)
 		? null
 		: result.body;
+}
+
+export async function encodePersonalNodeRequestBody(request: Request, transferredBytes?: Uint8Array) {
+	const bytes = transferredBytes ?? new Uint8Array(await request.clone().arrayBuffer());
+	const contentType = request.headers.get("content-type") ?? "";
+	if (bytes.byteLength === 0) return { body: "" };
+	if (!contentType || /\bjson\b/i.test(contentType) || /^text\//i.test(contentType)) {
+		try { return { body: new TextDecoder("utf-8", { fatal: true }).decode(bytes) }; }
+		catch { /* Preserve non-UTF-8 bytes rather than replacing them. */ }
+	}
+	let binary = "";
+	for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+	return { body: btoa(binary), bodyEncoding: "base64" as const };
 }
 
 export function personalNodeProjectionResponse(

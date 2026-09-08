@@ -15,6 +15,54 @@ function fakeChild() {
 	return new FakeRuntimeChild();
 }
 
+test("a ready message waits for owner persistence before authentication", async () => {
+	const child = fakeChild();
+	let finishOwner!: () => void;
+	let verified = false;
+	const owner = new Promise<void>((resolve) => { finishOwner = resolve; });
+	const startup = waitForRuntimeStartup({
+		child, instanceId: "instance-1", prepare: () => owner,
+		verifyReady: () => { verified = true; return true; },
+		cleanup: async () => {}, timeoutMs: 1_000,
+	});
+	child.emit("message", { type: "runtime-ready", instanceId: "instance-1" });
+	await new Promise((resolve) => setImmediate(resolve));
+	const verifiedBeforeOwner = verified;
+	finishOwner();
+	await startup;
+	assert.equal(verifiedBeforeOwner, false);
+	assert.equal(verified, true);
+});
+
+test("owner persistence failure cleans the child without waiting for ready", async () => {
+	const child = fakeChild();
+	let cleaned = false;
+	await assert.rejects(waitForRuntimeStartup({
+		child, instanceId: "instance-1", prepare: async () => { throw new Error("Owner write failed"); },
+		verifyReady: () => true, cleanup: async () => { cleaned = true; }, timeoutMs: 30,
+	}), /Owner write failed/);
+	assert.equal(cleaned, true);
+});
+
+test("cancellation waits for a pending owner write before cleanup", async () => {
+	const child = fakeChild();
+	const controller = new AbortController();
+	let finishOwner!: () => void;
+	let ownerWritten = false;
+	let cleanedAfterOwner = false;
+	const owner = new Promise<void>((resolve) => { finishOwner = () => { ownerWritten = true; resolve(); }; });
+	const startup = waitForRuntimeStartup({
+		child, instanceId: "instance-1", prepare: () => owner, signal: controller.signal,
+		verifyReady: () => true, cleanup: async () => { cleanedAfterOwner = ownerWritten; }, timeoutMs: 1_000,
+	});
+	await new Promise((resolve) => setImmediate(resolve));
+	const rejected = assert.rejects(startup, /Stopped during owner write/);
+	controller.abort(new Error("Stopped during owner write"));
+	finishOwner();
+	await rejected;
+	assert.equal(cleanedAfterOwner, true);
+});
+
 test("cancellation cleans the runtime and rejects a late authenticated ready", async () => {
 	const child = fakeChild();
 	const controller = new AbortController();

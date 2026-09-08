@@ -21,6 +21,7 @@ export function createAlphaReadProjection(
 		command.status !== "succeeded" ||
 		command.request.method !== "GET" ||
 		!command.result ||
+		command.result.bodyParts !== undefined ||
 		!isAlphaLocalApiRequest(command.request.method, command.request.path) ||
 		command.result.status < 200 ||
 		command.result.status >= 300 ||

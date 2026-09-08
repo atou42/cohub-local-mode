@@ -1,6 +1,6 @@
 import { env } from "$env/dynamic/public";
 import { getAuthToken } from "$lib/auth";
-import { resolvePersonalNodeDevice } from "$lib/personal-node-fetch";
+import { currentPersonalNodeScope, resolvePersonalNodeDevice } from "$lib/personal-node-fetch";
 import {
 	connectLocalRelayEvents,
 	type LocalRelayEventHandlers,
@@ -57,6 +57,9 @@ export type PendingLocalRelayCommand = {
 	optimisticTurnId: string;
 	clientMessageId: string;
 	createdAt: string;
+	admitted?: boolean;
+	accountId?: string;
+	deviceId?: string;
 };
 
 const PENDING_COMMANDS_STORAGE_KEY = "cohub:local-relay-pending:v1";
@@ -85,6 +88,7 @@ async function relayRequestContext() {
 			path: (suffix: string) => relayNodePath(suffix),
 			headers: {} as Record<string, string>,
 			webSocketProtocols: undefined as string[] | undefined,
+			assertCurrent: () => {},
 		};
 	}
 	const token = await getAuthToken();
@@ -111,18 +115,29 @@ async function relayRequestContext() {
 			401,
 		);
 	}
+	const generation = currentPersonalNodeScope()?.generation;
 	return {
 		path: (suffix: string) =>
 			`/api/alpha/v1/nodes/${encodeURIComponent(device.id)}${suffix}`,
 		headers: { authorization },
 		webSocketProtocols: ["cohub-alpha-v1", `cohub-alpha-bearer.${token}`],
+		assertCurrent: () => {
+			if (generation === undefined || currentPersonalNodeScope()?.generation !== generation) throw new LocalRelayRequestError("Personal Node account or device changed", "personal_node_scope_changed", 409);
+		},
 	};
+}
+
+function pendingStorageKey() {
+	if (!isPersonalNodeAlpha) return PENDING_COMMANDS_STORAGE_KEY;
+	const scope = currentPersonalNodeScope();
+	return scope ? `${PENDING_COMMANDS_STORAGE_KEY}:${scope.accountId}:${scope.deviceId}` : null;
 }
 
 function isPendingCommand(value: unknown): value is PendingLocalRelayCommand {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
 	return (
+		(record.admitted === undefined || typeof record.admitted === "boolean") &&
 		[
 			"commandId",
 			"spaceId",
@@ -141,7 +156,9 @@ function isPendingCommand(value: unknown): value is PendingLocalRelayCommand {
 function readPendingCommands() {
 	if (typeof localStorage === "undefined")
 		return [] as PendingLocalRelayCommand[];
-	const raw = localStorage.getItem(PENDING_COMMANDS_STORAGE_KEY);
+	const key = pendingStorageKey();
+	if (!key) return [];
+	const raw = localStorage.getItem(key);
 	if (raw === null) return [];
 	let parsed: unknown;
 	try {
@@ -152,12 +169,16 @@ function readPendingCommands() {
 	if (!Array.isArray(parsed) || !parsed.every(isPendingCommand)) {
 		throw new Error("Local relay recovery data is corrupted");
 	}
+	const scope = currentPersonalNodeScope();
+	if (isPersonalNodeAlpha && parsed.some((command) => command.accountId !== scope?.accountId || command.deviceId !== scope?.deviceId)) throw new Error("Local relay recovery data belongs to a different account or device");
 	return parsed;
 }
 
 function writePendingCommands(commands: PendingLocalRelayCommand[]) {
 	if (typeof localStorage === "undefined") return;
-	localStorage.setItem(PENDING_COMMANDS_STORAGE_KEY, JSON.stringify(commands));
+	const key = pendingStorageKey();
+	if (!key) throw new Error("Personal Node account and device must be resolved before saving recovery data");
+	localStorage.setItem(key, JSON.stringify(commands));
 }
 
 export function listPendingLocalRelayCommands(spaceId: string) {
@@ -170,10 +191,12 @@ export function registerPendingLocalRelayCommand(
 	if (!isPendingCommand(command)) {
 		throw new Error("Local relay recovery command is invalid");
 	}
+	const scope = currentPersonalNodeScope();
+	if (isPersonalNodeAlpha && (!scope || command.accountId !== scope.accountId || command.deviceId !== scope.deviceId)) throw new LocalRelayRequestError("Personal Node account or device changed", "personal_node_scope_changed", 409);
 	const current = readPendingCommands();
 	writePendingCommands([
 		command,
-		...current.filter((item) => item.commandId !== command.commandId),
+		...current.filter((item) => item.clientMessageId !== command.clientMessageId),
 	]);
 }
 
@@ -323,8 +346,12 @@ export async function submitLocalRelayPrompt(input: {
 	clientMessageId: string;
 	body: Record<string, unknown>;
 	attachmentIds?: string[];
+	recovery?: Omit<PendingLocalRelayCommand, "commandId" | "admitted">;
 }) {
 	const relay = await relayRequestContext();
+	const scope = currentPersonalNodeScope();
+	const recovery = input.recovery ? { ...input.recovery, ...(isPersonalNodeAlpha && scope ? { accountId: scope.accountId, deviceId: scope.deviceId } : {}) } : null;
+	if (recovery) registerPendingLocalRelayCommand({ ...recovery, commandId: input.clientMessageId, admitted: false });
 	const response = await fetch(relay.path("/commands"), {
 		method: "POST",
 		headers: { ...relay.headers, "content-type": "application/json" },
@@ -339,9 +366,13 @@ export async function submitLocalRelayPrompt(input: {
 			},
 		}),
 	});
+	relay.assertCurrent();
 	if (!response.ok)
 		throw await responseError(response, "Relay rejected the message");
-	return ((await response.json()) as { command: LocalRelayCommand }).command;
+	const command = ((await response.json()) as { command: LocalRelayCommand }).command;
+	relay.assertCurrent();
+	if (recovery) registerPendingLocalRelayCommand({ ...recovery, commandId: command.id, admitted: true });
+	return command;
 }
 
 export function openLocalRelayEvents(
@@ -353,6 +384,11 @@ export function openLocalRelayEvents(
 	void relayRequestContext()
 		.then((relay) => {
 			if (closed || options.signal?.aborted) return;
+			relay.assertCurrent();
+			const current = () => {
+				try { relay.assertCurrent(); return true; }
+				catch { connection?.close(); return false; }
+			};
 			const url = resolveLocalRelayEventsUrl(
 				relay.path("/events"),
 				typeof window === "undefined" ? null : window.location,
@@ -360,7 +396,13 @@ export function openLocalRelayEvents(
 			connection = connectLocalRelayEvents({
 				url,
 				protocols: relay.webSocketProtocols,
-				handlers,
+				handlers: {
+					onSnapshot: (message) => { if (current()) handlers.onSnapshot?.(message); },
+					onCommandUpdated: (command) => { if (current()) handlers.onCommandUpdated?.(command); },
+					onTurnEvent: (event) => { if (current()) handlers.onTurnEvent?.(event); },
+					onAvailable: () => { if (current()) handlers.onAvailable?.(); },
+					onUnavailable: () => { if (current()) handlers.onUnavailable?.(); },
+				},
 				signal: options.signal,
 			});
 		})
@@ -399,14 +441,15 @@ export async function cancelLocalRelayCommand(
 
 export async function waitForLocalRelayCommand(
 	commandId: string,
-	options: { signal?: AbortSignal; intervalMs?: number } = {},
+	options: { signal?: AbortSignal; intervalMs?: number; operationId?: string } = {},
 ) {
 	const intervalMs = options.intervalMs ?? LOCAL_RELAY_COMMAND_POLL_INTERVAL_MS;
 	const relay = await relayRequestContext();
 	for (;;) {
+		relay.assertCurrent();
 		if (options.signal?.aborted) throw options.signal.reason;
 		const response = await fetch(
-			relay.path(`/commands/${encodeURIComponent(commandId)}`),
+			relay.path(options.operationId ? `/operations/${encodeURIComponent(options.operationId)}` : `/commands/${encodeURIComponent(commandId)}`),
 			{
 				headers: relay.headers,
 				credentials: "include",
@@ -414,10 +457,12 @@ export async function waitForLocalRelayCommand(
 				signal: options.signal,
 			},
 		);
+		relay.assertCurrent();
 		if (!response.ok)
 			throw await responseError(response, "Relay command lookup failed");
 		const command = ((await response.json()) as { command: LocalRelayCommand })
 			.command;
+		relay.assertCurrent();
 		if (["succeeded", "failed", "cancelled"].includes(command.status))
 			return command;
 		await new Promise<void>((resolve, reject) => {

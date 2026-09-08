@@ -1,14 +1,17 @@
 // In production, /api/spaces/:id/fs/* is routed by the gateway to the
 // fs-api deployment. See deploy/fs-api/manifests/httproute.tmpl.yaml.
 import { createLogger } from "@cohub/infra/logging";
-import { resolveAccessToken } from "@neta-art/cohub-cli/auth";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import { ensureFsCdnManifest, shouldUseFsCdnForMeta } from "../../space-fs-cdn-cache.js";
 import { FS_CDN_DOWNLOAD_WAIT_TIMEOUT_MS } from "../../space-fs-cdn-constants.js";
 import { getExecutionPrincipal, getOptionalAuth, useAuth, requireValidId, authzDenied } from "../../lib/middleware.js";
 import { config } from "../../config.js";
+import { resolveCloudAccessToken } from "../../local-mode/cloud-access-token.js";
+import { proxyUploadStream } from "../../local-mode/upload-stream.js";
 import { createCloudSpaceProxy } from "../../local-mode/cloud-space-proxy.js";
 import { listSessionTurns } from "../../session-turns.js";
 import { hasPermission } from "../../permissions.js";
@@ -71,7 +74,7 @@ const proxyCloudSpace = createCloudSpaceProxy({
   cloudApiOrigin: config.cloudApiOrigin,
   loadRecentSessionTurns: (sessionId) =>
     listSessionTurns(sessionId, { limit: 100, direction: "older" }),
-  resolveAccessToken,
+  resolveAccessToken: resolveCloudAccessToken,
   fetch,
 });
 
@@ -481,6 +484,14 @@ router.get("/download", async (c) => {
       });
     }
     const info = await streamSpaceFile(spaceId, path, { visibility });
+    if (download.kind === "local") {
+      const stream = Readable.toWeb(createReadStream(info.target)) as ReadableStream;
+      return c.body(stream, 200, {
+        "content-type": info.mimeType ?? "application/octet-stream",
+        "content-length": String(info.size),
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(info.name)}`,
+      });
+    }
     const meta = {
       spaceId,
       path: info.path,
@@ -588,6 +599,9 @@ router.post("/uploads", async (c) => {
         return { id: entry.id, downloadUrl: entry.downloadUrl };
       }
       const signed = createPresignedPutUrl(entry.objectKey as string, entry.mimeType, entry.size);
+      if (process.env.COHUB_DESKTOP_INSTANCE_SECRET) {
+        return { id: entry.id, objectKey: entry.objectKey, uploadUrl: `/api/spaces/${spaceId}/fs/uploads/${uploadId}/entries/${encodeURIComponent(entry.id)}`, headers: { "content-type": entry.mimeType || "application/octet-stream" } };
+      }
       return { id: entry.id, objectKey: entry.objectKey, uploadUrl: signed.uploadUrl, headers: signed.headers };
     });
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -613,6 +627,24 @@ router.post("/uploads", async (c) => {
     const message = error instanceof Error ? error.message.toLowerCase().replace(/\.$/, "") : "failed to create upload";
     return c.json({ message }, 400);
   }
+});
+
+router.put("/uploads/:uploadId/entries/:entryId", async (c) => {
+  if (!process.env.COHUB_DESKTOP_INSTANCE_SECRET) return c.json({ message: "not found" }, 404);
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
+  const spaceId = c.req.param("id");
+  const uploadId = c.req.param("uploadId");
+  if (!spaceId || !requireValidId(spaceId) || !requireValidId(uploadId)) return c.json({ message: "upload not found" }, 404);
+  if (!(await hasPermission(user, "file.edit", { spaceId }))) return authzDenied(c);
+  const manifest = await getSpaceUploadManifest(spaceId, uploadId);
+  if (!manifest || manifest.userId !== user.uuid) return c.json({ message: "upload not found" }, 404);
+  if (Date.parse(manifest.expiresAt) <= Date.now()) return c.json({ message: "upload expired" }, 410);
+  const entry = manifest.entries.find((item) => item.id === c.req.param("entryId"));
+  if (!entry?.objectKey || entry.downloadUrl) return c.json({ message: "upload entry not found" }, 404);
+  const signed = createPresignedPutUrl(entry.objectKey, entry.mimeType, entry.size);
+  await proxyUploadStream({ body: c.req.raw.body, size: entry.size, uploadUrl: signed.uploadUrl, headers: signed.headers ?? {}, signal: c.req.raw.signal });
+  return c.json({ ok: true });
 });
 
 router.post("/uploads/:uploadId/complete", async (c) => {

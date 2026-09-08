@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { ContentBlock } from "@cohub/protocol/core";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { protectedRelayMedia, publicMediaSource } from "$lib/protected-relay-media";
 
 type ImageBlock = Extract<ContentBlock, { type: "image" }>;
 
@@ -35,7 +36,7 @@ function getImageAlt(block: ImageBlock, index: number): string {
 					mediaLightbox.show(gallery, index);
 				}}
 			>
-				<img src={getImagePreviewSrc(block)} alt={getImageAlt(block, index)} class="h-36 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
+				<img src={publicMediaSource(getImagePreviewSrc(block))} use:protectedRelayMedia={getImagePreviewSrc(block)} alt={getImageAlt(block, index)} class="h-36 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
 			</button>
 		{/each}
 	</div>

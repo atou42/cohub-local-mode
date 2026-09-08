@@ -28,6 +28,14 @@ class ModelsCatalogStore {
 	private loadedUserKey: string | null = null;
 	private loadedAt = 0;
 
+	visibleItemsFor(origin: SpaceOrigin, harness: AgentHarness) {
+		const items = this.visibleItems;
+		return this.loadedKey === `${origin}:${harness}` &&
+			this.loadedUserKey === getCacheUserKey()
+			? items
+			: null;
+	}
+
 	reset() {
 		this.items = null;
 		this.visibleItems = null;

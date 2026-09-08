@@ -1,4 +1,5 @@
 import type { AgentHarness } from "@cohub/protocol";
+import { localCliProxyArgv, localCliProxyExecutionKey, resolveLocalCliProxyOverrides } from "@cohub/infra/local-cli-proxy";
 import { ensureSandboxConnection } from "./sandbox-pool.js";
 import { tracedRpc } from "./sandbox/tools.js";
 import {
@@ -49,11 +50,13 @@ export async function prepareExternalHarnessFork(input: {
 	if (input.strategy === "context_clone") {
 		return { externalSessionId: null, strategy: input.strategy };
 	}
+	const proxyEnvironment = await resolveLocalCliProxyOverrides();
 	const common = {
 		spaceId: input.spaceId,
 		sessionId: input.sessionId,
 		environment: {},
-		executionContextKey: `fork:${input.sessionId}`,
+		proxyEnvironment,
+		executionContextKey: localCliProxyExecutionKey(`fork:${input.sessionId}`, proxyEnvironment),
 		writableRoots,
 		accessMode: "full_access" as const,
 		model: input.model,
@@ -117,6 +120,8 @@ export async function runExternalHarness(input: {
 	if (connection.capabilities?.processStartArgv !== true) {
 		throw new Error("Local sandbox must support argv process execution for external harnesses");
 	}
+	const proxyEnvironment = await resolveLocalCliProxyOverrides();
+	const executionContextKey = localCliProxyExecutionKey(input.executionContextKey, proxyEnvironment);
 	emitProgress(
 		reducer.pushRuntimeEvent({
 			kind: "status",
@@ -127,6 +132,8 @@ export async function runExternalHarness(input: {
 	if (input.harness === "codex" && connection.capabilities?.processWrite === true) {
 		return runCodexAppServerHarness({
 			...input,
+			proxyEnvironment,
+			executionContextKey,
 			writableRoots,
 			connection,
 			reducer,
@@ -135,6 +142,8 @@ export async function runExternalHarness(input: {
 	if (input.harness === "grok_build" && connection.capabilities?.processWrite === true) {
 		return runGrokAcpHarness({
 			...input,
+			proxyEnvironment,
+			executionContextKey,
 			writableRoots,
 			connection,
 			reducer,
@@ -143,6 +152,8 @@ export async function runExternalHarness(input: {
 	if (input.harness === "cursor" && connection.capabilities?.processWrite === true) {
 		return runCursorAcpHarness({
 			...input,
+			proxyEnvironment,
+			executionContextKey,
 			writableRoots,
 			connection,
 			reducer,
@@ -227,7 +238,7 @@ export async function runExternalHarness(input: {
 		const result = await tracedRpc(
 			connection,
 			"process.start",
-			{ argv, cwd: SANDBOX_WORKSPACE, env: input.environment, timeoutSecs: PROCESS_TIMEOUT_SECONDS },
+			{ argv: localCliProxyArgv(argv, proxyEnvironment), cwd: SANDBOX_WORKSPACE, env: input.environment, timeoutSecs: PROCESS_TIMEOUT_SECONDS },
 			{
 				context: { spaceId: input.spaceId, sessionId: input.sessionId, turnId: input.turnId },
 				onEvent(event) {

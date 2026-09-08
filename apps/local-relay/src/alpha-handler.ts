@@ -531,8 +531,8 @@ async function personalNodeStub(input: {
 	const raw = input.env.NODES.getByName(nodeId);
 	return {
 		nodeId,
-		fetch(request: Request) {
-			return raw.fetch(bindRelayNodeRequest(request, undefined, nodeId));
+		fetch(request: RequestInfo | URL, init?: RequestInit) {
+			return raw.fetch(bindRelayNodeRequest(request, init, nodeId));
 		},
 	};
 }
@@ -777,6 +777,7 @@ async function trustedAccountRequest(input: {
 function withPublicCors(response: Response, origin: string) {
 	const headers = new Headers(response.headers);
 	headers.set("access-control-allow-origin", origin);
+	headers.set("access-control-expose-headers", "content-disposition, content-length, content-type, etag, x-cohub-attachment-id, x-cohub-attachment-size, x-cohub-attachment-sha256");
 	headers.set("cache-control", "no-store");
 	headers.append("vary", "Origin");
 	return new Response(response.body, {
@@ -865,8 +866,8 @@ export function createAlphaHandler(dependencies: AlphaHandlerDependencies = {}) 
 						status: 204,
 						headers: {
 							"access-control-allow-origin": allowedOrigin,
-							"access-control-allow-headers": "authorization, content-type",
-							"access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+							"access-control-allow-headers": "authorization, content-type, x-cohub-content-sha256",
+							"access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
 							"access-control-max-age": "600",
 							vary: "Origin",
 						},
@@ -931,7 +932,7 @@ export function createAlphaHandler(dependencies: AlphaHandlerDependencies = {}) 
 					return withPublicCors(response, allowedOrigin);
 				}
 				const userNodeMatch = url.pathname.match(
-					/^\/api\/alpha\/v1\/nodes\/([0-9a-f-]{36})\/(status|events|commands|read)(\/[^/]+)?(\/cancel)?$/,
+					/^\/api\/alpha\/v1\/nodes\/([0-9a-f-]{36})\/(status|events|commands|operations|read)(\/[^/]+)?(\/cancel)?$/,
 				);
 				if (userNodeMatch?.[1] && userNodeMatch[2]) {
 					const deviceId = userNodeMatch[1].toLowerCase();
@@ -944,6 +945,7 @@ export function createAlphaHandler(dependencies: AlphaHandlerDependencies = {}) 
 						(resource === "read" && request.method === "GET" && !resourceId) ||
 						(resource === "commands" && request.method === "POST" && !resourceId) ||
 						(resource === "commands" && request.method === "GET" && !!resourceId && !cancel) ||
+						(resource === "operations" && request.method === "GET" && /^\/[0-9a-f-]{36}$/i.test(resourceId) && !cancel) ||
 						(resource === "commands" && request.method === "POST" && !!resourceId && cancel === "/cancel");
 					if (allowed) {
 						const internalPath =
@@ -953,7 +955,7 @@ export function createAlphaHandler(dependencies: AlphaHandlerDependencies = {}) 
 									? "/internal/events"
 									: resource === "read"
 										? `/internal/projection${url.search}`
-									: `/internal/commands${resourceId}${cancel}`;
+									: `/internal/${resource === "operations" ? "operations" : "commands"}${resourceId}${cancel}`;
 						const response = await routeUserNodeRequest({
 							request,
 							env,

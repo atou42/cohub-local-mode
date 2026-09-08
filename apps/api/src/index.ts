@@ -22,6 +22,7 @@ import { verifyAppSessionToken, type AppSessionPrincipal } from "./app-sessions.
 import { assertRequiredConfig, config } from "./config.js";
 import { isManagedLocalSandboxRelayToken } from "./local-sandbox-supervisor-auth.js";
 import { loadExternalHarnessCatalog } from "./local-mode/harness-catalog.js";
+import { verifyDesktopLocalAccessToken } from "./local-mode/desktop-local-auth.js";
 
 import router from "./routes/index.js";
 
@@ -117,6 +118,19 @@ app.use(async (c, next) => {
   c.set("principal", null);
 
   if (token) {
+    if (token.startsWith("cohub-local-v1.")) {
+      let user: AuthUserProfile | undefined;
+      try {
+        user = await verifyDesktopLocalAccessToken(token, c.req.raw, `${config.logtoEndpoint.replace(/\/+$/, "")}/oidc`);
+      } catch {
+        return c.json({ message: "Local desktop authorization is no longer valid" }, 401);
+      }
+      if (!user) return c.json({ message: "unauthorized" }, 401);
+      c.set("authUser", user);
+      c.set("principal", { type: "user", user });
+      await next();
+      return;
+    }
     if (
       c.req.path === "/internal/gateway/local-sandbox/authorize" &&
       isManagedLocalSandboxRelayToken({

@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
-  "sha256": "9bd11e7409402ab2be01c8ff909b0417989658f458b1fcf03dc811af3a96cc63",
-  "size": 1072591872
+  "schemaVersion": 2,
+  "sha256": "c67123bad1895cb344e17d6eaf9469940c634a8c26711f0f1650080e0582ee56",
+  "size": 904188928,
+  "filesSha256": "dd669d0fe71bf43a31ae8470e5ef6adde8ec1d6d094fa79cf21ae8c36a50903d"
 }

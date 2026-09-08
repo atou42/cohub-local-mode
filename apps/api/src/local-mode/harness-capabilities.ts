@@ -257,7 +257,7 @@ export function parseCursorCommands(result: JsonObject): HarnessCapabilityComman
 async function discoverGrok(spaceId: string): Promise<HarnessCapabilityCatalog> {
   const result = await runJsonRpcProbe({
     command: "grok",
-    args: ["agent", "stdio"],
+    args: ["--no-auto-update", "agent", "stdio"],
     cwd: workspacePath(spaceId),
     initializeParams: {
       protocolVersion: 1,

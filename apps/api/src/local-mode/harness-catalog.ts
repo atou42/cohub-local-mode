@@ -1,5 +1,6 @@
 import type { AgentHarness, ModelThinkingLevel } from "@cohub/protocol";
 import type { ModelCatalogEntry } from "@cohub/infra/config-runtime/models";
+import { resolveLocalCliProxyOverrides } from "@cohub/infra/local-cli-proxy";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -424,8 +425,9 @@ export function bundledCursorModelsCatalog(): ModelCatalogEntry[] {
 
 async function loadCursorAcpModels(): Promise<Record<string, unknown>> {
   const command = process.env.CURSOR_AGENT_COMMAND?.trim() || "agent";
+  const env = { ...process.env, ...await resolveLocalCliProxyOverrides() };
   return new Promise((resolve, reject) => {
-    const child = spawn(command, ["acp"], { env: process.env, stdio: ["pipe", "pipe", "pipe"], shell: false });
+    const child = spawn(command, ["--disable-auto-update", "acp"], { env, stdio: ["pipe", "pipe", "pipe"], shell: false });
     const stdout = createInterface({ input: child.stdout });
     let settled = false;
     let stderr = "";

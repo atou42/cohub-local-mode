@@ -8,7 +8,7 @@ import {
   SANDBOX_PUBLIC_NETWORK_HTTP_ROUTE_VERSION,
 } from "@cohub/sandbox-controller";
 import { config, sessionsNamespace } from "./config.js";
-import { k8sCoreApi, k8sCustomObjectsApi } from "./k8s.js";
+import { getKubernetesClients } from "./k8s.js";
 
 export { getSandboxPublicRouteName, getSandboxPublicServiceName } from "@cohub/sandbox-controller";
 
@@ -160,6 +160,7 @@ const buildSandboxPublicRoute = (spaceId: string, port: SandboxPublicPort): Http
 });
 
 const reconcileSandboxPublicService = async (spaceId: string) => {
+  const { k8sCoreApi } = await getKubernetesClients();
   const name = getSandboxPublicServiceName(spaceId);
   const desired = buildSandboxPublicService(spaceId);
 
@@ -196,6 +197,7 @@ const reconcileSandboxPublicService = async (spaceId: string) => {
 };
 
 const reconcileSandboxPublicRoute = async (spaceId: string, port: SandboxPublicPort) => {
+  const { k8sCustomObjectsApi } = await getKubernetesClients();
   const name = getSandboxPublicRouteName(spaceId, port);
   const desired = buildSandboxPublicRoute(spaceId, port);
 
@@ -234,6 +236,7 @@ export const reconcileSandboxPublicNetwork = async (spaceId: string) => {
 };
 
 export const deleteSandboxPublicNetwork = async (spaceId: string) => {
+  const { k8sCoreApi, k8sCustomObjectsApi } = await getKubernetesClients();
   await Promise.allSettled([
     ...SANDBOX_PUBLIC_PORTS.map(async (port) => {
       try {

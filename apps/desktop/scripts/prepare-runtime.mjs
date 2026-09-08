@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectRuntimeIntegrity } from "../src/runtime-integrity.ts";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(desktopRoot, "../..");
@@ -22,6 +23,7 @@ const output = join(desktopRoot, "resources", "runtime");
 const nativeBuild = join(desktopRoot, "resources", "native-build");
 const runtimeArchive = join(desktopRoot, "resources", "runtime.tar");
 const runtimeManifest = join(desktopRoot, "resources", "runtime-manifest.json");
+const runtimeFiles = join(desktopRoot, "resources", "runtime-files.json");
 
 const desktopWebEnv = {
 	COHUB_WEB_TARGET: "desktop",
@@ -137,15 +139,21 @@ await Promise.all([
 	rm(runtimeArchive, { force: true }),
 	rm(runtimeManifest, { force: true }),
 ]);
-await run("/usr/bin/tar", ["-cf", runtimeArchive, "-C", output, "."]);
+// Ship executable bytes and links, not the build machine's AppleDouble metadata.
+await run("/usr/bin/tar", ["--no-mac-metadata", "--no-xattrs", "-cf", runtimeArchive, "-C", output, "."], {
+	env: { COPYFILE_DISABLE: "1" },
+});
 const archiveStat = await stat(runtimeArchive);
+const fileManifest = `${JSON.stringify(await collectRuntimeIntegrity(output))}\n`;
+await writeFile(runtimeFiles, fileManifest);
 await writeFile(
 	runtimeManifest,
 	`${JSON.stringify(
 		{
-			schemaVersion: 1,
+			schemaVersion: 2,
 			sha256: await sha256File(runtimeArchive),
 			size: archiveStat.size,
+			filesSha256: createHash("sha256").update(fileManifest).digest("hex"),
 		},
 		null,
 		2,

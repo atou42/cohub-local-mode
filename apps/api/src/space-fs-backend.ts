@@ -6,6 +6,7 @@ import { isSandboxDialable } from "@cohub/sandbox-controller";
 import type { AgentSandboxFsMutationOperation } from "@cohub/infra/agent-queue";
 import { enqueueSandboxFsMutationJob, SandboxFsMutationTimeoutError } from "./sandbox-fs-mutation-queue.js";
 import { SpaceFsError, assertSafeRelativePath } from "./space-fs.js";
+import { config } from "./config.js";
 
 // Provider-aware facade over the space filesystem. Cloud spaces read/write the
 // shared PVC directly (the existing implementation); local spaces are served
@@ -276,10 +277,13 @@ export async function uploadSpaceFiles(spaceId: string, files: File[], targetDir
  */
 export type SpaceFileDownload =
   | { kind: "cloud"; spaceId: string; path: string; options?: Visibility }
+  | { kind: "local"; spaceId: string; path: string; options?: Visibility }
   | { kind: "buffer"; name: string; mimeType: string | null; buffer: Buffer };
 
 export async function resolveSpaceFileDownload(spaceId: string, path: string, options?: Visibility): Promise<SpaceFileDownload> {
   if (await isLocal(spaceId)) {
+    // The installed API owns this workspace; remote cloud APIs still use RPC.
+    if (config.nodeOrigin === "local") return { kind: "local", spaceId, path, options };
     const file = await remote.downloadSpaceFile(spaceId, path, options);
     return { kind: "buffer", ...file };
   }

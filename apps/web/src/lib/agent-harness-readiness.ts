@@ -5,13 +5,6 @@ export function resolveAgentHarnessReadinessView(input: {
 	entry: HarnessReadinessEntry | null;
 	error?: string | null;
 }) {
-	if (input.harness === "pi") {
-		return {
-			available: true,
-			label: input.entry?.bundled ? "Included" : "Ready",
-			detail: input.entry?.detail ?? "Pi is included with Cohub Connector.",
-		};
-	}
 	if (!input.entry) {
 		return {
 			available: false,

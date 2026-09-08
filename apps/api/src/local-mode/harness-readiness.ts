@@ -6,10 +6,10 @@ import {
   type HarnessReadinessResponse,
 } from "@cohub/protocol";
 import { constants } from "node:fs";
-import { access, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { loadExternalHarnessCatalog } from "./harness-catalog.js";
+import { isExplicitSignOut, probeCliAuthentication } from "./harness-auth.js";
 
 type ExternalHarness = Exclude<AgentHarness, "pi">;
 
@@ -22,6 +22,7 @@ export type HarnessReadinessDependencies = {
   probeExecutable: (harness: ExternalHarness) => Promise<ExecutableProbe>;
   hasAuthentication: (harness: ExternalHarness) => Promise<boolean>;
   loadCatalog: (harness: ExternalHarness) => Promise<unknown>;
+  hasConfiguredPiModel: (userId?: string) => Promise<boolean>;
   now?: () => number;
   ttlMs?: number;
 };
@@ -82,10 +83,6 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function looksLikeAuthenticationFailure(message: string) {
-  return /auth|login|log in|sign in|unauthori[sz]ed|device not configured/i.test(message);
-}
-
 async function inspectExternalHarness(
   harness: ExternalHarness,
   dependencies: HarnessReadinessDependencies,
@@ -117,8 +114,8 @@ async function inspectExternalHarness(
     return unavailableEntry(
       harness,
       "unavailable",
-      `${LABELS[harness]} credentials could not be checked: ${errorMessage(error)}`,
-      { kind: "repair", label: `Check ${LABELS[harness]} credentials` },
+      `${LABELS[harness]} CLI status could not be checked: ${errorMessage(error)}`,
+      { kind: "repair", label: `Check ${LABELS[harness]} in Terminal` },
       executable.version,
     );
   }
@@ -136,7 +133,7 @@ async function inspectExternalHarness(
     await dependencies.loadCatalog(harness);
   } catch (error) {
     const message = errorMessage(error);
-    if (looksLikeAuthenticationFailure(message)) {
+    if (isExplicitSignOut(message)) {
       return unavailableEntry(
         harness,
         "sign_in_required",
@@ -197,57 +194,14 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function hasNonEmptyString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-async function readJsonObject(path: string) {
-  try {
-    return object(JSON.parse(await readFile(path, "utf8")));
-  } catch (error) {
-    const code = object(error)?.code;
-    if (code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-async function hasAuthentication(harness: ExternalHarness) {
-  const home = homedir();
-  if (harness === "codex") {
-    const root = await readJsonObject(
-      join(process.env.CODEX_HOME?.trim() || join(home, ".codex"), "auth.json"),
-    );
-    const tokens = object(root?.tokens);
-    return Boolean(
-      hasNonEmptyString(root?.OPENAI_API_KEY) ||
-      hasNonEmptyString(tokens?.access_token) ||
-      hasNonEmptyString(tokens?.refresh_token),
-    );
-  }
-  if (harness === "grok_build") {
-    const root = await readJsonObject(
-      join(process.env.GROK_HOME?.trim() || join(home, ".grok"), "auth.json"),
-    );
-    return Boolean(
-      root && Object.values(root).some((value) => {
-        const credential = object(value);
-        return hasNonEmptyString(credential?.key) ||
-          hasNonEmptyString(credential?.refresh_token);
-      }),
-    );
-  }
-  const root = await readJsonObject(join(home, ".cursor", "cli-config.json"));
-  const authInfo = object(root?.authInfo);
-  return Boolean(
-    authInfo &&
-    (hasNonEmptyString(authInfo.authId) ||
-      typeof authInfo.userId === "number"),
-  );
-}
-
 export const systemHarnessReadinessService = createHarnessReadinessService({
   probeExecutable,
-  hasAuthentication,
+  hasAuthentication: probeCliAuthentication,
+  hasConfiguredPiModel: async (userId) => {
+    const { CompletionModelRegistry, loadRuntimeModelsConfigs } = await import("../llm/models.js");
+    const registry = new CompletionModelRegistry(await loadRuntimeModelsConfigs(userId));
+    return registry.getAvailable().some((model) => Boolean(registry.getApiKey(model.provider)));
+  },
   loadCatalog: async (harness) => {
     const entries = await loadExternalHarnessCatalog(harness);
     if (
@@ -265,44 +219,52 @@ export function createHarnessReadinessService(
 ) {
   const now = dependencies.now ?? Date.now;
   const ttlMs = dependencies.ttlMs ?? 5 * 60_000;
-  let cached: { expiresAt: number; value: HarnessReadinessResponse } | null = null;
-  let inflight: Promise<HarnessReadinessResponse> | null = null;
+  let cached: { userId?: string; expiresAt: number; value: HarnessReadinessResponse } | null = null;
+  let inflight: { userId?: string; promise: Promise<HarnessReadinessResponse> } | null = null;
 
-  async function refresh() {
+  async function inspectPi(userId?: string): Promise<HarnessReadinessEntry> {
+    const base = { harness: "pi" as const, label: "Pi", bundled: true };
+    try {
+      if (await dependencies.hasConfiguredPiModel(userId)) {
+        return { ...base, state: "ready", detail: "Pi has a configured local model provider." };
+      }
+      return {
+        ...base, state: "setup_required",
+        detail: "Pi is included, but no local model provider is configured. Choose a ready local CLI agent.",
+      };
+    } catch (error) {
+      return { ...base, state: "unavailable", detail: `Pi model configuration could not be checked: ${errorMessage(error)}` };
+    }
+  }
+
+  async function refresh(userId?: string) {
     const external = AGENT_HARNESSES.filter(
       (harness): harness is ExternalHarness => harness !== "pi",
     );
     const checkedAtMs = now();
-    const harnesses = await Promise.all(
-      external.map((harness) => inspectExternalHarness(harness, dependencies)),
-    );
+    const harnesses = await Promise.all([
+      inspectPi(userId),
+      ...external.map((harness) => inspectExternalHarness(harness, dependencies)),
+    ]);
     const value: HarnessReadinessResponse = {
       checkedAt: new Date(checkedAtMs).toISOString(),
-      harnesses: [
-        {
-          harness: "pi",
-          label: "Pi",
-          state: "ready",
-          bundled: true,
-          detail: "Pi is included with Cohub Connector.",
-        },
-        ...harnesses,
-      ],
+      harnesses,
     };
-    cached = { expiresAt: checkedAtMs + ttlMs, value };
+    cached = { userId, expiresAt: checkedAtMs + ttlMs, value };
     return value;
   }
 
   return {
-    list(options: { force?: boolean } = {}) {
-      if (!options.force && cached && cached.expiresAt > now()) {
+    list(options: { force?: boolean; userId?: string } = {}) {
+      if (!options.force && cached && cached.userId === options.userId && cached.expiresAt > now()) {
         return Promise.resolve(cached.value);
       }
-      if (inflight) return inflight;
-      inflight = refresh().finally(() => {
-        inflight = null;
+      if (inflight && inflight.userId === options.userId) return inflight.promise;
+      const promise = refresh(options.userId).finally(() => {
+        if (inflight?.promise === promise) inflight = null;
       });
-      return inflight;
+      inflight = { userId: options.userId, promise };
+      return promise;
     },
     clear() {
       cached = null;

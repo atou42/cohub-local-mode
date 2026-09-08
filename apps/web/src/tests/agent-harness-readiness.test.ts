@@ -2,15 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveAgentHarnessReadinessView } from "../lib/agent-harness-readiness";
 
-test("Pi remains selectable before local detection returns", () => {
+test("Pi waits for local detection instead of treating bundled as ready", () => {
 	assert.deepEqual(
 		resolveAgentHarnessReadinessView({ harness: "pi", entry: null }),
 		{
-			available: true,
-			label: "Ready",
-			detail: "Pi is included with Cohub Connector.",
+			available: false,
+			label: "Checking…",
+			detail: "Local Agent status is still loading.",
 		},
 	);
+});
+
+test("Pi without provider configuration is visible but unavailable", () => {
+	const view = resolveAgentHarnessReadinessView({
+		harness: "pi",
+		entry: {
+			harness: "pi", label: "Pi", state: "setup_required", bundled: true,
+			detail: "No local model provider is configured.",
+		},
+	});
+	assert.equal(view.available, false);
+	assert.equal(view.label, "Setup required");
 });
 
 test("missing and unauthenticated host harnesses remain visible but locked", () => {
