@@ -8,7 +8,7 @@ import {
 
 const IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
-export type PublicAssetPurpose = "user_avatar" | "space_avatar" | "chat_attachment";
+export type PublicAssetPurpose = "user_avatar" | "space_avatar" | "chat_attachment" | "app_source";
 export type PublicAssetUploadProtocol = "presigned_put_v1";
 
 export type CreatePublicAssetUploadInput = {
@@ -173,6 +173,10 @@ export const buildPublicAssetObjectKey = (input: {
     if (!input.spaceId) throw new PublicAssetValidationError("spaceId is required for space avatar uploads");
     return `${envPrefix()}avatars/spaces/${input.spaceId}/${assetId}.${extension}`;
   }
+  if (input.purpose === "app_source") {
+    if (!input.sessionId) throw new PublicAssetValidationError("sessionId is required for app source uploads");
+    return `${envPrefix()}app-sources/${input.userUuid}/${input.sessionId}/${randomUUID()}`;
+  }
   // Chat attachments are user-scoped. spaceId/sessionId are optional association only.
   const extension = extensionForChatAttachment({
     mimeType: input.mimeType,
@@ -237,8 +241,8 @@ export const assertPublicAssetUploadFile = (input: {
   if (!file || typeof file !== "object") throw new PublicAssetValidationError("file is required");
   if (!Number.isSafeInteger(file.size) || file.size <= 0) throw new PublicAssetValidationError("invalid file size");
 
-  if (input.purpose === "chat_attachment") {
-    normalizeChatMimeType(file.mimeType);
+  if (input.purpose === "chat_attachment" || input.purpose === "app_source") {
+    if (input.purpose === "chat_attachment") normalizeChatMimeType(file.mimeType);
     if (file.filename != null && (typeof file.filename !== "string" || file.filename.length > 255)) {
       throw new PublicAssetValidationError("invalid filename");
     }
@@ -261,8 +265,8 @@ export const consumePublicAssetUploadQuota = async (
 ) => {
   const n = Math.max(0, Math.floor(entryCount));
   if (n <= 0) return;
-  if (purpose === "chat_attachment") {
-    const key = `chat_attachment_upload:${userUuid}`;
+  if (purpose === "chat_attachment" || purpose === "app_source") {
+    const key = `${purpose}_upload:${userUuid}`;
     const next = await redisCommandClient.incrby(key, n);
     if (next === n) await redisCommandClient.expire(key, CHAT_ATTACHMENT_RATE_LIMIT_WINDOW_SECONDS);
     if (next > CHAT_ATTACHMENT_RATE_LIMIT_MAX) {
@@ -319,7 +323,7 @@ export const createPublicAssetUploadPlan = (input: {
     filename: input.file.filename,
   });
 
-  const { signed, publicUrl } = input.purpose === "chat_attachment"
+  const { signed, publicUrl } = input.purpose === "chat_attachment" || input.purpose === "app_source"
     ? createChatAttachmentPutPlan({
       objectKey,
       mimeType,
@@ -366,7 +370,7 @@ export const createInternalPublicAssetUploadPlan = (input: {
     mimeType,
     filename: input.file.filename,
   });
-  const userUploadPlan = input.purpose === "chat_attachment"
+  const userUploadPlan = input.purpose === "chat_attachment" || input.purpose === "app_source"
     ? createChatAttachmentPutPlan({ objectKey, mimeType, filename: input.file.filename })
     : {
       signed: createUserUploadPutUrl({

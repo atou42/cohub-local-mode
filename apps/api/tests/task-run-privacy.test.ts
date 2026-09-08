@@ -93,6 +93,7 @@ test("App Action internals are visible only to the App owner", () => {
         appId: "app_1",
         appVersionId: "version_1",
         action: "summarize",
+        actionInput: { text: "Hello" },
         actorUserId: "owner_1",
         executionScopes: ["command.execute"],
         command: "secret command",
@@ -100,16 +101,18 @@ test("App Action internals are visible only to the App owner", () => {
     },
     result: {
       command: "secret command",
+      output: "safe output",
       content: [{ type: "tool_use", input: { command: "secret command" }, _meta: { command: "secret command" } }],
     },
   };
   const progress = {
     command: "secret command",
+    output: "safe progress",
     content: [{ type: "tool_use", input: { command: "secret command" }, _meta: { command: "secret command" } }],
   };
 
-  assert.equal(sanitizeTaskRunPricingForViewer(run, "owner_1"), run);
-  assert.deepEqual(sanitizeTaskRunPricingForViewer(run, "viewer_1"), {
+  assert.equal(sanitizeTaskRunPricingForViewer(run, "viewer_1", { canViewSpaceData: true }), run);
+  assert.deepEqual(sanitizeTaskRunPricingForViewer(run, "viewer_1", { canViewSpaceData: false }), {
     ...run,
     payload: {
       type: "run_command",
@@ -120,10 +123,28 @@ test("App Action internals are visible only to the App owner", () => {
         action: "summarize",
       },
     },
-    result: { content: [{ type: "tool_use", input: {}, _meta: {} }] },
+    result: { output: "safe output" },
   });
-  assert.deepEqual(sanitizeTaskRunProgressForViewer(run, progress, "viewer_1"), {
-    content: [{ type: "tool_use", input: {}, _meta: {} }],
+  assert.deepEqual(sanitizeTaskRunProgressForViewer(run, progress, false), {
+    output: "safe progress",
+  });
+});
+
+test("run command execution fields are hidden from malformed payloads", () => {
+  const run = {
+    taskType: "run_command",
+    userUuid: "owner_1",
+    payload: { type: "run_command", data: null },
+    result: { command: "secret command", content: [{ type: "tool_use", input: { command: "secret command" } }], output: "safe output" },
+  };
+  const progress = { command: "secret command", content: [{ type: "tool_use", input: { command: "secret command" } }], output: "safe progress" };
+
+  assert.deepEqual(sanitizeTaskRunPricingForViewer(run, "viewer_1", { canViewSpaceData: false }), {
+    ...run,
+    result: { output: "safe output" },
+  });
+  assert.deepEqual(sanitizeTaskRunProgressForViewer(run, progress, false), {
+    output: "safe progress",
   });
 });
 

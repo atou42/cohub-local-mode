@@ -4,6 +4,19 @@ All notable changes to Cohub are documented in this file.
 
 <!-- Generated from apps/web/src/lib/changelog/entries.json. Do not edit. -->
 
+## v2.42 — 2026-09-07
+
+- **Local App Source Publishing**: `cohub apps publish --source local` now uploads an app source from your machine — a single file or a directory site, up to 1,000 files / 1 GiB — into immutable `app_source` storage, so sources no longer need to be staged in the Space workspace. The publish worker downloads the bundle, re-validates every object against a manifest (path traversal, duplicates, size caps), and renders the app or site artifact; the SDK mirrors the flow with `publicAssets.uploadAppSource()`.
+- **SDK Execution Context and Task Wait**: The SDK exposes `getCohubContext()`, returning a fully typed runtime context — execution source, actor/viewer users, space/session/turn/tool-call IDs, app and action, granted scopes, and model — resolved from the execution token and environment. `tasks.wait()` now resolves when a run reaches a terminal state by subscribing to realtime `task.updated` events in the space room with a polling fallback, configurable timeout (up to 24h) and poll interval, and `AbortSignal` support; run_command payloads gain strict types in @cohub/protocol.
+- **Permission-based Task-run Privacy**: Task-run snapshots are kept intact in storage; redaction now follows the requester's space-data permission instead of actor inference. Viewers who can view the space receive the full run, while everyone else gets execution fields (command, cwd, action input, actor/viewer IDs, scopes) and billing figures stripped from payloads, results, and live progress — enforced consistently across task and cronjob run endpoints.
+- **Persistent Space Workspace Shell**: The workspace shell moved from individual route pages into the Space layout, so one mounted instance now spans session, task, checkpoint, cronjob, and app views — route changes swap only data and children instead of remounting the shell. Navigation between views preserves the active workspace window and its long-lived runtimes (boards, apps, previews, chat), and the per-route pages slimmed down to pure route data.
+- **Faster Streaming Chat Rendering**: Streaming markdown is rendered per stable block with a per-block cache, so a new paragraph costs only its own render pass instead of re-sanitizing the whole message; the reveal loop and commit scheduling were rebuilt to avoid per-patch timer churn, no-op renders are skipped, and bottom-follow is throttled to one rAF-aligned pass after the DOM flush — cutting main-thread layout and timer work during long generations.
+
+### Bug Fixes
+
+- App Action task runs no longer lose their input: run_command payloads persist `actionInput`, and the run page now renders the action input plus payload/result sections for authorized viewers instead of suppressing them.
+- Opening a task run from a session, board, or checkpoint no longer closes live previews or resets the workspace window — space views now share one persistent shell, so boards, apps, and chat keep running during navigation.
+
 ## v2.41 — 2026-09-04
 
 - **Owner-funded App Actions**: Published apps can now expose server-side entrypoints under `.cohub/actions/` and run them via `cohub.app.actions.run()` in the SDK or `cohub apps actions run` in the CLI. Cohub downloads the immutable, version-pinned app artifact into the Space sandbox and executes TypeScript/JavaScript (Node 24 with native type stripping) or any executable, passing JSON input on stdin and capturing output into the Task Run. Actions execute with the app owner as actor and platform cost owner, while entitlement checks and credit metering apply to the signed-in viewer — action code can use the SDK or CLI with no credential management.

@@ -1891,11 +1891,9 @@ export class SpaceBoardsApi {
   }
 
   authoring(boardId: string, input: BoardAuthoringReadInput = {}, customFetch?: Fetch) {
+    if (input.include?.length === 0) throw new Error("Board authoring include must not be empty.");
     const params = new URLSearchParams();
-    if (input.include) {
-      for (const section of input.include) params.append("include", section);
-      if (input.include.length === 0) params.set("include", "");
-    }
+    for (const section of input.include ?? []) params.append("include", section);
     if (input.itemIds?.length) params.set("itemIds", input.itemIds.join(","));
     if (input.connectionIds?.length) params.set("connectionIds", input.connectionIds.join(","));
     if (input.effectIds?.length) params.set("effectIds", input.effectIds.join(","));

@@ -1,131 +1,120 @@
-import { APP_ACTION_EXECUTION_SOURCE } from "@cohub/protocol/task";
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-type TaskRunPricingView = {
+type TaskRunView = {
   taskType: string;
   userUuid: string | null;
   payload: unknown;
   result: unknown;
 };
 
-function appActionActorUserId(payload: unknown): string | null {
-  if (!isRecord(payload) || !isRecord(payload.data) || payload.data.source !== APP_ACTION_EXECUTION_SOURCE) return null;
-  return typeof payload.data.actorUserId === "string" ? payload.data.actorUserId : null;
-}
+function hideRunCommandExecutionFields<T extends TaskRunView>(run: T): T {
+  if (run.taskType !== "run_command") return run;
 
-function sanitizeCommandContent(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map((block) => {
-    if (!isRecord(block)) return block;
-    const next = { ...block };
-    if (isRecord(next.input) && Object.hasOwn(next.input, "command")) {
-      const input = { ...next.input };
-      delete input.command;
-      next.input = input;
+  let payload = run.payload;
+  if (isRecord(run.payload) && isRecord(run.payload.data)) {
+    const sourcePayload = run.payload as Record<string, unknown>;
+    const data = run.payload.data;
+    const hiddenData = { ...data };
+    for (const key of ["command", "cwd", "actionInput", "actorUserId", "viewerUserId", "executionScopes"]) {
+      delete hiddenData[key];
     }
-    if (isRecord(next._meta) && Object.hasOwn(next._meta, "command")) {
-      const meta = { ...next._meta };
-      delete meta.command;
-      next._meta = meta;
+    if (Object.keys(hiddenData).length !== Object.keys(data).length) {
+      payload = { ...sourcePayload, data: hiddenData };
     }
-    return next;
-  });
-}
+  }
 
-function sanitizeAppActionValue(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  const next = { ...value };
-  delete next.command;
-  if (Object.hasOwn(next, "content")) next.content = sanitizeCommandContent(next.content);
-  return next;
-}
+  let result = run.result;
+  if (isRecord(result)) {
+    const hiddenResult = { ...result };
+    let resultChanged = false;
+    for (const key of ["command", "content"]) {
+      if (Object.hasOwn(hiddenResult, key)) {
+        delete hiddenResult[key];
+        resultChanged = true;
+      }
+    }
+    if (resultChanged) result = hiddenResult;
+  }
 
-function sanitizeAppActionRun<T extends TaskRunPricingView>(run: T, viewerUserId: string | null | undefined): T {
-  const actorUserId = appActionActorUserId(run.payload);
-  if (!actorUserId || actorUserId === viewerUserId || !isRecord(run.payload) || !isRecord(run.payload.data)) return run;
-  const data = run.payload.data;
-  const payload = {
-    ...run.payload,
-    data: {
-      source: APP_ACTION_EXECUTION_SOURCE,
-      appId: data.appId,
-      appVersionId: data.appVersionId,
-      action: data.action,
-    },
-  };
-  return { ...run, payload, result: sanitizeAppActionValue(run.result) };
+  return payload === run.payload && result === run.result ? run : { ...run, payload, result };
 }
 
 export function sanitizeTaskRunProgressForViewer(
-  run: Pick<TaskRunPricingView, "payload">,
+  run: Pick<TaskRunView, "taskType" | "payload">,
   progress: unknown,
-  viewerUserId: string | null | undefined,
+  canViewSpaceData: boolean,
 ): unknown {
-  const actorUserId = appActionActorUserId(run.payload);
-  return actorUserId && actorUserId !== viewerUserId
-    ? sanitizeAppActionValue(progress)
-    : progress;
+  if (canViewSpaceData || run.taskType !== "run_command" || !isRecord(progress)) return progress;
+  const next = { ...progress };
+  let changed = false;
+  for (const key of ["command", "content"]) {
+    if (Object.hasOwn(next, key)) {
+      delete next[key];
+      changed = true;
+    }
+  }
+  return changed ? next : progress;
 }
 
 /**
- * Keep server-side task snapshots intact while removing secrets from every
- * response and creator pricing from collaborator-visible responses.
+ * Keep stored task snapshots intact. Space viewers receive the full snapshot;
+ * the owner fallback receives the task summary without execution fields.
  */
-export function sanitizeTaskRunPricingForViewer<T extends TaskRunPricingView>(
+export function sanitizeTaskRunPricingForViewer<T extends TaskRunView>(
   run: T,
   viewerUserId: string | null | undefined,
+  options?: { canViewSpaceData?: boolean },
 ): T {
-  const appActionRun = sanitizeAppActionRun(run, viewerUserId);
-  let payload = appActionRun.payload;
-  if (run.taskType === "create_space" && isRecord(payload) && isRecord(payload.data)) {
-    const data = { ...payload.data };
+  let next = run;
+  if (run.taskType === "create_space" && isRecord(run.payload) && isRecord(run.payload.data)) {
+    const data = { ...run.payload.data };
     if (Object.hasOwn(data, "gitToken")) {
       delete data.gitToken;
-      payload = { ...payload, data };
+      next = { ...next, payload: { ...run.payload, data } };
     }
   }
 
-  const isGeneration = appActionRun.taskType === "generation";
-  const isBillingRetry = appActionRun.taskType === "generation.billing_retry";
-  if ((!isGeneration && !isBillingRetry) || (viewerUserId && appActionRun.userUuid === viewerUserId)) {
-    return payload === appActionRun.payload ? appActionRun : { ...appActionRun, payload };
+  if (options?.canViewSpaceData === false) {
+    next = hideRunCommandExecutionFields(next);
   }
 
+  const isGeneration = next.taskType === "generation";
+  const isBillingRetry = next.taskType === "generation.billing_retry";
+  if ((!isGeneration && !isBillingRetry) || (viewerUserId && next.userUuid === viewerUserId)) return next;
+
+  let payload = next.payload;
   if (isRecord(payload) && isRecord(payload.data)) {
     const data = { ...payload.data };
-    let dataChanged = false;
+    let changed = false;
     for (const key of isBillingRetry
       ? ["modelDiscount", "officialCostUsd", "amountUsd"]
       : ["modelDiscount"]) {
       if (Object.hasOwn(data, key)) {
         delete data[key];
-        dataChanged = true;
+        changed = true;
       }
     }
-    if (dataChanged) payload = { ...payload, data };
+    if (changed) payload = { ...payload, data };
   }
 
-  let result = appActionRun.result;
+  let result = next.result;
   if (isGeneration && isRecord(result) && Object.hasOwn(result, "billing")) {
     const nextResult = { ...result };
     delete nextResult.billing;
     result = nextResult;
   } else if (isBillingRetry && isRecord(result)) {
     const nextResult = { ...result };
-    let resultChanged = false;
+    let changed = false;
     for (const key of ["officialCostUsd", "amountUsd", "discountMultiplier"]) {
       if (Object.hasOwn(nextResult, key)) {
         delete nextResult[key];
-        resultChanged = true;
+        changed = true;
       }
     }
-    if (resultChanged) result = nextResult;
+    if (changed) result = nextResult;
   }
 
-  return payload === appActionRun.payload && result === appActionRun.result
-    ? appActionRun
-    : { ...appActionRun, payload, result };
+  return payload === next.payload && result === next.result ? next : { ...next, payload, result };
 }

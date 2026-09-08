@@ -513,7 +513,7 @@ async function openWorkspaceNavigation(target: AppNavigationTarget) {
 					: target.kind === "checkpoint"
 						? buildSpaceCheckpointRoute(spaceId, target.checkpointId)
 						: buildSpaceCronjobRoute(spaceId, target.cronjobId);
-		await goto(route, { keepFocus: true, noScroll: true });
+		await goto(withCurrentWindow(route), { keepFocus: true, noScroll: true });
 		return { handled: true as const };
 	}
 	return { handled: false as const, reason: "unsupported" as const };
@@ -2105,7 +2105,10 @@ async function openInlineBoard(
 }
 async function openTask(taskRunId: string) {
 	if (!spaceId) return;
-	await goto(buildSpaceTaskRoute(spaceId, taskRunId));
+	await goto(withCurrentWindow(buildSpaceTaskRoute(spaceId, taskRunId)), {
+		keepFocus: true,
+		noScroll: true,
+	});
 }
 function closeInlineBoard() {
 	const path = activeInlineBoardPath;

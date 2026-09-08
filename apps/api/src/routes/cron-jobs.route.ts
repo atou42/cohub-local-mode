@@ -164,6 +164,9 @@ router.get("/:id/runs", async (c) => {
 
   const job = await loadCronJobAuthSubject(cronJobId);
   if (!job) return c.json({ message: "not found" }, 404);
+  const canViewSpaceData = job.spaceId
+    ? await hasPermission(user, "taskrun.view", { spaceId: job.spaceId, sessionId: job.sessionId ?? undefined })
+    : false;
   if (!(await authorizeTaskRunView(user, job))) return authzDenied(c);
 
   const limitParam = Number(c.req.query("limit") ?? 20);
@@ -187,7 +190,7 @@ router.get("/:id/runs", async (c) => {
     .limit(limit + 1);
   const runs = rows
     .slice(0, limit)
-    .map((run) => sanitizeTaskRunPricingForViewer(run, user?.uuid));
+    .map((run) => sanitizeTaskRunPricingForViewer(run, user?.uuid, { canViewSpaceData }));
 
   return c.json({
     runs,

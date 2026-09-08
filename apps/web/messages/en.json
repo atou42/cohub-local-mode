@@ -1478,6 +1478,7 @@
 	"board_task_created": "Task created. Find it in Tasks list.",
 	"task_section_progress": "Progress",
 	"task_section_command": "Command",
+	"task_section_input": "Input",
 	"task_section_checkpoint": "Checkpoint",
 	"task_waiting_checkpoint": "Waiting for checkpoint result…",
 	"task_section_output": "Output",

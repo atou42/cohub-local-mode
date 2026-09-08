@@ -1,4 +1,31 @@
+import { PERMISSIONS, type Permission } from "./types.js";
+
 export type CohubEnvironment = "prod" | "dev";
+
+export type CohubRuntimeKind = "sandbox" | "browser" | "local";
+
+export type CohubExecutionContext = {
+  source: string | null;
+  actorUserId: string | null;
+  viewerUserId: string | null;
+  spaceId: string | null;
+  sessionId: string | null;
+  turnId: string | null;
+  toolCallId: string | null;
+  sourceClientId: string | null;
+  taskRunId: string | null;
+  appId: string | null;
+  appVersionId: string | null;
+  action: string | null;
+  scopes: Permission[];
+  modelProvider: string | null;
+  modelId: string | null;
+};
+
+export type CohubContext = {
+  runtime: { kind: CohubRuntimeKind };
+  execution: CohubExecutionContext | null;
+};
 
 export const COHUB_ENVIRONMENTS = {
   prod: {
@@ -26,16 +53,66 @@ const readRuntimeEnv = (): string | undefined => readProcessEnv()?.ENV;
 export const resolveExecutionToken = (): string | null =>
   readProcessEnv()?.COHUB_EXECUTION_TOKEN?.trim() || null;
 
-export function resolveExecutionAppId(): string | null {
-  const payload = resolveExecutionToken()?.split(".")[1];
-  if (!payload) return null;
+function decodeExecutionPayload(): Record<string, unknown> | null {
+  const encoded = resolveExecutionToken()?.split(".")[1];
+  if (!encoded) return null;
   try {
-    const base64 = payload.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
-    const appId = (JSON.parse(globalThis.atob(base64)) as { appId?: unknown }).appId;
-    return typeof appId === "string" && appId ? appId : null;
+    const base64 = encoded.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const decoded = JSON.parse(globalThis.atob(base64)) as unknown;
+    return decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : null;
   } catch {
     return null;
   }
+}
+
+const readString = (env: Record<string, string | undefined> | undefined, key: string) =>
+  env?.[key]?.trim() || null;
+
+const readPayloadString = (payload: Record<string, unknown> | null, key: string) =>
+  typeof payload?.[key] === "string" && payload[key] ? payload[key] as string : null;
+
+const KNOWN_PERMISSIONS = new Set<string>(PERMISSIONS);
+
+const readScopes = (payload: Record<string, unknown> | null): Permission[] =>
+  Array.isArray(payload?.scopes)
+    ? payload.scopes.filter((scope): scope is Permission => typeof scope === "string" && KNOWN_PERMISSIONS.has(scope))
+    : [];
+
+export function getCohubContext(): CohubContext {
+  const env = readProcessEnv();
+  const token = resolveExecutionToken();
+  const isBrowser = typeof window !== "undefined" && typeof document !== "undefined";
+  const runtime = token ? "sandbox" : isBrowser ? "browser" : "local";
+  const payload = decodeExecutionPayload();
+
+  if (!token && runtime !== "sandbox") {
+    return { runtime: { kind: runtime }, execution: null };
+  }
+
+  return {
+    runtime: { kind: runtime },
+    execution: {
+      source: readPayloadString(payload, "source"),
+      actorUserId: readString(env, "COHUB_USER_UUID") ?? readPayloadString(payload, "actorUserId"),
+      viewerUserId: readPayloadString(payload, "viewerUserId"),
+      spaceId: readString(env, "COHUB_SPACE_ID") ?? readPayloadString(payload, "spaceId"),
+      sessionId: readString(env, "COHUB_SESSION_ID") ?? readPayloadString(payload, "sessionId"),
+      turnId: readString(env, "COHUB_TURN_ID") ?? readPayloadString(payload, "turnId"),
+      toolCallId: readString(env, "COHUB_TOOL_CALL_ID"),
+      sourceClientId: readString(env, "COHUB_SOURCE_CLIENT_ID"),
+      taskRunId: readPayloadString(payload, "taskRunId"),
+      appId: readPayloadString(payload, "appId"),
+      appVersionId: readPayloadString(payload, "appVersionId"),
+      action: readPayloadString(payload, "action"),
+      scopes: readScopes(payload),
+      modelProvider: readString(env, "COHUB_MODEL_PROVIDER"),
+      modelId: readString(env, "COHUB_MODEL_ID"),
+    },
+  };
+}
+
+export function resolveExecutionAppId(): string | null {
+  return readPayloadString(decodeExecutionPayload(), "appId");
 }
 
 export const resolveCohubEnvironment = (env?: CohubEnvironment): CohubEnvironment => {

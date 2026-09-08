@@ -54,7 +54,7 @@ export async function inspectBoardAuthoring(
 	input: BoardAuthoringReadInput = {},
 ): Promise<BoardAuthoringSnapshot> {
 	const parsed = BoardAuthoringReadInputSchema.parse(input);
-	const include = new Set(parsed.include === undefined ? ["items"] : parsed.include);
+	const include = new Set(parsed.include === undefined ? ["items", "connections"] : parsed.include);
 	const raw = await inspectBoard(spaceId, boardId, {
 		include: [
 			...(include.has("items") ? (["nodes"] as const) : []),

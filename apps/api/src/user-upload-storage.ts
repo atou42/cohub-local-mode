@@ -5,7 +5,7 @@ import {
   type PresignStorageConfig,
 } from "./object-presign.js";
 
-export type UserUploadBucket = "chat_attachment" | "space_upload";
+export type UserUploadBucket = "chat_attachment" | "app_source" | "space_upload";
 
 export class UserUploadConfigError extends Error {
   override name = "UserUploadConfigError";
@@ -17,11 +17,11 @@ const requireStorage = (kind: UserUploadBucket): PresignStorageConfig & {
   accessKeyId: string;
   secretAccessKey: string;
 } => {
-  const bucket = kind === "chat_attachment"
+  const bucket = kind === "chat_attachment" || kind === "app_source"
     ? config.chatAttachmentS3Bucket
     : config.spaceUploadS3Bucket;
   if (!bucket) {
-    const name = kind === "chat_attachment" ? "CHAT_ATTACHMENT_S3_BUCKET" : "SPACE_UPLOAD_S3_BUCKET";
+    const name = kind === "chat_attachment" || kind === "app_source" ? "CHAT_ATTACHMENT_S3_BUCKET" : "SPACE_UPLOAD_S3_BUCKET";
     throw new UserUploadConfigError(`${name} is required`);
   }
   if (!config.userUploadS3Endpoint) {

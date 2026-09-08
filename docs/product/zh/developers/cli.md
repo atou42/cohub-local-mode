@@ -104,12 +104,14 @@ cohub -s <spaceId> spaces files diff
 
 ### Apps
 
-`--file` 与 `--dir` 接收的是 Space 工作区内的相对路径——与 `spaces files ls`
-看到的路径一致，而不是本地文件系统路径。
+`apps publish` 默认根据 runtime 自动判断来源：本地 CLI 使用本地文件系统路径，Cohub
+Sandbox 使用 Space 工作区路径。也可以用 `--source workspace` 或 `--source local`
+显式覆盖。
 
 ```bash
-cohub -s <spaceId> apps publish demo --file dist/index.html
-cohub -s <spaceId> apps publish site --dir dist
+cohub -s <spaceId> apps publish demo --file ./dist/index.html
+cohub -s <spaceId> apps publish site --dir ./dist
+cohub -s <spaceId> apps publish site --source workspace --dir dist
 cohub -s <spaceId> apps ls --json
 cohub apps stats <workId|url|username/space/work>
 ```

@@ -8,6 +8,9 @@ export type AppPublishAssetJobData = {
   slug: string;
   targetType: "file" | "directory";
   targetRef: string;
+  sourceType?: "workspace" | "upload";
+  sourceRef?: string | null;
+  sourceOwner?: string | null;
   requestId?: string | null;
   trace?: Record<string, unknown>;
 };

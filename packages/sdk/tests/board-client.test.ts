@@ -34,6 +34,21 @@ test("space.board and boards.byId use public authoring and mutation endpoints", 
 	assert.equal(requests[1]?.url, "https://api.example.test/api/spaces/space-1/boards/board-1/mutations");
 });
 
+test("Board authoring defers defaults to the server and rejects empty include", async () => {
+	const requests: string[] = [];
+	const fetch: Fetch = async (input) => {
+		requests.push(String(input));
+		return jsonResponse({ board: { id: "board-1", version: 1 }, items: [], connections: [] });
+	};
+	const client = new CohubHttpClient({ baseUrl: "https://api.example.test", fetch });
+	const board = client.space("space-1").board("board-1");
+	await board.authoring();
+	const url = new URL(requests[0] ?? "");
+	assert.deepEqual(url.searchParams.getAll("include"), []);
+	assert.throws(() => board.authoring({ include: [] }), /include must not be empty/);
+	assert.equal(requests.length, 1);
+});
+
 test("Board create rejects invalid semantic items before making a request", async () => {
 	let requests = 0;
 	const fetch: Fetch = async () => {

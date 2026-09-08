@@ -101,6 +101,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
 
 const getAppMeta = (value: unknown): AppMeta | null => isRecord(value) ? value : null;
 
+function getAppSource(meta: AppMeta | null): { type: "upload"; ref: string } | null {
+  const runtime = isRecord(meta?.runtime) ? meta.runtime : null;
+  const source = isRecord(runtime?.source) ? runtime.source : null;
+  return source?.type === "upload" && typeof source.ref === "string" && source.ref.length > 0
+    ? { type: "upload", ref: source.ref }
+    : null;
+}
+
 const getHideCohubBar = (meta: AppMeta | null | undefined): boolean => {
   const presentation = isRecord(meta?.presentation) ? meta.presentation : null;
   return presentation?.hideCohubBar === true;
@@ -338,11 +346,14 @@ async function writeAppAsset(input: {
   slug: string;
   targetType: string;
   targetRef: string;
+  sourceType?: "workspace" | "upload";
+  sourceRef?: string | null;
+  sourceOwner?: string | null;
   status: string;
 }): Promise<WrittenAppAsset | null> {
-  const { spaceId, slug, targetType, targetRef, status } = input;
+  const { spaceId, slug, targetType, targetRef, sourceType, sourceRef, sourceOwner, status } = input;
   if (status !== "published" || (targetType !== "file" && targetType !== "directory")) return null;
-  const result = await publishAppAssetInWorker({ spaceId, slug, targetType, targetRef });
+  const result = await publishAppAssetInWorker({ spaceId, slug, targetType, targetRef, sourceType, sourceRef, sourceOwner });
   if (!result.ok) throw new AppAssetPublishError(result);
   const extracted = result.extracted
     ? materializeHtmlPageMeta(
@@ -625,6 +636,7 @@ router.post("/", async (c) => {
   const identityError = await ensureAppPublicIdentity(c, spaceId, user);
   if (identityError) return identityError;
   const meta = getAppMeta(body?.meta);
+  const source = getAppSource(meta);
   const presentationError = await ensureAppPresentationAllowed(c, { userId: user.uuid, meta });
   if (presentationError) return presentationError;
   const now = new Date();
@@ -634,7 +646,7 @@ router.post("/", async (c) => {
 
   let written: WrittenAppAsset | null = null;
   try {
-    written = await writeAppAsset({ spaceId, slug, targetType, targetRef, status });
+    written = await writeAppAsset({ spaceId, slug, targetType, targetRef, sourceType: source ? "upload" : "workspace", sourceRef: source?.ref, sourceOwner: user.uuid, status });
   } catch (error) {
     return appAssetErrorResponse(c, error, { spaceId, targetType, targetRef });
   }
@@ -800,6 +812,9 @@ async function publishAppVersion(
       slug: current.slug,
       targetType: current.targetType,
       targetRef: current.targetRef,
+      sourceType: getAppSource(getAppMeta(current.meta)) ? "upload" : "workspace",
+      sourceRef: getAppSource(getAppMeta(current.meta))?.ref,
+      sourceOwner: current.userUuid,
       status: "published",
     });
   } catch (error) {
@@ -1054,6 +1069,7 @@ router.post("/:id/actions/:action/run", appActionBodyLimit, async (c) => {
         action,
         actionInput: body.input,
       }),
+      actionInput: body.input ?? null,
       cwd: "/workspace",
       source: APP_ACTION_EXECUTION_SOURCE,
       viewerUserId: user.uuid,

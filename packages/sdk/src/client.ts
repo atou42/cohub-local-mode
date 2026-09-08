@@ -154,7 +154,7 @@ export class CohubClient {
     this.sessionAccess = new SessionAccessApi(this.transport);
     this.search = new SearchApi(this.transport);
     this.references = new ReferencesApi(this.transport);
-    this.tasks = new TasksApi(this.transport);
+    this.tasks = new TasksApi(this.transport, this.websocketClient);
     this.cronJobs = new CronJobsApi(this.transport);
     this.desktop = new DesktopCommandsApi(this.transport);
     this.invite = new PublicInviteApi(this.transport);

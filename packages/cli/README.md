@@ -299,10 +299,9 @@ Confirm before deleting files or directories.
 
 Publish and manage Apps from a Space workspace. Public App URLs require a username and a Space slug.
 
-`--file` and `--dir` take paths relative to the Space workspace — the same paths
-`spaces files ls` shows, not your local filesystem. To publish local build
-output, upload it first (`spaces files upload <dir>`), then publish the
-Space-side path.
+`apps publish` detects the source from the runtime by default: local CLI runs use local
+filesystem paths, while Cohub Sandbox runs use Space workspace paths. Pass
+`--source workspace` or `--source local` to override the default explicitly.
 
 ```bash
 cohub profile update --username <username>
@@ -311,8 +310,9 @@ cohub -s <spaceId> apps ls --json
 cohub apps get <appId|url|username/space/app> --json
 cohub apps stats <appId|url|username/space/app>
 cohub apps download <appId|url|username/space/app> --output <path>
-cohub -s <spaceId> apps publish demo --file dist/index.html
-cohub -s <spaceId> apps publish site --dir dist
+cohub -s <spaceId> apps publish demo --file ./dist/index.html
+cohub -s <spaceId> apps publish site --dir ./dist
+cohub -s <spaceId> apps publish site --source workspace --dir dist
 cohub -s <spaceId> apps publish app --port 3000
 cohub apps publish-version <appId>
 cohub apps versions <appId> --json

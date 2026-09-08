@@ -211,25 +211,21 @@ function contentBlocksFrom(value: unknown): ContentBlock[] {
 	return [];
 }
 
-function appActionContent(content: ContentBlock[]): ContentBlock[] {
-	return content.map((block) => {
-		if (block.type !== "tool_use") return block;
-		const input = { ...block.input };
-		delete input.command;
-		const meta = block._meta ? { ...block._meta } : undefined;
-		if (meta) delete meta.command;
-		return { ...block, input, _meta: meta };
-	});
-}
-
 export function runCommandContent(
 	run: TaskRunRecord,
 	progress: unknown,
 ): ContentBlock[] {
+	const resultRecord = asRecord(run.result);
+	const progressRecord = asRecord(progress);
 	const resultContent = contentBlocksFrom(run.result);
-	const content =
-		resultContent.length > 0 ? resultContent : contentBlocksFrom(progress);
-	return appActionName(run) ? appActionContent(content) : content;
+	const progressContent = contentBlocksFrom(progress);
+	const content = resultContent.length > 0 ? resultContent : progressContent;
+	if (content.length > 0) return content;
+
+	const output = resultRecord?.output ?? progressRecord?.output;
+	return typeof output === "string" && output
+		? [{ type: "text", text: output }]
+		: [];
 }
 
 export function taskOutputContent(
@@ -345,6 +341,15 @@ export function appActionName(
 		typeof action === "string" &&
 		action.trim()
 		? action.trim()
+		: null;
+}
+
+export function appActionInput(run: TaskRunRecord): unknown {
+	const payload = asRecord(run.payload);
+	const data = asRecord(payload?.data);
+	return data?.source === APP_ACTION_EXECUTION_SOURCE &&
+		Object.hasOwn(data, "actionInput")
+		? data.actionInput
 		: null;
 }
 

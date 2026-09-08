@@ -86,6 +86,7 @@ export type {
 export type { RawHttpResponse } from "./transport.js";
 export {
   COHUB_ENVIRONMENTS,
+  getCohubContext,
   normalizeBaseUrl,
   normalizeVoiceInputWebsocketUrl,
   normalizeWebsocketUrl,
@@ -97,7 +98,8 @@ export {
   resolveWebsocketUrl,
 } from "./environment.js";
 export type { CohubClientOptions, Fetch, HttpTraceContext, UnauthorizedContext } from "./transport.js";
-export type { CohubEnvironment } from "./environment.js";
+export type { CohubContext, CohubEnvironment, CohubExecutionContext, CohubRuntimeKind } from "./environment.js";
+export type { TaskWaitOptions } from "./apis/tasks.js";
 export type {
   VoiceInputCallbacks,
   VoiceInputClientOptions,
@@ -192,7 +194,7 @@ export {
   parseBoardPlaybackPolicy,
 } from "@cohub/protocol";
 export * from "./board/animation.js";
-export type { CreatePublicAssetUploadInput, CreatePublicAssetUploadResponse, PublicAssetMimeType, PublicAssetPurpose, PublicAssetUploadProgress, PublicAssetUploadProtocol, UploadChatAttachmentInput, UploadChatImageAttachmentInput, UploadPublicAssetInput } from "./apis/public-assets.js";
+export type { CreatePublicAssetUploadInput, CreatePublicAssetUploadResponse, PublicAssetMimeType, PublicAssetPurpose, PublicAssetUploadProgress, PublicAssetUploadProtocol, UploadAppSourceInput, UploadChatAttachmentInput, UploadChatImageAttachmentInput, UploadPublicAssetInput } from "./apis/public-assets.js";
 export type { AppActionRunResponse, AppAuthorizeResponse, AppContent, AppContentDownload, AppCreateInput, AppDetailResponse, AppExtractedPageMeta, AppGetResponse, AppMeta, AppPresentationMeta, AppPromotionCreateInput, AppPromotionEventResponse, AppPromotionProvider, AppPromotionProviderStatus, AppPromotionRecord, AppPromotionStatsResponse, AppPublicOwnerRecord, AppPublicSpaceRecord, AppRecord, AppResolveResponse, AppSessionResponse, AppStatus, AppTargetType, AppUpdateInput, AppVersionRecord, AppViewerGrantRecord, AppViewSource, AppViewStatsResponse, AppVisibility } from "./apis/apps.js";
 export type {
   PublicFileCreateUploadInput,

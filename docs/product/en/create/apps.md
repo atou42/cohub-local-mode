@@ -96,14 +96,14 @@ They do not work from a raw static asset URL or a random local preview shell. De
 
 ## Publish from CLI
 
-`--file` and `--dir` take paths relative to the Space workspace — the same paths
-`spaces files ls` shows, not your local filesystem. To publish local build
-output, upload it first (`spaces files upload <dir>`), then publish the
-Space-side path.
+`apps publish` detects the source from the runtime by default: local CLI runs use local
+filesystem paths, while Cohub Sandbox runs use Space workspace paths. Use
+`--source workspace` or `--source local` to override this explicitly.
 
 ```bash
-cohub -s <spaceId> apps publish demo --file dist/index.html
-cohub -s <spaceId> apps publish site --dir dist
+cohub -s <spaceId> apps publish demo --file ./dist/index.html
+cohub -s <spaceId> apps publish site --dir ./dist
+cohub -s <spaceId> apps publish site --source workspace --dir dist
 cohub -s <spaceId> apps publish app --port 5173
 ```
 

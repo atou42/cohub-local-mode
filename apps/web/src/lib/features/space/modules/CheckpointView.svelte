@@ -35,6 +35,7 @@ import {
 } from "$lib/space-routes";
 import { asRecord } from "../space-utils";
 import { createKeyedRouteRequestGuard } from "./route-request-guard";
+import { withCurrentWindow } from "./window-route";
 
 type Props = {
 	mode: "create" | "detail";
@@ -309,7 +310,7 @@ async function handleCreateCheckpointSubmit(event: SubmitEvent) {
 		const { taskRunId } = await sdk
 			.space(spaceId)
 			.checkpoints.create(checkpointCreateDescription.trim() || null);
-		await goto(buildSpaceTaskRoute(spaceId, taskRunId));
+		await goto(withCurrentWindow(buildSpaceTaskRoute(spaceId, taskRunId)));
 	} catch (error) {
 		if (error instanceof HttpError && error.status === 409) {
 			checkpointCreateError = "Save in progress.";
@@ -687,9 +688,9 @@ onDestroy(() => {
 							</div>
 							{#if sourceTaskRunId}
 								<a
-									href={buildSpaceTaskRoute(spaceId, sourceTaskRunId)}
+									href={withCurrentWindow(buildSpaceTaskRoute(spaceId, sourceTaskRunId))}
 									class="inline-flex items-center gap-1.5 text-text-tertiary transition-colors hover:text-brand"
-									onclick={(e) => { e.preventDefault(); goto(buildSpaceTaskRoute(spaceId, sourceTaskRunId)); }}
+									onclick={(e) => { e.preventDefault(); goto(withCurrentWindow(buildSpaceTaskRoute(spaceId, sourceTaskRunId))); }}
 								>
 									<Activity class="w-3.5 h-3.5" />
 									<span>{m.cp_view_save_task({}, { locale })}</span>

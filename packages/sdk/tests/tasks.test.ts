@@ -3,6 +3,46 @@ import test from "node:test";
 import { TasksApi } from "../src/apis/tasks.js";
 import type { HttpTransport } from "../src/transport.js";
 
+test("wait rejects an already-aborted signal before requesting", async () => {
+	const controller = new AbortController();
+	controller.abort();
+	let requested = false;
+	const transport = {
+		request: async () => {
+			requested = true;
+			return {};
+		},
+	} as unknown as HttpTransport;
+	await assert.rejects(
+		() => new TasksApi(transport).wait("task-1", { signal: controller.signal }),
+		(error) => error instanceof DOMException && error.name === "AbortError",
+	);
+	assert.equal(requested, false);
+});
+
+test("wait rejects invalid timing options", async () => {
+	const transport = { request: async () => ({}) } as unknown as HttpTransport;
+	const tasks = new TasksApi(transport);
+	await assert.rejects(() => tasks.wait("task-1", { timeoutMs: Number.NaN }), /timeoutMs/);
+	await assert.rejects(() => tasks.wait("task-1", { pollIntervalMs: 1 }), /pollIntervalMs/);
+});
+
+test("wait returns immediately for a terminal task", async () => {
+	const transport = {
+		request: async () => ({
+			run: {
+				id: "task-1",
+				status: "completed",
+				spaceId: "space-1",
+			} as never,
+			progress: null,
+		}),
+	} as unknown as HttpTransport;
+	const task = await new TasksApi(transport).wait("task-1");
+	assert.equal(task.id, "task-1");
+	assert.equal(task.status, "completed");
+});
+
 test("getMany deduplicates task IDs and scopes the batch to a Space", async () => {
 	const requests: string[] = [];
 	const transport = {

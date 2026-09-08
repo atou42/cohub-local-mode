@@ -20,16 +20,17 @@ router.post("/uploads", async (c) => {
   if (user instanceof Response) return user;
   const body = await c.req.json<CreatePublicAssetUploadInput>().catch(() => null);
   if (!body || typeof body !== "object") return c.json({ message: "invalid body" }, 400);
-  if (body.purpose !== "user_avatar" && body.purpose !== "space_avatar" && body.purpose !== "chat_attachment") {
+  if (body.purpose !== "user_avatar" && body.purpose !== "space_avatar" && body.purpose !== "chat_attachment" && body.purpose !== "app_source") {
     return c.json({ message: "invalid public asset purpose" }, 400);
   }
   if (body.uploadProtocol !== "presigned_put_v1") {
     return c.json({ message: "presigned_put_v1 upload protocol is required" }, 400);
   }
 
-  if (body.purpose === "space_avatar") {
+  if (body.purpose === "space_avatar" || body.purpose === "app_source") {
     if (!body.spaceId || !requireValidId(body.spaceId)) return c.json({ message: "space not found" }, 404);
     if (!(await hasPermission(user, "space.edit", { spaceId: body.spaceId }))) return authzDenied(c);
+    if (body.purpose === "app_source" && !body.sessionId) return c.json({ message: "sessionId is required" }, 400);
   }
 
   // chat_attachment is user-scoped: authenticated is enough.

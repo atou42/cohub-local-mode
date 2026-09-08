@@ -1,10 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, open, readdir, realpath } from "node:fs/promises";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { lstat, mkdir, open, readdir, realpath, rm } from "node:fs/promises";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  relative,
+  resolve,
+} from "node:path";
 import { Transform, type TransformCallback } from "node:stream";
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -46,6 +54,7 @@ const MAX_WORK_PAGE_ASSET_FILES = 8;
 const WORK_SITE_UPLOAD_CONCURRENCY = 8;
 const WORK_FILE_UPLOAD_CONCURRENCY = 2;
 const WORK_MULTIPART_PART_BYTES = 16 * 1024 * 1024;
+const APP_SOURCE_TEMP_ROOT = "/tmp/cohub-app-sources";
 const IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const OPEN_READ_NOFOLLOW = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 const PAGE_ASSET_EXT = new Set([
@@ -163,6 +172,39 @@ function getStorage() {
   };
 }
 
+function getUserUploadStorage() {
+  return {
+    endpoint: config.userUploadS3Endpoint,
+    region: config.userUploadS3Region,
+    bucket: config.userUploadS3Bucket,
+    accessKeyId: config.userUploadS3AccessKeyId,
+    secretAccessKey: config.userUploadS3SecretAccessKey,
+  };
+}
+
+function requireUserUploadStorage() {
+  const storage = getUserUploadStorage();
+  if (
+    !storage.bucket ||
+    !storage.endpoint ||
+    !storage.accessKeyId ||
+    !storage.secretAccessKey
+  ) {
+    throw new WorkPublishAssetError(
+      503,
+      "user upload storage is not configured",
+      "upload_storage_not_configured",
+    );
+  }
+  return {
+    endpoint: storage.endpoint,
+    region: storage.region,
+    bucket: storage.bucket,
+    accessKeyId: storage.accessKeyId,
+    secretAccessKey: storage.secretAccessKey,
+  };
+}
+
 function requireStorage() {
   const storage = getStorage();
   if (
@@ -183,6 +225,23 @@ function requireStorage() {
     accessKeyId: storage.accessKeyId,
     secretAccessKey: storage.secretAccessKey,
   };
+}
+
+let userUploadS3Client: S3Client | null = null;
+
+function getUserUploadS3Client() {
+  if (userUploadS3Client) return userUploadS3Client;
+  const storage = requireUserUploadStorage();
+  userUploadS3Client = new S3Client({
+    endpoint: storage.endpoint,
+    region: storage.region,
+    forcePathStyle: false,
+    credentials: {
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
+    },
+  });
+  return userUploadS3Client;
 }
 
 function getS3Client() {
@@ -217,7 +276,7 @@ function getMimeType(path: string) {
 
 function assertSafeRelativePath(
   input: string,
-  options?: { allowEmpty?: boolean },
+  options?: { allowEmpty?: boolean; rejectDotSegments?: boolean },
 ) {
   const value = String(input ?? "")
     .replace(/\\/g, "/")
@@ -228,6 +287,12 @@ function assertSafeRelativePath(
   }
   if (value.startsWith("/") || value.includes("\0"))
     throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
+  if (
+    options?.rejectDotSegments &&
+    value.split("/").some((part) => part === "." || part === "..")
+  ) {
+    throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
+  }
   return value;
 }
 
@@ -240,9 +305,9 @@ function assertInsideRoot(target: string, root: string) {
 async function resolveTarget(
   spaceId: string,
   inputPath: string,
-  options?: { allowEmpty?: boolean },
+  options?: { allowEmpty?: boolean; rootOverride?: string },
 ) {
-  if (!config.spaceStorageRoot)
+  if (!config.spaceStorageRoot && !options?.rootOverride)
     throw new WorkPublishAssetError(
       503,
       "Space file storage is not configured.",
@@ -251,15 +316,17 @@ async function resolveTarget(
   const safePath = assertSafeRelativePath(inputPath, {
     allowEmpty: options?.allowEmpty,
   });
-  const root = await realpath(
-    resolve(config.spaceStorageRoot, spaceId, "workspace"),
-  ).catch(() => {
-    throw new WorkPublishAssetError(
-      404,
-      "space directory not found",
-      "space_not_found",
-    );
-  });
+  const root =
+    options?.rootOverride ??
+    (await realpath(
+      resolve(config.spaceStorageRoot, spaceId, "workspace"),
+    ).catch(() => {
+      throw new WorkPublishAssetError(
+        404,
+        "space directory not found",
+        "space_not_found",
+      );
+    }));
   const target = resolve(root, safePath);
   assertInsideRoot(target, root);
   return { root, target, relativePath: safePath };
@@ -294,8 +361,11 @@ async function openVerifiedFile(path: string, root: string) {
 async function readWorkFile(
   spaceId: string,
   path: string,
+  rootOverride?: string,
 ): Promise<WorkSourceFile> {
-  const { root, target, relativePath } = await resolveTarget(spaceId, path);
+  const { root, target, relativePath } = await resolveTarget(spaceId, path, {
+    rootOverride,
+  });
   const pathStats = await lstat(target).catch(() => {
     throw new WorkPublishAssetError(404, "file not found", "path_not_found");
   });
@@ -341,8 +411,12 @@ async function readWorkFile(
   }
 }
 
-async function readWorkHtmlFile(spaceId: string, path: string) {
-  const file = await readWorkFile(spaceId, path);
+async function readWorkHtmlFile(
+  spaceId: string,
+  path: string,
+  rootOverride?: string,
+) {
+  const file = await readWorkFile(spaceId, path, rootOverride);
   const prepared = await prepareWorkFile(file, WORK_HTML_METADATA_MAX_BYTES);
   const html = prepared.prefix?.toString("utf8") ?? "";
   const htmlDir = await realpath(resolve(file.absolutePath, "..")).catch(
@@ -441,9 +515,14 @@ async function readWorkPageCompanionAssets(input: {
   return files;
 }
 
-async function readWorkDirectoryFiles(spaceId: string, path: string) {
+async function readWorkDirectoryFiles(
+  spaceId: string,
+  path: string,
+  rootOverride?: string,
+) {
   const { root, target, relativePath } = await resolveTarget(spaceId, path, {
     allowEmpty: true,
+    rootOverride,
   });
   const targetStats = await lstat(target).catch(() => {
     throw new WorkPublishAssetError(
@@ -1289,23 +1368,261 @@ async function writeAppBoardAsset(input: {
   };
 }
 
+const MAX_APP_SOURCE_MANIFEST_BYTES = 256 * 1024;
+const MAX_APP_SOURCE_FILES = 1000;
+const MAX_APP_SOURCE_BYTES = MAX_WORK_SITE_BYTES;
+
+type AppSourceManifest = {
+  kind: "cohub.app-source";
+  version: 1;
+  targetType: "file" | "directory";
+  files: Array<{
+    path: string;
+    objectKey: string;
+    size: number;
+    mimeType: string;
+  }>;
+};
+
+async function prepareUploadedSource(
+  sourceRef: string,
+  jobId: string,
+  expectedTargetType: "file" | "directory",
+  sourceOwner: string,
+) {
+  const storage = requireUserUploadStorage();
+  const client = getUserUploadS3Client();
+  const ownerPrefix = `${envPrefix()}app-sources/${sourceOwner}/`;
+  if (!sourceRef.startsWith(ownerPrefix)) {
+    throw new WorkPublishAssetError(
+      400,
+      "invalid app source reference",
+      "source_invalid",
+    );
+  }
+  const sourcePrefix = sourceRef.slice(0, sourceRef.lastIndexOf("/"));
+  const manifestObject = await client.send(
+    new GetObjectCommand({ Bucket: storage.bucket, Key: sourceRef }),
+  );
+  const manifestLength = Number(manifestObject.ContentLength ?? 0);
+  if (manifestLength > MAX_APP_SOURCE_MANIFEST_BYTES)
+    throw new WorkPublishAssetError(
+      413,
+      "app source manifest is too large",
+      "source_too_large",
+    );
+  const chunks: Buffer[] = [];
+  let manifestBytes = 0;
+  for await (const chunk of manifestObject.Body as AsyncIterable<Buffer>) {
+    manifestBytes += chunk.byteLength;
+    if (manifestBytes > MAX_APP_SOURCE_MANIFEST_BYTES)
+      throw new WorkPublishAssetError(
+        413,
+        "app source manifest is too large",
+        "source_too_large",
+      );
+    chunks.push(Buffer.from(chunk));
+  }
+  let manifest: AppSourceManifest;
+  try {
+    manifest = JSON.parse(
+      Buffer.concat(chunks).toString("utf8"),
+    ) as AppSourceManifest;
+  } catch {
+    throw new WorkPublishAssetError(
+      400,
+      "invalid app source manifest",
+      "source_invalid",
+    );
+  }
+  if (
+    manifest.kind !== "cohub.app-source" ||
+    manifest.version !== 1 ||
+    !Array.isArray(manifest.files)
+  ) {
+    throw new WorkPublishAssetError(
+      400,
+      "invalid app source manifest",
+      "source_invalid",
+    );
+  }
+  if (
+    manifest.targetType !== expectedTargetType ||
+    manifest.files.length === 0 ||
+    manifest.files.length > MAX_APP_SOURCE_FILES
+  ) {
+    throw new WorkPublishAssetError(
+      400,
+      "invalid app source manifest",
+      "source_invalid",
+    );
+  }
+  let totalBytes = 0;
+  const paths = new Set<string>();
+  if (
+    manifest.files.some((file) => {
+      if (
+        !file ||
+        typeof file !== "object" ||
+        typeof file.path !== "string" ||
+        typeof file.objectKey !== "string" ||
+        !Number.isSafeInteger(file.size) ||
+        typeof file.mimeType !== "string"
+      )
+        return true;
+      let path: string;
+      try {
+        path = assertSafeRelativePath(file.path, { rejectDotSegments: true });
+      } catch {
+        return true;
+      }
+      if (paths.has(path)) return true;
+      paths.add(path);
+      totalBytes += file.size;
+      return (
+        file.size < 0 ||
+        totalBytes > MAX_APP_SOURCE_BYTES ||
+        !file.objectKey.startsWith(`${sourcePrefix}/`) ||
+        file.objectKey.includes("/chat-attachments/")
+      );
+    })
+  ) {
+    throw new WorkPublishAssetError(
+      400,
+      "invalid app source object",
+      "source_invalid",
+    );
+  }
+  const root = resolve(APP_SOURCE_TEMP_ROOT, jobId);
+  await mkdir(root, { recursive: true });
+  for (const file of manifest.files) {
+    const path = assertSafeRelativePath(file.path, { rejectDotSegments: true });
+    const destination = resolve(root, path);
+    assertInsideRoot(destination, root);
+    await mkdir(dirname(destination), { recursive: true });
+    const object = await client.send(
+      new GetObjectCommand({ Bucket: storage.bucket, Key: file.objectKey }),
+    );
+    const body = object.Body;
+    if (!body)
+      throw new WorkPublishAssetError(
+        404,
+        "app source file not found",
+        "source_not_found",
+      );
+    const handle = await open(
+      destination,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      0o600,
+    );
+    let bytes = 0;
+    try {
+      for await (const chunk of body as AsyncIterable<Buffer>) {
+        bytes += chunk.byteLength;
+        if (bytes > file.size)
+          throw new WorkPublishAssetError(
+            400,
+            "app source file size mismatch",
+            "source_invalid",
+          );
+        await handle.write(chunk);
+      }
+      if (bytes !== file.size)
+        throw new WorkPublishAssetError(
+          400,
+          "app source file size mismatch",
+          "source_invalid",
+        );
+    } finally {
+      await handle.close();
+    }
+  }
+  return { root, manifest };
+}
+
 async function processWorkPublishAsset(
   job: Job<AppPublishAssetJobData>,
 ): Promise<AppPublishAssetJobResult> {
-  const { spaceId, slug, targetType, targetRef } = job.data;
-  if (targetType === "file") {
-    if (/\.html?$/i.test(targetRef)) {
-      const { file, prepared, html, companions } = await readWorkHtmlFile(
+  const {
+    spaceId,
+    slug,
+    targetType,
+    targetRef,
+    sourceType,
+    sourceRef,
+    sourceOwner,
+  } = job.data;
+  const tempJobId = job.id ?? randomUUID();
+  let sourceRoot: string | undefined;
+  try {
+    const preparedSource =
+      sourceType === "upload" && sourceRef
+        ? sourceOwner
+          ? await prepareUploadedSource(
+              sourceRef,
+              tempJobId,
+              targetType,
+              sourceOwner,
+            )
+          : (() => {
+              throw new WorkPublishAssetError(
+                400,
+                "app source owner is required",
+                "source_invalid",
+              );
+            })()
+        : null;
+    sourceRoot = preparedSource?.root;
+    if (targetType === "file") {
+      if (/\.html?$/i.test(targetRef)) {
+        const { file, prepared, html, companions } = await readWorkHtmlFile(
+          spaceId,
+          targetRef,
+          sourceRoot,
+        );
+        const written = await writeWorkHtmlAsset({
+          spaceId,
+          appSlug: slug,
+          file,
+          prepared,
+          html,
+          companions,
+        });
+        return {
+          ok: true,
+          ...written,
+          artifact: {
+            kind: "web",
+            mimeType: "text/html",
+            sizeBytes: written.sizeBytes,
+            fileCount: written.fileCount,
+            download: written.download,
+          },
+        };
+      }
+      const file = await readWorkFile(spaceId, targetRef, sourceRoot);
+      const written = isBoardPath(targetRef)
+        ? await writeAppBoardAsset({
+            spaceId,
+            appSlug: slug,
+            sourcePath: file.relativePath,
+            root: file.root,
+            file,
+          })
+        : await writeWorkFileAsset({ spaceId, appSlug: slug, file });
+      return { ok: true, ...written };
+    }
+    if (targetType === "directory") {
+      const result = await readWorkDirectoryFiles(
         spaceId,
         targetRef,
+        sourceRoot,
       );
-      const written = await writeWorkHtmlAsset({
+      const written = await writeWorkSiteAssets({
         spaceId,
         appSlug: slug,
-        file,
-        prepared,
-        html,
-        companions,
+        targetRef: result.path,
+        files: result.files,
       });
       return {
         ok: true,
@@ -1319,39 +1636,18 @@ async function processWorkPublishAsset(
         },
       };
     }
-    const file = await readWorkFile(spaceId, targetRef);
-    const written = isBoardPath(targetRef)
-      ? await writeAppBoardAsset({
-          spaceId,
-          appSlug: slug,
-          sourcePath: file.relativePath,
-          root: file.root,
-          file,
-        })
-      : await writeWorkFileAsset({ spaceId, appSlug: slug, file });
-    return { ok: true, ...written };
+    throw new WorkPublishAssetError(400, "target is invalid");
+  } finally {
+    if (sourceRoot)
+      await rm(sourceRoot, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    else if (sourceType === "upload")
+      await rm(resolve(APP_SOURCE_TEMP_ROOT, tempJobId), {
+        recursive: true,
+        force: true,
+      }).catch(() => undefined);
   }
-  if (targetType === "directory") {
-    const result = await readWorkDirectoryFiles(spaceId, targetRef);
-    const written = await writeWorkSiteAssets({
-      spaceId,
-      appSlug: slug,
-      targetRef: result.path,
-      files: result.files,
-    });
-    return {
-      ok: true,
-      ...written,
-      artifact: {
-        kind: "web",
-        mimeType: "text/html",
-        sizeBytes: written.sizeBytes,
-        fileCount: written.fileCount,
-        download: written.download,
-      },
-    };
-  }
-  throw new WorkPublishAssetError(400, "target is invalid");
 }
 
 registerSystemJob(

@@ -110,12 +110,14 @@ function hydrateTaskRunUserProfiles<T extends {
   result: unknown;
 }>(
   runs: T[],
-  options?: { sanitizeForList?: boolean; viewerUserId?: string | null },
+  options?: { sanitizeForList?: boolean; viewerUserId?: string | null; canViewSpaceData?: boolean },
 ) {
   const userUuids = runs.map((run) => run.userUuid).filter((value): value is string => Boolean(value));
   return getProfilesByUuids(userUuids).then((profiles) =>
     runs.map((run) => {
-      const privateRun = sanitizeTaskRunPricingForViewer(run, options?.viewerUserId);
+      const privateRun = sanitizeTaskRunPricingForViewer(run, options?.viewerUserId, {
+        canViewSpaceData: options?.canViewSpaceData,
+      });
       const sanitized = options?.sanitizeForList ? sanitizeTaskRunForList(privateRun) : privateRun;
       return {
         ...sanitized,
@@ -167,6 +169,7 @@ router.get("/", async (c) => {
     const runs = await hydrateTaskRunUserProfiles(rows.slice(0, limit), {
       sanitizeForList: true,
       viewerUserId: userId,
+      canViewSpaceData: true,
     });
     return c.json({ runs, pageInfo: { hasMore: rows.length > limit, nextCursor: rows.length > limit ? buildTaskCursor(runs.at(-1)) : null } });
   }
@@ -196,6 +199,7 @@ router.get("/", async (c) => {
   const runs = await hydrateTaskRunUserProfiles(rows.slice(0, limit), {
     sanitizeForList: true,
     viewerUserId: userId,
+    canViewSpaceData: false,
   });
 
   return c.json({ runs, pageInfo: { hasMore: rows.length > limit, nextCursor: rows.length > limit ? buildTaskCursor(runs.at(-1)) : null } });
@@ -222,8 +226,14 @@ router.get("/:taskId", async (c) => {
   }
 
   const job = await taskQueue.getJob(run.jobId).catch(() => null);
-  const [hydratedRun] = await hydrateTaskRunUserProfiles([run], { viewerUserId: user?.uuid });
-  const progress = sanitizeTaskRunProgressForViewer(run, job?.progress ?? null, user?.uuid);
+  const hasSpaceAccess = run.spaceId
+    ? await hasPermission(user, "taskrun.view", { spaceId: run.spaceId, sessionId: run.sessionId ?? undefined })
+    : false;
+  const [hydratedRun] = await hydrateTaskRunUserProfiles([run], {
+    viewerUserId: user?.uuid,
+    canViewSpaceData: hasSpaceAccess,
+  });
+  const progress = sanitizeTaskRunProgressForViewer(run, job?.progress ?? null, hasSpaceAccess);
   return c.json({ run: hydratedRun, progress });
 });
 

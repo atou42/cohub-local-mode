@@ -17,6 +17,7 @@ import {
 	type TaskRealtimeEvent,
 } from "./task-run-detail-controller.svelte";
 import {
+	appActionInput,
 	appActionName,
 	checkpointIdFromTaskRun,
 	displaySafeJson,
@@ -38,6 +39,7 @@ import {
 	taskRunStatusBadge,
 	taskTypeLabel,
 } from "./task-run-utils";
+import { withCurrentWindow } from "./window-route";
 
 type Props = {
 	spaceId: string;
@@ -105,9 +107,12 @@ $effect(() => {
 	if (!checkpointId) return;
 
 	redirectedCheckpointTaskId = run.id;
-	void goto(buildSpaceCheckpointRoute(spaceId, checkpointId), {
-		replaceState: true,
-	});
+	void goto(
+		withCurrentWindow(buildSpaceCheckpointRoute(spaceId, checkpointId)),
+		{
+			replaceState: true,
+		},
+	);
 });
 
 onDestroy(() => {
@@ -165,6 +170,7 @@ function userTitle(
 			{@const resultCheckpointId = checkpointIdFromTaskRun(taskRunDetail)}
 			{@const saveStageLabel = taskRunDetail.taskType === "save_checkpoint" ? saveCheckpointProgressLabel(taskRunProgress, locale) : null}
 			{@const commandInfo = runCommandPayload(taskRunDetail)}
+			{@const actionInput = appActionInput(taskRunDetail)}
 			{@const commandMeta = runCommandResultMeta(taskRunDetail)}
 			{@const outputContent = taskOutputContent(taskRunDetail, taskRunProgress)}
 			{@const generationBlocks = generationOutputBlocks(taskRunDetail)}
@@ -194,9 +200,9 @@ function userTitle(
 								{#if taskRunDetail.cronJobId}
 									<span class="text-text-placeholder">·</span>
 									<a
-										href={buildSpaceCronjobRoute(spaceId, taskRunDetail.cronJobId)}
+										href={withCurrentWindow(buildSpaceCronjobRoute(spaceId, taskRunDetail.cronJobId))}
 										class="text-text-secondary transition-colors hover:text-brand"
-										onclick={(e) => { e.preventDefault(); goto(buildSpaceCronjobRoute(spaceId, taskRunDetail!.cronJobId!)); }}
+										onclick={(e) => { e.preventDefault(); goto(withCurrentWindow(buildSpaceCronjobRoute(spaceId, taskRunDetail!.cronJobId!))); }}
 									>{m.task_view_cronjob({}, { locale })}</a>
 								{/if}
 							</div>
@@ -211,7 +217,7 @@ function userTitle(
 					</section>
 				{/if}
 
-				{#if taskRunDetail.taskType === "run_command" && !actionName}
+				{#if taskRunDetail.taskType === "run_command" && commandInfo.command}
 					<section class="space-y-2">
 						<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_command({}, { locale })}</div>
 						<div class="rounded-[8px] bg-bg-elevated/35 px-4 py-3">
@@ -225,6 +231,13 @@ function userTitle(
 								<span>{formatDateTime(taskRunDetail.createdAt, locale)}</span>
 							</div>
 						</div>
+					</section>
+				{/if}
+
+				{#if actionInput !== null}
+					<section class="space-y-2">
+						<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_input({}, { locale })}</div>
+						<pre class="max-h-[36vh] overflow-auto rounded-[8px] bg-bg-elevated/35 p-3 text-[12px] font-mono leading-relaxed text-text-secondary whitespace-pre-wrap break-all">{displaySafeJson(actionInput, { locale })}</pre>
 					</section>
 				{/if}
 
@@ -244,9 +257,9 @@ function userTitle(
 						</div>
 						{#if resultCheckpointId}
 							<a
-								href={buildSpaceCheckpointRoute(spaceId, resultCheckpointId)}
+								href={withCurrentWindow(buildSpaceCheckpointRoute(spaceId, resultCheckpointId))}
 								class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-[5px] bg-brand-muted px-3 py-2 text-[12px] font-medium text-brand transition-colors hover:bg-brand-muted-hover"
-								onclick={(e) => { e.preventDefault(); goto(buildSpaceCheckpointRoute(spaceId, resultCheckpointId)); }}
+								onclick={(e) => { e.preventDefault(); goto(withCurrentWindow(buildSpaceCheckpointRoute(spaceId, resultCheckpointId))); }}
 							>
 								<GitCommitHorizontal class="w-3.5 h-3.5" />
 								<span>{m.task_view_checkpoint({}, { locale })}</span>
@@ -304,19 +317,17 @@ function userTitle(
 							<div class="space-y-1"><div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_finished({}, { locale })}</div><div class="text-[13px] text-text-primary">{formatDateTime(taskRunDetail.finishedAt, locale)}</div></div>
 						</div>
 
-						{#if !actionName}
-							<div class="space-y-2">
-								<div class="flex items-center justify-between gap-3">
-									<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_payload({}, { locale })}</div>
-									<button type="button" class="inline-flex min-h-8 items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] text-text-placeholder transition-colors hover:bg-bg-hover hover:text-text-secondary" onclick={() => void taskDetail.copyField("payload", taskRunDetail!.payload)} title={m.task_copy_payload({}, { locale })}>
-										{#if taskCopiedField === "payload"}<Check class="h-3 w-3 text-success-soft" /><span class="text-success-soft">{m.copied({}, { locale })}</span>{:else}<Copy class="h-3 w-3" /><span>{m.copy({}, { locale })}</span>{/if}
-									</button>
-								</div>
-								<pre class="max-h-[48vh] overflow-auto rounded-[7px] bg-bg-elevated/35 p-3 text-[12px] font-mono leading-relaxed text-text-secondary whitespace-pre-wrap break-all sm:max-h-[520px]">{displaySafeJson(taskRunDetail.payload, { locale })}</pre>
+						<div class="space-y-2">
+							<div class="flex items-center justify-between gap-3">
+								<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_payload({}, { locale })}</div>
+								<button type="button" class="inline-flex min-h-8 items-center gap-1 rounded-[4px] px-2 py-1 text-[11px] text-text-placeholder transition-colors hover:bg-bg-hover hover:text-text-secondary" onclick={() => void taskDetail.copyField("payload", taskRunDetail!.payload)} title={m.task_copy_payload({}, { locale })}>
+									{#if taskCopiedField === "payload"}<Check class="h-3 w-3 text-success-soft" /><span class="text-success-soft">{m.copied({}, { locale })}</span>{:else}<Copy class="h-3 w-3" /><span>{m.copy({}, { locale })}</span>{/if}
+								</button>
 							</div>
-						{/if}
+							<pre class="max-h-[48vh] overflow-auto rounded-[7px] bg-bg-elevated/35 p-3 text-[12px] font-mono leading-relaxed text-text-secondary whitespace-pre-wrap break-all sm:max-h-[520px]">{displaySafeJson(taskRunDetail.payload, { locale })}</pre>
+						</div>
 
-						{#if rawResult && !actionName}
+						{#if rawResult}
 							<div class="space-y-2">
 								<div class="flex items-center justify-between gap-3">
 									<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_result({}, { locale })}</div>

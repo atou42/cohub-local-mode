@@ -1,4 +1,7 @@
-import { HttpError, type CohubHttpClient, type Permission, type AppCreateInput, type AppMeta, type AppStatus, type AppUpdateInput, type AppViewStatsResponse, type AppVisibility } from "@neta-art/cohub";
+import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { basename } from "node:path";
+import { getCohubContext, HttpError, type CohubHttpClient, type Permission, type AppCreateInput, type AppMeta, type AppStatus, type AppUpdateInput, type AppViewStatsResponse, type AppVisibility } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient, createClientWithAccessToken } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
@@ -7,6 +10,7 @@ import { downloadApp } from "../app-download.js";
 import { getAppByRef, parseAppRef } from "../app-ref.js";
 import { checkAppTarget } from "../app-target.js";
 import { registerAppCommerce } from "./app-commerce.js";
+import { collectPublicUpload } from "./public.js";
 
 const APP_STATUSES = ["published", "disabled"] as const;
 const APP_VISIBILITIES = ["public", "space"] as const;
@@ -59,7 +63,70 @@ function withCohubBarMeta(input: {
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
+type AppSourceType = "workspace" | "local";
+const MAX_APP_SOURCE_FILES = 1000;
+const MAX_APP_SOURCE_BYTES = 1024 * 1024 * 1024;
+const APP_SOURCE_UPLOAD_CONCURRENCY = 4;
 type ResolvedTarget = { targetType: "file" | "directory" | "port"; targetRef: string };
+
+async function uploadLocalAppSource(client: CohubHttpClient, spaceId: string, source: ResolvedTarget) {
+  if (source.targetType === "port") return null;
+  const upload = await collectPublicUpload(source.targetRef);
+  const totalBytes = upload.files.reduce((sum, file) => sum + file.size, 0);
+  if (upload.files.length > MAX_APP_SOURCE_FILES) return error("App source is too large", `Use no more than ${MAX_APP_SOURCE_FILES} files.`);
+  if (totalBytes > MAX_APP_SOURCE_BYTES) return error("App source is too large", "The total source size must not exceed 1 GiB.");
+  const uploadId = randomUUID();
+  const directoryPrefix = source.targetType === "directory" ? upload.destination.replace(/\/$/, "") : "";
+  const files: Array<{ path: string; objectKey: string; size: number; mimeType: string }> = new Array(upload.files.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(APP_SOURCE_UPLOAD_CONCURRENCY, upload.files.length) }, async () => {
+    while (nextIndex < upload.files.length) {
+      const index = nextIndex++;
+      const file = upload.files[index];
+      if (!file) return;
+      const plan = await client.publicAssets.createUpload({
+        purpose: "app_source",
+        uploadProtocol: "presigned_put_v1",
+        spaceId,
+        sessionId: uploadId,
+        file: { size: file.size, mimeType: file.mimeType, filename: basename(file.publicPath) },
+      });
+      const response = await fetch(plan.asset.uploadUrl, {
+        method: "PUT",
+        headers: plan.asset.uploadHeaders,
+        body: createReadStream(file.localPath) as never,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" });
+      if (!response.ok) throw new Error(`Failed to upload ${file.publicPath}: HTTP ${response.status}`);
+      const path = directoryPrefix && file.publicPath.startsWith(`${directoryPrefix}/`)
+        ? file.publicPath.slice(directoryPrefix.length + 1)
+        : basename(file.publicPath);
+      files[index] = { path, objectKey: plan.asset.objectKey, size: file.size, mimeType: file.mimeType };
+    }
+  });
+  await Promise.all(workers);
+  const manifest = JSON.stringify({ kind: "cohub.app-source", version: 1, targetType: source.targetType, files });
+  const manifestBlob = new Blob([manifest], { type: "application/json" });
+  const manifestPlan = await client.publicAssets.createUpload({
+    purpose: "app_source",
+    uploadProtocol: "presigned_put_v1",
+    spaceId,
+    sessionId: uploadId,
+    file: { size: manifestBlob.size, mimeType: "application/json", filename: "manifest.json" },
+  });
+  const manifestResponse = await fetch(manifestPlan.asset.uploadUrl, {
+    method: "PUT",
+    headers: manifestPlan.asset.uploadHeaders,
+    body: manifestBlob,
+  });
+  if (!manifestResponse.ok) throw new Error(`Failed to upload app source manifest: HTTP ${manifestResponse.status}`);
+  const manifestAsset = manifestPlan.asset;
+  return { sourceRef: manifestAsset.objectKey, targetRef: source.targetType === "file" ? files[0]?.path ?? "" : "." };
+}
+
+function resolveDefaultAppSource(): AppSourceType {
+  return getCohubContext().runtime.kind === "sandbox" ? "workspace" : "local";
+}
 
 function resolveTarget(opts: { file?: string; dir?: string; port?: string }): ResolvedTarget | null {
   const targets: Array<ResolvedTarget | null> = [
@@ -196,6 +263,7 @@ type PublishOptions = {
   file?: string;
   dir?: string;
   port?: string;
+  source?: AppSourceType;
   disabled?: boolean;
   status?: string;
   visibility?: string;
@@ -354,8 +422,9 @@ export function registerApps(program: Command): void {
   appsCmd
     .command("publish <slug>")
     .description("Create or publish an app in the target space")
-    .option("--file <path>", "Publish a file (HTML page, board, or any other file) from the Space workspace")
-    .option("--dir <path>", "Publish a directory site from the Space workspace")
+    .option("--source <source>", "Source: workspace or local (auto-detected from runtime by default)")
+    .option("--file <path>", "Publish a file from the selected source")
+    .option("--dir <path>", "Publish a directory site from the selected source")
     .option("--port <port>", "Publish a public sandbox port")
     .option("--disabled", "Create as disabled")
     .option("--status <status>", "App status: published, disabled")
@@ -370,26 +439,39 @@ export function registerApps(program: Command): void {
       if (opts.hideCohubBar && opts.showCohubBar) return error("Conflicting Cohub bar options", "Use either --hide-cohub-bar or --show-cohub-bar.");
       const target = resolveTarget(opts);
       if (!target) return error("Missing target", "Use one of --file, --dir, or --port.");
+      const source = opts.source ? parseChoice(opts.source, "source", ["workspace", "local"] as const) : resolveDefaultAppSource();
+      if (target.targetType === "port" && opts.source) return error("Invalid source", "--source applies only to --file and --dir.");
       const spaceId = resolveSpace(appsCmd);
       const client = createClient();
-      const { targetType, targetRef } = target;
-      if (targetType !== "port") await guardAppTarget(client, spaceId, { targetType, targetRef });
+      let { targetType, targetRef } = target;
+      let sourceRef: string | null = null;
+      if (source === "local") {
+        const uploaded = await uploadLocalAppSource(client, spaceId, target);
+        if (!uploaded) return error("Invalid source", "--source local applies only to --file and --dir.");
+        targetRef = uploaded.targetRef;
+        sourceRef = uploaded.sourceRef;
+      } else if (targetType !== "port") {
+        await guardAppTarget(client, spaceId, { targetType, targetRef });
+      }
       const status = resolveStatus(opts);
       const meta = withCohubBarMeta({
         meta: parseJsonObject(opts.meta, "meta"),
         hideCohubBar: opts.hideCohubBar,
         showCohubBar: opts.showCohubBar,
       });
+      const publishMeta = source === "local"
+        ? { ...(meta ?? {}), runtime: { source: { type: "upload", ref: sourceRef } } }
+        : meta;
       const input: AppCreateInput = {
         spaceId,
         slug,
         status,
         visibility: resolveVisibility(opts.visibility),
         targetType: target.targetType,
-        targetRef: target.targetRef,
+        targetRef,
         appScopes: opts.appScope as Permission[],
         allowedViewerScopes: opts.viewerScope as Permission[],
-        meta,
+        meta: publishMeta,
       };
       try {
         const result = await client.apps.create(input);
@@ -407,10 +489,10 @@ export function registerApps(program: Command): void {
             status: status === "published" && existingApp.status !== "published" ? existingApp.status : status,
             visibility: resolveVisibility(opts.visibility),
             targetType: target.targetType,
-            targetRef: target.targetRef,
+            targetRef,
             appScopes: opts.appScope as Permission[],
             allowedViewerScopes: opts.viewerScope as Permission[],
-            meta,
+            meta: publishMeta,
           });
           const publishedVersion = status === "published"
             ? await client.apps.publishVersion(app.id)

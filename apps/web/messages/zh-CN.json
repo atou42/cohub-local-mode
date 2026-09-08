@@ -1478,6 +1478,7 @@
 	"board_task_created": "任务已创建。可在任务列表中查看。",
 	"task_section_progress": "进度",
 	"task_section_command": "命令",
+	"task_section_input": "输入",
 	"task_section_checkpoint": "检查点",
 	"task_waiting_checkpoint": "等待检查点结果…",
 	"task_section_output": "输出",

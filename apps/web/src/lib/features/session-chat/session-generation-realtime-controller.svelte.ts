@@ -89,6 +89,47 @@ export function createSessionGenerationRealtimeController(options: {
 		ReturnType<typeof setTimeout>
 	>();
 	const lastStreamSnapshotRecoveryByTurn = new Map<string, number>();
+	// Streaming patches arrive many times per second. Coalesce the "keep pinned
+	// to bottom" follow-up into one throttled pass: a 32ms leading-edge timer
+	// bounds the rate independently of the display refresh (a bare rAF on a
+	// 144Hz panel would run ~144 scrollHeight reads/s), and the rAF inside it
+	// aligns the scroll write with the frame after Svelte has flushed the DOM.
+	const STREAM_FOLLOW_THROTTLE_MS = 32;
+	let pendingStreamFollowTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingStreamFollowFrame: number | null = null;
+	let pendingStreamFollowSessionId: string | null = null;
+
+	function runStreamBottomFollow() {
+		pendingStreamFollowFrame = null;
+		const target = pendingStreamFollowSessionId;
+		pendingStreamFollowSessionId = null;
+		if (!target || target !== options.getActiveSessionId()) return;
+		if (!options.shouldAutoFollow()) return;
+		options.requestBottomFollow();
+	}
+
+	function scheduleStreamBottomFollow(sessionId: string) {
+		pendingStreamFollowSessionId = sessionId;
+		if (pendingStreamFollowTimer != null || pendingStreamFollowFrame != null)
+			return;
+		pendingStreamFollowTimer = setTimeout(() => {
+			pendingStreamFollowTimer = null;
+			if (pendingStreamFollowSessionId == null) return;
+			pendingStreamFollowFrame = requestAnimationFrame(runStreamBottomFollow);
+		}, STREAM_FOLLOW_THROTTLE_MS);
+	}
+
+	function cancelStreamBottomFollow() {
+		if (pendingStreamFollowTimer != null) {
+			clearTimeout(pendingStreamFollowTimer);
+			pendingStreamFollowTimer = null;
+		}
+		if (pendingStreamFollowFrame != null) {
+			cancelAnimationFrame(pendingStreamFollowFrame);
+			pendingStreamFollowFrame = null;
+		}
+		pendingStreamFollowSessionId = null;
+	}
 
 	async function restoreSessionStreamSnapshot(
 		sessionId: string,
@@ -496,8 +537,7 @@ export function createSessionGenerationRealtimeController(options: {
 				sessionId === options.getActiveSessionId() &&
 				options.shouldAutoFollow()
 			) {
-				await tick();
-				options.requestBottomFollow();
+				scheduleStreamBottomFollow(sessionId);
 			}
 		} catch (error) {
 			console.error("[WS] handleGenerationStreamEvent error:", error);
@@ -556,6 +596,7 @@ export function createSessionGenerationRealtimeController(options: {
 		// Do not clear process-wide finalized/snapshot maps: another host may still own them.
 		clearActiveGenerationSubscription();
 		clearAllPostSendRecovery();
+		cancelStreamBottomFollow();
 		recoveryCoordinator.dispose();
 		lastStreamSnapshotRecoveryByTurn.clear();
 	}

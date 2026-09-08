@@ -77,6 +77,7 @@ import {
 	type BoardDropItem,
 	toBoardDropItems,
 } from "$lib/drag/pointer-drag-core";
+import { withCurrentWindow } from "$lib/features/space/modules/window-route";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { sdk } from "$lib/sdk";
@@ -1069,7 +1070,10 @@ function handleDoubleClick(event: MouseEvent) {
 		return;
 	}
 	if (item?.type === "task") {
-		if (!readonly) void goto(buildSpaceTaskRoute(spaceId, item.taskRunId));
+		if (!readonly)
+			void goto(
+				withCurrentWindow(buildSpaceTaskRoute(spaceId, item.taskRunId)),
+			);
 		return;
 	}
 	// View mode stops here: text editing and the blank-canvas text draft are both

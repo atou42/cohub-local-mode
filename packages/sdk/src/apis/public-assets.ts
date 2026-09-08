@@ -1,6 +1,6 @@
 import type { HttpTransport } from "../transport.js";
 
-export type PublicAssetPurpose = "user_avatar" | "space_avatar" | "chat_attachment";
+export type PublicAssetPurpose = "user_avatar" | "space_avatar" | "chat_attachment" | "app_source";
 export type PublicAssetUploadProtocol = "presigned_put_v1";
 /** Preprocessed chat images. General chat files and avatars may use any mime string. */
 export type PublicAssetMimeType = "image/webp" | "image/jpeg";
@@ -47,6 +47,8 @@ export type PublicAssetUploadProgress = {
   totalBytes: number;
   ratio: number;
 };
+
+export type UploadAppSourceInput = UploadChatAttachmentInput;
 
 export type UploadChatAttachmentInput = {
   /** Optional association only; upload is user-scoped. */
@@ -194,6 +196,19 @@ export class PublicAssetsApi {
   }
 
   /** Durable public upload for any chat attachment (image or file). No space required. */
+  uploadAppSource(input: UploadAppSourceInput) {
+    return this.upload({
+      purpose: "app_source",
+      spaceId: input.spaceId,
+      sessionId: input.sessionId,
+      file: input.file,
+      mimeType: input.mimeType,
+      filename: input.filename,
+      onProgress: input.onProgress,
+      signal: input.signal,
+    });
+  }
+
   uploadChatAttachment(input: UploadChatAttachmentInput) {
     return this.upload({
       purpose: "chat_attachment",
