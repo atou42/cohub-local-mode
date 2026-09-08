@@ -1537,7 +1537,8 @@ async function prepareUploadedSource(
       await handle.close();
     }
   }
-  return { root, manifest };
+  // Match realpath-based containment checks when /tmp is a platform symlink.
+  return { root: await realpath(root), manifest };
 }
 
 async function processWorkPublishAsset(
