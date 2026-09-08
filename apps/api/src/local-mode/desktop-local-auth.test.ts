@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
+import { allowLoopbackPort } from "../../../../scripts/test/no-network.mjs";
 import { createDesktopLocalAccessToken, verifyDesktopLocalAccessToken } from "./desktop-local-auth.js";
 import type { LocalDesktopIdentity } from "./personal-node-cloud-auth.js";
 
@@ -50,7 +51,7 @@ test("untrusted hosts and a missing desktop secret cannot mint or use local gran
   await assert.rejects(createDesktopLocalAccessToken(request(), issuer, { ...deps, readIdentity: async () => { throw new Error("locked Keychain"); } }), /locked/);
 });
 
-test("a real HTTP session retains local access offline and rejects the former account after switching", async (t) => {
+test("a real HTTP session retains local access offline and rejects the former account after switching", { timeout: 10000 }, async (t) => {
   let current: LocalDesktopIdentity | null = account();
   const server = createServer(async (req, res) => {
     const incoming = new Request(`http://127.0.0.1${req.url}`, { headers: req.headers as Record<string, string> });
@@ -62,6 +63,7 @@ test("a real HTTP session retains local access offline and rejects the former ac
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  t.after(allowLoopbackPort((server.address() as { port: number }).port));
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const signedIn = await fetch(`${origin}/auth`, { headers: request().headers });
   const { token } = await signedIn.json();

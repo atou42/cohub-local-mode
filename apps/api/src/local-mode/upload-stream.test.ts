@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
+import { allowLoopbackPort } from "../../../../scripts/test/no-network.mjs";
 import { proxyUploadStream } from "./upload-stream.js";
 
-test("proxies binary bytes to a real HTTP storage endpoint without text conversion", async (t) => {
+test("proxies binary bytes to a real HTTP storage endpoint without text conversion", { timeout: 10000 }, async (t) => {
   const bytes = new Uint8Array(2 * 1024 * 1024 + 7).fill(0xff);
   bytes.set([0x50, 0x4b, 3, 4, 0, 0x80]);
   let received = 0;
@@ -19,6 +20,7 @@ test("proxies binary bytes to a real HTTP storage endpoint without text conversi
   t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
+  t.after(allowLoopbackPort(address.port));
   await proxyUploadStream({ body: new Response(bytes).body, size: bytes.length, uploadUrl: `http://127.0.0.1:${address.port}/upload`, headers: { "content-type": "application/zip" } });
   assert.equal(received, bytes.length);
   assert.equal(hash.digest("hex"), createHash("sha256").update(bytes).digest("hex"));

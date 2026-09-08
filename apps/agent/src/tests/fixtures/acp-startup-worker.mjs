@@ -86,7 +86,11 @@ class FakeSandbox {
 			"session/set_model", "session/set_mode",
 		].includes(request.method), `unexpected request ${request.method}`);
 		this.reply(process, request, {
-			result: request.method === "session/new" ? { sessionId: `session-${process.id}` } : {},
+			result: request.method === "session/new"
+				? { sessionId: `session-${process.id}` }
+				: request.method === "initialize"
+					? { authMethods: [{ id: "cached_token" }] }
+					: {},
 		});
 		return {};
 	}

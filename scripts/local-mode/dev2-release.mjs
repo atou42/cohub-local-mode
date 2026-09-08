@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { webBuildEnvironment } from "./web-build-env.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const DEV2_QUEUE = "cohub-personal-node-dev2-wakeups";
@@ -34,7 +35,9 @@ function run(program, commandArgs, options = {}) {
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn(program, commandArgs, {
 			cwd: options.cwd ?? repoRoot,
-			env: { ...process.env, ...options.env },
+			env: options.webBuild
+				? webBuildEnvironment({ ...process.env, ...options.env })
+				: { ...process.env, ...options.env },
 			stdio: "inherit",
 			shell: false,
 		});
@@ -191,8 +194,8 @@ const webEnv = {
 	PUBLIC_LOGTO_APP_ID: appId,
 };
 
-await run("pnpm", ["--filter", "web", "typecheck"], { env: webEnv });
-await run("pnpm", ["--filter", "web", "alpha:build"], { env: webEnv });
+await run("pnpm", ["--filter", "web", "typecheck"], { env: webEnv, webBuild: true });
+await run("pnpm", ["--filter", "web", "alpha:build"], { env: webEnv, webBuild: true });
 
 if (action === "deploy") {
 	await ensureCloudflareResource("queue", DEV2_QUEUE);

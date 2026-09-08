@@ -15,6 +15,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectRuntimeIntegrity } from "../src/runtime-integrity.ts";
+import { webBuildEnvironment } from "../../../scripts/local-mode/web-build-env.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(desktopRoot, "../..");
@@ -45,7 +46,7 @@ function run(program, args, options = {}) {
 		const child = execFile(
 			program,
 			args,
-			{ cwd: options.cwd ?? repoRoot, env: { ...process.env, ...options.env }, maxBuffer: 32 * 1024 * 1024 },
+			{ cwd: options.cwd ?? repoRoot, env: options.webBuild ? webBuildEnvironment({ ...process.env, ...options.env }) : { ...process.env, ...options.env }, maxBuffer: 32 * 1024 * 1024 },
 			(error, stdout, stderr) => {
 				if (error) reject(new Error(`${program} failed: ${stderr || error.message}`, { cause: error }));
 				else resolvePromise(stdout);
@@ -76,7 +77,7 @@ for (const packages of [
 		packages.flatMap((name) => ["--filter", name]).concat("build"),
 	);
 }
-await run("pnpm", ["--filter", "web", "build"], { env: desktopWebEnv });
+await run("pnpm", ["--filter", "web", "build"], { env: desktopWebEnv, webBuild: true });
 await run("pnpm", [
 	"--filter",
 	"@cohub/api",

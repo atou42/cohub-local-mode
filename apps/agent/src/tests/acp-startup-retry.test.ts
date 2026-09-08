@@ -16,6 +16,8 @@ for (const scenario of [
 	"cursor-authenticate-timeout",
 	"grok-initialize-error",
 	"grok-initialize-timeout",
+	"grok-authenticate-error",
+	"grok-authenticate-timeout",
 ]) {
 	test(`ACP startup retries after ${scenario}`, () => {
 		const home = mkdtempSync(join(tmpdir(), "cohub-acp-startup-test-"));

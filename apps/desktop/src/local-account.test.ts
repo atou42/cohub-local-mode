@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { localAccountFromVerifiedRegistration } from "./local-account.js";
+import { localAccountFromVerifiedRegistration } from "./local-account.ts";
 
 for (const userUuid of ["7c3b9d14-b3db-4dd9-a146-559ebfc1e14e", "7c3b9d14b3db4dd9a146559ebfc1e14e"]) test(`local identity preserves the verified user identifier ${userUuid.length}`, () => {
 	const issuer = "https://auth.neta.art/oidc";

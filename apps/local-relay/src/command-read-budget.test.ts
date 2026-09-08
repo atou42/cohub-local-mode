@@ -141,6 +141,7 @@ function seed(h: ReturnType<typeof harness>, count = 200) {
     h.storage.records.set(`idempotency:${id}`, key);
   }
   h.storage.records.set("meta:next-sequence", count + 1);
+  h.storage.records.set("meta:node-id", "test-node");
 }
 
 test("production status reads stay bounded after indexing and reactivation", async () => {
