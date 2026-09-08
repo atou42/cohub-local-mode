@@ -49,6 +49,7 @@ import {
 } from "./apns.ts";
 import {
 	GC_ALARM_MS,
+	TERMINAL_COMMAND_MAX_STORED,
 	TURN_EVENT_MAX_STORED,
 	decideCancel,
 	decideExpiredCommand,
@@ -59,6 +60,18 @@ import {
 	selectSnapshotEvents,
 	selectTerminalCommandsForGc,
 } from "./lifecycle";
+import {
+	COMMAND_ACTIVE_PREFIX,
+	COMMAND_PENDING_PREFIX,
+	COMMAND_TERMINAL_PREFIX,
+	type CommandIndexEntry,
+	commandKeyForEntry,
+	initializeCommandIndexes,
+	removeTerminalCommandIndex,
+	terminalCommandCount,
+	updateCommandIndexes,
+	validateCommandIndexEntry,
+} from "./command-index.ts";
 import {
 	assertRelayAttachmentFresh,
 	assertRelayOwnerOrigin,
@@ -363,6 +376,7 @@ function sendSocket(socket: WebSocket, message: RelayToNodeMessage | RelayBrowse
 
 export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	private readonly leaseMs: number;
+	private commandIndexesReady: Promise<void> | null = null;
 	private apnsProviderToken: { value: string; issuedAtMs: number } | null = null;
 
 	constructor(state: DurableObjectState, env: RelayEnv) {
@@ -450,9 +464,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async getStatus() {
-		const active = (await this.listCommands()).find(
-			(command) => command.status === "claimed" || command.status === "running",
-		);
+		const [indexed] = await this.listCommandIndex(COMMAND_ACTIVE_PREFIX, 1);
+		const active = indexed ? await this.ctx.storage.get<RelayCommand>(commandKeyForEntry(indexed)) : undefined;
+		if (indexed && (!active || active.id !== indexed.id || active.sequence !== indexed.sequence || active.status !== indexed.status)) {
+			throw new Error("Active relay command index is inconsistent");
+		}
 		return json({
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			nodeId: this.env.NODE_ID,
@@ -1529,6 +1545,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			}
 			attachments.push(publicAttachment(stored));
 		}
+		await this.ensureCommandIndexes();
 		const accepted = await this.ctx.storage.transaction(async (storage) => {
 			const existingKey = await storage.get<string>(
 				`${IDEMPOTENCY_PREFIX}${input.idempotencyKey}`,
@@ -1576,6 +1593,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				errorMessage: null,
 			};
 			const key = commandStorageKey(sequence, id);
+			await updateCommandIndexes(storage, key, command);
 			await storage.put({
 				[NEXT_SEQUENCE_KEY]: sequence + 1,
 				[key]: command,
@@ -1619,9 +1637,15 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async putCommand(command: RelayCommand) {
-		const key = await this.ctx.storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
-		if (!key) throw new Error(`missing relay command index: ${command.id}`);
-		await this.ctx.storage.put(key, command);
+		await this.ensureCommandIndexes();
+		await this.ctx.storage.transaction(async (storage) => {
+			const key = await storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
+			if (!key) throw new Error(`missing relay command index: ${command.id}`);
+			const previous = await storage.get<RelayCommand>(key);
+			if (!previous) throw new Error("Relay command index points to a missing record");
+			await storage.put(key, command);
+			await updateCommandIndexes(storage, key, command, previous);
+		});
 		this.broadcast(command);
 	}
 
@@ -1636,6 +1660,26 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 	}
 
+	private async ensureCommandIndexes() {
+		if (!this.commandIndexesReady) {
+			const initializing = this.ctx.storage.transaction(storage => initializeCommandIndexes(storage));
+			this.commandIndexesReady = initializing;
+			try {
+				await initializing;
+			} catch (error) {
+				this.commandIndexesReady = null;
+				throw error;
+			}
+		}
+		await this.commandIndexesReady;
+	}
+
+	private async listCommandIndex(prefix: string, limit?: number) {
+		await this.ensureCommandIndexes();
+		const records = await this.ctx.storage.list<CommandIndexEntry>({ prefix, ...(limit === undefined ? {} : { limit }) });
+		return [...records.values()].map(validateCommandIndexEntry);
+	}
+
 	private async listCommands() {
 		const records = await this.ctx.storage.list<RelayCommand>({
 			prefix: COMMAND_KEY_PREFIX,
@@ -1644,9 +1688,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async requeueExpired(nowMs = Date.now()) {
-		for (const command of await this.listCommands()) {
-			const decision = decideExpiredCommand(command, nowMs);
+		for (const indexed of await this.listCommandIndex(COMMAND_ACTIVE_PREFIX)) {
+			const decision = decideExpiredCommand(indexed, nowMs);
 			if (decision.action === "keep") continue;
+			const command = await this.getCommandById(indexed.id);
+			if (!command) throw new Error("Active relay command index points to a missing record");
 			const now = new Date(nowMs).toISOString();
 			if (decision.action === "fail") {
 				await this.putCommand({
@@ -1658,7 +1704,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 					errorCode: decision.errorCode,
 					errorMessage: decision.errorMessage,
 				});
-				this.ctx.waitUntil(this.collectGarbage(nowMs));
+				this.ctx.waitUntil(this.collectGarbage(nowMs, false));
 				continue;
 			}
 			await this.putCommand({
@@ -1679,12 +1725,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const sockets = this.ctx.getWebSockets("node");
 		const socket = sockets[0];
 		if (!socket) return;
-		const commands = await this.listCommands();
-		if (commands.some((command) => command.status === "claimed" || command.status === "running")) {
-			return;
-		}
-		const next = commands.find((command) => command.status === "queued");
-		if (!next) return;
+		if ((await this.listCommandIndex(COMMAND_ACTIVE_PREFIX, 1)).length > 0) return;
+		const [indexed] = await this.listCommandIndex(COMMAND_PENDING_PREFIX, 1);
+		if (!indexed) return;
+		const next = await this.getCommandById(indexed.id);
+		if (!next || next.status !== "queued") throw new Error("Pending relay command index is inconsistent");
 		sendSocket(socket, {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type: "command",
@@ -1871,7 +1916,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			commandId: completed.id,
 			status: completed.status,
 		});
-		this.ctx.waitUntil(this.collectGarbage(Date.now()));
+		this.ctx.waitUntil(this.collectGarbage(Date.now(), false));
 		await this.dispatchNext();
 		await this.scheduleNextAlarm();
 	}
@@ -1905,7 +1950,6 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	async alarm() {
 		const nowMs = Date.now();
-		await this.requeueExpired(nowMs);
 		await this.dispatchNext();
 		await this.recoverExpiredActivitySends(nowMs);
 		await this.enqueuePendingActivityOutboxes();
@@ -1951,7 +1995,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			leaseExpiresAt: null,
 		};
 		await this.putCommand(cancelled);
-		this.ctx.waitUntil(this.collectGarbage(Date.now()));
+		this.ctx.waitUntil(this.collectGarbage(Date.now(), false));
 		return json({ command: cancelled });
 	}
 
@@ -2264,7 +2308,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	private async scheduleNextAlarm(nowMs = Date.now()) {
 		let next = nowMs + GC_ALARM_MS;
-		for (const command of await this.listCommands()) {
+		for (const command of await this.listCommandIndex(COMMAND_ACTIVE_PREFIX)) {
 			if (
 				(command.status !== "claimed" && command.status !== "running") ||
 				!command.leaseExpiresAt
@@ -2304,17 +2348,23 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		await this.ctx.storage.setAlarm(next);
 	}
 
-	private async collectGarbage(nowMs = Date.now()) {
-		const doomed = selectTerminalCommandsForGc(await this.listCommands(), nowMs);
+	private async collectGarbage(nowMs = Date.now(), periodic = true) {
+		await this.ensureCommandIndexes();
+		const excess = Math.max(0, await terminalCommandCount(this.ctx.storage) - TERMINAL_COMMAND_MAX_STORED);
+		const doomed = periodic
+			? selectTerminalCommandsForGc(await this.listCommands(), nowMs)
+			: excess > 0 ? await this.listCommandIndex(COMMAND_TERMINAL_PREFIX, excess) : [];
 		for (const command of doomed) {
-			const key = await this.ctx.storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
-			const deletes = [
-				`${COMMAND_ID_PREFIX}${command.id}`,
-				`${IDEMPOTENCY_PREFIX}${command.idempotencyKey}`,
-			];
-			if (key) deletes.push(key);
-			await this.ctx.storage.delete(deletes);
+			await this.ctx.storage.transaction(async (storage) => {
+				const key = await storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
+				if (!key) return;
+				const stored = await storage.get<RelayCommand>(key);
+				if (!stored) throw new Error("Relay GC index points to a missing record");
+				await removeTerminalCommandIndex(storage, key, stored);
+				await storage.delete([key, `${COMMAND_ID_PREFIX}${command.id}`, `${IDEMPOTENCY_PREFIX}${stored.idempotencyKey}`]);
+			});
 		}
+		if (!periodic) return;
 		await this.gcTurnEvents();
 		await this.gcActivityOutboxes(nowMs);
 		await this.gcExpiredActivityRegistrations(nowMs);

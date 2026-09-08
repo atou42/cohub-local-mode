@@ -103,6 +103,8 @@ export class TasksApi {
       };
       const inspect = async () => {
         if (settled || inspectInFlight) return;
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = null;
         inspectInFlight = true;
         try {
           const detail = await this.get(taskRunId, { signal: controller.signal });
@@ -168,4 +170,3 @@ export class TasksApi {
     );
   }
 }
-
