@@ -449,6 +449,7 @@ test("external harnesses receive only their Space writable roots", () => {
 		buildCursorAppServerArgv("cursor-grok-4.6-high-fast", roots),
 		[
 			"agent",
+			"--disable-auto-update",
 			"--model",
 			"cursor-grok-4.6-high-fast",
 			"--sandbox",
@@ -476,9 +477,10 @@ test("external harnesses receive only their Space writable roots", () => {
 		buildGrokAppServerArgv(
 			"full_access",
 			"cohub-local-11111111-1111-4111-8111-111111111111",
-		).slice(0, 4),
+		).slice(0, 5),
 		[
 			"grok",
+			"--no-auto-update",
 			"--sandbox",
 			"cohub-local-11111111-1111-4111-8111-111111111111",
 			"--always-approve",

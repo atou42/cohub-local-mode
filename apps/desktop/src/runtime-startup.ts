@@ -1,6 +1,7 @@
 export interface RuntimeStartupChild {
 	readonly pid?: number;
 	readonly exitCode: number | null;
+	readonly signalCode?: NodeJS.Signals | null;
 	on(event: string, listener: (...args: any[]) => void): this;
 	removeListener(event: string, listener: (...args: any[]) => void): this;
 }
@@ -8,6 +9,7 @@ export interface RuntimeStartupChild {
 export type RuntimeStartupOptions = {
 	child: RuntimeStartupChild;
 	instanceId: string;
+	prepare?: () => Promise<void>;
 	verifyReady: () => Promise<boolean> | boolean;
 	cleanup: () => Promise<void>;
 	isCurrent?: () => boolean;
@@ -29,6 +31,7 @@ function defaultExitError(code: number | null, signal: NodeJS.Signals | null) {
 export function waitForRuntimeStartup({
 	child,
 	instanceId,
+	prepare,
 	verifyReady,
 	cleanup,
 	isCurrent = () => child.exitCode === null,
@@ -40,6 +43,7 @@ export function waitForRuntimeStartup({
 	return new Promise<void>((resolve, reject) => {
 		let settled = false;
 		let verifying = false;
+		let preparation = Promise.resolve();
 		const timeoutLabel = timeoutMs % 1_000 === 0
 			? `${timeoutMs / 1_000} seconds`
 			: `${timeoutMs} milliseconds`;
@@ -67,7 +71,8 @@ export function waitForRuntimeStartup({
 			}
 			verifying = true;
 			void Promise.resolve()
-				.then(() => verifyReady())
+				.then(() => preparation)
+				.then(() => settled ? false : verifyReady())
 				.then((ready) => {
 					if (settled) return;
 					if (!ready) {
@@ -118,6 +123,8 @@ export function waitForRuntimeStartup({
 			detach();
 			const startupError = asError(reason);
 			try {
+				// Ownership writes must finish before cleanup removes their record.
+				await preparation.catch(() => undefined);
 				await cleanup();
 				reject(startupError);
 			} catch (cleanupError) {
@@ -136,5 +143,10 @@ export function waitForRuntimeStartup({
 		child.on("exit", onExit);
 		signal?.addEventListener("abort", onAbort, { once: true });
 		if (signal?.aborted) onAbort();
+		else if (child.exitCode !== null || child.signalCode != null) void fail(describeExit(child.exitCode, child.signalCode ?? null));
+		else if (prepare) {
+			preparation = Promise.resolve().then(() => settled ? undefined : prepare());
+			void preparation.catch(fail);
+		}
 	});
 }

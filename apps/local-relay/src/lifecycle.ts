@@ -53,10 +53,11 @@ export function guardResultSize(
 	const encodedBytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
 	if (encodedBytes <= maxBytes) return result;
 	return {
-		status: result.status,
-		headers: result.headers,
+		status: 502,
+		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
-			relayTruncated: true,
+			code: "relay_result_too_large",
+			message: "The node returned an oversized inline response. The original operation may have completed; it was not replayed.",
 			originalBytes: encodedBytes,
 		}),
 	};

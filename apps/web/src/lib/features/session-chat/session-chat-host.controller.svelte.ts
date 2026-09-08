@@ -57,6 +57,7 @@ import {
 	cancelLocalRelayCommand,
 	getLocalRelayNodeStatus,
 	isLocalRelayEnabled,
+	LocalRelayRequestError,
 	listPendingLocalRelayCommands,
 	localFederatedApiUrl,
 	openLocalRelayEvents,
@@ -397,7 +398,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	});
 
 	const modelsCatalog = $derived(modelsCatalogStore.items);
-	const visibleModelsCatalog = $derived(modelsCatalogStore.visibleItems);
 	const generationModelsCatalog = $derived(generationPolicy.modelsCatalog);
 	let composerSelection = $state<SessionComposerSelection>({
 		mode: "agent",
@@ -409,6 +409,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	);
 	const activeAgentHarness = $derived<AgentHarness>(
 		activeSessionState?.session?.agentHarness ?? draftAgentHarness,
+	);
+	const visibleModelsCatalog = $derived(
+		modelsCatalogStore.visibleItemsFor(resolveSpaceOrigin(spaceId), activeAgentHarness),
 	);
 	const agentHarnessLocked = $derived(Boolean(activeSessionState?.session));
 	const agentHarnessReadiness = $derived(harnessReadinessStore.entries);
@@ -1166,7 +1169,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		const catalog = visibleModelsCatalog;
 		const harness = activeAgentHarness;
 		const userKey = parameterPreferencesUserKey;
-		if (!sessionId || !model || !catalog?.length || !userKey) return;
+		// Restored turn content can arrive before its Session identifies the harness.
+		if (!activeSessionState?.loaded || !sessionId || !model || !catalog?.length || !userKey) return;
 		const resolved = resolveAgentParameterSelection({
 			harness,
 			catalog,
@@ -1179,14 +1183,18 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				resolved.model?.provider !== model.provider ||
 				resolved.model.id !== model.id
 			) {
+				const repairedModel = {
+					provider: resolved.model.provider,
+					id: resolved.model.id,
+					name: resolved.model.model.name as string | undefined,
+				};
 				sessionModelById = {
 					...sessionModelById,
-					[sessionId]: {
-						provider: resolved.model.provider,
-						id: resolved.model.id,
-						name: resolved.model.model.name as string | undefined,
-					},
+					[sessionId]: repairedModel,
 				};
+				if (composerSelection.mode === "agent") {
+					composerSelection = { mode: "agent", model: repairedModel };
+				}
 			}
 			if (resolved.notice) parameterPreferenceNotice = resolved.notice;
 			if (resolved.repaired && !parameterPreferencesInvalid) {
@@ -3247,6 +3255,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					if (disposed || spaceId !== currentSpaceId) return;
 					relayEventsLive = true;
 					stopAllRelayCommandWatches();
+					resumePendingRelayCommandWatches(currentSpaceId);
 				},
 				onUnavailable: () => {
 					if (disposed || spaceId !== currentSpaceId) return;
@@ -3263,19 +3272,27 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	}
 
 	function watchPendingRelayCommand(pending: PendingLocalRelayCommand) {
-		if (relayEventsLive || relayCommandWatches.has(pending.commandId)) return;
+		if ((relayEventsLive && pending.admitted !== false) || relayCommandWatches.has(pending.commandId)) return;
 		const controller = new AbortController();
 		relayCommandWatches.set(pending.commandId, controller);
 		void (async () => {
-			while (!disposed && !controller.signal.aborted && !relayEventsLive) {
+			while (!disposed && !controller.signal.aborted && (!relayEventsLive || pending.admitted === false)) {
 				try {
 					const command = await waitForLocalRelayCommand(pending.commandId, {
 						signal: controller.signal,
+						...(pending.admitted === false ? { operationId: pending.clientMessageId } : {}),
 					});
-					await reconcileRelayCommand(pending, command);
+					const resolved = { ...pending, commandId: command.id, admitted: true };
+					registerPendingLocalRelayCommand(resolved);
+					await reconcileRelayCommand(resolved, command);
 					return;
 				} catch (error) {
-					if (controller.signal.aborted || disposed || relayEventsLive) return;
+					if (controller.signal.aborted || disposed || (relayEventsLive && pending.admitted !== false)) return;
+					if (error instanceof LocalRelayRequestError && [401, 403, 404, 410].includes(error.status)) {
+						setComposerError(error.message, error.code);
+						return;
+					}
+					if (error instanceof LocalRelayRequestError && error.code === "personal_node_scope_changed") return;
 					console.warn("[local-relay] result recovery retry", error);
 					relayStatus = "cloud-error";
 					await waitForRelayRetry(controller.signal);
@@ -4114,7 +4131,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			} satisfies CreateSpacePromptInput;
 			let relayCommandId: string | null = null;
 			let pendingRelayCommand: PendingLocalRelayCommand | null = null;
-			let relayRecoveryPersistError = "";
 			let sendResult: CreateSpacePromptResponse;
 			if (useLocalRelay) {
 				if (!sessionId) throw new Error("Relay Session identity is missing");
@@ -4123,24 +4139,11 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					clientMessageId,
 					body: promptBody as Record<string, unknown>,
 					attachmentIds: relayAttachmentIds,
+					recovery: { spaceId: opSpaceId, sessionId, optimisticTurnId, clientMessageId, createdAt: new Date().toISOString() },
 				});
 				relayCommandId = relayCommand.id;
-				pendingRelayCommand = {
-					commandId: relayCommand.id,
-					spaceId: opSpaceId,
-					sessionId,
-					optimisticTurnId,
-					clientMessageId,
-					createdAt: new Date().toISOString(),
-				};
-				try {
-					registerPendingLocalRelayCommand(pendingRelayCommand);
-				} catch (error) {
-					relayRecoveryPersistError =
-						error instanceof Error
-							? error.message
-							: "Relay recovery could not be saved";
-				}
+				pendingRelayCommand = listPendingLocalRelayCommands(opSpaceId).find((pending) => pending.commandId === relayCommand.id) ?? null;
+				if (!pendingRelayCommand) throw new Error("Relay recovery is unavailable for the current account and device");
 				noteRelayCommandStatus(relayCommand);
 				const now = new Date().toISOString();
 				const relaySession: SessionRecord = targetSessionState?.session ?? {
@@ -4290,12 +4293,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (pendingRelayCommand && sessionId) {
 				refreshPendingRelayCommands(opSpaceId);
 				if (!relayEventsLive) watchPendingRelayCommand(pendingRelayCommand);
-				if (relayRecoveryPersistError) {
-					setComposerError(
-						relayRecoveryPersistError,
-						"relay_recovery_persist_failed",
-					);
-				}
 			}
 			// The accepted turn now owns the explicit request state. Clear the local
 			// override only after merging it to avoid briefly showing the older level.

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, openAsBlob } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { resolveCohubEnvironment } from "@neta-art/cohub";
@@ -260,7 +260,11 @@ async function uploadFiles(command: Command, paths: string[], opts: UploadOption
       if (!file) throw new Error(`Missing upload entry: ${entry.id}`);
       // Remote downloadUrl entries have no uploadUrl; complete pulls them server-side.
       if (!entry.uploadUrl) continue;
-      await putUploadEntry(file, entry.uploadUrl, entry.headers);
+      if (entry.uploadUrl === `/api/spaces/${spaceId}/fs/uploads/${plan.uploadId}/entries/${encodeURIComponent(entry.id)}`) {
+        await client.space(spaceId).files.uploadEntry(plan.uploadId, entry.id, await openAsBlob(file.localPath, { type: file.mimeType ?? "application/octet-stream" }));
+      } else {
+        await putUploadEntry(file, entry.uploadUrl, entry.headers);
+      }
     }
     const result = await client.space(spaceId).files.completeUpload(plan.uploadId, {
       entries: plan.entries.map((entry) => ({ id: entry.id })),

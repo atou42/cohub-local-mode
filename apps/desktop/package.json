@@ -1,7 +1,7 @@
 {
 	"name": "@cohub/desktop",
 	"private": true,
-	"version": "0.3.0-dev2.2",
+  "version": "0.3.0-dev2.14",
 	"description": "Cohub Dev2 for macOS",
 	"author": "Cohub",
 	"type": "module",
@@ -12,6 +12,7 @@
 		"build:client": "tsc -p tsconfig.json && esbuild src/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=build/preload.cjs",
 		"build": "pnpm build:node && pnpm build:runtime && pnpm build:client",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"release:dev2": "node --use-env-proxy scripts/publish-dev2-release.mjs",
 		"package:dir": "ulimit -n 65536 && pnpm build && electron-builder --dir --mac --arm64",
 		"package": "ulimit -n 65536 && pnpm build && electron-builder --mac dmg --arm64",
 		"test": "node --test src/**/*.test.ts"
@@ -46,11 +47,13 @@
 				"filter": [
 					"relay-node.mjs",
 					"runtime.tar",
-					"runtime-manifest.json"
+					"runtime-manifest.json",
+					"runtime-files.json"
 				]
 			}
 		],
 		"mac": {
+			"minimumSystemVersion": "13.0",
 			"category": "public.app-category.developer-tools",
 			"target": ["dmg"],
 			"identity": "-",

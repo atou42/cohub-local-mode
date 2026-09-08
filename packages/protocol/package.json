@@ -143,6 +143,10 @@
       "types": "./dist/public-identifiers.d.ts",
       "default": "./dist/public-identifiers.js"
     },
+    "./local-relay-request-timeout": {
+      "types": "./dist/local-relay-request-timeout.d.ts",
+      "default": "./dist/local-relay-request-timeout.js"
+    },
     "./local-relay-compatibility": {
       "types": "./dist/local-relay-compatibility.d.ts",
       "default": "./dist/local-relay-compatibility.js"

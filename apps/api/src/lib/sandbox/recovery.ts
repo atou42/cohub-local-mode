@@ -1,7 +1,6 @@
 import { Writable } from "node:stream";
 import type { V1Status } from "@kubernetes/client-node";
-import { Exec } from "@kubernetes/client-node";
-import { kubeConfig } from "../../k8s.js";
+import { getKubernetesClients } from "../../k8s.js";
 
 export type SandboxInfraErrorCode = "STALE_MOUNT" | "CRITICAL_MOUNT_IO";
 
@@ -108,8 +107,6 @@ export const smokeVerifySandboxPod = async (podName: string, namespace: string, 
   throw toExecError(lastError);
 };
 
-const k8sExec = new Exec(kubeConfig);
-
 const execInSandboxPod = (namespace: string, podName: string, script: string, timeoutMs: number) => {
   return new Promise<string>((resolve, reject) => {
     let stdout = "";
@@ -143,27 +140,31 @@ const execInSandboxPod = (namespace: string, podName: string, script: string, ti
       },
     });
 
-    k8sExec.exec(
-      namespace,
-      podName,
-      "sandbox",
-      ["sh", "-lc", script],
-      stdoutStream,
-      stderrStream,
-      null,
-      false,
-      (status: V1Status) => {
-        const exitCode = status.details?.causes?.find((cause) => cause.reason === "ExitCode")?.message;
-        if (status.status === "Success" || exitCode === "0") {
-          finish();
-          return;
-        }
-        const message = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim();
-        finish(new Error(`kubernetes exec failed${exitCode ? ` with code ${exitCode}` : ""}: ${message || status.message || status.reason || "unknown error"}`));
-      },
-    ).then((ws) => {
-      socket = ws;
-      ws.on("error", (error: unknown) => finish(toExecError(error)));
+    void getKubernetesClients().then(({ k8sExec }) => {
+      if (settled) return;
+      return k8sExec.exec(
+        namespace,
+        podName,
+        "sandbox",
+        ["sh", "-lc", script],
+        stdoutStream,
+        stderrStream,
+        null,
+        false,
+        (status: V1Status) => {
+          const exitCode = status.details?.causes?.find((cause) => cause.reason === "ExitCode")?.message;
+          if (status.status === "Success" || exitCode === "0") {
+            finish();
+            return;
+          }
+          const message = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim();
+          finish(new Error(`kubernetes exec failed${exitCode ? ` with code ${exitCode}` : ""}: ${message || status.message || status.reason || "unknown error"}`));
+        },
+      ).then((ws) => {
+        if (settled) { ws.close(); return; }
+        socket = ws;
+        ws.on("error", (error: unknown) => finish(toExecError(error)));
+      });
     }).catch((error: unknown) => {
       finish(toExecError(error));
     });

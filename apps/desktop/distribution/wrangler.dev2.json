@@ -1,0 +1,12 @@
+{
+  "name": "cohub-personal-node-dev2-downloads",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-08-25",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "dev2-cohub.atou.cc/downloads/*", "zone_name": "atou.cc" }
+  ],
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "cohub-personal-node-dev2-releases", "remote": true }
+  ]
+}

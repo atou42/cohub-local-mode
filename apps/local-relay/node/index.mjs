@@ -23,6 +23,8 @@ import {
   RELAY_PROTOCOL_VERSION,
 } from "./protocol-compat.mjs";
 import { SerialCommandBuffer } from "./serial-command-buffer.mjs";
+import { CommandJournal, CommandJournalError } from "./command-journal.mjs";
+import { localRelayRequestTimeoutMs } from "../../../packages/protocol/src/local-relay-request-timeout.ts";
 
 const PROTOCOL_VERSION = RELAY_PROTOCOL_VERSION;
 const nodeId = process.env.COHUB_LOCAL_RELAY_NODE_ID?.trim() || "mac-mini";
@@ -42,7 +44,7 @@ const heartbeatMs = Number(
   process.env.COHUB_LOCAL_RELAY_HEARTBEAT_MS?.trim() || "30000",
 );
 const maxResponseBytes = Number(
-  process.env.COHUB_LOCAL_RELAY_MAX_RESPONSE_BYTES?.trim() || "2097152",
+  process.env.COHUB_LOCAL_RELAY_MAX_RESPONSE_BYTES?.trim() || "2147483648",
 );
 const maxAttachmentBytes = Number(
   process.env.COHUB_LOCAL_RELAY_ATTACHMENT_MAX_BYTES?.trim() || "104857600",
@@ -127,6 +129,9 @@ const nodeToken = readNodeToken();
 const dataDir =
   process.env.COHUB_LOCAL_DATA_DIR?.trim() ||
   join(homedir(), ".cohub-local-mode");
+const journal = new CommandJournal(dataDir, `${relayNodeBaseUrl}#${nodeId}`);
+const recoveredOutcomes = new Map();
+let recoveryAckTimer = null;
 
 let socket = null;
 let readyAccepted = false;
@@ -514,6 +519,14 @@ function sendOutcome(state, outcome) {
 }
 
 function resumeActiveCommands() {
+  for (const outcome of recoveredOutcomes.values()) send(outcome);
+  if (recoveredOutcomes.size && !recoveryAckTimer) {
+    recoveryAckTimer = setTimeout(() => {
+      recoveryAckTimer = null;
+      if (recoveredOutcomes.size) socket?.close(4008, "recovered outcome acknowledgement timeout");
+    }, outcomeAckTimeoutMs);
+    recoveryAckTimer.unref?.();
+  }
   for (const state of allActiveStates()) {
     if (state.outcome) sendOutcome(state, state.outcome);
     else if (state.attempt !== null) sendStarted(state);
@@ -525,6 +538,15 @@ async function runClaimedCommand(state, attempt) {
   if (!stateIsActive(state) || state.attempt !== null || !Number.isInteger(attempt) || attempt < 1) return;
   state.attempt = attempt;
   stopAckTimer(state);
+  const recorded = journal.prepare(state.command, attempt);
+  if (recorded.outcome || (recorded.phase === "dispatched" && state.command.request.method !== "GET")) {
+    const outcome = { ...(recorded.outcome ?? unknownOutcome(state.command, attempt)), commandId: state.command.id, attempt };
+    journal.complete(state.command, attempt, outcome, recorded.watch);
+    if (recorded.watch) await persistWatch(recorded.watch);
+    recoveredOutcomes.delete(recorded.command.id);
+    sendOutcome(state, outcome);
+    return;
+  }
   writeStatus("executing", {
     commandId: state.command.id,
     attempt,
@@ -536,11 +558,12 @@ async function runClaimedCommand(state, attempt) {
       fetcher: relayFetcher,
       localApiOrigin,
       maxResponseBytes,
-      requestTimeoutMs: commandTimeoutMs,
+      requestTimeoutMs: localRelayRequestTimeoutMs(state.command.request, commandTimeoutMs),
       relayNodeBaseUrl,
       relayNodeToken: nodeToken,
       spaceStorageRoot,
       signal: state.abort.signal,
+      beforeDispatch: () => journal.dispatch(state.command),
       onRetry: ({ code, retryDelayMs }) => {
         console.warn(
           `[relay-node] ${code}; retrying command ${state.command.id} in ${retryDelayMs}ms`,
@@ -560,14 +583,14 @@ async function runClaimedCommand(state, attempt) {
       attempt,
       result,
     };
-    sendOutcome(state, outcome);
-    if (watch) {
-      void watcher.watch({
+    const watchRecord = watch ? {
         eventId: randomUUID(),
         nodeId: state.command.nodeId ?? nodeId,
         ...watch,
-      });
-    }
+    } : null;
+    journal.complete(state.command, attempt, outcome, watchRecord);
+    if (watchRecord) await persistWatch(watchRecord);
+    if (stateIsActive(state)) sendOutcome(state, outcome);
     writeStatus(connectionState(), {
       lastCommandId: state.command.id,
       lastCommandStatus:
@@ -575,6 +598,7 @@ async function runClaimedCommand(state, attempt) {
     });
   } catch (error) {
     if (state.abort.signal.aborted || !stateIsActive(state)) return;
+    if (error?.code === "command_persistence_failed" || error?.name === "CommandJournalError" || error?.code?.startsWith?.("ERR_SQLITE")) throw error;
     const code =
       error instanceof RelayNodeError ? error.code : "node_execution_failed";
     const message = error instanceof Error ? error.message : String(error);
@@ -585,6 +609,7 @@ async function runClaimedCommand(state, attempt) {
       code,
       message,
     };
+    journal.complete(state.command, attempt, outcome);
     sendOutcome(state, outcome);
     writeStatus(connectionState(), {
       lastCommandId: state.command.id,
@@ -592,6 +617,36 @@ async function runClaimedCommand(state, attempt) {
       lastErrorCode: code,
     });
   }
+}
+
+function unknownOutcome(command, attempt) {
+  return {
+    type: "failed", commandId: command.id, attempt, code: "local_api_outcome_unknown",
+    message: "The relay stopped after dispatching this write and before recording its response. It may have completed; check its outcome before creating another operation. It was not sent again.",
+  };
+}
+
+async function restoreOutcomes() {
+  for (const row of journal.pending()) {
+    const outcome = row.outcome ?? (row.phase === "dispatched" && row.command.request.method !== "GET" ? unknownOutcome(row.command, row.attempt) : null);
+    if (!outcome) continue;
+    if (!row.outcome) journal.complete(row.command, row.attempt, outcome);
+    if (row.watch) await persistWatch(row.watch);
+    recoveredOutcomes.set(row.command.id, outcome);
+  }
+}
+
+async function persistWatch(watch) {
+  try { await watcher.watch(watch); }
+  catch (error) {
+    throw new CommandJournalError(`Turn watch persistence failed; the original command result was preserved: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function journalFailure(error) {
+  console.error(`[relay-node] command persistence failed; journal preserved: ${error instanceof Error ? error.message : String(error)}`);
+  writeStatus("error", { lastErrorCode: "command_persistence_failed" });
+  void shutdown(1);
 }
 
 function handleMessage(raw, sourceSocket = socket) {
@@ -697,11 +752,18 @@ function handleMessage(raw, sourceSocket = socket) {
     const state = activeState(message.commandId);
     if (!state || state.attempt !== null) return;
     stopAckTimer(state);
-    void runClaimedCommand(state, message.attempt);
+    void runClaimedCommand(state, message.attempt).catch(journalFailure);
     return;
   }
   if (message.type === "ack") {
     if (!TERMINAL_COMMAND_STATUSES.has(message.status)) return;
+    try { journal.acknowledge(message.commandId); }
+    catch (error) { journalFailure(error); return; }
+    recoveredOutcomes.delete(message.commandId);
+    if (recoveredOutcomes.size === 0 && recoveryAckTimer) {
+      clearTimeout(recoveryAckTimer);
+      recoveryAckTimer = null;
+    }
     const state = activeState(message.commandId);
     // The relay's terminal record is authoritative. A command may be
     // cancelled or failed after the node has already sent its outcome.
@@ -714,11 +776,17 @@ function handleMessage(raw, sourceSocket = socket) {
       `[relay-node] ${message.code ?? "relay_error"}: ${message.message ?? "unknown relay error"}`,
     );
     if (message.code === "stale_attempt") {
+      recoveredOutcomes.delete(message.commandId);
       const state = typeof message.commandId === "string"
         ? activeState(message.commandId)
         : null;
       if (state) clearState(state);
       return;
+    }
+    if (message.code === "command_not_found") {
+      // Retain the local result for inspection, but do not reconnect forever
+      // when an older relay has already discarded its command record.
+      recoveredOutcomes.delete(message.commandId);
     }
     const state = typeof message.commandId === "string"
       ? activeState(message.commandId)
@@ -783,28 +851,32 @@ function connect() {
   });
 }
 
-async function shutdown() {
+async function shutdown(exitCode = 0) {
   if (stopping) return;
   stopping = true;
   writeStatus("stopping");
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (statusHeartbeat) clearInterval(statusHeartbeat);
+  if (recoveryAckTimer) clearTimeout(recoveryAckTimer);
   clearAllStates();
   socket?.close(1000, "node shutting down");
   const forcedExit = setTimeout(() => process.exit(1), 5_000);
   forcedExit.unref();
   await activityWatchUpdate.catch(() => {});
   await Promise.all([watcher.stop(), pulseWatcher.stop(), statusWrite]).catch((error) => {
+    exitCode = 1;
     console.error(
       `[relay-node] shutdown persistence failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   });
+  journal.close();
   clearTimeout(forcedExit);
-  process.exit(0);
+  process.exit(exitCode);
 }
 
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 statusHeartbeat = setInterval(() => writeStatus(connectionState()), 15_000);
 statusHeartbeat.unref?.();
+await restoreOutcomes();
 connect();

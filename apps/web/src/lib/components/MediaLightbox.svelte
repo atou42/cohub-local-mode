@@ -8,6 +8,7 @@ import {
 	ZoomOut,
 } from "lucide-svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { fetchRelayMedia, protectedRelayMedia, publicMediaSource } from "$lib/protected-relay-media";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -412,7 +413,7 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
 }
 
 async function fetchUrlAsBlob(url: string): Promise<Blob> {
-	const res = await fetch(url);
+	const res = await fetchRelayMedia(url);
 	if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 	return res.blob();
 }
@@ -546,7 +547,8 @@ const imageCursor = $derived(
 			>
 				<img
 					bind:this={imageEl}
-					src={mediaLightbox.current.src}
+					src={publicMediaSource(mediaLightbox.current.src)}
+					use:protectedRelayMedia={mediaLightbox.current.src}
 					alt={mediaLightbox.current.alt ?? ""}
 					draggable="false"
 					style={`transform: translate(${panX}px, ${panY}px) scale(${zoom}); ${dragging || gestureZooming ? "" : "transition: transform 120ms ease-out;"}`}
@@ -557,7 +559,8 @@ const imageCursor = $derived(
 			<div class="w-full max-w-[95vw] max-h-[85vh] rounded-lg" role="presentation" onclick={(e) => e.stopPropagation()}>
 				<!-- svelte-ignore a11y_media_has_caption: User-generated preview videos do not provide caption tracks. -->
 				<video
-					src={mediaLightbox.current.src}
+					src={publicMediaSource(mediaLightbox.current.src)}
+					use:protectedRelayMedia={mediaLightbox.current.src}
 					poster={mediaLightbox.current.poster}
 					controls
 					autoplay

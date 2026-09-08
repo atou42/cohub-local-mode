@@ -1,4 +1,5 @@
 import type { SandboxConnection } from "@cohub/sandbox-client";
+import { localCliProxyArgv } from "@cohub/infra/local-cli-proxy";
 import type {
   AccessMode,
   ExternalHarnessProgress,
@@ -52,6 +53,7 @@ export function buildCursorAppServerArgv(
 ) {
   return [
     command,
+    "--disable-auto-update",
     "--model",
     model,
     "--sandbox",
@@ -403,6 +405,7 @@ function createRuntime(input: {
   accessMode: AccessMode;
   externalSessionId: string | null;
   environment: Record<string, string>;
+  proxyEnvironment?: Record<string, string>;
   model: string;
   thinkingLevel: string;
   writableRoots: readonly string[];
@@ -448,10 +451,10 @@ function createRuntime(input: {
     input.connection,
     "process.start",
     {
-      argv: buildCursorAppServerArgv(
+      argv: localCliProxyArgv(buildCursorAppServerArgv(
         cursorCliModelId(input.model, input.thinkingLevel),
         input.writableRoots,
-      ),
+      ), input.proxyEnvironment),
       cwd: entry.workspaceCwd,
       env: input.environment,
       timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -518,6 +521,7 @@ function getOrCreateRuntime(input: {
   accessMode: AccessMode;
   externalSessionId: string | null;
   environment: Record<string, string>;
+  proxyEnvironment?: Record<string, string>;
   executionContextKey: string;
   model: string;
   thinkingLevel: string;
@@ -548,6 +552,7 @@ function getOrCreateRuntime(input: {
       accessMode: input.accessMode,
       externalSessionId: input.externalSessionId,
       environment: input.environment,
+      proxyEnvironment: input.proxyEnvironment,
       model: input.model,
       thinkingLevel: input.thinkingLevel,
       writableRoots: input.writableRoots,
@@ -598,6 +603,7 @@ export async function runCursorAcpHarness(input: {
   turnId: string;
   prompt: string;
   environment: Record<string, string>;
+  proxyEnvironment?: Record<string, string>;
   executionContextKey: string;
   externalSessionId: string | null;
   accessMode: AccessMode;

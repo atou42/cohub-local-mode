@@ -13,6 +13,7 @@ router.get("/", async (c) => {
   if (user instanceof Response) return user;
   return c.json(await systemHarnessReadinessService.list({
     force: c.req.query("force") === "true",
+    userId: user.uuid,
   }));
 });
 

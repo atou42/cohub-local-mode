@@ -605,6 +605,13 @@ export class SpaceFilesApi {
       },
     );
   }
+
+  uploadEntry(uploadId: string, entryId: string, body: Blob, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<{ ok: true }>(
+      `/api/spaces/${this.spaceId}/fs/uploads/${encodeURIComponent(uploadId)}/entries/${encodeURIComponent(entryId)}`,
+      { method: "PUT", headers: { "content-type": body.type || "application/octet-stream" }, body, signal: options.signal },
+    );
+  }
 }
 
 class SessionMessagesClient {

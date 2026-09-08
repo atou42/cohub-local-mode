@@ -17,6 +17,7 @@ import {
 } from "../local-mode/access.js";
 import { resolvePersonalNodeCloudAccessTokenFromEnvironment, selectLocalModeAccessToken } from "../local-mode/personal-node-cloud-auth.js";
 import { desktopInstanceResponse, hasDesktopAccess } from "../local-mode/desktop-instance.js";
+import { createDesktopLocalAccessToken } from "../local-mode/desktop-local-auth.js";
 
 const router = new Hono();
 
@@ -45,6 +46,10 @@ router.get("/auth", async (c) => {
   }
 
   const forceRefresh = c.req.query("refresh") === "1";
+  if (c.req.query("desktop") === "1") {
+    const localToken = await createDesktopLocalAccessToken(c.req.raw, `${config.logtoEndpoint.replace(/\/+$/, "")}/oidc`);
+    if (localToken) return c.json({ accessToken: localToken }, 200, { "Cache-Control": "no-store", Pragma: "no-cache" });
+  }
   const personalNodeAccessToken =
     await resolvePersonalNodeCloudAccessTokenFromEnvironment(forceRefresh);
   const accessToken = await selectLocalModeAccessToken(

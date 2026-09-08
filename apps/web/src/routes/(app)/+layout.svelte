@@ -1,6 +1,8 @@
 <script lang="ts">
 import "../../app.css";
 import { onMount } from "svelte";
+import { Download } from "lucide-svelte";
+import { env } from "$env/dynamic/public";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
 import { markCohubClientHealthy } from "$lib/asset-import-recovery";
@@ -49,7 +51,11 @@ import { registerBundledPersonalNode } from "$lib/personal-node-desktop";
 import {
 	getPersonalNodeDeviceStatus,
 	resolvePersonalNodeDevice,
+	listPersonalNodeDevices,
+	choosePersonalNodeDevice,
 } from "$lib/personal-node-fetch";
+import type { PersonalNodeDevice } from "$lib/personal-node-transport-core";
+import { startPersonalNodeStatusPolling } from "$lib/personal-node-status-polling";
 import {
 	type PersonalNodeStatusNotice,
 	personalNodeStatusNotice,
@@ -102,6 +108,24 @@ type PersonalNodeStatus = {
 };
 let personalNodeStatus = $state<PersonalNodeStatus | null>(null);
 let personalNodeNotice = $state<PersonalNodeStatusNotice | null>(null);
+let personalNodeDevices = $state<PersonalNodeDevice[]>([]);
+let selectedPersonalNodeId = $state("");
+let choosingPersonalNode = $state(false);
+const remotePersonalNode = $derived(IS_PERSONAL_NODE_ALPHA && !personalNodeStatus);
+
+async function changePersonalNode(deviceId: string) {
+	choosingPersonalNode = true;
+	try {
+		const accessToken = await getAuthToken();
+		if (!accessToken) throw new Error("Personal Node sign-in is required.");
+		await choosePersonalNodeDevice(`Bearer ${accessToken}`, deviceId);
+		// Reset view-local state while retaining each device's scoped caches and drafts.
+		window.location.assign("/sessions");
+	} catch (error) {
+		personalNodeNotice = { kind: "error", text: error instanceof Error ? error.message : String(error) };
+		choosingPersonalNode = false;
+	}
+}
 const personalNodeStatusLabel = $derived.by(() => {
 	if (personalNodeNotice) return personalNodeNotice.text;
 	if (!personalNodeStatus) return null;
@@ -123,31 +147,35 @@ const personalNodeStatusIsError = $derived(
 
 function startPersonalNodeStatusMonitor() {
 	let stopped = false;
-	let timer: ReturnType<typeof setTimeout> | null = null;
-	const refresh = async () => {
-		try {
+	const monitor = startPersonalNodeStatusPolling({
+		refresh: async () => {
 			const accessToken = await getAuthToken();
 			if (!accessToken) throw new Error("Personal Node sign-in is required.");
 			const authorization = `Bearer ${accessToken}`;
+			const { devices } = await listPersonalNodeDevices(authorization);
+			if (stopped) return;
+			personalNodeDevices = devices.filter((device) => device.status === "active");
 			const device = await resolvePersonalNodeDevice(authorization);
 			if (!device) throw new Error("No active Cohub Connector is registered.");
-			personalNodeNotice = personalNodeStatusNotice(
+			const notice = personalNodeStatusNotice(
 				await getPersonalNodeDeviceStatus(device.id, authorization),
 			);
-		} catch (error) {
+			if (stopped) return;
+			selectedPersonalNodeId = device.id;
+			personalNodeNotice = notice;
+		},
+		onError: (error) => {
+			if (stopped) return;
 			personalNodeNotice = {
 				kind: "error",
 				text: error instanceof Error ? error.message : String(error),
 			};
-		} finally {
-			if (!stopped) timer = setTimeout(refresh, 3_000);
-		}
-	};
-	void refresh();
-	return () => {
+		},
+	});
+	return { ready: monitor.ready, stop: () => {
 		stopped = true;
-		if (timer) clearTimeout(timer);
-	};
+		monitor.stop();
+	} };
 }
 
 $effect(() => {
@@ -657,8 +685,7 @@ onMount(() => {
 			});
 	}
 
-	void authStore.ensureLoaded().finally(() => {
-		authReady = true;
+	void authStore.ensureLoaded().finally(async () => {
 		scheduleCacheCleanup();
 		if (authStore.isAuthenticated) {
 			void registerBundledPersonalNode().catch((error) => {
@@ -671,7 +698,9 @@ onMount(() => {
 			});
 			turnNotifications.start();
 			if (IS_PERSONAL_NODE_ALPHA && !window.cohubPersonalNode) {
-				stopPersonalNodeMonitor = startPersonalNodeStatusMonitor();
+				const monitor = startPersonalNodeStatusMonitor();
+				stopPersonalNodeMonitor = monitor.stop;
+				await monitor.ready;
 			}
 			// Listen in the shell, not a page, so delivery never depends on route.
 			stopDesktopCommands = startDesktopCommandListener();
@@ -682,6 +711,7 @@ onMount(() => {
 				nativeActivityBridge?.setCurrentRoute(currentLayoutSpaceId);
 			}
 		}
+		authReady = true;
 		initSpacePinRealtime();
 	});
 
@@ -716,7 +746,7 @@ onMount(() => {
     <CenteredLoading label={m.shell_loading({}, { locale })} size="page" />
   </main>
 {:else}
-  {#if personalNodeStatusLabel}
+  {#if personalNodeStatusLabel && !remotePersonalNode}
     <div
       class="fixed top-3 left-1/2 z-[100] max-w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 rounded border border-border bg-surface px-3 py-2 text-center text-sm text-text-primary shadow-md"
       role={personalNodeStatusIsError ? "alert" : "status"}
@@ -724,7 +754,21 @@ onMount(() => {
       {personalNodeStatusLabel}
     </div>
   {/if}
-  <div use:iosStandaloneViewportRecovery class="app-shell app-shell-viewport min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
+  <div use:iosStandaloneViewportRecovery class="app-shell app-shell-viewport min-h-0 overflow-hidden flex flex-col text-text-primary font-sans text-[13px] leading-[1.6]">
+    {#if remotePersonalNode}
+      <div class="flex shrink-0 min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-3 py-1.5">
+        <label for="personal-node-device" class="shrink-0 text-xs text-text-secondary">Device</label>
+        <select id="personal-node-device" aria-label="Personal Node device" class="min-h-8 min-w-0 max-w-[min(18rem,calc(100vw-6rem))] rounded border border-border bg-surface px-2 text-sm text-text-primary" value={selectedPersonalNodeId} disabled={choosingPersonalNode || personalNodeDevices.length === 0} onchange={(event) => void changePersonalNode(event.currentTarget.value)}>
+          {#if !selectedPersonalNodeId}<option value="" disabled>Choose a device</option>{/if}
+          {#each personalNodeDevices as device (device.id)}<option value={device.id}>{device.displayName}</option>{/each}
+        </select>
+        {#if personalNodeStatusLabel}<span class="min-w-0 break-words text-xs text-text-secondary" role={personalNodeStatusIsError ? "alert" : "status"}>{personalNodeStatusLabel}</span>{/if}
+        {#if env.PUBLIC_API_ORIGIN === "https://dev2-cohub.atou.cc"}
+          <a href="/download" class="ml-auto inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"><Download class="h-3.5 w-3.5" />Mac app</a>
+        {/if}
+      </div>
+    {/if}
+    <div class="flex flex-1 min-h-0 overflow-hidden flex-col lg:flex-row">
     <!-- Desktop sidebar — hidden on mobile -->
     <!-- z-30 keeps collapsed rail flyouts above main workspace stacking contexts.
          Width-only panel-shell: the icon rail stays interactive (no --collapsed). -->
@@ -758,6 +802,7 @@ onMount(() => {
         {@render children?.()}
       </div>
     </main>
+    </div>
   </div>
 
   <!-- Mobile left drawer — outside flex container to avoid stacking context issues -->

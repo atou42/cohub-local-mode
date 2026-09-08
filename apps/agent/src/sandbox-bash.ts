@@ -54,7 +54,7 @@ async function buildUploadCommand(data: AgentSandboxBashUploadJobData) {
   const manifest = buildManifest(data);
   return [
     "set -euo pipefail",
-    "script_path=$(mktemp /tmp/cohub-upload-files.XXXXXX.sh)",
+    "script_path=$(mktemp /tmp/cohub-upload-files.XXXXXX)",
     "trap 'rm -f \"$script_path\"' EXIT",
     "cat > \"$script_path\" <<'COHUB_UPLOAD_SCRIPT'",
     script.trimEnd(),

@@ -22,6 +22,7 @@ export function buildGrokAppServerArgv(
 ) {
 	const argv = [
 		"grok",
+		"--no-auto-update",
 		"--sandbox",
 		accessMode === "read_only" ? "read-only" : sandboxProfile,
 	];

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { extractRuntime, installRuntime } from "./runtime-installation.ts";
+import { collectRuntimeIntegrity } from "./runtime-integrity.ts";
 
 async function fixture(complete = true) {
 	const root = await mkdtemp(join(tmpdir(), "cohub-runtime-install-"));
@@ -26,7 +27,9 @@ async function fixture(complete = true) {
 	execFileSync("/usr/bin/tar", ["-cf", join(resources, "runtime.tar"), "-C", source, "."]);
 	const archive = await readFile(join(resources, "runtime.tar"));
 	const sha256 = createHash("sha256").update(archive).digest("hex");
-	await writeFile(join(resources, "runtime-manifest.json"), JSON.stringify({ schemaVersion: 1, sha256, size: archive.length }));
+	const files = JSON.stringify(await collectRuntimeIntegrity(source));
+	await writeFile(join(resources, "runtime-files.json"), files);
+	await writeFile(join(resources, "runtime-manifest.json"), JSON.stringify({ schemaVersion: 2, sha256, size: archive.length, filesSha256: createHash("sha256").update(files).digest("hex") }));
 	return { root, resources, data, sha256 };
 }
 
@@ -66,6 +69,14 @@ test("cancelled installation does not create an installed runtime", async () => 
 	controller.abort(new Error("Installer stopped"));
 	await assert.rejects(installRuntime(f.resources, f.data, controller.signal), /Installer stopped/);
 	await assert.rejects(access(join(f.data, "runtime", f.sha256)), { code: "ENOENT" });
+});
+
+test("an installation receipt does not authorize changed executable content", async () => {
+	const f = await fixture();
+	const manager = await installRuntime(f.resources, f.data);
+	await writeFile(manager, "changed executable content");
+	await assert.rejects(installRuntime(f.resources, f.data), /integrity|checksum/);
+	assert.equal(await readFile(manager, "utf8"), "changed executable content");
 });
 
 test("cancelling a blocked real tar process waits for its termination", async () => {

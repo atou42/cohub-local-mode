@@ -58,14 +58,23 @@ async function listen(server) {
 
 async function stopChild(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(() => {
-      child.kill("SIGKILL");
+  await new Promise((resolve, reject) => {
+    let killTimeout;
+    const onExit = () => {
+      clearTimeout(termTimeout);
+      clearTimeout(killTimeout);
       resolve();
-    }, 500)),
-  ]);
+    };
+    const termTimeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      killTimeout = setTimeout(() => {
+        child.removeListener("exit", onExit);
+        reject(new Error("Relay test child did not exit; preserving its data directory"));
+      }, 5_000);
+    }, 500);
+    child.once("exit", onExit);
+    child.kill("SIGTERM");
+  });
 }
 
 async function closeServer(server) {
@@ -80,19 +89,18 @@ async function startScenario(
     duplicateDeliveryAfterResult = false,
     queueSecond = false,
     timeoutCommand = false,
+    uploadCompletion = false,
+    fileDownload = false,
     commandTimeoutMs = 2_000,
     disconnectBeforeClaimAck = false,
     sendReady = true,
     parallelRead = false,
     holdReads = false,
+    withholdOutcomeAck = false,
   } = {},
 ) {
   const dataDir = await mkdtemp(join(tmpdir(), "cohub-relay-command-test-"));
   const spaceStorageRoot = await mkdtemp(join(tmpdir(), "cohub-relay-space-test-"));
-  t.after(() => Promise.all([
-    rm(dataDir, { recursive: true, force: true }),
-    rm(spaceStorageRoot, { recursive: true, force: true }),
-  ]));
 
   let promptCalls = 0;
   let readCalls = 0;
@@ -100,17 +108,17 @@ async function startScenario(
   const desktopSecrets = [];
   const localApi = createServer(async (request, response) => {
     desktopSecrets.push(request.headers["x-cohub-desktop-secret"] ?? null);
-    if (request.url === "/api/local-mode/auth") {
+    if (request.url === "/api/local-mode/auth?desktop=1") {
       jsonResponse(response, { accessToken: "test-access-token" });
       return;
     }
-    if (request.url === `/api/spaces/${SPACE_ID}/prompt`) {
+    if (request.url === `/api/spaces/${SPACE_ID}/prompt` || (uploadCompletion && request.url === `/api/spaces/${SPACE_ID}/fs/uploads/9d216fad-984f-43ba-87b8-414a8c830cd1/complete`) || (fileDownload && request.url === `/api/spaces/${SPACE_ID}/fs/download?path=large.zip`)) {
       promptCalls += 1;
       if (timeoutCommand) {
         await new Promise((resolve) => request.once("close", resolve));
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await new Promise((resolve) => setTimeout(resolve, uploadCompletion || fileDownload ? 500 : 80));
       jsonResponse(response, { mode: "immediate", ok: true }, 202);
       return;
     }
@@ -140,10 +148,10 @@ async function startScenario(
     sequence: 1,
     idempotencyKey: "relay-idempotency-test-1",
     request: {
-      method: "POST",
-      path: `/api/spaces/${SPACE_ID}/prompt`,
+      method: fileDownload ? "GET" : "POST",
+      path: fileDownload ? `/api/spaces/${SPACE_ID}/fs/download?path=large.zip` : uploadCompletion ? `/api/spaces/${SPACE_ID}/fs/uploads/9d216fad-984f-43ba-87b8-414a8c830cd1/complete` : `/api/spaces/${SPACE_ID}/prompt`,
       headers: {},
-      body: JSON.stringify({
+      body: fileDownload ? "" : JSON.stringify({
         sessionId: "f91aa9e1-a16c-4bbc-8154-a7ba0f30ef02",
         createSession: true,
         clientMessageId: "relay-idempotency-test-1",
@@ -245,6 +253,7 @@ async function startScenario(
         return;
       }
       if (frame.type === "result" && claimedCommand) {
+        if (withholdOutcomeAck) return;
         if (!firstResultSocket) firstResultSocket = client;
         if (
           reconnectAfterResult &&
@@ -308,6 +317,7 @@ async function startScenario(
   const output = [];
   const errors = [];
   const ipcStatuses = [];
+  const startChild = () => {
   const child = fork(INDEX_PATH, [], {
     cwd: REPO_ROOT,
     execArgv: [],
@@ -332,15 +342,30 @@ async function startScenario(
   child.on("message", (message) => {
     if (message?.type === "relay-status") ipcStatuses.push(message);
   });
+  return child;
+  };
+  let child = startChild();
   t.after(async () => {
+    // The relay can persist status until it exits; remove fixtures only afterward.
     await stopChild(child);
     await closeServer(relay);
     localApi.closeAllConnections();
     await new Promise((resolve) => localApi.close(resolve));
+    await Promise.all([
+      rm(dataDir, { recursive: true, force: true }),
+      rm(spaceStorageRoot, { recursive: true, force: true }),
+    ]);
   });
 
   return {
-    child,
+    get child() { return child; },
+    async restart({ redeliver = false } = {}) {
+      const exited = new Promise((resolve) => child.once("exit", resolve));
+      child.kill("SIGKILL");
+      await exited;
+      if (redeliver) commandSent = false;
+      child = startChild();
+    },
     command,
     readCommand,
     frames,
@@ -355,6 +380,24 @@ async function startScenario(
     errors,
   };
 }
+
+test("a process restart resends the durable result without repeating its write", async (t) => {
+  const scenario = await startScenario(t, { withholdOutcomeAck: true });
+  await waitFor(() => scenario.frames.some(frame => frame.type === "result"), 10_000);
+  const previous = scenario.frames.filter(frame => frame.type === "result").length;
+  await scenario.restart();
+  await waitFor(() => scenario.frames.filter(frame => frame.type === "result").length > previous, 10_000);
+  assert.equal(scenario.promptCalls, 1);
+});
+
+test("a restart after dispatch preserves an unknown outcome instead of executing again", async (t) => {
+  const scenario = await startScenario(t, { timeoutCommand: true, commandTimeoutMs: 30_000 });
+  await waitFor(() => scenario.promptCalls === 1, 10_000);
+  await scenario.restart({ redeliver: true });
+  const outcome = await waitFor(() => scenario.frames.find(frame => frame.type === "failed"), 10_000);
+  assert.equal(outcome.code, "local_api_outcome_unknown");
+  assert.equal(scenario.promptCalls, 1);
+});
 
 test("runs an independent GET while a mutation remains blocked", async (t) => {
   const scenario = await startScenario(t, { parallelRead: true, timeoutCommand: true });
@@ -477,3 +520,13 @@ test("reports a command timeout as failed and stops its heartbeat", async (t) =>
     heartbeatCount,
   );
 });
+
+for (const kind of ["upload completion", "file download"]) {
+test(`${kind} outlives the ordinary HTTP deadline and persists its actual result`, async (t) => {
+  const scenario = await startScenario(t, { uploadCompletion: kind === "upload completion", fileDownload: kind === "file download", commandTimeoutMs: 300 });
+  await waitFor(() => scenario.frames.some((frame) => frame.type === "result" || frame.type === "failed"), 10_000);
+  assert.equal(scenario.frames.some((frame) => frame.type === "failed"), false);
+  assert.equal(scenario.frames.find((frame) => frame.type === "result").result.status, 202);
+  assert.equal(scenario.promptCalls, 1);
+});
+}

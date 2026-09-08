@@ -1,4 +1,6 @@
 import { authStore } from "$lib/stores/auth.svelte";
+import { IS_PERSONAL_NODE_ALPHA } from "$lib/auth";
+import { currentPersonalNodeScope } from "$lib/personal-node-fetch";
 
 /**
  * User-scoped cache partition key.
@@ -11,13 +13,14 @@ import { authStore } from "$lib/stores/auth.svelte";
  * Never share authenticated private data under a global `guest` key.
  */
 export function getCacheUserKey() {
-	if (authStore.userUuid) return authStore.userUuid;
 	const subject =
 		typeof authStore.claims?.sub === "string"
 			? authStore.claims.sub.trim()
 			: "";
-	if (subject) return `sub:${subject}`;
-	return "guest";
+	const userKey = authStore.userUuid || (subject ? `sub:${subject}` : "guest");
+	if (!IS_PERSONAL_NODE_ALPHA) return userKey;
+	const scope = currentPersonalNodeScope();
+	return scope ? `personal-node:${scope.accountId}:${scope.deviceId}:${userKey}` : `personal-node:unresolved:${userKey}`;
 }
 
 /**
@@ -25,6 +28,10 @@ export function getCacheUserKey() {
  * Authenticated sessions without any isolatable key must not read/write `guest`.
  */
 export function canUseUserScopedCache(userKey = getCacheUserKey()) {
+	if (IS_PERSONAL_NODE_ALPHA) {
+		const scope = currentPersonalNodeScope();
+		return Boolean(scope && authStore.isAuthenticated && userKey.startsWith(`personal-node:${scope.accountId}:${scope.deviceId}:`));
+	}
 	if (userKey !== "guest") return true;
 	return !authStore.isAuthenticated;
 }

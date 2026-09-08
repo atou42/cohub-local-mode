@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { userInfo } from "node:os";
+import { createHash } from "node:crypto";
 
 const AUTH_SCHEMA_VERSION = 1;
 const EXPIRY_SKEW_MS = 60_000;
@@ -11,6 +12,10 @@ export async function selectLocalModeAccessToken(
   return desktopToken === undefined ? await resolveHostToken() : desktopToken;
 }
 
+export type LocalDesktopIdentity = {
+  accountId: string; userUuid: string; subject: string; clientId: string; issuer: string; deviceId: string;
+};
+
 type StoredCloudAuth = {
   schemaVersion: typeof AUTH_SCHEMA_VERSION;
   accessToken: string;
@@ -18,7 +23,16 @@ type StoredCloudAuth = {
   accessTokenExpiresAt: number;
   scope: string;
   updatedAt: number;
+  localIdentity?: LocalDesktopIdentity;
 };
+
+export function parseLocalDesktopIdentity(value: unknown): LocalDesktopIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Desktop account identity is invalid");
+  const record = value as Record<keyof LocalDesktopIdentity, unknown>;
+  const result = Object.fromEntries(["accountId", "userUuid", "subject", "clientId", "issuer", "deviceId"].map((key) => [key, requiredString(Reflect.get(record, key), key)])) as LocalDesktopIdentity;
+  if (!/^[a-f0-9]{64}$/.test(result.accountId) || !/^[0-9a-f-]{36}$/i.test(result.deviceId) || new URL(result.issuer).protocol !== "https:" || createHash("sha256").update(`${result.issuer}\0${result.subject}`).digest("hex") !== result.accountId) throw new Error("Desktop account binding is invalid");
+  return result;
+}
 
 type ResolvePersonalNodeCloudAccessTokenInput = {
   forceRefresh: boolean;
@@ -60,6 +74,7 @@ function parseStoredCloudAuth(value: unknown): StoredCloudAuth {
     ),
     scope: requiredString(record.scope, "scope"),
     updatedAt: requiredPositiveNumber(record.updatedAt, "updatedAt"),
+    ...(record.localIdentity === undefined ? {} : { localIdentity: parseLocalDesktopIdentity(record.localIdentity) }),
   };
 }
 
@@ -107,6 +122,7 @@ export async function resolvePersonalNodeCloudAccessToken(
 
   const refreshed = parseRefreshPayload(await input.refresh(stored.refreshToken));
   const next: StoredCloudAuth = {
+    ...stored,
     schemaVersion: AUTH_SCHEMA_VERSION,
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken ?? stored.refreshToken,
@@ -114,6 +130,7 @@ export async function resolvePersonalNodeCloudAccessToken(
     scope: refreshed.scope,
     updatedAt: now,
   };
+  if (await input.readSecret() !== raw) throw new Error("Personal Node account changed during token refresh");
   await input.writeSecret(JSON.stringify(next));
   return next.accessToken;
 }
@@ -168,19 +185,39 @@ async function refreshCloudAuth(origin: string, refreshToken: string) {
   return payload;
 }
 
-export async function resolvePersonalNodeCloudAccessTokenFromEnvironment(
-  forceRefresh: boolean,
-) {
+function cloudAuthEnvironment() {
   const service =
     process.env.COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_SERVICE?.trim() ?? "";
   const account =
     process.env.COHUB_PERSONAL_NODE_AUTH_KEYCHAIN_ACCOUNT?.trim() ?? "";
   const origin = process.env.COHUB_PERSONAL_NODE_AUTH_ORIGIN?.trim() ?? "";
-  if (!service && !account && !origin) return undefined;
+  if (!service && !account && !origin) return null;
   if (!service || !account || !origin || new URL(origin).protocol !== "https:") {
     throw new Error("Personal Node cloud auth environment is invalid");
   }
-  const normalizedOrigin = origin.replace(/\/+$/, "");
+  return { service, account, origin: origin.replace(/\/+$/, "") };
+}
+
+export async function readPersonalNodeCloudAuthRecord() {
+  const environment = cloudAuthEnvironment();
+  if (!environment) return undefined;
+  const raw = await runSecurity(["find-generic-password", "-w", "-s", environment.service, "-a", environment.account], true);
+  if (raw === null) return null;
+  return parseStoredCloudAuth(JSON.parse(raw));
+}
+
+let tokenResolution: Promise<string | null | undefined> | null = null;
+export async function resolvePersonalNodeCloudAccessTokenFromEnvironment(forceRefresh: boolean) {
+  if (tokenResolution) return tokenResolution;
+  const operation = resolveTokenFromEnvironment(forceRefresh).finally(() => { if (tokenResolution === operation) tokenResolution = null; });
+  tokenResolution = operation;
+  return operation;
+}
+
+async function resolveTokenFromEnvironment(forceRefresh: boolean) {
+  const environment = cloudAuthEnvironment();
+  if (!environment) return undefined;
+  const { service, account, origin: normalizedOrigin } = environment;
   return resolvePersonalNodeCloudAccessToken({
     forceRefresh,
     readSecret: () =>

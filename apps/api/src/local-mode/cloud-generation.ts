@@ -1,6 +1,6 @@
-import { resolveAccessToken } from "@neta-art/cohub-cli/auth";
 import type { PublicGenerationDeclaration } from "@cohub/infra/config-runtime/generation-declarations";
 import { config } from "../config.js";
+import { resolveCloudAccessToken } from "./cloud-access-token.js";
 
 const ACCOUNT_CACHE_TTL_MS = 60_000;
 const MODEL_CACHE_TTL_MS = 60_000;
@@ -28,7 +28,7 @@ function responseMessage(body: unknown, fallback: string): string {
 }
 
 async function getCloudToken(userId: string, forceRefresh = false): Promise<string> {
-  const token = await resolveAccessToken({ forceRefresh }).catch((error) => {
+  const token = await resolveCloudAccessToken({ forceRefresh }).catch((error) => {
     throw new Error(`Cloud account authentication failed: ${error instanceof Error ? error.message : String(error)}`);
   });
   if (!token) throw new Error("Cloud account is not connected. Run cohub auth login on the host.");

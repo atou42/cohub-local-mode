@@ -6,6 +6,7 @@ import {
 	unmount as unmountComponent,
 } from "svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { downloadRelayMedia, protectedRelayMedia, protectedRelayMediaPath } from "$lib/protected-relay-media";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
 import {
 	createWorkspaceAssetLoader,
@@ -44,6 +45,18 @@ let markdownEl = $state<HTMLElement | null>(null);
 let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 let themeObserver: MutationObserver | null = null;
 let workspaceAssetRun = 0;
+
+$effect(() => {
+	stableHtml;
+	tailHtml;
+	if (!markdownEl) return;
+	const media = Array.from(markdownEl.querySelectorAll<HTMLImageElement | HTMLMediaElement>("img[src], video[src], audio[src]"));
+	const actions = media.flatMap((element) => {
+		const source = element.getAttribute("src") ?? "";
+		return protectedRelayMediaPath(source) ? [protectedRelayMedia(element, source)] : [];
+	});
+	return () => { for (const action of actions) action.destroy(); };
+});
 
 const mountedAudioPlayers: {
 	mount: HTMLElement;
@@ -446,6 +459,16 @@ onMount(() => {
 		const link = target.closest<HTMLAnchorElement>("a[href]");
 		if (link && e instanceof MouseEvent) {
 			const href = link.getAttribute("href") ?? "";
+			if (protectedRelayMediaPath(href)) {
+				e.preventDefault();
+				e.stopPropagation();
+				void downloadRelayMedia(href, link.textContent?.trim() || "attachment").catch((error) => {
+					const message = error instanceof Error ? error.message : "Download failed";
+					link.title = message;
+					link.textContent = `${link.textContent ?? "Attachment"}: ${message}`;
+				});
+				return;
+			}
 			const fileTarget = normalizeWorkspaceFileLinkTarget(href, {
 				basePath: baseFilePath,
 			});

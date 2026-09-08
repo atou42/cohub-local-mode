@@ -26,7 +26,8 @@ tmp=""
 staged=()
 cleanup_tmp() {
   [ -z "$tmp" ] || rm -f -- "$tmp"
-  for staged_path in "${staged[@]}"; do
+  # Bash 3.2 treats an empty array as unset under nounset.
+  for staged_path in ${staged[@]+"${staged[@]}"}; do
     rm -f -- "$staged_path"
   done
 }

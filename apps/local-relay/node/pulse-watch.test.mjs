@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { RELAY_PROTOCOL_VERSION } from "./protocol-compat.mjs";
 import {
   createPulseWatcher,
   loadPulseState,
@@ -51,7 +52,7 @@ function watchSnapshot({
 
 test("accepts only the exact Relay Activity watch envelope", () => {
   const envelope = {
-    protocolVersion: 3,
+    protocolVersion: RELAY_PROTOCOL_VERSION,
     type: "activity-watch.replace",
     digest: "AB".repeat(32),
     ...watchSnapshot(),

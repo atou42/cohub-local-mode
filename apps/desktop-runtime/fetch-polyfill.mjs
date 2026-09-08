@@ -5,7 +5,10 @@ const NativeRequest = globalThis.Request;
 const NativeResponse = globalThis.Response;
 
 async function requestInput(input, init = {}) {
-	if (!(input instanceof NativeRequest)) return [input, init];
+	if (!(input instanceof NativeRequest)) return [input, {
+		...init,
+		...(init.body instanceof ReadableStream ? { body: Readable.fromWeb(init.body) } : {}),
+	}];
 	const method = init.method ?? input.method;
 	let body = init.body;
 	if (
@@ -14,14 +17,14 @@ async function requestInput(input, init = {}) {
 		method !== "GET" &&
 		method !== "HEAD"
 	) {
-		body = Buffer.from(await input.arrayBuffer());
+		body = input.body;
 	}
 	return [
 		input.url,
 		{
 			method,
 			headers: init.headers ?? input.headers,
-			body,
+			body: body instanceof ReadableStream ? Readable.fromWeb(body) : body,
 			signal: init.signal ?? input.signal,
 			redirect: init.redirect ?? input.redirect,
 		},

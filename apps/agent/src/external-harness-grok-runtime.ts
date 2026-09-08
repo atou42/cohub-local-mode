@@ -1,4 +1,5 @@
 import type { SandboxConnection } from "@cohub/sandbox-client";
+import { localCliProxyArgv } from "@cohub/infra/local-cli-proxy";
 import type {
 	AccessMode,
 	ExternalHarnessProgress,
@@ -360,6 +361,7 @@ function createRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	writableRoots: readonly string[];
 }) {
 	evictRuntimeIfNeeded();
@@ -402,10 +404,10 @@ function createRuntime(input: {
 		input.connection,
 		"process.start",
 		{
-			argv: buildGrokAppServerArgv(
+			argv: localCliProxyArgv(buildGrokAppServerArgv(
 				input.accessMode,
 				resolveGrokSandboxProfile(input.spaceId, input.writableRoots),
-			),
+			), input.proxyEnvironment),
 			cwd: input.connection.filesystem?.defaultCwd?.trim() || SANDBOX_WORKSPACE,
 			env: input.environment,
 			timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -447,7 +449,7 @@ function createRuntime(input: {
 
 	entry.readyPromise = (async () => {
 		await entry.processIdPromise;
-		await request(entry, "initialize", {
+		const initialized = await request(entry, "initialize", {
 			protocolVersion: 1,
 			clientCapabilities: {
 				fs: { readTextFile: false, writeTextFile: false },
@@ -455,6 +457,14 @@ function createRuntime(input: {
 			},
 			clientInfo: { name: "cohub-local", version: "1.0.0" },
 		});
+		const authMethods = Array.isArray(initialized.authMethods)
+			? initialized.authMethods.map((method) => record(method)?.id)
+			: [];
+		const methodId = process.env.XAI_API_KEY?.trim() && authMethods.includes("xai.api_key")
+			? "xai.api_key"
+			: authMethods.includes("cached_token") ? "cached_token" : null;
+		if (!methodId) throw new Error("Grok Build requires an existing local CLI login.");
+		await request(entry, "authenticate", { methodId, _meta: { headless: true } });
 	})();
 	void entry.readyPromise.catch((error) => {
 		closeEntry(entry, error instanceof Error ? error.message : String(error));
@@ -470,6 +480,7 @@ function getOrCreateRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	executionContextKey: string;
 	writableRoots: readonly string[];
 }) {
@@ -498,6 +509,7 @@ function getOrCreateRuntime(input: {
 			accessMode: input.accessMode,
 			externalSessionId: input.externalSessionId,
 			environment: input.environment,
+			proxyEnvironment: input.proxyEnvironment,
 			writableRoots: input.writableRoots,
 		}),
 		reused: false,
@@ -550,6 +562,7 @@ export async function runGrokAcpHarness(input: {
 	turnId: string;
 	prompt: string;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	executionContextKey: string;
 	externalSessionId: string | null;
 	accessMode: AccessMode;

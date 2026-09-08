@@ -15,7 +15,7 @@ import { db } from "./db/index.js";
 import { listEnabledSpaceMods, getSpaceModMountSignature } from "@cohub/core/space-mods";
 import { spaceSandboxes, spaces } from "@cohub/db";
 import { sessionsNamespace, config } from "./config.js";
-import { k8sCoreApi } from "./k8s.js";
+import { getKubernetesClients } from "./k8s.js";
 import { renderSandboxPodTemplate } from "./sandbox-template.js";
 import { deleteSandboxPublicNetwork, getSandboxPublicEndpoints, reconcileSandboxPublicNetwork } from "./sandbox-public-network.js";
 import { createSandboxReportToken, hashSandboxReportToken } from "./crypto.js";
@@ -83,6 +83,7 @@ const getK8sErrorMessage = (error: unknown) => {
 };
 
 export const waitForSandboxPodDeleted = async (podName: string, timeoutMs = 120_000) => {
+  const { k8sCoreApi } = await getKubernetesClients();
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -113,6 +114,7 @@ const resourcesMatch = (actual: unknown, expected: { limits: Record<string, stri
 type SandboxPodResizeOutcome = { status: "applied" } | { status: "pending" } | { status: "timeout" };
 
 const waitForSandboxPodResizeApplied = async (input: { podName: string; resources: { limits: Record<string, string>; requests: Record<string, string> }; timeoutMs?: number }): Promise<SandboxPodResizeOutcome> => {
+  const { k8sCoreApi } = await getKubernetesClients();
   const timeoutMs = input.timeoutMs ?? 15_000;
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -148,6 +150,7 @@ export const resizeSpaceSandboxToSpec = async (input: { spaceId: string; specId:
   }
   const podName = sandbox.podName ?? `sandbox-${input.spaceId}`;
   const spec = SANDBOX_SPECS[input.specId] ?? SANDBOX_SPECS[DEFAULT_SANDBOX_SPEC_ID];
+  const { k8sCoreApi } = await getKubernetesClients();
   const k8sObjectApi = k8sCoreApi as typeof k8sCoreApi & {
     patchNamespacedPodResize?: (input: { name: string; namespace: string; body: unknown }) => Promise<unknown>;
   };
@@ -195,6 +198,7 @@ export const resizeSpaceSandboxToSpec = async (input: { spaceId: string; specId:
 };
 
 export const waitForSandboxPodReady = async (podName: string, timeoutMs = 120_000) => {
+  const { k8sCoreApi } = await getKubernetesClients();
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -392,6 +396,7 @@ const triggerSandboxPublicNetworkReconcile = (spaceId: string) => {
 };
 
 const tryCreatePod = async (spaceId: string, pod: V1Pod, retry = 0): Promise<{ podName: string; created: boolean }> => {
+  const { k8sCoreApi } = await getKubernetesClients();
   try {
     await k8sCoreApi.createNamespacedPod({
       namespace: sessionsNamespace,
@@ -459,6 +464,7 @@ export const reconcileSpaceSandbox = async (input: {
 
     const podToReplace = existingSandbox?.podName ?? podName;
     try {
+      const { k8sCoreApi } = await getKubernetesClients();
       await k8sCoreApi.deleteNamespacedPod({
         name: podToReplace,
         namespace: sessionsNamespace,
@@ -777,4 +783,3 @@ export const recoverSpaceSandbox = async (input: {
     await redisCommandClient.del(lockKey).catch(() => undefined);
   }
 };
-

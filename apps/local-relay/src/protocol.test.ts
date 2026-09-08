@@ -176,7 +176,7 @@ test("accepts the Personal Node Alpha read surface", () => {
 					method: "GET",
 					path,
 					headers: { authorization: "must-not-cross-relay" },
-					body: "ignored",
+					body: "",
 				},
 			},
 			{ maxBodyBytes: 64 * 1024 },
@@ -207,6 +207,151 @@ test("accepts owner-scoped Personal Node Alpha mutations", () => {
 		assert.equal(result.request.body, body);
 		assert.equal(result.request.headers.authorization, undefined);
 	}
+});
+
+test("forwards allowlisted Alpha headers and canonical binary bodies", () => {
+	const body = "AP8B";
+	const result = validateRelayCommandInput(
+		{
+			kind: "alpha_api",
+			idempotencyKey: clientMessageId,
+			request: {
+				method: "PUT",
+				path: `/api/spaces/${spaceId}/fs/file`,
+				headers: {
+					"Content-Type": "application/octet-stream",
+					Accept: "application/octet-stream",
+					range: "bytes=0-2",
+					"if-match": '"v1"',
+					"if-none-match": "*",
+					"if-modified-since": "Wed, 21 Oct 2015 07:28:00 GMT",
+					"x-cohub-fs-mutation-id": clientMessageId,
+					authorization: "must-not-cross-relay",
+					cookie: "must-not-cross-relay",
+					"x-cohub-desktop-secret": "must-not-cross-relay",
+				},
+				body,
+				bodyEncoding: "base64",
+			},
+		},
+		{ maxBodyBytes: 3 },
+	);
+	assert.deepEqual(result.request.headers, {
+		"content-type": "application/octet-stream",
+		accept: "application/octet-stream",
+		range: "bytes=0-2",
+		"if-match": '"v1"',
+		"if-none-match": "*",
+		"if-modified-since": "Wed, 21 Oct 2015 07:28:00 GMT",
+		"x-cohub-fs-mutation-id": clientMessageId,
+	});
+	assert.equal(result.request.body, body);
+	assert.equal(result.request.bodyEncoding, "base64");
+
+	assert.throws(
+		() =>
+			validateRelayCommandInput(
+				{
+					kind: "alpha_api",
+					idempotencyKey: clientMessageId,
+					request: {
+						method: "PUT",
+						path: `/api/spaces/${spaceId}/fs/file`,
+						headers: {},
+						body,
+						bodyEncoding: "base64",
+					},
+				},
+				{ maxBodyBytes: 2 },
+			),
+		(error: unknown) =>
+			error instanceof RelayProtocolError &&
+			error.code === "body_too_large" &&
+			error.status === 413,
+	);
+});
+
+test("rejects malformed Alpha binary bodies, unsafe headers, and GET bodies", () => {
+	for (const body of ["A", "AA=", "AB==", "_w==", "AA==\n"]) {
+		assert.throws(
+			() =>
+				validateRelayCommandInput(
+					{
+						kind: "alpha_api",
+						idempotencyKey: clientMessageId,
+						request: {
+							method: "PUT",
+							path: `/api/spaces/${spaceId}/fs/file`,
+							headers: {},
+							body,
+							bodyEncoding: "base64",
+						},
+					},
+					{ maxBodyBytes: 64 * 1024 },
+				),
+			(error: unknown) =>
+				error instanceof RelayProtocolError && error.code === "invalid_request",
+		);
+	}
+	assert.throws(
+		() =>
+			validateRelayCommandInput(
+				{
+					kind: "alpha_api",
+					idempotencyKey: clientMessageId,
+					request: {
+						method: "PUT",
+						path: `/api/spaces/${spaceId}/fs/file`,
+						headers: { accept: "text/plain\r\nX-Injected: yes" },
+						body: "",
+					},
+				},
+				{ maxBodyBytes: 64 * 1024 },
+			),
+		(error: unknown) =>
+			error instanceof RelayProtocolError && error.code === "invalid_request",
+	);
+	for (const request of [
+		{
+			method: "GET",
+			path: `/api/spaces/${spaceId}`,
+			headers: {},
+			body: "{}",
+		},
+		{
+			method: "GET",
+			path: `/api/spaces/${spaceId}`,
+			headers: {},
+			body: "",
+			bodyEncoding: "base64",
+		},
+	]) {
+		assert.throws(
+			() =>
+				validateRelayCommandInput(
+					{ kind: "alpha_api", idempotencyKey: clientMessageId, request },
+					{ maxBodyBytes: 64 * 1024 },
+				),
+			(error: unknown) =>
+				error instanceof RelayProtocolError && error.code === "invalid_request",
+		);
+	}
+});
+
+test("keeps the JSON content type default when Alpha headers are omitted", () => {
+	const result = validateRelayCommandInput(
+		{
+			kind: "alpha_api",
+			idempotencyKey: clientMessageId,
+			request: {
+				method: "POST",
+				path: "/api/spaces",
+				body: "{}",
+			},
+		},
+		{ maxBodyBytes: 64 * 1024 },
+	);
+	assert.deepEqual(result.request.headers, { "content-type": "application/json" });
 });
 
 test("rejects secret, arbitrary, and cross-origin Alpha API routes", () => {
@@ -340,7 +485,7 @@ test("parses claim, result, failure, and heartbeat node messages", () => {
 			attempt: 2,
 			result: {
 				status: 202,
-				headers: { "Content-Type": "application/json", ignored: 5 },
+				headers: { "Content-Type": "application/json" },
 				body: "{}",
 			},
 		});
@@ -367,6 +512,132 @@ test("parses claim, result, failure, and heartbeat node messages", () => {
 		}).type,
 		"heartbeat",
 	);
+});
+
+test("validates referenced HTTP bodies and forbids ambiguous or malformed parts", () => {
+	const part = { id: clientMessageId, size: 16 * 1024 * 1024, sha256: "a".repeat(64) };
+	const input = { kind: "alpha_api", idempotencyKey: clientMessageId, request: { method: "PUT", path: `/api/spaces/${spaceId}/fs/file`, body: "", bodyParts: [part] } };
+	assert.deepEqual(validateRelayCommandInput(input, { maxBodyBytes: 1024 }).request.bodyParts, [part]);
+	for (const request of [
+		{ ...input.request, body: "also inline" },
+		{ ...input.request, method: "GET" },
+		{ ...input.request, bodyParts: [part, part] },
+		{ ...input.request, bodyParts: [{ ...part, size: part.size + 1 }] },
+		{ ...input.request, bodyParts: [{ ...part, sha256: "bad" }] },
+	]) assert.throws(() => validateRelayCommandInput({ ...input, request }, { maxBodyBytes: 1024 }));
+	const message = { protocolVersion: RELAY_PROTOCOL_VERSION, type: "result", commandId: "command-1", attempt: 1, result: { status: 200, headers: {}, body: "", bodyParts: [part] } };
+	const parsed = parseNodeMessage(message);
+	assert.equal(parsed.type, "result");
+	if (parsed.type === "result") assert.deepEqual(parsed.result.bodyParts, [part]);
+	assert.throws(() => parseNodeMessage({ ...message, result: { ...message.result, status: 204 } }));
+	assert.throws(() => parseNodeMessage({ ...message, result: { ...message.result, headers: { ignored: 5 } } }));
+});
+
+test("preserves and validates binary node results with safe headers", () => {
+	const binaryResult = {
+		protocolVersion: RELAY_PROTOCOL_VERSION,
+		type: "result",
+		commandId: "command-1",
+		attempt: 1,
+		result: {
+			status: 200,
+			headers: {
+				"Content-Type": "application/octet-stream",
+				Accept: "application/octet-stream",
+				ETag: '"download"',
+				"Content-Disposition": "attachment; filename=download.zip",
+				authorization: "must-not-cross-relay",
+				cookie: "must-not-cross-relay",
+				"x-cohub-desktop-secret": "must-not-cross-relay",
+			},
+			body: "AP8B",
+			bodyEncoding: "base64",
+		},
+	};
+	const parsed = parseNodeMessage(binaryResult, { maxBodyBytes: 3 });
+	assert.deepEqual(parsed, {
+		protocolVersion: RELAY_PROTOCOL_VERSION,
+		type: "result",
+		commandId: "command-1",
+		attempt: 1,
+		result: {
+			status: 200,
+			headers: {
+				"content-type": "application/octet-stream",
+				etag: '"download"',
+				"content-disposition": "attachment; filename=download.zip",
+			},
+			body: "AP8B",
+			bodyEncoding: "base64",
+		},
+	});
+	assert.throws(
+		() => parseNodeMessage(binaryResult, { maxBodyBytes: 2 }),
+		(error: unknown) =>
+			error instanceof RelayProtocolError &&
+			error.code === "body_too_large" &&
+			error.status === 413,
+	);
+	for (const body of ["A", "AA=", "AB==", "_w==", "AA==\n"]) {
+		assert.throws(
+			() =>
+				parseNodeMessage({
+					...binaryResult,
+					result: { ...binaryResult.result, body },
+				}),
+			(error: unknown) =>
+				error instanceof RelayProtocolError && error.code === "invalid_request",
+		);
+	}
+	assert.throws(
+		() =>
+			parseNodeMessage({
+				...binaryResult,
+				result: { ...binaryResult.result, bodyEncoding: "utf-8" },
+			}),
+		(error: unknown) =>
+			error instanceof RelayProtocolError && error.code === "invalid_request",
+	);
+	assert.throws(
+		() =>
+			parseNodeMessage({
+				...binaryResult,
+				result: {
+					...binaryResult.result,
+					headers: { accept: "text/plain\r\nX-Injected: yes" },
+				},
+			}),
+		(error: unknown) =>
+			error instanceof RelayProtocolError && error.code === "invalid_request",
+	);
+});
+
+test("rejects bodies on HTTP statuses that cannot carry content", () => {
+	for (const status of [204, 205, 304]) {
+		assert.throws(
+			() =>
+				parseNodeMessage({
+					protocolVersion: RELAY_PROTOCOL_VERSION,
+					type: "result",
+					commandId: "command-1",
+					attempt: 1,
+					result: { status, headers: {}, body: "AP8B", bodyEncoding: "base64" },
+				}),
+			(error: unknown) =>
+				error instanceof RelayProtocolError && error.code === "invalid_request",
+		);
+	}
+	for (const status of [204, 205, 304]) {
+		assert.doesNotThrow(() =>
+			parseNodeMessage({
+				protocolVersion: RELAY_PROTOCOL_VERSION,
+				type: "result",
+				commandId: "command-1",
+				attempt: 1,
+				result: { status, headers: {}, body: "" },
+			}),
+		);
+	}
 });
 
 test("parses a turn-event and rejects malformed ones", () => {

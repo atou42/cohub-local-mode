@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
+import { requestBodyParts, responseBodyParts } from "./http-body.mjs";
 
 const PROMPT_PATH_PATTERN = /^\/api\/spaces\/([0-9a-f-]{36})\/prompt$/i;
 const FEDERATED_FS_PATH_PATTERN =
@@ -58,30 +59,41 @@ export class RelayNodeError extends Error {
   }
 }
 
-export async function readLimitedResponseBody(response, maxBytes) {
-  if (!response.body) return "";
+async function readLimitedResponseBytes(response, maxBytes) {
+  if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let total = 0;
-  let body = "";
+  const chunks = [];
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
+        await reader.cancel();
         throw new RelayNodeError(
           "local_response_too_large",
           `Local API response exceeds ${maxBytes} bytes`,
         );
       }
-      body += decoder.decode(value, { stream: true });
+      chunks.push(Buffer.from(value));
     }
-    body += decoder.decode();
-    return body;
+    return Buffer.concat(chunks, total);
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function readLimitedResponseBody(response, maxBytes) {
+  return new TextDecoder("utf-8", { fatal: true }).decode(await readLimitedResponseBytes(response, maxBytes));
+}
+
+const requestHeaders = ["content-type", "accept", "range", "if-match", "if-none-match", "if-modified-since", "x-cohub-fs-mutation-id"];
+const resultHeaders = ["content-type", "content-disposition", "content-range", "accept-ranges", "etag", "last-modified", "cache-control", "retry-after", "x-request-id", "vary"];
+
+function forwardedHeaders(source, names) {
+  const incoming = new Headers(source);
+  return Object.fromEntries(names.flatMap((name) => incoming.has(name) ? [[name, incoming.get(name)]] : []));
 }
 
 export async function resolveLocalAccessToken(
@@ -92,8 +104,11 @@ export async function resolveLocalAccessToken(
 ) {
 	let response;
 	try {
+		const query = new URLSearchParams();
+		if (forceRefresh) query.set("refresh", "1");
+		if (process.env.COHUB_DESKTOP_INSTANCE_SECRET) query.set("desktop", "1");
 		response = await fetcher(
-			`${localApiOrigin}/api/local-mode/auth${forceRefresh ? "?refresh=1" : ""}`,
+			`${localApiOrigin}/api/local-mode/auth${query.size ? `?${query}` : ""}`,
 			{
 			method: "GET",
 			cache: "no-store",
@@ -534,7 +549,7 @@ async function uploadReturnedArtifact(artifact, command, options) {
       "x-cohub-content-sha256": artifact.sha256,
       "x-cohub-relay-node": "1",
     },
-    body: createReadStream(artifact.path),
+    body: artifact.bytes ?? createReadStream(artifact.path),
     duplex: "half",
     cache: "no-store",
     signal: options.signal,
@@ -769,6 +784,7 @@ export async function executeRelayCommand(command, {
 	relayNodeToken,
   spaceStorageRoot,
   signal,
+  beforeDispatch,
 } = {}) {
   if (!command || typeof command !== "object") {
     throw new RelayNodeError("invalid_command", "Relay command is missing");
@@ -818,6 +834,8 @@ export async function executeRelayCommand(command, {
   if (typeof request.body !== "string") {
     throw new RelayNodeError("invalid_command", "Relay command body is invalid");
   }
+  if (request.bodyEncoding !== undefined && (request.bodyEncoding !== "base64" || Buffer.from(request.body, "base64").toString("base64") !== request.body)) throw new RelayNodeError("invalid_command", "Relay command body encoding is invalid");
+  if (request.bodyParts && (request.method === "GET" || request.body || request.bodyEncoding)) throw new RelayNodeError("invalid_command", "Referenced HTTP bodies cannot also have inline content or use GET");
   if (!promptPathMatch && Array.isArray(command.attachments) && command.attachments.length > 0) {
     throw new RelayNodeError(
       "invalid_command",
@@ -837,7 +855,10 @@ export async function executeRelayCommand(command, {
     : timeoutController.signal;
   let response;
   let body;
+  let responseEncoding;
+  let responseParts;
   let preparedPrompt;
+  let requestSent = false;
   try {
     const accessToken = await resolveLocalAccessToken(
       fetcher,
@@ -860,25 +881,63 @@ export async function executeRelayCommand(command, {
           relayNodeToken,
           signal: requestSignal,
         })
-      : { body: request.body, responseReplacements: new Map() };
+      : { body: request.bodyParts ? requestBodyParts(request.bodyParts, { fetcher, relayNodeBaseUrl, relayNodeToken, signal: requestSignal }) : request.bodyEncoding === "base64" ? Buffer.from(request.body, "base64") : request.body, responseReplacements: new Map() };
+    requestSignal.throwIfAborted();
+    if (beforeDispatch) {
+      let allowed;
+      try { allowed = await beforeDispatch(); }
+      catch (error) {
+        throw new RelayNodeError("command_persistence_failed", "The relay could not persist the command before dispatch", { cause: error });
+      }
+      if (allowed === false) {
+        throw new RelayNodeError("local_api_outcome_unknown", "This write was already dispatched. Its outcome must be checked; it was not sent again.");
+      }
+    }
+    requestSignal.throwIfAborted();
+    requestSent = true;
     response = await fetcher(`${localApiOrigin}${request.path}`, {
       method: request.method,
       headers: {
 		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.body
-			? { "content-type": "application/json" }
+			? { "content-type": request.bodyEncoding ? "application/octet-stream" : "application/json" }
 			: {}),
+        ...forwardedHeaders(request.headers, requestHeaders),
         authorization: `Bearer ${accessToken}`,
         "x-cohub-source-via":
           promptPathMatch || alphaApiRequest ? "web" : "federated_cloud",
         "x-cohub-relay-command-id": command.idempotencyKey,
       },
-		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.body
+		...(["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && (request.body || request.bodyParts)
 			? { body: preparedPrompt.body }
         : {}),
+      ...(request.bodyParts ? { duplex: "half" } : {}),
       signal: requestSignal,
     });
-    body = await readLimitedResponseBody(response, maxResponseBytes);
+    const transferred = relayNodeBaseUrl && relayNodeToken
+      ? await responseBodyParts(response, {
+          maxBytes: maxResponseBytes,
+          uploadPart: async (bytes, sha256) => {
+            const path = await uploadReturnedArtifact({ bytes, size: bytes.length, name: "http-body.bin", contentType: "application/octet-stream", sha256 }, command, { fetcher, relayNodeBaseUrl, relayNodeToken, signal: requestSignal });
+            return path.split("/").at(-2);
+          },
+        })
+      : { bytes: await readLimitedResponseBytes(response, maxResponseBytes) };
+    responseParts = transferred.bodyParts;
+    const bytes = transferred.bytes ?? Buffer.alloc(0);
+    const contentType = response.headers.get("content-type") ?? "";
+    const isText = /^text\/|\b(?:json|xml|javascript|svg\+xml)\b/i.test(contentType);
+    body = isText ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("base64");
+    responseEncoding = isText || bytes.length === 0 ? undefined : "base64";
   } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
+    // A missing response cannot prove that a dispatched mutation did not commit.
+    if (requestSent && request.method !== "GET") {
+      throw new RelayNodeError(
+        "local_api_outcome_unknown",
+        "The local write may have completed, but its response was lost. Check the operation before retrying; it was not automatically sent again.",
+        { cause: error },
+      );
+    }
     if (timeoutController.signal.aborted && !signal?.aborted) {
       throw new RelayNodeError(
         "local_api_timeout",
@@ -886,7 +945,6 @@ export async function executeRelayCommand(command, {
         { cause: error },
       );
     }
-    if (signal?.aborted) throw signal.reason ?? error;
     if (error instanceof RelayNodeError) throw error;
     throw new RelayNodeError(
       "local_api_unavailable",
@@ -898,9 +956,9 @@ export async function executeRelayCommand(command, {
   } finally {
     clearTimeout(timeout);
   }
-  body = restoreRelayAttachmentUris(body, preparedPrompt.responseReplacements);
+  if (!responseEncoding && !responseParts) body = restoreRelayAttachmentUris(body, preparedPrompt.responseReplacements);
   let watch = null;
-  if (response.status >= 200 && response.status < 300) {
+  if (!responseEncoding && !responseParts && response.status >= 200 && response.status < 300) {
     const parsed = parseWatchFromPromptResponse(body, request.path);
     if (parsed) {
       watch = {
@@ -909,13 +967,9 @@ export async function executeRelayCommand(command, {
       };
     }
   }
-  const headers = {};
-  for (const name of ["content-type", "retry-after", "x-request-id"]) {
-    const value = response.headers.get(name);
-    if (value) headers[name] = value;
-  }
+  const headers = forwardedHeaders(response.headers, resultHeaders);
   return {
-    result: { status: response.status, headers, body },
+    result: { status: response.status, headers, body, ...(responseEncoding ? { bodyEncoding: responseEncoding } : {}), ...(responseParts ? { bodyParts: responseParts } : {}) },
     watch,
   };
 }

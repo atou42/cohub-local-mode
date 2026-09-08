@@ -84,7 +84,7 @@ test("keeps an active lease that has not expired", () => {
 	);
 });
 
-test("strips an oversized result body while preserving status", () => {
+test("rejects an oversized inline result instead of reporting truncated success", () => {
 	const result = guardResultSize(
 		{
 			status: 202,
@@ -93,10 +93,10 @@ test("strips an oversized result body while preserving status", () => {
 		},
 		RESULT_MAX_JSON_BYTES,
 	);
-	assert.equal(result.status, 202);
+	assert.equal(result.status, 502);
 	assert.equal(result.headers["content-type"], "application/json");
 	const payload = JSON.parse(result.body);
-	assert.equal(payload.relayTruncated, true);
+	assert.equal(payload.code, "relay_result_too_large");
 	assert.equal(typeof payload.originalBytes, "number");
 	assert.ok(payload.originalBytes > RESULT_MAX_JSON_BYTES);
 });
@@ -107,7 +107,8 @@ test("measures the result guard in UTF-8 bytes, not string length", () => {
 	assert.ok(encoded.length <= 200);
 	const result = guardResultSize({ status: 200, headers: {}, body }, 200);
 	const payload = JSON.parse(result.body);
-	assert.equal(payload.relayTruncated, true);
+	assert.equal(result.status, 502);
+	assert.equal(payload.code, "relay_result_too_large");
 	assert.ok(payload.originalBytes > 200);
 });
 

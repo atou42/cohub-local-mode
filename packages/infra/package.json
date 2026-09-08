@@ -75,6 +75,10 @@
     "./logging": {
       "types": "./dist/logging/index.d.ts",
       "default": "./dist/logging/index.js"
+    },
+    "./local-cli-proxy": {
+      "types": "./dist/local-cli-proxy.d.ts",
+      "default": "./dist/local-cli-proxy.js"
     }
   },
   "types": "./dist/index.d.ts",

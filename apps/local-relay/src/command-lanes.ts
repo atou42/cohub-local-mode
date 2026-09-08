@@ -4,13 +4,15 @@ export const MAX_READ_COMMANDS = 4;
 
 export type CommandLane = "read" | "mutation";
 
-type CommandForLane = Pick<RelayCommand, "request" | "status">;
+type CommandForLane = Pick<RelayCommand, "status"> & {
+	request: Pick<RelayCommand["request"], "method">;
+};
 
-export function getCommandLane(command: Pick<RelayCommand, "request">): CommandLane {
+export function getCommandLane(command: Pick<CommandForLane, "request">): CommandLane {
 	return command.request.method === "GET" ? "read" : "mutation";
 }
 
-export function isReadCommand(command: Pick<RelayCommand, "request">) {
+export function isReadCommand(command: Pick<CommandForLane, "request">) {
 	return getCommandLane(command) === "read";
 }
 

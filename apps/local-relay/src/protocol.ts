@@ -69,17 +69,34 @@ export type RelayCommandStatus =
 	| "failed"
 	| "cancelled";
 
+export type RelayBodyPart = { id: string; size: number; sha256: string };
+
+export function parseRelayBodyParts(value: unknown): RelayBodyPart[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length === 0 || value.length > 128) throw new RelayProtocolError("invalid_body_parts", "HTTP body parts are invalid");
+	const ids = new Set<string>();
+	return value.map((part) => {
+		if (!isRecord(part) || !hasExactKeys(part, ["id", "size", "sha256"]) || typeof part.id !== "string" || !UUID_PATTERN.test(part.id) || ids.has(part.id) || !Number.isSafeInteger(part.size) || Number(part.size) < 1 || Number(part.size) > 16 * 1024 * 1024 || typeof part.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(part.sha256)) throw new RelayProtocolError("invalid_body_parts", "HTTP body part identity is invalid");
+		ids.add(part.id);
+		return { id: part.id, size: Number(part.size), sha256: part.sha256 };
+	});
+}
+
 export type RelayHttpRequest = {
 	method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
 	headers: Record<string, string>;
 	body: string;
+	bodyEncoding?: "base64";
+	bodyParts?: RelayBodyPart[];
 };
 
 export type RelayHttpResult = {
 	status: number;
 	headers: Record<string, string>;
 	body: string;
+	bodyEncoding?: "base64";
+	bodyParts?: RelayBodyPart[];
 };
 
 export type RelayAttachmentState = "pending" | "ready" | "failed";
@@ -327,6 +344,137 @@ function requireString(
 		);
 	}
 	return value;
+}
+
+const RELAY_HTTP_HEADER_ALLOWLIST = new Set([
+	"content-type",
+	"accept",
+	"range",
+	"if-match",
+	"if-none-match",
+	"if-modified-since",
+	"x-cohub-fs-mutation-id",
+]);
+const BASE64_PATTERN =
+	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const RELAY_HTTP_RESULT_HEADERS = new Set([
+	"content-type", "content-disposition", "content-range", "accept-ranges", "etag", "last-modified",
+	"cache-control", "retry-after", "x-request-id", "vary",
+]);
+const BODYLESS_HTTP_STATUSES = new Set([204, 205, 304]);
+
+type ParsedRelayHttpBody = {
+	body: string;
+	bodyEncoding?: "base64";
+	byteLength: number;
+};
+
+function bodyTooLarge() {
+	throw new RelayProtocolError(
+		"body_too_large",
+		"command body exceeds the relay limit",
+		413,
+	);
+}
+
+function decodeCanonicalBase64(
+	value: string,
+	label: string,
+	maxBodyBytes?: number,
+) {
+	if (!BASE64_PATTERN.test(value)) {
+		throw new RelayProtocolError(
+			"invalid_request",
+			`${label} must be canonical base64`,
+		);
+	}
+	const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+	const byteLength = (value.length / 4) * 3 - padding;
+	if (maxBodyBytes !== undefined && byteLength > maxBodyBytes) bodyTooLarge();
+	let decoded: string;
+	try {
+		decoded = atob(value);
+	} catch {
+		throw new RelayProtocolError(
+			"invalid_request",
+			`${label} must be canonical base64`,
+		);
+	}
+	if (decoded.length !== byteLength || btoa(decoded) !== value) {
+		throw new RelayProtocolError(
+			"invalid_request",
+			`${label} must be canonical base64`,
+		);
+	}
+	return byteLength;
+}
+
+function parseRelayHttpBody(
+	rawBody: unknown,
+	rawEncoding: unknown,
+	options: { maxBodyBytes: number },
+	label: string,
+): ParsedRelayHttpBody {
+	if (rawEncoding !== undefined && rawEncoding !== "base64") {
+		throw new RelayProtocolError(
+			"invalid_request",
+			`${label} encoding must be base64`,
+		);
+	}
+	if (rawEncoding === "base64") {
+		if (typeof rawBody !== "string") {
+			throw new RelayProtocolError(
+				"invalid_request",
+				`${label} must be text when encoding is base64`,
+			);
+		}
+		const byteLength = decodeCanonicalBase64(
+			rawBody,
+			label,
+			options.maxBodyBytes,
+		);
+		return { body: rawBody, bodyEncoding: "base64", byteLength };
+	}
+	if (rawBody !== undefined && typeof rawBody !== "string") throw new RelayProtocolError("invalid_request", `${label} must be a string`);
+	const body = rawBody ?? "";
+	const byteLength = new TextEncoder().encode(body).byteLength;
+	if (byteLength > options.maxBodyBytes) bodyTooLarge();
+	return { body, byteLength };
+}
+
+function parseRelayHttpHeaders(
+	rawHeaders: unknown,
+	options: { strict: boolean; response?: boolean } = { strict: false },
+): Record<string, string> {
+	if (rawHeaders === undefined) return {};
+	if (!isRecord(rawHeaders)) {
+		if (options.strict) {
+			throw new RelayProtocolError(
+				"invalid_request",
+				"request.headers must be an object",
+			);
+		}
+		return {};
+	}
+	const headers: Record<string, string> = {};
+	for (const [rawName, rawValue] of Object.entries(rawHeaders)) {
+		if (/[\r\n]/.test(rawName)) {
+			throw new RelayProtocolError(
+				"invalid_request",
+				"HTTP header names must not contain CR or LF",
+			);
+		}
+		if (typeof rawValue !== "string") throw new RelayProtocolError("invalid_request", "HTTP header values must be strings");
+		if (/[\r\n]/.test(rawValue)) {
+			throw new RelayProtocolError(
+				"invalid_request",
+				"HTTP header values must not contain CR or LF",
+			);
+		}
+		const name = rawName.toLowerCase();
+		if ((options.response ? RELAY_HTTP_RESULT_HEADERS : RELAY_HTTP_HEADER_ALLOWLIST).has(name)) headers[name] = rawValue;
+	}
+	return headers;
 }
 
 export function parseActivityDisplayName(
@@ -721,26 +869,39 @@ export function validateRelayCommandInput(
 			);
 		}
 		const url = new URL(path, "https://alpha.internal");
-		const body =
-			method === "GET"
-				? ""
-				: typeof value.request.body === "string"
-					? value.request.body
-					: "";
-		if (new TextEncoder().encode(body).byteLength > options.maxBodyBytes) {
+		const parsedBody = parseRelayHttpBody(
+			value.request.body,
+			value.request.bodyEncoding,
+			options,
+			"request.body",
+		);
+		const bodyParts = parseRelayBodyParts(value.request.bodyParts);
+		if (bodyParts && (parsedBody.byteLength > 0 || parsedBody.bodyEncoding)) throw new RelayProtocolError("invalid_request", "Referenced HTTP bodies cannot also have inline content");
+		if (method === "GET" && (parsedBody.byteLength > 0 || parsedBody.bodyEncoding || bodyParts)) {
 			throw new RelayProtocolError(
-				"body_too_large",
-				"command body exceeds the relay limit",
-				413,
+				"invalid_request",
+				"GET requests cannot include a body or body encoding",
 			);
+		}
+		const headers = parseRelayHttpHeaders(value.request.headers, { strict: true });
+		if (
+			parsedBody.byteLength > 0 &&
+			parsedBody.bodyEncoding === undefined &&
+			headers["content-type"] === undefined
+		) {
+			headers["content-type"] = "application/json";
 		}
 		return {
 			idempotencyKey,
 			request: {
 				method: method as RelayHttpRequest["method"],
 				path: `${url.pathname}${url.search}`,
-				headers: body ? { "content-type": "application/json" } : {},
-				body,
+				headers,
+				body: parsedBody.body,
+				...(bodyParts ? { bodyParts } : {}),
+				...(parsedBody.bodyEncoding
+					? { bodyEncoding: parsedBody.bodyEncoding }
+					: {}),
 			},
 			attachmentIds: [],
 		};
@@ -1083,7 +1244,10 @@ function parseTurnEvent(value: unknown): RelayTurnEvent {
 	};
 }
 
-export function parseNodeMessage(value: unknown): NodeToRelayMessage {
+export function parseNodeMessage(
+	value: unknown,
+	options: { maxBodyBytes?: number } = {},
+): NodeToRelayMessage {
 	if (!isRecord(value) || value.protocolVersion !== RELAY_PROTOCOL_VERSION) {
 		throw new RelayProtocolError(
 			"protocol_mismatch",
@@ -1227,20 +1391,35 @@ export function parseNodeMessage(value: unknown): NodeToRelayMessage {
 		if (!Number.isInteger(status) || Number(status) < 100 || Number(status) > 599) {
 			throw new RelayProtocolError("invalid_request", "result status is invalid");
 		}
-		const body = typeof value.result.body === "string" ? value.result.body : "";
-		const headers = isRecord(value.result.headers)
-			? Object.fromEntries(
-					Object.entries(value.result.headers).flatMap(([key, item]) =>
-						typeof item === "string" ? [[key.toLowerCase(), item]] : [],
-					),
-				)
-			: {};
+		const parsedBody = parseRelayHttpBody(
+			value.result.body,
+			value.result.bodyEncoding,
+			{ maxBodyBytes: options.maxBodyBytes ?? Number.MAX_SAFE_INTEGER },
+			"result.body",
+		);
+		const bodyParts = parseRelayBodyParts(value.result.bodyParts);
+		if (bodyParts && (parsedBody.byteLength > 0 || parsedBody.bodyEncoding)) throw new RelayProtocolError("invalid_request", "Referenced HTTP bodies cannot also have inline content");
+		if (BODYLESS_HTTP_STATUSES.has(Number(status)) && (parsedBody.byteLength > 0 || bodyParts)) {
+			throw new RelayProtocolError(
+				"invalid_request",
+				`HTTP ${Number(status)} responses cannot include a body`,
+			);
+		}
+		const headers = parseRelayHttpHeaders(value.result.headers, { strict: true, response: true });
 		return {
 			protocolVersion: RELAY_PROTOCOL_VERSION,
 			type,
 			commandId,
 			attempt: Number(attempt),
-			result: { status: Number(status), headers, body },
+			result: {
+				status: Number(status),
+				headers,
+				body: parsedBody.body,
+				...(bodyParts ? { bodyParts } : {}),
+				...(parsedBody.bodyEncoding
+					? { bodyEncoding: parsedBody.bodyEncoding }
+					: {}),
+			},
 		};
 	}
 	throw new RelayProtocolError("invalid_request", `unsupported node message: ${type}`);

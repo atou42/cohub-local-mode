@@ -13,7 +13,8 @@ import {
 	prepareForAuthInvalidation,
 	setSessionHint,
 } from "$lib/auth";
-import { sdk } from "$lib/sdk";
+import { sdk, sdkForSpaceOrigin } from "$lib/sdk";
+import { env } from "$env/dynamic/public";
 import {
 	clearCachedMeProfile,
 	getCachedMeProfile,
@@ -64,6 +65,7 @@ const restoreAuthSession = async (
 	// decide whether to prompt login. skipUnauthorizedHandler keeps transport
 	// from racing with clearBrokenAuthSession via onUnauthorized.
 	const meOptions = { skipUnauthorizedHandler: true as const };
+	const profileClient = env.PUBLIC_DESKTOP_CLIENT === "true" ? sdkForSpaceOrigin("local") : sdk;
 
 	const cached = getCachedMeProfile(subject);
 	if (cached) {
@@ -79,7 +81,7 @@ const restoreAuthSession = async (
 		};
 		onProfileUpdate?.(cachedSession);
 		if (options?.refreshInBackground) {
-			void sdk.user
+			void profileClient.user
 				.getMe(meOptions)
 				.then((me) => {
 					setCachedMeProfile(subject, me);
@@ -106,7 +108,7 @@ const restoreAuthSession = async (
 	}
 
 	try {
-		const me = await sdk.user.getMe(meOptions);
+		const me = await profileClient.user.getMe(meOptions);
 		userUuid = me.uuid ?? null;
 		profile = me.profile ?? null;
 		email = me.email ?? null;

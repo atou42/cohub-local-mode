@@ -61,18 +61,9 @@ import {
 	selectTerminalCommandsForGc,
 } from "./lifecycle";
 import { selectDispatchableCommands } from "./command-lanes.ts";
-import {
-	COMMAND_ACTIVE_PREFIX,
-	COMMAND_PENDING_PREFIX,
-	COMMAND_TERMINAL_PREFIX,
-	type CommandIndexEntry,
-	commandKeyForEntry,
-	initializeCommandIndexes,
-	removeTerminalCommandIndex,
-	terminalCommandCount,
-	updateCommandIndexes,
-	validateCommandIndexEntry,
-} from "./command-index.ts";
+import { commandRequestFingerprint, commandReceipt, parseCommandReceipt, assertReceiptRequest, expiredCommandResult, type CommandReceipt } from "./command-receipt.ts";
+import { storeCommandWithBodies, loadCommandWithBodies, deleteCommandBodies, type StoredCommand } from "./command-bodies.ts";
+import { COMMAND_PENDING_PREFIX, COMMAND_ACTIVE_PREFIX, COMMAND_TERMINAL_PREFIX, initializeCommandIndexes, updateCommandIndexes, removeTerminalCommandIndex, terminalCommandCount, commandKeyForEntry, validateCommandIndexEntry, type CommandIndexEntry } from "./command-index.ts";
 import {
 	assertRelayAttachmentFresh,
 	assertRelayOwnerOrigin,
@@ -93,6 +84,7 @@ import {
 	type RelayCommandAccepted,
 	type RelayCommandStatus,
 	type RelayHttpResult,
+	type RelayHttpRequest,
 	type NodeToRelayMessage,
 	type RelayToNodeMessage,
 	type RelayTurnEvent,
@@ -143,6 +135,8 @@ type RelayEnv = RelayAttachmentEnv & {
 const COMMAND_KEY_PREFIX = "command:";
 const COMMAND_ID_PREFIX = "command-id:";
 const IDEMPOTENCY_PREFIX = "idempotency:";
+const COMMAND_RECEIPT_PREFIX = "command-receipt:";
+const OPERATION_RECEIPT_PREFIX = "operation-receipt:";
 const NEXT_SEQUENCE_KEY = "meta:next-sequence";
 const NEXT_EVENT_SEQUENCE_KEY = "meta:next-event-sequence";
 const ATTACHMENT_KEY_PREFIX = "attachment:";
@@ -413,8 +407,8 @@ function sendSocket(socket: WebSocket, message: RelayToNodeMessage | RelayBrowse
 
 export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	private readonly leaseMs: number;
-	private commandIndexesReady: Promise<void> | null = null;
 	private boundNodeId: string | null = null;
+	private commandIndexesReady: Promise<void> | null = null;
 	private apnsProviderToken: { value: string; issuedAtMs: number } | null = null;
 
 	constructor(state: DurableObjectState, env: RelayEnv) {
@@ -487,8 +481,24 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				return this.cancelCommand(decodeURIComponent(commandCancelMatch[1]));
 			}
 			const commandMatch = url.pathname.match(/^\/internal\/commands\/([^/]+)$/);
+			const operationMatch = url.pathname.match(/^\/internal\/operations\/([0-9a-f-]{36})$/i);
+			if (request.method === "GET" && operationMatch?.[1]) {
+				const operationId = operationMatch[1];
+				const receipt = await this.ctx.storage.get(`${OPERATION_RECEIPT_PREFIX}${operationId}`);
+				if (receipt !== undefined) return json(expiredCommandResult(parseCommandReceipt(receipt)), 410);
+				const key = await this.ctx.storage.get<string>(`${IDEMPOTENCY_PREFIX}${operationId}`);
+				if (!key) return json({ code: "command_not_found", message: "No command receipt was found. Do not resend without checking the original operation." }, 404);
+				const command = await this.ctx.storage.get<RelayCommand>(key);
+				if (!command) throw new Error("relay operation index points to a missing command");
+				return json({ command: await loadCommandWithBodies(this.ctx.storage, command) });
+			}
 			if (request.method === "GET" && commandMatch?.[1]) {
-				const command = await this.getCommandById(decodeURIComponent(commandMatch[1]));
+				const commandId = decodeURIComponent(commandMatch[1]);
+				const command = await this.getCommandById(commandId);
+				if (!command) {
+					const receipt = await this.getCommandReceipt(commandId);
+					if (receipt) return json(expiredCommandResult(receipt), 410);
+				}
 				return command
 					? json({ command })
 					: json({ code: "command_not_found", message: "Command not found" }, 404);
@@ -542,7 +552,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const connector =
 			(await this.ctx.storage.get<StoredConnectorStatus>(CONNECTOR_STATUS_KEY)) ?? null;
 		const [indexed] = await this.listCommandIndex(COMMAND_ACTIVE_PREFIX, 1);
-		const active = indexed ? await this.ctx.storage.get<RelayCommand>(commandKeyForEntry(indexed)) : undefined;
+		const active = indexed ? await this.ctx.storage.get<StoredCommand>(commandKeyForEntry(indexed)) : undefined;
 		if (indexed && (!active || active.id !== indexed.id || active.sequence !== indexed.sequence || active.status !== indexed.status)) {
 			throw new Error("Active relay command index is inconsistent");
 		}
@@ -926,6 +936,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				(await storage.get<StoredActivityWatchSnapshot>(
 					ACTIVITY_WATCH_SNAPSHOT_KEY,
 				)) ?? null;
+			if (this.env.OWNER_USER_ID === undefined && records.size === 0 && current === null) return null;
 			const next = await evolveActivityWatchSnapshot({
 				current,
 				effective,
@@ -940,6 +951,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			if (changed) await storage.delete(ACTIVITY_WATCH_ACK_KEY);
 			return { next, changed };
 		});
+		if (!result) return null;
 		if (input.forceSend || result.changed || input.socket) {
 			const sockets = input.socket
 				? [input.socket]
@@ -1679,7 +1691,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		sendSocket(server, {
 			protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION,
 			type: "snapshot",
-			commands: selectSnapshotCommands(await this.listCommands()),
+			commands: await Promise.all(selectSnapshotCommands(await this.listCommandMetadata()).map(command => loadCommandWithBodies(this.ctx.storage, command))),
 			events: selectSnapshotEvents(await this.listBrowserTurnEvents()),
 		});
 		const protocols = (request.headers.get("sec-websocket-protocol") ?? "")
@@ -1691,6 +1703,15 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		);
 	}
 
+	private async validateBodyParts(parts: RelayHttpRequest["bodyParts"]) {
+		const nodeId = await this.resolveNodeId();
+		for (const part of parts ?? []) {
+			const attachment = await this.getAttachment(part.id);
+			if (!attachment || attachment.nodeId !== nodeId || attachment.state !== "ready" || attachment.size !== part.size || attachment.sha256 !== part.sha256 || attachment.contentType !== "application/octet-stream") throw new RelayProtocolError("body_part_invalid", "HTTP body part is missing, belongs to another node, or has a different identity", 409);
+			assertRelayAttachmentFresh(attachment.expiresAt);
+		}
+	}
+
 	private async createCommand(request: Request) {
 		const nodeId = await this.resolveNodeId(request);
 		const input = validateRelayCommandInput(await request.json(), {
@@ -1699,6 +1720,8 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				"COMMAND_MAX_BODY_BYTES",
 			),
 		});
+		await this.validateBodyParts(input.request.bodyParts);
+		await this.ensureCommandIndexes();
 		const attachments: RelayAttachment[] = [];
 		for (const attachmentId of input.attachmentIds) {
 			const stored = await this.getAttachment(attachmentId);
@@ -1725,23 +1748,24 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			}
 			attachments.push(publicAttachment(stored));
 		}
-		await this.ensureCommandIndexes();
+		const requestFingerprint = await commandRequestFingerprint(input.request, attachments.map(({ id }) => id));
 		const accepted = await this.ctx.storage.transaction(async (storage) => {
+			const oldReceipt = await storage.get<CommandReceipt>(`${OPERATION_RECEIPT_PREFIX}${input.idempotencyKey}`);
+			if (oldReceipt !== undefined) {
+				const receipt = parseCommandReceipt(oldReceipt);
+				assertReceiptRequest(receipt, requestFingerprint);
+				return { receipt };
+			}
 			const existingKey = await storage.get<string>(
 				`${IDEMPOTENCY_PREFIX}${input.idempotencyKey}`,
 			);
 			if (existingKey) {
-				const existing = await storage.get<RelayCommand>(existingKey);
-				if (!existing) {
+				const stored = await storage.get<RelayCommand>(existingKey);
+				if (!stored) {
 					throw new Error("relay idempotency index points to a missing command");
 				}
-				if (
-					existing.request.method !== input.request.method ||
-					existing.request.path !== input.request.path ||
-					existing.request.body !== input.request.body ||
-					(existing.attachments ?? []).map((item) => item.id).join(",") !==
-						attachments.map((item) => item.id).join(",")
-				) {
+				const existing = await loadCommandWithBodies(storage, stored);
+				if (await commandRequestFingerprint(existing.request, (existing.attachments ?? []).map(({ id }) => id)) !== requestFingerprint) {
 					throw new RelayProtocolError(
 						"idempotency_conflict",
 						"Idempotency key is already bound to a different command",
@@ -1773,15 +1797,16 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 				errorMessage: null,
 			};
 			const key = commandStorageKey(sequence, id);
-			await updateCommandIndexes(storage, key, command);
+			const { stored, previous } = await storeCommandWithBodies(storage, key, command);
+			await updateCommandIndexes(storage, key, stored, previous);
 			await storage.put({
 				[NEXT_SEQUENCE_KEY]: sequence + 1,
-				[key]: command,
 				[`${COMMAND_ID_PREFIX}${id}`]: key,
 				[`${IDEMPOTENCY_PREFIX}${input.idempotencyKey}`]: key,
 			});
 			return { command, deduplicated: false };
 		});
+		if (accepted.receipt) return json(expiredCommandResult(accepted.receipt), 410);
 		if (!accepted.deduplicated) {
 			this.broadcast(accepted.command);
 			this.ctx.waitUntil(
@@ -1813,7 +1838,17 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 
 	private async getCommandById(commandId: string) {
 		const key = await this.ctx.storage.get<string>(`${COMMAND_ID_PREFIX}${commandId}`);
-		return key ? (await this.ctx.storage.get<RelayCommand>(key)) ?? null : null;
+		if (!key) return null;
+		const stored = await this.ctx.storage.get<RelayCommand>(key);
+		if (!stored) throw new Error("Relay command index points to a missing record");
+		return loadCommandWithBodies(this.ctx.storage, stored);
+	}
+
+	private async getCommandReceipt(commandId: string) {
+		const operationId = await this.ctx.storage.get<string>(`${COMMAND_RECEIPT_PREFIX}${commandId}`);
+		if (operationId === undefined) return null;
+		if (typeof operationId !== "string" || !operationId) throw new Error("Stored relay receipt index is invalid");
+		return parseCommandReceipt(await this.ctx.storage.get(`${OPERATION_RECEIPT_PREFIX}${operationId}`));
 	}
 
 	private async putCommand(command: RelayCommand) {
@@ -1821,10 +1856,9 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		await this.ctx.storage.transaction(async (storage) => {
 			const key = await storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
 			if (!key) throw new Error(`missing relay command index: ${command.id}`);
-			const previous = await storage.get<RelayCommand>(key);
+			const { stored, previous } = await storeCommandWithBodies(storage, key, command);
 			if (!previous) throw new Error("Relay command index points to a missing record");
-			await storage.put(key, command);
-			await updateCommandIndexes(storage, key, command, previous);
+			await updateCommandIndexes(storage, key, stored, previous);
 		});
 		this.broadcast(command);
 	}
@@ -1840,42 +1874,65 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 	}
 
-	private async ensureCommandIndexes() {
+	private ensureCommandIndexes() {
 		if (!this.commandIndexesReady) {
 			const initializing = this.ctx.storage.transaction(storage => initializeCommandIndexes(storage));
 			this.commandIndexesReady = initializing;
-			try {
-				await initializing;
-			} catch (error) {
-				this.commandIndexesReady = null;
-				throw error;
-			}
+			void initializing.catch(() => {
+				if (this.commandIndexesReady === initializing) this.commandIndexesReady = null;
+			});
 		}
-		await this.commandIndexesReady;
+		return this.commandIndexesReady;
 	}
 
 	private async listCommandIndex(prefix: string, limit?: number) {
 		await this.ensureCommandIndexes();
 		const records = await this.ctx.storage.list<CommandIndexEntry>({ prefix, ...(limit === undefined ? {} : { limit }) });
-		return [...records.values()].map(validateCommandIndexEntry);
+		return [...records].map(([key, value]) => {
+			const command = validateCommandIndexEntry(value);
+			if (key !== `${prefix}${commandKeyForEntry(command).slice(COMMAND_KEY_PREFIX.length)}` ||
+				(prefix === COMMAND_ACTIVE_PREFIX && command.status !== "claimed" && command.status !== "running") ||
+				(prefix === COMMAND_PENDING_PREFIX && isTerminal(command.status)) ||
+				(prefix === COMMAND_TERMINAL_PREFIX && !isTerminal(command.status))) {
+				throw new Error("Stored relay command index is inconsistent");
+			}
+			return command;
+		});
 	}
 
-	private async listCommands() {
-		const records = await this.ctx.storage.list<RelayCommand>({
+	private async listCommandMetadata() {
+		const records = await this.ctx.storage.list<StoredCommand>({
 			prefix: COMMAND_KEY_PREFIX,
 		});
 		return [...records.values()];
 	}
 
+	private async updateCommandMetadata(commandId: string, update: (current: StoredCommand) => StoredCommand | null, allowMissing = false) {
+		await this.ensureCommandIndexes();
+		const changed = await this.ctx.storage.transaction(async storage => {
+			const key = await storage.get<string>(`${COMMAND_ID_PREFIX}${commandId}`);
+			if (key === undefined && allowMissing) return null;
+			if (!key) throw new Error(`Missing relay command index: ${commandId}`);
+			const previous = await storage.get<StoredCommand>(key);
+			if (!previous) throw new Error("Relay command index points to a missing record");
+			const next = update(previous);
+			if (!next) return null;
+			await storage.put(key, next);
+			await updateCommandIndexes(storage, key, next, previous);
+			return next;
+		});
+		if (changed && this.ctx.getWebSockets("browser").length > 0) this.broadcast(await loadCommandWithBodies(this.ctx.storage, changed));
+		return changed;
+	}
+
 	private async requeueExpired(nowMs = Date.now()) {
 		for (const indexed of await this.listCommandIndex(COMMAND_ACTIVE_PREFIX)) {
-			const decision = decideExpiredCommand(indexed, nowMs);
-			if (decision.action === "keep") continue;
-			const command = await this.getCommandById(indexed.id);
-			if (!command) throw new Error("Active relay command index points to a missing record");
+			if (decideExpiredCommand(indexed, nowMs).action === "keep") continue;
 			const now = new Date(nowMs).toISOString();
-			if (decision.action === "fail") {
-				await this.putCommand({
+			const changed = await this.updateCommandMetadata(indexed.id, command => {
+				const decision = decideExpiredCommand(command, nowMs);
+				if (decision.action === "keep") return null;
+				if (decision.action === "fail") return {
 					...command,
 					status: "failed",
 					updatedAt: now,
@@ -1883,20 +1940,19 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 					leaseExpiresAt: null,
 					errorCode: decision.errorCode,
 					errorMessage: decision.errorMessage,
-				});
-				this.ctx.waitUntil(this.collectGarbage(nowMs, false));
-				continue;
-			}
-			await this.putCommand({
-				...command,
-				status: "queued",
-				updatedAt: now,
-				claimedAt: null,
-				leaseExpiresAt: null,
-				startedAt: null,
-				errorCode: "lease_expired",
-				errorMessage: "Node execution lease expired; command was requeued",
+				};
+				return {
+					...command,
+					status: "queued",
+					updatedAt: now,
+					claimedAt: null,
+					leaseExpiresAt: null,
+					startedAt: null,
+					errorCode: "lease_expired",
+					errorMessage: "Node execution lease expired; command was requeued",
+				};
 			});
+			if (changed && isTerminal(changed.status)) this.ctx.waitUntil(this.collectGarbage(nowMs, false));
 		}
 	}
 
@@ -1905,8 +1961,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		const sockets = this.ctx.getWebSockets("node");
 		const socket = sockets[0];
 		if (!socket) return;
-		const commands = await this.listCommands();
-		for (const command of selectDispatchableCommands(commands)) {
+		const commands = await this.listCommandIndex(COMMAND_PENDING_PREFIX);
+		for (const indexed of selectDispatchableCommands(commands)) {
+			const command = await this.getCommandById(indexed.id);
+			if (!command) throw new Error("Pending relay command index points to a missing record");
+			if (command.status !== "queued") continue;
 			sendSocket(socket, {
 				protocolVersion: RELAY_PROTOCOL_VERSION,
 				type: "command",
@@ -1919,7 +1978,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		if (!this.ctx.getTags(socket).includes("node")) return;
 		let parsed: NodeToRelayMessage;
 		try {
-			parsed = parseNodeMessage(parseJsonMessage(raw));
+			parsed = parseNodeMessage(parseJsonMessage(raw), { maxBodyBytes: 2 * 1024 * 1024 });
 		} catch (error) {
 			const protocolError =
 				error instanceof RelayProtocolError
@@ -1949,6 +2008,11 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		}
 		const command = await this.getCommandById(parsed.commandId);
 		if (!command) {
+			const receipt = await this.getCommandReceipt(parsed.commandId);
+			if (receipt) {
+				sendSocket(socket, { protocolVersion: RELAY_PROTOCOL_VERSION, type: "ack", commandId: receipt.commandId, status: receipt.status });
+				return;
+			}
 			sendSocket(socket, {
 				protocolVersion: RELAY_PROTOCOL_VERSION,
 				type: "error",
@@ -2066,8 +2130,9 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		let errorCode: string | null = null;
 		let errorMessage: string | null = null;
 		if (parsed.type === "result") {
+			await this.validateBodyParts(parsed.result.bodyParts);
 			result = guardResultSize(parsed.result);
-			status = parsed.result.status >= 200 && parsed.result.status < 300 ? "succeeded" : "failed";
+			status = result.status >= 200 && result.status < 300 ? "succeeded" : "failed";
 			if (status === "failed") {
 				errorCode = "local_api_rejected";
 				errorMessage = `Local API returned HTTP ${parsed.result.status}`;
@@ -2107,21 +2172,16 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 	}
 
 	private async extendLease(commandId: string, attempt: number) {
-		const command = await this.getCommandById(commandId);
-		if (
-			!command ||
-			command.attempt !== attempt ||
-			(command.status !== "claimed" && command.status !== "running")
-		) {
-			return;
-		}
 		const nowMs = Date.now();
-		await this.putCommand({
+		const changed = await this.updateCommandMetadata(commandId, command => {
+			if (command.attempt !== attempt || (command.status !== "claimed" && command.status !== "running")) return null;
+			return {
 			...command,
 			updatedAt: new Date(nowMs).toISOString(),
 			leaseExpiresAt: new Date(nowMs + this.leaseMs).toISOString(),
-		});
-		await this.ctx.storage.setAlarm(nowMs + this.leaseMs);
+			};
+		}, true);
+		if (changed) await this.ctx.storage.setAlarm(nowMs + this.leaseMs);
 	}
 
 	async webSocketClose() {
@@ -2180,7 +2240,7 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 			leaseExpiresAt: null,
 		};
 		await this.putCommand(cancelled);
-		this.ctx.waitUntil(this.collectGarbage(Date.now(), false));
+		this.ctx.waitUntil(this.collectGarbage(Date.now()));
 		return json({ command: cancelled });
 	}
 
@@ -2539,14 +2599,22 @@ export class LocalNodeRelay extends DurableObject<RelayEnv> {
 		await this.ensureCommandIndexes();
 		const excess = Math.max(0, await terminalCommandCount(this.ctx.storage) - TERMINAL_COMMAND_MAX_STORED);
 		const doomed = periodic
-			? selectTerminalCommandsForGc(await this.listCommands(), nowMs)
+			? selectTerminalCommandsForGc(await this.listCommandMetadata(), nowMs)
 			: excess > 0 ? await this.listCommandIndex(COMMAND_TERMINAL_PREFIX, excess) : [];
 		for (const command of doomed) {
 			await this.ctx.storage.transaction(async (storage) => {
 				const key = await storage.get<string>(`${COMMAND_ID_PREFIX}${command.id}`);
 				if (!key) return;
-				const stored = await storage.get<RelayCommand>(key);
+				const stored = await storage.get<StoredCommand>(key);
 				if (!stored) throw new Error("Relay GC index points to a missing record");
+				const receipt = await commandReceipt(await loadCommandWithBodies(storage, stored));
+				// Compact response retention and operation deduplication have different
+				// lifetimes. Removing a body must never authorize the write again.
+				await storage.put({
+					[`${OPERATION_RECEIPT_PREFIX}${stored.idempotencyKey}`]: receipt,
+					[`${COMMAND_RECEIPT_PREFIX}${command.id}`]: stored.idempotencyKey,
+				});
+				await deleteCommandBodies(storage, stored);
 				await removeTerminalCommandIndex(storage, key, stored);
 				await storage.delete([key, `${COMMAND_ID_PREFIX}${command.id}`, `${IDEMPOTENCY_PREFIX}${stored.idempotencyKey}`]);
 			});
@@ -3068,6 +3136,28 @@ async function handleRequest(request: Request, env: RelayEnv) {
 		return handleFederatedApi({
 			request,
 			stub: nodeStub(env, env.NODE_ID),
+			resolveBodyParts: (result) => {
+				let index = 0;
+				let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+				return new ReadableStream<Uint8Array>({
+					async pull(controller) {
+						for (;;) {
+							if (!reader) {
+								const part = result.bodyParts?.[index++];
+								if (!part) { controller.close(); return; }
+								const response = await handleAttachmentDownload({ env, stub: nodeStub(env, env.NODE_ID), attachmentId: part.id });
+								if (Number(response.headers.get("content-length")) !== part.size || response.headers.get("x-cohub-attachment-sha256") !== part.sha256 || !response.body) throw new Error("Relay body part identity mismatch");
+								reader = response.body.getReader();
+							}
+							const next = await reader.read();
+							if (next.done) { reader.releaseLock(); reader = undefined; continue; }
+							controller.enqueue(next.value);
+							return;
+						}
+					},
+					async cancel(reason) { await reader?.cancel(reason); },
+				});
+			},
 			cloudApiOrigin: env.CLOUD_API_ORIGIN,
 			ownerUserId: env.OWNER_USER_ID,
 			maxBodyBytes: parsePositiveInteger(
@@ -3216,6 +3306,10 @@ async function handleRequest(request: Request, env: RelayEnv) {
 		);
 	}
 	const commandMatch = suffix.match(/^\/commands\/([^/]+)$/);
+	const operationMatch = suffix.match(/^\/operations\/([0-9a-f-]{36})$/i);
+	if (request.method === "GET" && operationMatch?.[1]) {
+		return stub.fetch(new Request(`https://relay.internal/internal/operations/${operationMatch[1]}`, request));
+	}
 	if (request.method === "GET" && commandMatch?.[1]) {
 		return stub.fetch(
 			new Request(

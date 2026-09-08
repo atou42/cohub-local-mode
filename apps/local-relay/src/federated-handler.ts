@@ -3,6 +3,7 @@ import {
 	RelayProtocolError,
 	type RelayCommand,
 	type RelayCommandAccepted,
+	type RelayHttpResult,
 } from "./protocol.ts";
 
 const FEDERATED_COMMAND_WAIT_MS = 30_000;
@@ -35,6 +36,7 @@ export async function handleFederatedApi(
 		cloudApiOrigin: string;
 		ownerUserId: string;
 		maxBodyBytes: number;
+		resolveBodyParts?: (result: RelayHttpResult) => BodyInit;
 	},
 	runtime: FederatedHandlerRuntime = {},
 ) {
@@ -99,10 +101,18 @@ export async function handleFederatedApi(
 				502,
 			);
 		}
-		if (command.status === "succeeded" && command.result) {
+		if ((command.status === "succeeded" || command.status === "failed") && command.result) {
 			const headers = new Headers(command.result.headers);
 			headers.set("cache-control", "no-store");
-			return new Response(command.result.body, {
+			let body: BodyInit | null = command.result.body;
+			if (command.result.bodyParts) {
+				if (!input.resolveBodyParts) throw new RelayProtocolError("relay_body_unavailable", "Relay body storage is unavailable", 502);
+				body = input.resolveBodyParts(command.result);
+			} else if (command.result.bodyEncoding === "base64") {
+				body = Uint8Array.from(atob(command.result.body), (character) => character.charCodeAt(0));
+			}
+			if ([204, 205, 304].includes(command.result.status)) body = null;
+			return new Response(body, {
 				status: command.result.status,
 				headers,
 			});

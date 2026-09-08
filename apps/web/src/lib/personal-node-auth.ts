@@ -1,3 +1,5 @@
+import { invalidatePersonalNodeRequests } from "./personal-node-fetch";
+
 export const PERSONAL_NODE_AUTH_STORAGE_KEY =
 	"cohub:personal-node-auth-session:v1";
 
@@ -246,10 +248,12 @@ export function writePersonalNodeAuthSession(
 		PERSONAL_NODE_AUTH_STORAGE_KEY,
 		JSON.stringify(validated),
 	);
+	invalidatePersonalNodeRequests();
 }
 
 export function clearPersonalNodeAuthSession(storage?: Storage) {
 	storageOrThrow(storage).removeItem(PERSONAL_NODE_AUTH_STORAGE_KEY);
+	invalidatePersonalNodeRequests();
 }
 
 export async function beginPersonalNodeDeviceAuthorization(

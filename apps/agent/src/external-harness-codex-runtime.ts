@@ -1,4 +1,5 @@
 import type { SandboxConnection } from "@cohub/sandbox-client";
+import { localCliProxyArgv } from "@cohub/infra/local-cli-proxy";
 import { tracedRpc } from "./sandbox/tools.js";
 import type {
 	HarnessEventReducer,
@@ -525,6 +526,7 @@ function createRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	writableRoots: readonly string[];
 }) {
 	evictRuntimeIfNeeded();
@@ -565,7 +567,7 @@ function createRuntime(input: {
 		input.connection,
 		"process.start",
 		{
-			argv: buildCodexAppServerArgv(input.writableRoots),
+			argv: localCliProxyArgv(buildCodexAppServerArgv(input.writableRoots), input.proxyEnvironment),
 			cwd: entry.workspaceCwd,
 			env: input.environment,
 			timeoutSecs: PROCESS_TIMEOUT_SECONDS,
@@ -628,6 +630,7 @@ async function getOrCreateRuntime(input: {
 	accessMode: AccessMode;
 	externalSessionId: string | null;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	executionContextKey: string;
 	writableRoots: readonly string[];
 }) {
@@ -724,6 +727,7 @@ export async function prepareCodexForkSession(input: {
 	parentThreadId: string;
 	lastTurnId: string;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	executionContextKey: string;
 	writableRoots: readonly string[];
 	accessMode: AccessMode;
@@ -769,6 +773,7 @@ export async function runCodexAppServerHarness(input: {
 	turnId: string;
 	prompt: string;
 	environment: Record<string, string>;
+	proxyEnvironment?: Record<string, string>;
 	executionContextKey: string;
 	writableRoots: readonly string[];
 	externalSessionId: string | null;
