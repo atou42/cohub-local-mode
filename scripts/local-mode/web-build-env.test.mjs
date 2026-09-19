@@ -21,3 +21,20 @@ test("web builds exclude backend PUBLIC settings without changing the server env
   });
   assert.deepEqual(input, before);
 });
+
+test("existing local deployments resolve new public build settings without exposing storage credentials", () => {
+  const result = webBuildEnvironment({
+    PUBLIC_COHUB_LOCAL_MODE: "true",
+    PUBLIC_API_ORIGIN: "https://local.example.test",
+    PUBLIC_ASSET_CDN_BASE_URL: "https://local.example.test/assets",
+    PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY: "must-not-leak",
+  });
+  assert.equal(result.PUBLIC_FILES_ORIGIN, "https://local.example.test/assets");
+  assert.equal(result.PUBLIC_PREVIEW_ORIGIN, "https://local.example.test");
+  assert.equal(result.PUBLIC_MARKETPLACE_APP_ID, "");
+  assert.equal(result.PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY, undefined);
+  assert.equal(result.PUBLIC_ASSET_CDN_BASE_URL, undefined);
+  const explicit = webBuildEnvironment({ ...result, PUBLIC_FILES_ORIGIN: "https://files.example.test", PUBLIC_MARKETPLACE_APP_ID: "configured-app" });
+  assert.equal(explicit.PUBLIC_FILES_ORIGIN, "https://files.example.test");
+  assert.equal(explicit.PUBLIC_MARKETPLACE_APP_ID, "configured-app");
+});

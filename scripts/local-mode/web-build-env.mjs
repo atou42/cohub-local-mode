@@ -1,6 +1,7 @@
 const publicWebSettings = new Set([
   "PUBLIC_API_ORIGIN",
   "PUBLIC_GATEWAY_ORIGIN",
+  "PUBLIC_FILES_ORIGIN",
   "PUBLIC_CLOUD_API_ORIGIN",
   "PUBLIC_CLOUD_GATEWAY_ORIGIN",
   "PUBLIC_COHUB_ENV",
@@ -22,8 +23,15 @@ const publicWebSettings = new Set([
 ]);
 
 export function webBuildEnvironment(environment) {
+  const local = environment.PUBLIC_COHUB_LOCAL_MODE === "true";
+  const resolved = local ? {
+    ...environment,
+    PUBLIC_FILES_ORIGIN: environment.PUBLIC_FILES_ORIGIN ?? environment.PUBLIC_ASSET_CDN_BASE_URL ?? "",
+    PUBLIC_PREVIEW_ORIGIN: environment.PUBLIC_PREVIEW_ORIGIN ?? environment.PUBLIC_API_ORIGIN ?? "",
+    PUBLIC_MARKETPLACE_APP_ID: environment.PUBLIC_MARKETPLACE_APP_ID ?? "",
+  } : environment;
   // Backend object-store settings also use PUBLIC_; they are not browser data.
-  return Object.fromEntries(Object.entries(environment).filter(([key]) =>
+  return Object.fromEntries(Object.entries(resolved).filter(([key]) =>
     !key.startsWith("PUBLIC_") || publicWebSettings.has(key),
   ));
 }

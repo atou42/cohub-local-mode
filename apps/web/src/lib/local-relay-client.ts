@@ -140,18 +140,31 @@ export function removePendingLocalRelayCommand(commandId: string) {
 }
 
 export async function getLocalRelayNodeStatus(signal?: AbortSignal) {
-	const response = await fetch(relayNodePath("/status"), {
-		credentials: "include",
-		cache: "no-store",
-		signal,
-	});
-	if (!response.ok)
-		throw await responseError(response, "Relay status could not be loaded");
-	const payload = (await response.json()) as { connected?: unknown };
-	if (typeof payload.connected !== "boolean") {
-		throw new Error("Relay status response is invalid");
+	const controller = new AbortController();
+	const abort = () => controller.abort(signal?.reason);
+	if (signal?.aborted) abort();
+	else signal?.addEventListener("abort", abort, { once: true });
+	// Bound both headers and body reads so a stalled poll cannot block recovery.
+	const timeout = setTimeout(() => {
+		controller.abort(new DOMException("Relay status request timed out", "TimeoutError"));
+	}, 10_000);
+	try {
+		const response = await fetch(relayNodePath("/status"), {
+			credentials: "include",
+			cache: "no-store",
+			signal: controller.signal,
+		});
+		if (!response.ok)
+			throw await responseError(response, "Relay status could not be loaded");
+		const payload = (await response.json()) as { connected?: unknown };
+		if (typeof payload.connected !== "boolean") {
+			throw new Error("Relay status response is invalid");
+		}
+		return payload.connected;
+	} finally {
+		clearTimeout(timeout);
+		signal?.removeEventListener("abort", abort);
 	}
-	return payload.connected;
 }
 
 async function responseError(response: Response, fallback: string) {

@@ -1,4 +1,5 @@
 import { AuthorizationError, verifyUserAccessToken } from "@cohub/identity";
+import { timingSafeEqual } from "node:crypto";
 import { gatewayConfig } from "./config.js";
 
 export const LOCAL_SANDBOX_INVALID_TOKEN_MESSAGE = "access token is invalid or expired";
@@ -16,6 +17,14 @@ export const describeLocalSandboxTokenFailure = (error: unknown): Extract<LocalS
 // Reject expired or invalid user tokens on the gateway so leftover local
 // runners do not hammer API /internal/gateway/local-sandbox/authorize.
 export const verifyLocalSandboxAccessToken = async (token: string): Promise<LocalSandboxTokenCheck> => {
+  // Managed local runners use a host secret, not a user JWT. The API still
+  // checks the target Space's local provider before authorizing the connection.
+  const expected = Buffer.from(gatewayConfig.localSandboxRelayToken);
+  const provided = Buffer.from(token);
+  if (gatewayConfig.nodeOrigin === "local" && expected.length > 0 &&
+      expected.length === provided.length && timingSafeEqual(expected, provided)) {
+    return { ok: true };
+  }
   try {
     await verifyUserAccessToken({ token, logtoEndpoint: gatewayConfig.logtoEndpoint });
     return { ok: true };

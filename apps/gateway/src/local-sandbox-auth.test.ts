@@ -1,11 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AuthorizationError } from "@cohub/identity";
+import { gatewayConfig } from "./config.js";
 import {
   LOCAL_SANDBOX_INVALID_TOKEN_MESSAGE,
   describeLocalSandboxTokenFailure,
   relayAuthClose,
+  verifyLocalSandboxAccessToken,
 } from "./local-sandbox-auth.js";
+
+test("managed token is accepted only on a local node; invalid user tokens remain rejected", async () => {
+  const original = { nodeOrigin: gatewayConfig.nodeOrigin, localSandboxRelayToken: gatewayConfig.localSandboxRelayToken };
+  try {
+    gatewayConfig.nodeOrigin = "local";
+    gatewayConfig.localSandboxRelayToken = "isolated-managed-runner-secret";
+    assert.deepEqual(await verifyLocalSandboxAccessToken("isolated-managed-runner-secret"), { ok: true });
+    for (const token of ["", "incorrect", "isolated-managed-runner-secreX"]) {
+      assert.equal((await verifyLocalSandboxAccessToken(token)).ok, false);
+    }
+    gatewayConfig.nodeOrigin = "cloud";
+    assert.equal((await verifyLocalSandboxAccessToken("isolated-managed-runner-secret")).ok, false);
+    gatewayConfig.nodeOrigin = "local";
+    gatewayConfig.localSandboxRelayToken = "";
+    assert.equal((await verifyLocalSandboxAccessToken("")).ok, false);
+  } finally {
+    Object.assign(gatewayConfig, original);
+  }
+});
 
 test("expired or invalid tokens are rejected as 401 without calling the API", () => {
   assert.deepEqual(describeLocalSandboxTokenFailure(new AuthorizationError("Jwt is invalid", 401)), {
