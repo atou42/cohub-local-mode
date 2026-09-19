@@ -11,24 +11,24 @@ const assistants: Array<{ turnId: string; userMessageId: string; userId: string;
 const outputs: Array<{ turnId?: string }> = [];
 const registration = { connectionId: randomUUID(), ownerUserId: "host-owner", endpoint: "ws://gateway/internal/runtime-relay/space",
   capabilities: { harnesses: ["pi", "codex"], models: [{ harness: "pi", id: "chosen", provider: "fixture", name: "chosen" }, { harness: "codex", id: "chosen", provider: "fixture", name: "chosen" }] } };
-mock.module("../env.js", { exports: { env: {} } });
-mock.module("../db.js", { exports: { db: {
+mock.module("../env.js", { namedExports: { env: {} } });
+mock.module("../db.js", { namedExports: { db: {
   select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status, meta: {} }] }) }) }),
-  update: () => ({ set: () => ({ where: async () => {} }) }),
+  update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ meta: {} }] }) }) }),
 } } });
-mock.module("../redis.js", { exports: { redis: { get: async () => online ? JSON.stringify(registration) : null }, sendOutput: async (event: { turnId?: string }) => { outputs.push(event); } } });
-mock.module("../api.js", { exports: { getSpaceSandbox: async () => ({ sandbox: { provider: "local" } }) } });
-mock.module("../logger.js", { exports: { logger: { warn() {}, debug() {}, error() {} } } });
-mock.module("../runtime/context-store.js", { exports: { loadRuntimeContext: async (input: { beforeSequence?: number; throughTurnId?: string }) => {
+mock.module("../redis.js", { namedExports: { redis: { get: async () => online ? JSON.stringify(registration) : null }, sendOutput: async (event: { turnId?: string }) => { outputs.push(event); } } });
+mock.module("../api.js", { namedExports: { getSpaceSandbox: async () => ({ sandbox: { provider: "local" } }) } });
+mock.module("../logger.js", { namedExports: { logger: { warn() {}, debug() {}, error() {}, info() {} } } });
+mock.module("../runtime/context-store.js", { namedExports: { loadRuntimeContext: async (input: { beforeSequence?: number; throughTurnId?: string }) => {
   contexts.push(input); return { revision: input.throughTurnId ? "completed" : "previous", throughTurnId: input.throughTurnId ?? null, messages: [] };
 } } });
-mock.module("../persistence.js", { exports: {
+mock.module("../persistence.js", { namedExports: {
   persistBatchUserMessages: async ({ batch }: { batch: ClaimedTurnBatch }) => {
     const { buildUserMessagesForBatch } = await import("../batch.js"); users.push(...buildUserMessagesForBatch(batch));
   },
   persistAssistantMessage: async (input: typeof assistants[number]) => { assistants.push(input); status = "completed"; },
 } });
-mock.module("../runtime/exchange.js", { exports: {
+mock.module("../runtime/exchange.js", { namedExports: {
   RuntimeExecutionUncertainError: class extends Error {}, RuntimeResultUnavailableError: class extends Error {},
   exchangeRuntimeTurn: async (options: { input: RuntimeTurnInput; recovery?: boolean; event: (event: unknown, send: (command: unknown) => void, id: string) => Promise<void> }) => {
     commands.push(options.input);

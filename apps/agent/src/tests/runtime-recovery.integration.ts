@@ -28,7 +28,8 @@ function makeTurn(outcome: "saved" | "unknown" | "offline" = "unknown") {
 function params(where: SQL) { return dialect.sqlToQuery(where).params; }
 function matchingTurns(where: SQL) {
   const values = params(where);
-  return [...rows.values()].filter((row) => values.includes(row.id) && values.includes(row.sessionId) && ["running", "abort_requested"].includes(row.status));
+  const checksSession = dialect.sqlToQuery(where).sql.includes('"session_id"');
+  return [...rows.values()].filter((row) => values.includes(row.id) && (!checksSession || values.includes(row.sessionId)) && ["running", "abort_requested"].includes(row.status));
 }
 
 const db = {
@@ -60,17 +61,17 @@ const db = {
   },
 };
 
-mock.module("../db.js", { exports: { db } });
-mock.module("../env.js", { exports: { env: { AGENT_STALE_ACTIVE_TURN_MS: 60_000 } } });
-mock.module("../session-lock.js", { exports: { acquireSessionLock: async (sessionId: string) => locked.has(sessionId) ? null : { signal: new AbortController().signal, release: async () => {} } } });
-mock.module("../persistence.js", { exports: {
+mock.module("../db.js", { namedExports: { db } });
+mock.module("../env.js", { namedExports: { env: { AGENT_STALE_ACTIVE_TURN_MS: 60_000 } } });
+mock.module("../session-lock.js", { namedExports: { acquireSessionLock: async (sessionId: string) => locked.has(sessionId) ? null : { signal: new AbortController().signal, release: async () => {} } } });
+mock.module("../persistence.js", { namedExports: {
   persistBatchUserMessages: async ({ batch }: { batch: ClaimedTurnBatch }) => { persistedBatches.push(batch); },
   publishSessionTurnsUpdated: async () => {},
   persistAssistantMessage: async ({ turnId }: { turnId: string }) => { const turn = rows.get(turnId); assert(turn); turn.status = "interrupted"; },
 } });
-mock.module("../queue.js", { exports: { enqueueAgentTurnJob: async ({ sessionId }: { sessionId: string }) => { drained.push(sessionId); } } });
-mock.module("../logger.js", { exports: { logger: { warn: () => {}, debug: () => {} } } });
-mock.module("../runtime/remote-runtime.js", { exports: {
+mock.module("../queue.js", { namedExports: { enqueueAgentTurnJob: async ({ sessionId }: { sessionId: string }) => { drained.push(sessionId); } } });
+mock.module("../logger.js", { namedExports: { logger: { warn: () => {}, debug: () => {} } } });
+mock.module("../runtime/remote-runtime.js", { namedExports: {
   markRuntimeRecovery: async (id: string, state: RuntimeRecoveryState) => { const row = rows.get(id); assert(row); row.meta.runtimeRecovery = { ...row.meta.runtimeRecovery, ...state }; },
   executeRemoteHarnessTurn: async (input: { recovery: boolean; batch: ClaimedTurnBatch }) => {
     recoveredBatches.push(input.batch);
