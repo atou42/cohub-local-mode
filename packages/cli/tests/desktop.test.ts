@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -38,7 +38,7 @@ function renderHelp(command: Command): string {
 }
 
 test("desktop open uses the current directory binding without falling back to Home", async () => {
-  const root = await mkdtemp(join(tmpdir(), "cohub-desktop-binding-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "cohub-desktop-binding-")));
   temporaryRoots.push(root);
   const bindingsPath = join(root, "runtime-spaces.json");
   const previousToken = process.env.COHUB_EXECUTION_TOKEN;

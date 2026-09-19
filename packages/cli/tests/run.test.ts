@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 test("cohub run uses the current directory Runtime binding", async () => {
-  const root = await mkdtemp(join(tmpdir(), "cohub-run-binding-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "cohub-run-binding-")));
   roots.push(root);
   const path = join(root, "runtime-spaces.json");
   const previousToken = process.env.COHUB_EXECUTION_TOKEN;

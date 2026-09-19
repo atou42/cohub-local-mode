@@ -161,6 +161,15 @@ func TestFSEventsNativeWriteAndClose(t *testing.T) {
 	for {
 		select {
 		case batch := <-batches:
+			// A root event may coalesce the write into an authoritative refresh.
+			// Consumers reload the file tree on Resync rather than require a delta.
+			if batch.Resync {
+				content, err := os.ReadFile(filepath.Join(root, "native.txt"))
+				if err != nil || string(content) != "content" {
+					t.Fatalf("resync did not expose the write: content=%q err=%v", content, err)
+				}
+				return
+			}
 			for _, change := range batch.Changes {
 				if change.Path == "native.txt" {
 					return
