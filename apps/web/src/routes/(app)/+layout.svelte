@@ -3,6 +3,7 @@ import "../../app.css";
 import { onMount } from "svelte";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
+import { markCohubClientHealthy } from "$lib/asset-import-recovery";
 import { scheduleCacheCleanup } from "$lib/cache/cleanup";
 import BillingConversionCenter from "$lib/components/BillingConversionCenter.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -33,9 +34,11 @@ import {
 	shouldStartRightDrawerGesture,
 } from "$lib/gestures/drawer-swipe";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { iosStandaloneViewportRecovery } from "$lib/ios-standalone-viewport";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { DESKTOP_SHELL_MIN_WIDTH_PX } from "$lib/layout/breakpoints";
 import { DURATION_DRAWER_OUT, DURATION_PANEL } from "$lib/motion.svelte";
+import { startNativeActivityBridge } from "$lib/native-activity";
 import {
 	beginMobileSessionViewTransition,
 	resolveMobileSessionNavTransition,
@@ -108,6 +111,9 @@ let isDragging = $state(false);
 let leftSidebarResizeCleanup: (() => void) | null = null;
 let vConsole: InstanceType<typeof import("vconsole").default> | null = null;
 let vConsoleRequestId = 0;
+let nativeActivityBridge = $state<ReturnType<
+	typeof startNativeActivityBridge
+> | null>(null);
 /**
  * Sidebar content mode lags collapse so the expanded tree can clip away
  * with the width tween instead of hard-swapping to the icon rail first.
@@ -543,6 +549,10 @@ $effect(() => {
 	turnNotifications.syncActiveSessionPresence();
 });
 
+$effect(() => {
+	nativeActivityBridge?.setCurrentRoute(currentLayoutSpaceId);
+});
+
 // Lock body scroll when drawer is open
 $effect(() => {
 	if (
@@ -560,6 +570,9 @@ $effect(() => {
 onMount(() => {
 	window.cohubDisableVConsole = disableVConsole;
 	window.cohubEnableVConsole = enableVConsole;
+	if (page.status < 400) {
+		markCohubClientHealthy();
+	}
 
 	if (shouldEnableVConsole()) {
 		void enableVConsole();
@@ -575,16 +588,15 @@ onMount(() => {
 			turnNotifications.start();
 			// Listen in the shell, not a page, so delivery never depends on route.
 			stopDesktopCommands = startDesktopCommandListener();
+			if (authStore.userUuid) {
+				nativeActivityBridge = startNativeActivityBridge({
+					userKey: authStore.userUuid,
+				});
+				nativeActivityBridge?.setCurrentRoute(currentLayoutSpaceId);
+			}
 		}
 		initSpacePinRealtime();
 	});
-
-	// Register PWA Service Worker (conservative update: closes all tabs to activate)
-	if ("serviceWorker" in navigator) {
-		window.addEventListener("load", () => {
-			void navigator.serviceWorker.register("/sw.js");
-		});
-	}
 
 	return () => {
 		delete window.cohubDisableVConsole;
@@ -592,6 +604,8 @@ onMount(() => {
 		stopDesktopCommands?.();
 		stopViewportOffsetGuard();
 		turnNotifications.stop();
+		nativeActivityBridge?.stop();
+		nativeActivityBridge = null;
 		vConsoleRequestId += 1;
 		vConsole?.destroy();
 		vConsole = null;
@@ -614,7 +628,7 @@ onMount(() => {
     <CenteredLoading label={m.shell_loading({}, { locale })} size="page" />
   </main>
 {:else}
-  <div class="app-shell h-full min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
+  <div use:iosStandaloneViewportRecovery class="app-shell app-shell-viewport min-h-0 overflow-hidden flex flex-col lg:flex-row text-text-primary font-sans text-[13px] leading-[1.6]">
     <!-- Desktop sidebar — hidden on mobile -->
     <!-- z-30 keeps collapsed rail flyouts above main workspace stacking contexts.
          Width-only panel-shell: the icon rail stays interactive (no --collapsed). -->

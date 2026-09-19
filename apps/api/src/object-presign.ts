@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 
 export type PresignStorageConfig = {
   endpoint?: string;
@@ -31,7 +32,9 @@ export const getBucketPublicEndpoint = (storage: PresignStorageConfig) => {
   const endpoint = storage.publicEndpoint ?? storage.endpoint?.replace("-internal.", ".");
   if (!endpoint) throw new Error("endpoint is required");
   const parsed = new URL(endpoint.replace(/\/+$/, ""));
-  if (!parsed.hostname.startsWith(`${storage.bucket}.`)) {
+  if (parsed.hostname === "localhost" || isIP(parsed.hostname)) {
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/${encodeURIComponent(storage.bucket)}`;
+  } else if (!parsed.hostname.startsWith(`${storage.bucket}.`)) {
     parsed.hostname = `${storage.bucket}.${parsed.hostname}`;
   }
   return parsed.toString().replace(/\/+$/, "");

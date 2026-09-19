@@ -1,6 +1,7 @@
 import { SPACE_CUSTOM_THEME_CSS_PATH } from "@cohub/protocol";
 import { HttpError, type SpaceFsFileResponse } from "@neta-art/cohub";
 import { sdk } from "$lib/sdk";
+import { syncSpaceChromeTheme } from "$lib/space-chrome-theme";
 
 const SPACE_STYLE_NODE_ATTR = "data-cohub-space-style";
 const SPACE_STYLE_ACTIVE_ATTR = "data-cohub-space-style-active";
@@ -67,6 +68,7 @@ function clearRetryTimer() {
 
 function notifySpaceStyleChanged(spaceId: string | null) {
 	if (typeof window === "undefined") return;
+	syncSpaceChromeTheme();
 	window.dispatchEvent(
 		new CustomEvent(SPACE_STYLE_CHANGED_EVENT, {
 			detail: { spaceId },

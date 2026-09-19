@@ -1,0 +1,16 @@
+tunnel: replace-with-tunnel-id
+credentials-file: /Users/you/.cloudflared/replace-with-tunnel-id.json
+
+ingress:
+  - hostname: cohub.example.com
+    path: ^/(cohub-assets|cohub-sessions)/.*
+    service: http://127.0.0.1:9000
+  - hostname: cohub.example.com
+    path: ^/api/.*
+    service: http://127.0.0.1:8787
+  - hostname: cohub.example.com
+    path: ^/(ws|sandbox/relay|asr/ws).*
+    service: http://127.0.0.1:8788
+  - hostname: cohub.example.com
+    service: http://127.0.0.1:4173
+  - service: http_status:404

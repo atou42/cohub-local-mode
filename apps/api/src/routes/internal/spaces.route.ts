@@ -3,9 +3,14 @@ import { Hono } from "hono";
 import { BillingAccessBlockedError, serializeBillingBlocked } from "@cohub/billing";
 import { attachSandboxPublicEndpoints } from "../../sandbox-public-network.js";
 import type {
+	AgentHarness,
   PersistMessageInput,
   UpdateSessionInfoInput,
 } from "@cohub/protocol/model";
+import {
+  HarnessCatalogError,
+  validateExternalHarnessSelection,
+} from "../../local-mode/harness-catalog.js";
 import type { ContentBlock } from "@cohub/protocol/core";
 import {
   getSpaceById,
@@ -390,6 +395,7 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
       provider?: string | null;
       harness?: "cohub" | "pi" | "codex" | null;
       thinkingLevel?: string | null;
+      serviceTier?: string | null;
       accessMode?: PromptAccessMode | null;
       env?: unknown;
       context?: SubmitSessionPromptContext | null;
@@ -404,9 +410,43 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
   if (accessMode !== "read_only" && accessMode !== "full_access") {
     return c.json({ message: "accessMode must be one of: read_only, full_access" }, 400);
   }
-  const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
   const promptThinkingLevel = typeof body.thinkingLevel === "string" && body.thinkingLevel.trim() && VALID_THINKING_LEVELS.has(body.thinkingLevel.trim()) ? body.thinkingLevel.trim() : body.thinkingLevel === undefined || body.thinkingLevel === null ? undefined : null;
-  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
+  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
+  const promptServiceTier = body.serviceTier === undefined
+    ? undefined
+    : body.serviceTier === null
+      ? null
+      : typeof body.serviceTier === "string" && body.serviceTier.trim()
+        ? body.serviceTier.trim()
+        : undefined;
+  if (body.serviceTier !== undefined && body.serviceTier !== null && promptServiceTier === undefined) {
+    return c.json({ message: "serviceTier must be a non-empty string or null" }, 400);
+  }
+  const agentHarness = session.agentHarness as AgentHarness;
+  if (agentHarness === "pi") {
+    if (promptServiceTier) {
+      return c.json({ code: "service_tier_unavailable", message: "Speed tiers are not available for Pi" }, 422);
+    }
+  } else {
+    try {
+      const selection = await validateExternalHarnessSelection({
+        harness: agentHarness,
+        provider: body.provider?.trim() || null,
+        model: body.model?.trim() || null,
+        thinkingLevel: promptThinkingLevel ?? null,
+        serviceTier: promptServiceTier ?? null,
+      });
+      if (!selection.ok) {
+        return c.json({ code: selection.code, message: selection.message }, 422);
+      }
+    } catch (error) {
+      if (error instanceof HarnessCatalogError) {
+        return c.json({ code: error.code, message: error.message }, 503);
+      }
+      throw error;
+    }
+  }
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   const appSession = body.authToken ? verifyAppSessionToken(body.authToken) : null;
   const permissionSubject = appSession && appSession.userUuid === userId
@@ -439,6 +479,7 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
       provider: body.provider ?? null,
       harness: body.harness ?? null,
       thinkingLevel: promptThinkingLevel ?? null,
+      serviceTier: promptServiceTier,
       accessMode,
       env: promptEnv,
       context: mergePromptContextAuth(body.context ?? null, promptAuth),

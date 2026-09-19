@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { getCohubContext, HttpError, type CohubHttpClient, type Permission, type AppCreateInput, type AppMeta, type AppStatus, type AppUpdateInput, type AppVersionRecord, type AppViewStatsResponse, type AppVisibility } from "@neta-art/cohub";
 import type { Command } from "commander";
-import { createClient, createClientWithAccessToken } from "../client.js";
+import { createClient as createDefaultClient, createClientWithAccessToken } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
 import { resolveSpace } from "../space.js";
 import { downloadApp } from "../app-download.js";
@@ -256,7 +256,7 @@ async function confirmDelete(opts: { yes?: boolean }): Promise<void> {
 }
 
 async function publishAppVersion(id: string, opts: { json?: boolean }): Promise<void> {
-  const client = createClient();
+  const client = createDefaultClient();
   try {
     const result = await client.apps.publishVersion(id);
     if (jsonRequested(opts)) return outJson(result);
@@ -296,7 +296,8 @@ type ResolveOptions = {
   json?: boolean;
 };
 
-export function registerApps(program: Command): void {
+export function registerApps(program: Command, dependencies: { createClient?: typeof createDefaultClient } = {}): void {
+  const createClient = dependencies.createClient ?? createDefaultClient;
   const appsCmd = program
     .command("apps")
     .description("App management")
@@ -448,8 +449,10 @@ export function registerApps(program: Command): void {
       if (opts.hideCohubBar && opts.showCohubBar) return error("Conflicting Cohub bar options", "Use either --hide-cohub-bar or --show-cohub-bar.");
       const target = resolveTarget(opts);
       if (!target) return error("Missing target", "Use one of --file, --dir, or --port.");
-      const source = opts.source ? parseChoice(opts.source, "source", ["workspace", "local"] as const) : resolveDefaultAppSource();
       if (target.targetType === "port" && opts.source) return error("Invalid source", "--source applies only to --file and --dir.");
+      const source = target.targetType === "port"
+        ? "workspace"
+        : opts.source ? parseChoice(opts.source, "source", ["workspace", "local"] as const) : resolveDefaultAppSource();
       const spaceId = await resolveSpace(appsCmd);
       const client = createClient();
       let { targetType, targetRef } = target;

@@ -21,6 +21,10 @@ import { ensureSessionTurnSegments, findSegmentForTurn, MAX_SESSION_TURN_SEGMENT
 import { fallbackPublicUserProfile, getProfilesByUuids } from "./user-profiles.js";
 import { buildTurnObjectPrefix, assertTurnObjectKeyForTurn, createTurnObjectCdnUrl, writeTurnObjectJson } from "./turn-object-storage.js";
 import { deriveMessagePreviewText } from "./session-content.js";
+import {
+  rewriteRelayArtifactProjection,
+  type RelayArtifactReplacement,
+} from "./local-mode/relay-artifacts.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -32,7 +36,7 @@ const toIso = (value: Date | string | null | undefined) => {
 const normalizeRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 /** Extracts the effective thinking level from turn meta, if present. */
 function extractThinkingLevel(meta: unknown): ModelThinkingLevel | null {
@@ -449,6 +453,57 @@ export const getSessionTurnById = async (sessionId: string, turnId: string) => {
   return withTimelineSource(toTurnRecord(row), sessionId);
 };
 
+export const persistCompletedTurnRelayArtifacts = async (input: {
+  sessionId: string;
+  turnId: string;
+  replacements: RelayArtifactReplacement[];
+}) => {
+  const existing = await getSessionTurnById(input.sessionId, input.turnId);
+  if (!existing) throw new Error("turn not found");
+  if (existing.status !== "completed") {
+    throw new Error("turn is not completed");
+  }
+  const rewritten = rewriteRelayArtifactProjection(
+    {
+      assistantContent: existing.assistantContent,
+      assistantText: existing.assistantText,
+      summary: existing.summary,
+    },
+    input.replacements,
+  );
+  if (!rewritten.changed) return existing;
+
+  const sourceSessionId = existing.sourceSessionId ?? existing.sessionId;
+  const [row] = await db
+    .update(sessionTurns)
+    .set({
+      assistantContent:
+        rewritten.assistantContent == null
+          ? null
+          : sanitizeContentBlocksForPostgresJson(
+              rewritten.assistantContent as ContentBlock[],
+            ),
+      assistantText: rewritten.assistantText,
+      summary:
+        rewritten.summary == null
+          ? null
+          : (sanitizePostgresJsonValue(
+              rewritten.summary,
+            ) as typeof existing.summary),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(sessionTurns.id, input.turnId),
+        eq(sessionTurns.sessionId, sourceSessionId),
+        eq(sessionTurns.status, "completed"),
+      ),
+    )
+    .returning();
+  if (!row) throw new Error("turn changed before artifact projection");
+  return withTimelineSource(toTurnRecord(row), input.sessionId);
+};
+
 export const findLatestVisibleAgentEntryId = async (sessionId: string, throughSequence: number) => {
   const segments = await ensureSessionTurnSegments(sessionId);
   if (segments.length > MAX_SESSION_TURN_SEGMENTS) throw new Error("Fork chain is too deep");
@@ -480,6 +535,35 @@ export const findLatestVisibleAgentEntryId = async (sessionId: string, throughSe
       ? agentMeta.leafEntryId.trim()
       : "";
   return entryId || null;
+};
+
+export const findLatestVisibleAgentRuntime = async (sessionId: string, throughSequence: number) => {
+  const segments = await ensureSessionTurnSegments(sessionId);
+  if (segments.length > MAX_SESSION_TURN_SEGMENTS) throw new Error("Fork chain is too deep");
+  const rangePredicates = segments.flatMap((segment) => {
+    const toSequence = Math.min(segment.toSequence ?? throughSequence, throughSequence);
+    if (toSequence < segment.fromSequence) return [];
+    return [and(
+      eq(sessionTurns.sessionId, segment.sourceSessionId),
+      gte(sessionTurns.sequence, segment.fromSequence),
+      lte(sessionTurns.sequence, toSequence),
+    )];
+  });
+  const visibleRange = or(...rangePredicates);
+  if (!visibleRange) return null;
+  const [row] = await db.select({
+    model: sessionTurns.model,
+    meta: sessionTurns.meta,
+  }).from(sessionTurns).where(and(
+    eq(sessionTurns.executionKind, "agent"),
+    visibleRange,
+  )).orderBy(desc(sessionTurns.sequence)).limit(1);
+  if (!row) return null;
+  return {
+    model: row.model ?? null,
+    thinkingLevel: extractThinkingLevel(row.meta),
+    meta: normalizeRecord(row.meta),
+  };
 };
 
 export const buildIntermediateObjectsForTurn = async (input: { spaceId: string; sessionId: string; turnId: string }) => {

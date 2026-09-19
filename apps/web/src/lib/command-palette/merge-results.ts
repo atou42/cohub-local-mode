@@ -55,6 +55,7 @@ function remoteToItem(item: GlobalSearchResult): CommandPaletteItem {
 		viewerRelation: item.viewerRelation ?? null,
 		viewerTier: item.effectiveTier ?? undefined,
 		source: "remote",
+		spaceOrigin: "cloud",
 		remoteScore: item.score,
 	};
 }
@@ -74,6 +75,9 @@ export function mergeCommandResults(input: {
 		if (!existing) {
 			byKey.set(key, item);
 			continue;
+		}
+		if (existing.spaceOrigin === "local") {
+			throw new Error(`Space ${item.spaceId} was returned by both local and cloud nodes`);
 		}
 		// Remote knows the viewer relation authoritatively; keep its tier.
 		byKey.set(key, {

@@ -17,7 +17,11 @@ import type {
 } from "@cohub/protocol/model";
 import type { ChannelEnvelope } from "@cohub/protocol/realtime";
 import {
+	type AgentHarness,
+	type CreateSpacePromptInput,
+	type CreateSpacePromptResponse,
 	extractBillingPayload,
+	type HarnessCapabilityCatalog,
 	HttpError,
 	type SessionRecord,
 } from "@neta-art/cohub";
@@ -34,6 +38,7 @@ import {
 	type ComposerImageAttachment,
 	type ComposerTextAttachment,
 } from "$lib/composer-attachments";
+import { createHarnessCapabilityController } from "$lib/features/space/modules/harness-capability-controller.svelte";
 import {
 	createPromptTemplateController,
 	type PromptQuickAction,
@@ -47,9 +52,35 @@ import {
 import { asRecord } from "$lib/features/space/space-utils";
 import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
+import {
+	buildLocalFederatedPromptContext,
+	buildLocalFederatedPromptEnv,
+} from "$lib/local-federated-space";
+import { localRelayCommandFailure } from "$lib/local-node-error";
+import {
+	cancelLocalRelayCommand,
+	getLocalRelayNodeStatus,
+	isLocalRelayEnabled,
+	listPendingLocalRelayCommands,
+	localFederatedApiUrl,
+	openLocalRelayEvents,
+	type PendingLocalRelayCommand,
+	registerPendingLocalRelayCommand,
+	removePendingLocalRelayCommand,
+	submitLocalRelayPrompt,
+	uploadLocalRelayAttachment,
+	waitForLocalRelayCommand,
+} from "$lib/local-relay-client";
+import type {
+	LocalRelayEventCommand,
+	LocalRelayTurnEvent,
+} from "$lib/local-relay-events";
 import { extractSpaceMentionsFromText } from "$lib/mentions/space";
 import {
 	formatThinkingLevelShort,
+	getFastServiceTier,
+	getModelServiceTiers,
+	getRequestedServiceTier,
 	getRequestedThinkingLevel,
 	type ModelThinkingLevel,
 } from "$lib/model-catalog";
@@ -63,7 +94,22 @@ import { sortSessionsByRecentActivity } from "$lib/session-sort";
 import type { TimelineItem } from "$lib/session-tree";
 import { buildTurnTimelineItems } from "$lib/session-turn-render";
 import type { NewChatComposerApplyPayload } from "$lib/space-config";
+import {
+	getRegisteredSpaceOrigin,
+	resolveSpaceOrigin,
+} from "$lib/space-origin";
 import { materializeSpaceEntries } from "$lib/space-upload";
+import {
+	type AgentModelParameterPreference,
+	type AgentParameterPreferences,
+	createEmptyAgentParameterPreferences,
+	getAgentModelParameterPreference,
+	readAgentParameterPreferences,
+	resetAgentParameterPreferences,
+	resolveAgentParameterSelection,
+	updateAgentParameterPreferences,
+	writeAgentParameterPreferences,
+} from "$lib/stores/agent-parameter-preferences";
 import { authStore } from "$lib/stores/auth.svelte";
 import {
 	billingConversion,
@@ -73,11 +119,7 @@ import {
 	readCreateModelPreference,
 	saveCreateModelPreference,
 } from "$lib/stores/create-model-preference";
-import {
-	readDraftSessionModel,
-	saveDraftSessionModel,
-} from "$lib/stores/draft-session-model";
-import { modelsCatalogStore } from "$lib/stores/models-catalog.svelte";
+import { createModelsCatalogStore } from "$lib/stores/models-catalog.svelte";
 import {
 	readSessionComposerDraftText,
 	removeSessionComposerDraftText,
@@ -113,6 +155,14 @@ import { turnRecordToIndexItem } from "$lib/turn-nav-preview";
 import type { LocalUploadEntry } from "$lib/upload-entries";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import {
+	buildRelaySessionCreation,
+	decideRelayCommandReconcile,
+	decideRelayTurnEvent,
+	findOptimisticTurnForRelayCommand,
+	mergeRelayCommandStatuses,
+	queuedRelayCancelTargets,
+} from "./local-relay-event-plane";
+import {
 	shouldClearActiveSessionForNewDraft,
 	shouldClearResolvedNewSessionOnRoute,
 } from "./new-chat-draft-isolation";
@@ -145,6 +195,7 @@ import {
 	normalizeTurnDuplicates,
 	preserveSessionTurnRefs,
 	reconcileOptimisticTurn,
+	resolveAgentPromptThinkingLevel,
 	resolveComposerSelectionFromTurn,
 	resolveLastAgentTurnModel,
 	resolveTurnHarness,
@@ -198,6 +249,7 @@ export type SessionChatHostOptions = SessionChatEnvironment & {
 		| "error";
 	canManageSessionAccess?: () => boolean;
 	hasSpace?: () => boolean;
+	isLocalSpace?: () => boolean;
 };
 
 // Wire generation store reset once for process-wide leases.
@@ -215,6 +267,18 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		bootstrapping: false,
 	});
 	let disposed = false;
+	let relayStatus = $state<"unknown" | "connected" | "offline" | "cloud-error">(
+		"unknown",
+	);
+	const relayCommandWatches = new Map<string, AbortController>();
+	let relayEventsClose: (() => void) | null = null;
+	let relayEventsLive = false;
+	let relayCommandStatusById = $state<
+		Record<string, LocalRelayEventCommand["status"]>
+	>({});
+	let pendingRelayCommands = $state<PendingLocalRelayCommand[]>([]);
+	let cancellingRelayCommandIds = $state<Record<string, true>>({});
+	const seenRelayEventIds = new Set<string>();
 	/** Space id this host currently holds a generation lease for (null if none). */
 	let leasedSpaceId: string | null = null;
 
@@ -234,6 +298,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const isNewSessionRoute = $derived(route.kind === "new");
 	const workspace = createSessionWorkspaceController();
 	const composer = createSessionComposerController();
+	const modelsCatalogStore = createModelsCatalogStore();
 	const viewport = createViewportContextController();
 	const scroll = createSessionScrollController();
 	let sessionScrollAnchorsLoaded = $state(false);
@@ -263,6 +328,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const skillsCtrl = createSkillController({
 		getSpaceId: () => spaceId,
 	});
+	const harnessCapabilitiesCtrl = createHarnessCapabilityController();
 	const share = createSessionShareController({
 		getSpaceId: () => spaceId,
 		canManageAccess: () => options.canManageSessionAccess?.() ?? false,
@@ -281,6 +347,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		isNewSessionRoute && !resolvedNewSessionId,
 	);
 	let createSessionError = $state("");
+	let draftAgentHarness = $state<AgentHarness>("pi");
 	let forkingTurnId = $state<string | null>(null);
 
 	// Stable empty refs — fresh `{}` / `[]` each derived run re-triggers effects.
@@ -354,9 +421,12 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			activeTurnIndex,
 		).filter((turn) => turn.executionKind !== "direct_generation"),
 	);
+	// Federated nodes select the execution agent per Session, not per Runtime turn.
 	const composerHarness = $derived(
-		harnessBySession[harnessSelectionKey] ??
-			resolveTurnHarness(composerAgentTurns.at(-1)),
+		options.isLocalSpace?.()
+			? "cohub"
+			: (harnessBySession[harnessSelectionKey] ??
+				resolveTurnHarness(composerAgentTurns.at(-1))),
 	);
 	const localModel = $derived.by(() => {
 		const key = `${harnessSelectionKey}:${composerHarness}`;
@@ -392,6 +462,31 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		return () => window.removeEventListener("focus", refresh);
 	});
 	const composerMode = $derived(composerSelection.mode);
+	const showAgentHarnessSelector = $derived(
+		Boolean(options.isLocalSpace?.()) && composerMode === "agent",
+	);
+	const activeAgentHarness = $derived<AgentHarness>(
+		activeSessionState?.session?.agentHarness ?? draftAgentHarness,
+	);
+	const agentHarnessLocked = $derived(Boolean(activeSessionState?.session));
+
+	function setAgentHarness(next: AgentHarness) {
+		if (!showAgentHarnessSelector || agentHarnessLocked) return;
+		draftAgentHarness = next;
+		draftSessionModel = null;
+		draftSessionModelManuallySelected = false;
+		draftThinkingLevel = null;
+		draftServiceTier = undefined;
+		composerSelection = { mode: "agent", model: null };
+		void modelsCatalogStore
+			.load({
+				origin: resolveSpaceOrigin(spaceId),
+				agentHarness: next,
+			})
+			.catch((error) => {
+				console.error("Failed to load harness models catalog:", error);
+			});
+	}
 	let createModelId = $state<string | null>(null);
 	let createModelPreferenceRequest = 0;
 	const activeSessionLastGenerationModelId = $derived.by(() => {
@@ -448,6 +543,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const quickPromptActions = $derived(promptTemplatesCtrl.quickActions);
 	const skills = $derived(skillsCtrl.items);
 	const skillsLoaded = $derived(skillsCtrl.loaded);
+	const harnessCapabilities = $derived<HarnessCapabilityCatalog | null>(
+		harnessCapabilitiesCtrl.catalog,
+	);
+	const harnessCapabilitiesLoaded = $derived(harnessCapabilitiesCtrl.loaded);
+	const slashCatalogError = $derived(
+		harnessCapabilitiesCtrl.refreshError ??
+			skillsCtrl.refreshError ??
+			promptTemplatesCtrl.refreshError,
+	);
 	let showModelSelector = $state(false);
 	let restoredComposerModeKey: string | null = null;
 	let generationDraftSessionId = $state<string | null>(null);
@@ -455,9 +559,67 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	let sessionThinkingLevelById = $state<
 		Record<string, ModelThinkingLevel | null>
 	>({});
+	let sessionServiceTierById = $state<Record<string, string | null>>({});
 	let draftSessionModel = $state<SelectedModel | null>(null);
 	let draftSessionModelManuallySelected = $state(false);
 	let draftThinkingLevel = $state<ModelThinkingLevel | null>(null);
+	let draftServiceTier = $state<string | null | undefined>(undefined);
+	let parameterPreferences = $state<AgentParameterPreferences>(
+		createEmptyAgentParameterPreferences(),
+	);
+	let parameterPreferencesUserKey = $state<string | null>(null);
+	let parameterPreferencesInvalid = $state(false);
+	let parameterPreferenceNotice = $state<string | null>(null);
+
+	function resetDraftComposerState() {
+		draftAgentHarness = "pi";
+		composerSelection = { mode: "agent", model: null };
+		restoredComposerModeKey = null;
+		draftSessionModel = null;
+		draftSessionModelManuallySelected = false;
+		draftThinkingLevel = null;
+		draftServiceTier = undefined;
+		showModelSelector = false;
+		composer.clearError();
+		modelsCatalogStore.reset();
+	}
+
+	$effect(() => {
+		const authIdentity = authStore.loaded
+			? `${authStore.isAuthenticated}:${authStore.userUuid ?? authStore.claims?.sub ?? "guest"}`
+			: null;
+		untrack(() => {
+			parameterPreferences = createEmptyAgentParameterPreferences();
+			parameterPreferencesInvalid = false;
+			parameterPreferenceNotice = null;
+			parameterPreferencesUserKey = null;
+			if (!authIdentity) return;
+			const userKey = getCacheUserKey();
+			const result = readAgentParameterPreferences(userKey);
+			parameterPreferencesUserKey = userKey;
+			if (result.status === "ready") {
+				parameterPreferences = result.value;
+				if (result.source === "legacy") {
+					try {
+						writeAgentParameterPreferences(result.value, userKey);
+					} catch (error) {
+						parameterPreferenceNotice =
+							error instanceof Error
+								? error.message
+								: "Saved model settings could not be upgraded.";
+					}
+				}
+			} else if (result.status === "invalid") {
+				parameterPreferencesInvalid = true;
+				parameterPreferenceNotice = result.message;
+			}
+			// Re-resolve the draft against this user's preferences and live catalog.
+			draftSessionModel = null;
+			draftSessionModelManuallySelected = false;
+			draftThinkingLevel = null;
+			draftServiceTier = undefined;
+		});
+	});
 
 	$effect(() => {
 		const authIdentity = authStore.loaded
@@ -488,18 +650,38 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	});
 	$effect(() => {
 		const sessionKey = activeSessionId ?? "new";
+		const catalog = visibleModelsCatalog;
 		const latestTurn = mergeComposerTurnSources(
 			activeSessionState?.turns ?? [],
 			activeTurnIndex,
 		).at(-1);
 		const modeKey = `${sessionKey}:${latestTurn?.id ?? "none"}:${latestTurn?.executionKind ?? "agent"}`;
-		if (restoredComposerModeKey === modeKey) return;
+		if (restoredComposerModeKey === modeKey) {
+			if (
+				activeSessionId &&
+				latestTurn &&
+				composerSelection.mode === "agent" &&
+				composerSelection.model &&
+				!composerSelection.model.name
+			) {
+				const hydrated = resolveComposerSelectionFromTurn(latestTurn, catalog);
+				if (
+					hydrated.mode === "agent" &&
+					hydrated.model?.name &&
+					hydrated.model.provider === composerSelection.model.provider &&
+					hydrated.model.id === composerSelection.model.id
+				) {
+					composerSelection = hydrated;
+				}
+			}
+			return;
+		}
 		untrack(() => {
 			restoredComposerModeKey = modeKey;
 			if (activeSessionId && latestTurn) {
 				composerSelection = resolveComposerSelectionFromTurn(
 					latestTurn,
-					visibleModelsCatalog,
+					catalog,
 				);
 			}
 		});
@@ -575,14 +757,19 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			visibleModelsCatalog,
 		),
 	);
+	const activeSessionLastPersistedTurn = $derived.by(() =>
+		[...(activeSessionState?.turns ?? [])]
+			.filter((turn) => asRecord(turn.meta)?.optimistic !== true)
+			.sort((a, b) => a.sequence - b.sequence)
+			.at(-1),
+	);
 	const activeSessionLastRequestedThinkingLevel =
 		$derived.by<ModelThinkingLevel | null>(() => {
-			const lastPersistedTurn = [...(activeSessionState?.turns ?? [])]
-				.filter((turn) => asRecord(turn.meta)?.optimistic !== true)
-				.sort((a, b) => a.sequence - b.sequence)
-				.at(-1);
-			return getRequestedThinkingLevel(lastPersistedTurn?.meta);
+			return getRequestedThinkingLevel(activeSessionLastPersistedTurn?.meta);
 		});
+	const activeSessionLastRequestedServiceTier = $derived.by(() =>
+		getRequestedServiceTier(activeSessionLastPersistedTurn?.meta),
+	);
 	const restoredSessionModel = $derived.by(() => {
 		if (!activeSessionId) return draftSessionModel ?? firstCatalogModel;
 		return (
@@ -596,6 +783,24 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			? composerSelection.model
 			: restoredSessionModel,
 	);
+	const activeSessionCatalogItem = $derived.by(() =>
+		activeSessionModel
+			? modelsCatalog?.find(
+					(item) =>
+						item.provider === activeSessionModel?.provider &&
+						item.id === activeSessionModel?.id,
+				)
+			: null,
+	);
+	const activeModelParameterPreference = $derived.by(() =>
+		activeSessionModel
+			? getAgentModelParameterPreference(
+					parameterPreferences,
+					activeAgentHarness,
+					activeSessionModel,
+				)
+			: null,
+	);
 	// Explicit choices remain sticky across turns. Effective model defaults are
 	// never promoted into a request, and a pending null explicitly resets to default.
 	const activeSessionThinkingLevel = $derived.by<ModelThinkingLevel | null>(
@@ -603,9 +808,44 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (!activeSessionId) return draftThinkingLevel;
 			return Object.hasOwn(sessionThinkingLevelById, activeSessionId)
 				? (sessionThinkingLevelById[activeSessionId] ?? null)
-				: activeSessionLastRequestedThinkingLevel;
+				: (activeSessionLastRequestedThinkingLevel ??
+						activeModelParameterPreference?.thinkingLevel ??
+						null);
 		},
 	);
+	const activeSessionServiceTier = $derived.by<string | null | undefined>(
+		() => {
+			const fastTier = activeSessionCatalogItem
+				? getFastServiceTier(activeSessionCatalogItem)
+				: null;
+			if (!fastTier) return undefined;
+			if (!activeSessionId) {
+				return draftServiceTier !== undefined ? draftServiceTier : fastTier.id;
+			}
+			if (Object.hasOwn(sessionServiceTierById, activeSessionId)) {
+				return sessionServiceTierById[activeSessionId];
+			}
+			if (activeSessionLastRequestedServiceTier !== undefined) {
+				return activeSessionLastRequestedServiceTier;
+			}
+			if (
+				activeModelParameterPreference &&
+				Object.hasOwn(activeModelParameterPreference, "serviceTier")
+			) {
+				return activeModelParameterPreference.serviceTier;
+			}
+			return fastTier.id;
+		},
+	);
+	const activeSessionPromptThinkingLevel =
+		$derived.by<ModelThinkingLevel | null>(() => {
+			return resolveAgentPromptThinkingLevel({
+				agentHarness: activeAgentHarness,
+				catalog: modelsCatalog,
+				model: activeSessionModel,
+				requestedThinkingLevel: activeSessionThinkingLevel,
+			});
+		});
 	const activeGenerationState = $derived.by(() =>
 		sessionGenerationStore.get(activeSessionId),
 	);
@@ -670,11 +910,73 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	const activeStreamErrorCode = $derived.by(
 		() => activeGenerationState?.errorCode ?? null,
 	);
-	const composerNotice = $derived.by(() => activeStreamError || composerError);
+	const composerNotice = $derived.by(
+		() =>
+			activeStreamError ||
+			composerError ||
+			(relayStatus === "offline"
+				? "Local Mac is offline. Messages will wait in the queue."
+				: relayStatus === "cloud-error"
+					? "Cloud relay is unavailable."
+					: ""),
+	);
+	const queuedRelayCancels = $derived.by(() =>
+		queuedRelayCancelTargets(pendingRelayCommands, relayCommandStatusById),
+	);
 	const composerShowsBillingAction = $derived(
 		isBillingAccessBlockedCode(activeStreamErrorCode) ||
 			isBillingAccessBlockedCode(composerErrorCode),
 	);
+
+	$effect(() => {
+		const currentSpaceId = spaceId;
+		const enabled = Boolean(
+			currentSpaceId && isLocalRelayEnabled && options.isLocalSpace?.(),
+		);
+		if (!enabled) {
+			relayStatus = "unknown";
+			closeRelayEventConnection();
+			stopAllRelayCommandWatches();
+			return;
+		}
+		let stopped = false;
+		let inFlight = false;
+		let requestController: AbortController | null = null;
+		const refresh = async () => {
+			if (stopped || inFlight) return;
+			inFlight = true;
+			requestController = new AbortController();
+			try {
+				const connected = await getLocalRelayNodeStatus(
+					requestController.signal,
+				);
+				if (!stopped) relayStatus = connected ? "connected" : "offline";
+			} catch (error) {
+				if (
+					!stopped &&
+					!(error instanceof DOMException && error.name === "AbortError")
+				) {
+					relayStatus = "cloud-error";
+				}
+			} finally {
+				inFlight = false;
+				requestController = null;
+			}
+		};
+		void refresh();
+		untrack(() => {
+			refreshPendingRelayCommands(currentSpaceId);
+			startRelayEventConnection(currentSpaceId);
+		});
+		const timer = setInterval(refresh, 3_000);
+		return () => {
+			stopped = true;
+			clearInterval(timer);
+			requestController?.abort();
+			closeRelayEventConnection();
+			stopAllRelayCommandWatches();
+		};
+	});
 	const activeSessionIsRunning = $derived.by(() =>
 		Boolean(
 			activeGenerationState &&
@@ -805,6 +1107,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	);
 
 	$effect(() => {
+		const currentSpaceId = spaceId;
+		const origin = resolveSpaceOrigin(currentSpaceId);
+		const agentHarness = activeAgentHarness;
+		untrack(() => {
+			if (!currentSpaceId) return;
+			void modelsCatalogStore.load({ origin, agentHarness }).catch((error) => {
+				console.error("Failed to load models catalog:", error);
+			});
+		});
+	});
+	$effect(() => {
 		const key = nextComposerDraftKey;
 		if (key === activeComposerDraftKey) return;
 		untrack(() => {
@@ -838,19 +1151,82 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	$effect(() => {
 		if (!isDraftNewSessionRoute) return;
 		const catalog = visibleModelsCatalog;
-		if (!catalog || catalog.length === 0) return;
-		if (draftSessionModel) return;
-		const stored = readDraftSessionModel();
-		if (!stored) return;
-		const catalogItem = catalog.find(
-			(item) => item.provider === stored.provider && item.id === stored.id,
-		);
-		if (!catalogItem) return;
-		draftSessionModel = {
-			provider: catalogItem.provider,
-			id: catalogItem.id,
-			name: catalogItem.model.name as string | undefined,
-		};
+		const harness = activeAgentHarness;
+		const userKey = parameterPreferencesUserKey;
+		if (!catalog || catalog.length === 0 || !userKey) return;
+		if (draftSessionModelManuallySelected) return;
+		const resolved = resolveAgentParameterSelection({
+			harness,
+			catalog,
+			preferences: parameterPreferences,
+		});
+		if (!resolved.model) return;
+		untrack(() => {
+			draftSessionModel = {
+				provider: resolved.model.provider,
+				id: resolved.model.id,
+				name: resolved.model.model.name as string | undefined,
+			};
+			draftThinkingLevel = resolved.thinkingLevel;
+			draftServiceTier = resolved.serviceTier;
+			if (composerSelection.mode === "agent") {
+				composerSelection = { mode: "agent", model: draftSessionModel };
+			}
+			if (resolved.notice) parameterPreferenceNotice = resolved.notice;
+			if (resolved.repaired && !parameterPreferencesInvalid) {
+				try {
+					writeAgentParameterPreferences(resolved.preferences, userKey);
+					parameterPreferences = resolved.preferences;
+				} catch (error) {
+					parameterPreferenceNotice =
+						error instanceof Error
+							? error.message
+							: "Saved model settings could not be repaired.";
+				}
+			}
+		});
+	});
+	$effect(() => {
+		const sessionId = activeSessionId;
+		const model = activeSessionModel;
+		const catalog = visibleModelsCatalog;
+		const harness = activeAgentHarness;
+		const userKey = parameterPreferencesUserKey;
+		if (!sessionId || !model || !catalog?.length || !userKey) return;
+		const resolved = resolveAgentParameterSelection({
+			harness,
+			catalog,
+			preferences: parameterPreferences,
+			preferredModel: model,
+		});
+		if (!resolved.model || (!resolved.repaired && !resolved.notice)) return;
+		untrack(() => {
+			if (
+				resolved.model?.provider !== model.provider ||
+				resolved.model.id !== model.id
+			) {
+				sessionModelById = {
+					...sessionModelById,
+					[sessionId]: {
+						provider: resolved.model.provider,
+						id: resolved.model.id,
+						name: resolved.model.model.name as string | undefined,
+					},
+				};
+			}
+			if (resolved.notice) parameterPreferenceNotice = resolved.notice;
+			if (resolved.repaired && !parameterPreferencesInvalid) {
+				try {
+					writeAgentParameterPreferences(resolved.preferences, userKey);
+					parameterPreferences = resolved.preferences;
+				} catch (error) {
+					parameterPreferenceNotice =
+						error instanceof Error
+							? error.message
+							: "Saved model settings could not be repaired.";
+				}
+			}
+		});
 	});
 
 	// ── Timeline lifecycle (scroll, restore, markers, generation) ──
@@ -1333,7 +1709,10 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 
 	async function loadModelsCatalog() {
 		try {
-			await modelsCatalogStore.load();
+			await modelsCatalogStore.load({
+				origin: resolveSpaceOrigin(spaceId),
+				agentHarness: activeAgentHarness,
+			});
 		} catch (error) {
 			console.error("Failed to load models catalog:", error);
 		}
@@ -1380,17 +1759,94 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		generationPolicy.setBooleanConstraint(modelId, parameter, constraint);
 	}
 
-	async function loadPromptTemplates(options: { ensureFresh?: boolean } = {}) {
-		await Promise.all([
-			promptTemplatesCtrl.load(options),
-			skillsCtrl.load(options),
-		]);
+	async function loadPromptTemplates() {
+		await Promise.all([promptTemplatesCtrl.load(), skillsCtrl.load()]);
+	}
+
+	$effect(() => {
+		const targetSpaceId = spaceId;
+		const targetHarness = activeAgentHarness;
+		const isLocal = Boolean(options.isLocalSpace?.());
+		untrack(() => {
+			if (!targetSpaceId || !isLocal) {
+				harnessCapabilitiesCtrl.reset();
+				return;
+			}
+			void harnessCapabilitiesCtrl.load({
+				spaceId: targetSpaceId,
+				harness: targetHarness,
+			});
+		});
+	});
+
+	function getModelParameterPreference(model: {
+		provider: string;
+		id: string;
+	}): AgentModelParameterPreference | null {
+		return getAgentModelParameterPreference(
+			parameterPreferences,
+			activeAgentHarness,
+			model,
+		);
+	}
+
+	function persistAgentParameterSelection(input: {
+		model: SelectedModel;
+		thinkingLevel: ModelThinkingLevel | null;
+		serviceTier?: string | null;
+	}) {
+		const userKey = parameterPreferencesUserKey;
+		if (!userKey) return;
+		if (parameterPreferencesInvalid) {
+			parameterPreferenceNotice =
+				"Saved model settings are invalid. Reset them before saving new choices.";
+			return;
+		}
+		const next = updateAgentParameterPreferences(parameterPreferences, {
+			harness: activeAgentHarness,
+			model: input.model,
+			...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+			...(input.serviceTier !== undefined
+				? { serviceTier: input.serviceTier }
+				: {}),
+		});
+		try {
+			writeAgentParameterPreferences(next, userKey);
+			parameterPreferences = next;
+			parameterPreferenceNotice = null;
+		} catch (error) {
+			parameterPreferenceNotice =
+				error instanceof Error
+					? error.message
+					: "Saved model settings could not be written.";
+		}
+	}
+
+	function resetSavedAgentParameterPreferences() {
+		const userKey = parameterPreferencesUserKey;
+		if (!userKey) return;
+		try {
+			resetAgentParameterPreferences(userKey);
+			parameterPreferences = createEmptyAgentParameterPreferences();
+			parameterPreferencesInvalid = false;
+			parameterPreferenceNotice = "Saved model settings were reset.";
+			draftSessionModel = null;
+			draftSessionModelManuallySelected = false;
+			draftThinkingLevel = null;
+			draftServiceTier = undefined;
+		} catch (error) {
+			parameterPreferenceNotice =
+				error instanceof Error
+					? error.message
+					: "Saved model settings could not be reset.";
+		}
 	}
 
 	function handleModelSelect(model: {
 		provider: string;
 		id: string;
 		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
 	}) {
 		const catalogItem = modelsCatalog?.find(
 			(item) => item.provider === model.provider && item.id === model.id,
@@ -1400,12 +1856,28 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			id: model.id,
 			name: catalogItem?.model.name as string | undefined,
 		} satisfies SelectedModel;
-		const thinkingLevel = model.thinkingLevel ?? null;
+		const preference = getModelParameterPreference(selected);
+		const thinkingLevel =
+			model.thinkingLevel ?? preference?.thinkingLevel ?? null;
+		const fastTier = catalogItem ? getFastServiceTier(catalogItem) : null;
+		const serviceTier = fastTier
+			? model.serviceTier !== undefined
+				? model.serviceTier
+				: preference && Object.hasOwn(preference, "serviceTier")
+					? preference.serviceTier
+					: fastTier.id
+			: undefined;
 		composerSelection = { mode: "agent", model: selected };
+		persistAgentParameterSelection({
+			model: selected,
+			thinkingLevel,
+			serviceTier,
+		});
 		if (!activeSessionId) {
 			draftSessionModel = selected;
 			draftSessionModelManuallySelected = true;
 			draftThinkingLevel = thinkingLevel;
+			draftServiceTier = serviceTier;
 			showModelSelector = false;
 			focusComposerSoon();
 			return;
@@ -1418,6 +1890,16 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			...sessionThinkingLevelById,
 			[activeSessionId]: thinkingLevel,
 		};
+		if (serviceTier !== undefined) {
+			sessionServiceTierById = {
+				...sessionServiceTierById,
+				[activeSessionId]: serviceTier,
+			};
+		} else {
+			const nextServiceTiers = { ...sessionServiceTierById };
+			delete nextServiceTiers[activeSessionId];
+			sessionServiceTierById = nextServiceTiers;
+		}
 		showModelSelector = false;
 		focusComposerSoon();
 	}
@@ -2000,6 +2482,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						loaded: Boolean(fallback?.loaded ?? existing?.loaded),
 						error: classifyAccessError(error, {
 							isAuthenticated: authStore.isAuthenticated,
+							isLocalSpace: options.isLocalSpace?.() ?? false,
 							resource: "session",
 						}),
 						hasMore: fallback?.hasMore ?? existing?.hasMore ?? true,
@@ -2554,6 +3037,406 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		});
 	}
 
+	function waitForRelayRetry(signal: AbortSignal) {
+		return new Promise<void>((resolve) => {
+			const finish = () => {
+				clearTimeout(timer);
+				signal.removeEventListener("abort", finish);
+				resolve();
+			};
+			const timer = setTimeout(finish, 2_000);
+			signal.addEventListener("abort", finish, { once: true });
+		});
+	}
+
+	function refreshPendingRelayCommands(currentSpaceId = spaceId) {
+		try {
+			pendingRelayCommands = currentSpaceId
+				? listPendingLocalRelayCommands(currentSpaceId)
+				: [];
+		} catch (error) {
+			pendingRelayCommands = [];
+			setComposerError(
+				error instanceof Error
+					? error.message
+					: "Local relay recovery data could not be loaded",
+				"relay_recovery_failed",
+			);
+		}
+	}
+
+	function noteRelayCommandStatus(
+		command: Pick<LocalRelayEventCommand, "id" | "status">,
+	) {
+		relayCommandStatusById = mergeRelayCommandStatuses(relayCommandStatusById, [
+			command,
+		]);
+	}
+
+	function closeRelayEventConnection() {
+		relayEventsClose?.();
+		relayEventsClose = null;
+		relayEventsLive = false;
+	}
+
+	function stopAllRelayCommandWatches() {
+		for (const controller of relayCommandWatches.values()) controller.abort();
+		relayCommandWatches.clear();
+	}
+
+	function stopRelayCommandWatch(commandId: string) {
+		const controller = relayCommandWatches.get(commandId);
+		if (!controller) return;
+		controller.abort();
+		relayCommandWatches.delete(commandId);
+	}
+
+	function applyCancelledRelayCommand(pending: PendingLocalRelayCommand) {
+		stopRelayCommandWatch(pending.commandId);
+		removePendingLocalRelayCommand(pending.commandId);
+		refreshPendingRelayCommands(pending.spaceId);
+		if (disposed || spaceId !== pending.spaceId) return;
+		const current = sessionStateById[pending.sessionId];
+		if (!current) {
+			const generation = sessionGenerationStore.get(pending.sessionId);
+			if (
+				generation?.turnId &&
+				generation.turnId === pending.optimisticTurnId
+			) {
+				completeGeneration(pending.sessionId);
+			}
+			return;
+		}
+		const optimistic = findOptimisticTurnForRelayCommand(current.turns, {
+			commandId: pending.commandId,
+			optimisticTurnId: pending.optimisticTurnId,
+		});
+		const removeId = optimistic?.id ?? pending.optimisticTurnId;
+		workspace.sessionStateById = {
+			...sessionStateById,
+			[pending.sessionId]: {
+				...current,
+				turns: current.turns.filter((turn) => turn.id !== removeId),
+			},
+		};
+		const generation = sessionGenerationStore.get(pending.sessionId);
+		if (
+			generation?.turnId &&
+			(generation.turnId === removeId ||
+				generation.turnId === pending.optimisticTurnId)
+		) {
+			completeGeneration(pending.sessionId);
+		}
+	}
+
+	async function applySucceededRelayTurn(
+		pending: PendingLocalRelayCommand,
+		record: { session: SessionRecord; turn: SessionTurnRecord },
+		completeGenerationWhenTerminal: boolean,
+	) {
+		await sessionTurnsRepo.replaceTurnId(
+			pending.spaceId,
+			pending.sessionId,
+			{
+				previousTurnId: pending.optimisticTurnId,
+				nextTurnId: record.turn.id,
+			},
+			{ source: "network" },
+		);
+		const snapshot = await sessionTurnsRepo.mergeTurns(
+			pending.spaceId,
+			pending.sessionId,
+			[record.turn],
+			{
+				session: record.session,
+				preferIncoming: true,
+				source: "network",
+			},
+		);
+		removePendingLocalRelayCommand(pending.commandId);
+		refreshPendingRelayCommands(pending.spaceId);
+		if (disposed || spaceId !== pending.spaceId) return;
+		applyAcceptedTurnId({
+			sessionId: pending.sessionId,
+			previousTurnId: pending.optimisticTurnId,
+			nextTurnId: record.turn.id,
+			confirmedTurn: record.turn,
+		});
+		const current = sessionStateById[pending.sessionId];
+		workspace.sessionStateById = {
+			...sessionStateById,
+			[pending.sessionId]: {
+				session: record.session,
+				turns: current
+					? preserveSessionTurnRefs(current.turns, snapshot.turns)
+					: snapshot.turns,
+				loading: false,
+				loaded: true,
+				error: null,
+				hasMore: snapshot.hasMoreOlder,
+				hasMoreNewer: snapshot.hasMoreNewer,
+				loadingOlder: false,
+				loadingNewer: false,
+				oldestCursor: snapshot.oldestSequence ?? undefined,
+			},
+		};
+		upsertSessionRecord(record.session);
+		if (completeGenerationWhenTerminal) {
+			completeGenerationForTurn(pending.sessionId, record.turn.id);
+		}
+	}
+
+	function applyRelayTerminalTurn(
+		sessionId: string,
+		turn: SessionTurnRecord,
+		session: SessionRecord | null,
+	) {
+		const state = sessionStateById[sessionId];
+		if (!state) {
+			completeGenerationForTurn(sessionId, turn.id);
+			return;
+		}
+		const clientMessageId = getTurnClientMessageId(turn);
+		const optimisticTurn = state.turns.find(
+			(item) =>
+				isOptimisticTurn(item) &&
+				isSameClientMessageTurn(item, clientMessageId),
+		);
+		if (optimisticTurn?.id && optimisticTurn.id !== turn.id) {
+			applyAcceptedTurnId({
+				sessionId,
+				previousTurnId: optimisticTurn.id,
+				nextTurnId: turn.id,
+				confirmedTurn: turn,
+			});
+		}
+		const current = sessionStateById[sessionId] ?? state;
+		workspace.sessionStateById = {
+			...sessionStateById,
+			[sessionId]: {
+				...current,
+				...(session ? { session } : {}),
+				turns: normalizeTurnDuplicates(
+					mergeTurnsById(current.turns, [turn], { preferIncoming: true }),
+				),
+			},
+		};
+		if (session) upsertSessionRecord(session);
+		clearIntermediateHandoffIfPersisted(sessionId, turn.id);
+		completeGenerationForTurn(sessionId, turn.id);
+	}
+
+	async function reconcileRelayCommand(
+		pending: PendingLocalRelayCommand,
+		command: LocalRelayEventCommand,
+	) {
+		noteRelayCommandStatus(command);
+		const decision = decideRelayCommandReconcile(pending, command);
+		if (decision.action === "ignore-nonterminal") return;
+		if (decision.action === "cancelled") {
+			applyCancelledRelayCommand(pending);
+			return;
+		}
+		if (decision.action === "failed") {
+			const failure = localRelayCommandFailure(command);
+			failGeneration(pending.sessionId, failure.message, {
+				errorCode: failure.code,
+			});
+			if (
+				!disposed &&
+				spaceId === pending.spaceId &&
+				activeSessionId === pending.sessionId
+			) {
+				setComposerError(failure.message, failure.code);
+			}
+			stopRelayCommandWatch(pending.commandId);
+			removePendingLocalRelayCommand(pending.commandId);
+			refreshPendingRelayCommands(pending.spaceId);
+			return;
+		}
+		if (decision.action === "succeeded-truncated") {
+			stopRelayCommandWatch(pending.commandId);
+			removePendingLocalRelayCommand(pending.commandId);
+			refreshPendingRelayCommands(pending.spaceId);
+			return;
+		}
+		if (decision.action === "invalid-payload") {
+			throw new Error(decision.error);
+		}
+		await applySucceededRelayTurn(
+			pending,
+			{
+				session: decision.session as unknown as SessionRecord,
+				turn: decision.turn as unknown as SessionTurnRecord,
+			},
+			decision.completeGeneration,
+		);
+		stopRelayCommandWatch(pending.commandId);
+	}
+
+	function handleRelayTurnEvent(event: LocalRelayTurnEvent) {
+		const decision = decideRelayTurnEvent(event, {
+			spaceId,
+			seenEventIds: seenRelayEventIds,
+		});
+		if (decision.action === "ignore") return;
+		if (decision.action === "hydrate-truncated") {
+			completeGenerationForTurn(decision.sessionId, decision.turnId);
+			void hydrateTurnOnce({
+				sessionId: decision.sessionId,
+				turnId: decision.turnId,
+				reason: "relay.turn.event",
+			});
+			return;
+		}
+		applyRelayTerminalTurn(
+			decision.sessionId,
+			decision.turn as unknown as SessionTurnRecord,
+			decision.session as SessionRecord | null,
+		);
+	}
+
+	function handleRelaySnapshot(input: {
+		commands: LocalRelayEventCommand[];
+		events: LocalRelayTurnEvent[];
+	}) {
+		relayCommandStatusById = mergeRelayCommandStatuses(
+			relayCommandStatusById,
+			input.commands,
+		);
+		refreshPendingRelayCommands();
+		const pendingById = new Map(
+			pendingRelayCommands.map((item) => [item.commandId, item]),
+		);
+		for (const command of input.commands) {
+			const pending = pendingById.get(command.id);
+			if (!pending) continue;
+			void reconcileRelayCommand(pending, command).catch((error) => {
+				console.warn("[local-relay] snapshot command reconcile failed", error);
+			});
+		}
+		for (const event of input.events) {
+			handleRelayTurnEvent(event);
+		}
+	}
+
+	function startRelayEventConnection(currentSpaceId: string) {
+		closeRelayEventConnection();
+		const controller = new AbortController();
+		const connection = openLocalRelayEvents(
+			{
+				onSnapshot: (message) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					handleRelaySnapshot(message);
+				},
+				onCommandUpdated: (command) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					noteRelayCommandStatus(command);
+					const pending = pendingRelayCommands.find(
+						(item) => item.commandId === command.id,
+					);
+					if (!pending) return;
+					void reconcileRelayCommand(pending, command).catch((error) => {
+						console.warn(
+							"[local-relay] command update reconcile failed",
+							error,
+						);
+					});
+				},
+				onTurnEvent: (event) => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					handleRelayTurnEvent(event);
+				},
+				onAvailable: () => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					relayEventsLive = true;
+					stopAllRelayCommandWatches();
+				},
+				onUnavailable: () => {
+					if (disposed || spaceId !== currentSpaceId) return;
+					relayEventsLive = false;
+					resumePendingRelayCommandWatches(currentSpaceId);
+				},
+			},
+			{ signal: controller.signal },
+		);
+		relayEventsClose = () => {
+			controller.abort();
+			connection.close();
+		};
+	}
+
+	function watchPendingRelayCommand(pending: PendingLocalRelayCommand) {
+		if (relayEventsLive || relayCommandWatches.has(pending.commandId)) return;
+		const controller = new AbortController();
+		relayCommandWatches.set(pending.commandId, controller);
+		void (async () => {
+			while (!disposed && !controller.signal.aborted && !relayEventsLive) {
+				try {
+					const command = await waitForLocalRelayCommand(pending.commandId, {
+						signal: controller.signal,
+					});
+					await reconcileRelayCommand(pending, command);
+					return;
+				} catch (error) {
+					if (controller.signal.aborted || disposed || relayEventsLive) return;
+					console.warn("[local-relay] result recovery retry", error);
+					relayStatus = "cloud-error";
+					await waitForRelayRetry(controller.signal);
+				}
+			}
+		})().finally(() => {
+			relayCommandWatches.delete(pending.commandId);
+		});
+	}
+
+	function resumePendingRelayCommandWatches(currentSpaceId: string) {
+		refreshPendingRelayCommands(currentSpaceId);
+		for (const pending of pendingRelayCommands) {
+			watchPendingRelayCommand(pending);
+		}
+	}
+
+	async function cancelQueuedRelayCommand(commandId: string) {
+		if (cancellingRelayCommandIds[commandId]) return;
+		const pending = pendingRelayCommands.find(
+			(item) => item.commandId === commandId,
+		);
+		if (!pending) return;
+		if (relayCommandStatusById[commandId] !== "queued") return;
+		cancellingRelayCommandIds = {
+			...cancellingRelayCommandIds,
+			[commandId]: true,
+		};
+		try {
+			const command = await cancelLocalRelayCommand(commandId);
+			noteRelayCommandStatus(command);
+			await reconcileRelayCommand(pending, command);
+		} catch (error) {
+			const code =
+				error && typeof error === "object" && "code" in error
+					? String(error.code)
+					: "";
+			if (code === "command_active") {
+				noteRelayCommandStatus({ id: commandId, status: "claimed" });
+				setComposerError(
+					"Already being delivered — cannot withdraw.",
+					"command_active",
+				);
+				return;
+			}
+			setComposerError(
+				error instanceof Error
+					? error.message
+					: "Relay command could not be withdrawn",
+				code || "relay_cancel_failed",
+			);
+		} finally {
+			const next = { ...cancellingRelayCommandIds };
+			delete next[commandId];
+			cancellingRelayCommandIds = next;
+		}
+	}
 	async function handleForkTurn(turn: SessionTurnRecord) {
 		if (!activeSessionId || forkingTurnId) return;
 		const opSpaceId = spaceId;
@@ -2684,11 +3567,31 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		sessionId: string | null,
 		fileAttachments: ComposerFileAttachment[],
 	) {
-		if (fileAttachments.length === 0) return new Map<string, string>();
+		if (fileAttachments.length === 0)
+			return {
+				urls: new Map<string, string>(),
+				relayAttachmentIds: [] as string[],
+			};
 		composer.setUploading("file");
 		const urls = new Map<string, string>();
+		const relayAttachmentIds: string[] = [];
 		const results = await Promise.allSettled(
 			fileAttachments.map(async (attachment) => {
+				if (isLocalRelayEnabled && options.isLocalSpace?.()) {
+					const asset = await uploadLocalRelayAttachment({
+						file: attachment.file,
+						name: attachment.name,
+						onProgress: (ratio) =>
+							composer.setAttachmentUploadProgress(
+								attachment.id,
+								Math.round(ratio * 100),
+							),
+					});
+					urls.set(attachment.id, asset.referenceUrl);
+					relayAttachmentIds.push(asset.id);
+					composer.setAttachmentFinalizing(attachment.id);
+					return;
+				}
 				const asset = await uploadChatAttachmentFile({
 					spaceId: opSpaceId,
 					sessionId: sessionId ?? undefined,
@@ -2706,7 +3609,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		);
 		const failed = results.find((result) => result.status === "rejected");
 		if (failed?.status === "rejected") throw failed.reason;
-		return urls;
+		return { urls, relayAttachmentIds };
 	}
 
 	async function uploadComposerImageDurables(
@@ -2719,16 +3622,33 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				urls: new Map<string, string>(),
 				fileUrls: new Map<string, string>(),
 				demotedIds: new Set<string>(),
+				relayAttachmentIds: [] as string[],
 			};
 		}
 		composer.setUploading("image");
 		const urls = new Map<string, string>();
 		const fileUrls = new Map<string, string>();
 		const demotedIds = new Set<string>();
+		const relayAttachmentIds: string[] = [];
 		await Promise.all(
 			imageAttachments.map(async (attachment) => {
 				if (attachment.uploadedUrl) {
 					urls.set(attachment.id, attachment.uploadedUrl);
+					composer.setAttachmentFinalizing(attachment.id);
+					return;
+				}
+				if (isLocalRelayEnabled && options.isLocalSpace?.()) {
+					const asset = await uploadLocalRelayAttachment({
+						file: attachment.file,
+						name: attachment.name,
+						onProgress: (ratio) =>
+							composer.setAttachmentUploadProgress(
+								attachment.id,
+								Math.round(ratio * 100),
+							),
+					});
+					urls.set(attachment.id, asset.referenceUrl);
+					relayAttachmentIds.push(asset.id);
 					composer.setAttachmentFinalizing(attachment.id);
 					return;
 				}
@@ -2782,7 +3702,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			}),
 		);
 		if (urls.size > 0) composer.setUploadedImageUrls(urls);
-		return { urls, fileUrls, demotedIds };
+		return { urls, fileUrls, demotedIds, relayAttachmentIds };
 	}
 
 	function adoptPromptSession(input: {
@@ -2818,9 +3738,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				...sessionModelById,
 				[session.id]: model,
 			};
-			if (draftSessionModelManuallySelected) {
-				saveDraftSessionModel(model);
-			}
 		}
 		workspace.activeSessionId = session.id;
 		ensureSessionModelLoaded(session.id);
@@ -3010,17 +3927,30 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			setComposerError(m.runtime_harness_unavailable());
 			return;
 		}
-		composer.sending = true;
 		const model = harness === "cohub" ? activeSessionModel : localModel;
+		const agentHarness = activeAgentHarness;
+		const promptThinkingLevel = harness === "cohub" ? activeSessionPromptThinkingLevel : null;
+		const promptServiceTier = harness === "cohub" ? activeSessionServiceTier : undefined;
+		if (harness === "cohub" && agentHarness !== "pi" && (!model || !promptThinkingLevel)) {
+			composer.setError(
+				modelsCatalogStore.error || "Model options are not ready yet.",
+			);
+			return;
+		}
+		composer.sending = true;
 		clearComposerError();
 		// Snapshot identity for the whole send pipeline (multi-space host safe).
 		const opSpaceId = spaceId;
 		const opSessionIdAtStart = activeSessionId;
+		const useLocalRelay = Boolean(
+			isLocalRelayEnabled && options.isLocalSpace?.(),
+		);
 		clearGenerationError(opSessionIdAtStart);
 		// Existing session only — new chat lets prompt create the session server-side.
 		let sessionId = activeSessionState?.session?.id ?? null;
 		let targetSessionState = activeSessionState;
 		const isNewChat = !sessionId;
+		if (useLocalRelay && !sessionId) sessionId = crypto.randomUUID();
 		const pendingInput = input;
 		const pendingAttachments = attachments;
 		const optimisticTurnId = crypto.randomUUID();
@@ -3052,16 +3982,21 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 
 			// Client uploads once to durable public storage.
 			// With space, server materializes from those URLs into sandbox (no second client upload).
-			const [fileDurableUrls, imageUpload] = await Promise.all([
+			const [fileUpload, imageUpload] = await Promise.all([
 				uploadComposerFileDurables(opSpaceId, sessionId, fileAttachments),
 				uploadComposerImageDurables(opSpaceId, sessionId, imageAttachments),
 			]);
+			const fileDurableUrls = fileUpload.urls;
 			const imageUrls = imageUpload.urls;
 			const demotedImageIds = imageUpload.demotedIds;
 			const demotedImageFileUrls = imageUpload.fileUrls;
 			const durableFileUrls = [
 				...fileDurableUrls.values(),
 				...demotedImageFileUrls.values(),
+			];
+			const relayAttachmentIds = [
+				...fileUpload.relayAttachmentIds,
+				...imageUpload.relayAttachmentIds,
 			];
 
 			const materializeSource = [
@@ -3095,17 +4030,19 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				}),
 			];
 			const sandboxPaths =
-				materializeSource.length > 0
-					? await materializeDurableUrlsToSandbox(
-							opSpaceId,
-							sessionId,
-							materializeSource,
-						).catch((error) => {
-							// Durable URL is enough without sandbox.
-							console.warn("[composer] sandbox materialize skipped", error);
-							return [] as string[];
-						})
-					: [];
+				isLocalRelayEnabled && options.isLocalSpace?.()
+					? []
+					: materializeSource.length > 0
+						? await materializeDurableUrlsToSandbox(
+								opSpaceId,
+								sessionId,
+								materializeSource,
+							).catch((error) => {
+								// Durable URL is enough without sandbox.
+								console.warn("[composer] sandbox materialize skipped", error);
+								return [] as string[];
+							})
+						: [];
 
 			// Per-attachment delivery: each binary must have durable URL (image or file).
 			// Sandbox is additive; durable is the always-on channel without space.
@@ -3176,7 +4113,18 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				},
 			);
 			const viewportBlock = buildViewportContentBlock(pendingViewportContexts);
-			const mentions = extractSpaceMentionsFromText(text);
+			const mentions = extractSpaceMentionsFromText(text, {
+				resolveOrigin: getRegisteredSpaceOrigin,
+			});
+			const localFederatedPromptEnv = buildLocalFederatedPromptEnv({
+				useLocalRelay,
+				relayEnabled: isLocalRelayEnabled,
+				mentions,
+				apiUrl: localFederatedApiUrl,
+			});
+			const localFederatedPromptContext = localFederatedPromptEnv
+				? buildLocalFederatedPromptContext(mentions)
+				: null;
 			content = [
 				...(text
 					? [
@@ -3188,6 +4136,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						]
 					: []),
 				...(viewportBlock ? [viewportBlock] : []),
+				...(localFederatedPromptContext ? [localFederatedPromptContext] : []),
 				...attachmentBlocks,
 			];
 
@@ -3231,6 +4180,12 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						harness,
 						userId: currentUser.uuid,
 						clientMessageId,
+						...(promptThinkingLevel
+							? { requestedThinkingLevel: promptThinkingLevel }
+							: {}),
+						...(promptServiceTier !== undefined
+							? { requestedServiceTier: promptServiceTier }
+							: {}),
 					},
 					authorProfile: currentUser.profile,
 					startedAt: now,
@@ -3259,24 +4214,128 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					});
 			}
 
-			const sendResult = await sdk.space(opSpaceId).prompt({
-				// Omit sessionId for new chat — server creates it.
+			const promptBody = {
+				// Relay-first chats select their Session id before the Mac is online.
 				...(sessionId ? { sessionId } : {}),
+				...(useLocalRelay
+					? buildRelaySessionCreation(targetSessionState?.session, agentHarness)
+					: isNewChat && showAgentHarnessSelector
+						? { agentHarness }
+						: {}),
 				content,
 				model: model?.id,
 				provider: model?.provider,
 				harness,
-				...(harness === "cohub" && activeSessionThinkingLevel
-					? { thinkingLevel: activeSessionThinkingLevel }
+				...(promptThinkingLevel ? { thinkingLevel: promptThinkingLevel } : {}),
+				...(promptServiceTier !== undefined
+					? { serviceTier: promptServiceTier }
 					: {}),
 				clientMessageId,
 				...(harness === "cohub"
 					? { generationPolicy: buildTurnGenerationPolicy() }
 					: {}),
+				...(localFederatedPromptEnv ? { env: localFederatedPromptEnv } : {}),
 				accessMode: "full_access",
 				intent: "followup",
 				schedule: { mode: "immediate" },
-			});
+			} satisfies CreateSpacePromptInput;
+			let relayCommandId: string | null = null;
+			let pendingRelayCommand: PendingLocalRelayCommand | null = null;
+			let relayRecoveryPersistError = "";
+			let sendResult: CreateSpacePromptResponse;
+			if (useLocalRelay) {
+				if (!sessionId) throw new Error("Relay Session identity is missing");
+				const relayCommand = await submitLocalRelayPrompt({
+					spaceId: opSpaceId,
+					clientMessageId,
+					body: promptBody as Record<string, unknown>,
+					attachmentIds: relayAttachmentIds,
+				});
+				relayCommandId = relayCommand.id;
+				pendingRelayCommand = {
+					commandId: relayCommand.id,
+					spaceId: opSpaceId,
+					sessionId,
+					optimisticTurnId,
+					clientMessageId,
+					createdAt: new Date().toISOString(),
+				};
+				try {
+					registerPendingLocalRelayCommand(pendingRelayCommand);
+				} catch (error) {
+					relayRecoveryPersistError =
+						error instanceof Error
+							? error.message
+							: "Relay recovery could not be saved";
+				}
+				noteRelayCommandStatus(relayCommand);
+				const now = new Date().toISOString();
+				const relaySession: SessionRecord = targetSessionState?.session ?? {
+					id: sessionId,
+					spaceId: opSpaceId,
+					userUuid: currentUser.uuid,
+					userProfile: currentUser.profile,
+					title: null,
+					source: "web",
+					status: "active",
+					externalSessionId: null,
+					agentHarness,
+					meta: { relayPending: true, relayCommandId },
+					latestMessageText: text,
+					lastMessageAt: now,
+					lastMessageId: null,
+					createdAt: now,
+					updatedAt: now,
+				};
+				const relayTurn: SessionTurnRecord = optimisticTurn
+					? {
+							...optimisticTurn,
+							meta: {
+								...(optimisticTurn.meta ?? {}),
+								relayCommandId,
+							},
+						}
+					: {
+							id: optimisticTurnId,
+							sessionId,
+							userUuid: currentUser.uuid,
+							sequence: (targetSessionState?.turns.at(-1)?.sequence ?? 0) + 1,
+							status: "queued",
+							intent: "followup",
+							userContent: content,
+							userText: text,
+							assistantContent: null,
+							assistantText: null,
+							provider: model?.provider ?? null,
+							model: model?.id ?? null,
+							stopReason: null,
+							errorMessage: null,
+							finalUsage: null,
+							totalUsage: null,
+							summary: null,
+							intermediateIndex: null,
+							intermediateSummary: null,
+							meta: {
+								optimistic: true,
+								userId: currentUser.uuid,
+								clientMessageId,
+								relayCommandId,
+							},
+							authorProfile: currentUser.profile,
+							startedAt: now,
+							completedAt: null,
+							durationMs: null,
+							createdAt: now,
+							updatedAt: now,
+						};
+				sendResult = {
+					mode: "immediate",
+					session: relaySession,
+					turn: relayTurn,
+				};
+			} else {
+				sendResult = await sdk.space(opSpaceId).prompt(promptBody);
+			}
 			if (sendResult.mode !== "immediate") {
 				throw new Error("Expected immediate prompt response");
 			}
@@ -3335,17 +4394,35 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					},
 				};
 			}
-			if (isNewChat && sessionId) {
-				void sessionTurnsRepo
-					.mergeTurns(opSpaceId, sessionId, [acceptedTurnWithProfile], {
+			if ((isNewChat || useLocalRelay) && sessionId) {
+				const cacheAcceptedTurn = sessionTurnsRepo.mergeTurns(
+					opSpaceId,
+					sessionId,
+					[acceptedTurnWithProfile],
+					{
 						session: acceptedSession,
 						hasMoreOlder: false,
 						hasMoreNewer: false,
 						source: "network",
-					})
-					.catch((error) =>
+					},
+				);
+				if (useLocalRelay) {
+					await cacheAcceptedTurn;
+				} else {
+					void cacheAcceptedTurn.catch((error) =>
 						console.warn("[NewChat] failed to cache accepted turn", error),
 					);
+				}
+			}
+			if (pendingRelayCommand && sessionId) {
+				refreshPendingRelayCommands(opSpaceId);
+				if (!relayEventsLive) watchPendingRelayCommand(pendingRelayCommand);
+				if (relayRecoveryPersistError) {
+					setComposerError(
+						relayRecoveryPersistError,
+						"relay_recovery_persist_failed",
+					);
+				}
 			}
 			// The accepted turn now owns the explicit request state. Clear the local
 			// override only after merging it to avoid briefly showing the older level.
@@ -3353,8 +4430,12 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				const nextThinkingLevels = { ...sessionThinkingLevelById };
 				delete nextThinkingLevels[sessionId];
 				sessionThinkingLevelById = nextThinkingLevels;
+				const nextServiceTiers = { ...sessionServiceTierById };
+				delete nextServiceTiers[sessionId];
+				sessionServiceTierById = nextServiceTiers;
 			}
 			draftThinkingLevel = null;
+			draftServiceTier = undefined;
 			if (sessionId && options.getConnectionState() !== "open") {
 				schedulePostSendRecoveryCheck(sessionId);
 			}
@@ -3922,7 +5003,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (payload.type === "space.fs.changed") {
 				const eventPayload = payload.payload as SpaceFsChangedPayload;
 				if (shouldRefreshAgentCatalogs(eventPayload))
-					await loadPromptTemplates({ ensureFresh: true });
+					await loadPromptTemplates();
 				return;
 			}
 			// Shell owns ports and labels; chat only consumes session events.
@@ -4167,6 +5248,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			if (activeSessionId) captureCurrentScrollAnchor(activeSessionId);
 			if (spaceId) flushActiveComposerDraft();
 			spaceId = "";
+			resetDraftComposerState();
 			resolvedNewSessionId = null;
 			createSessionError = "";
 			forkingTurnId = null;
@@ -4189,8 +5271,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			share.reset();
 			tasks.reset();
 			sessionModelById = {};
-			draftSessionModel = null;
-			draftSessionModelManuallySelected = false;
 			route = { kind: "none" };
 			composer.sending = false;
 			composer.aborting = false;
@@ -4205,6 +5285,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		// Multi-host safe: host-local lease tracking; only last leaver resets store.
 		acquireGenerationLease(nextSpaceId);
 		spaceId = nextSpaceId;
+		resetDraftComposerState();
 		resolvedNewSessionId = null;
 		createSessionError = "";
 		forkingTurnId = null;
@@ -4229,8 +5310,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		share.reset();
 		tasks.reset();
 		sessionModelById = {};
-		draftSessionModel = null;
-		draftSessionModelManuallySelected = false;
 		promptTemplatesCtrl.restore(nextSpaceId);
 		skillsCtrl.restore(nextSpaceId);
 		void loadPromptTemplates();
@@ -4267,6 +5346,10 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		const prev = route;
 		if (!isSameRoute(route, input.route)) {
 			route = input.route;
+			composer.clearError();
+			if (input.route.kind === "new" && prev.kind !== "new") {
+				resetDraftComposerState();
+			}
 		}
 
 		if (route.kind === "session") {
@@ -4446,6 +5529,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		scroll.clearPendingVimG();
 		scroll.cancelTurnMarkerMeasure();
 		clearAllPostSendRecovery();
+		closeRelayEventConnection();
+		stopAllRelayCommandWatches();
 		composer.sending = false;
 		composer.aborting = false;
 		// Release generation lease only if this host still holds it.
@@ -4532,8 +5617,31 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			return activeSessionThinkingLevel;
 		},
 		get activeSessionThinkingLevelLabel() {
-			if (!activeSessionThinkingLevel) return null;
-			return formatThinkingLevelShort(activeSessionThinkingLevel);
+			if (!activeSessionPromptThinkingLevel) return null;
+			return formatThinkingLevelShort(activeSessionPromptThinkingLevel);
+		},
+		get activeSessionServiceTier() {
+			return activeSessionServiceTier;
+		},
+		get activeSessionServiceTierLabel() {
+			if (!activeSessionCatalogItem || !activeSessionServiceTier) return null;
+			return (
+				getModelServiceTiers(activeSessionCatalogItem).find(
+					(tier) => tier.id === activeSessionServiceTier,
+				)?.name ?? activeSessionServiceTier
+			);
+		},
+		get parameterPreferenceNotice() {
+			return parameterPreferenceNotice;
+		},
+		get parameterPreferencesInvalid() {
+			return parameterPreferencesInvalid;
+		},
+		get modelsCatalogLoading() {
+			return modelsCatalogStore.loading;
+		},
+		get modelsCatalogError() {
+			return modelsCatalogStore.error;
 		},
 		get generationPolicyLabel() {
 			return generationPolicyLabel;
@@ -4557,6 +5665,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				...localModelsBySession,
 				[`${harnessSelectionKey}:${composerHarness}`]: model,
 			};
+		},
+		get showAgentHarnessSelector() {
+			return showAgentHarnessSelector;
+		},
+		get activeAgentHarness() {
+			return activeAgentHarness;
+		},
+		get agentHarnessLocked() {
+			return agentHarnessLocked;
 		},
 		get generationModelsCatalog() {
 			return generationModelsCatalog;
@@ -4601,6 +5718,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get skillsLoaded() {
 			return skillsLoaded;
 		},
+		get harnessCapabilities() {
+			return harnessCapabilities;
+		},
+		get harnessCapabilitiesLoaded() {
+			return harnessCapabilitiesLoaded;
+		},
+		get slashCatalogError() {
+			return slashCatalogError;
+		},
 		get input() {
 			return composer.input;
 		},
@@ -4619,6 +5745,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get composerNotice() {
 			return composerNotice;
 		},
+		get queuedRelayCancels() {
+			return queuedRelayCancels;
+		},
+		get cancellingRelayCommandIds() {
+			return cancellingRelayCommandIds;
+		},
+		cancelQueuedRelayCommand,
 		get composerShowsBillingAction() {
 			return composerShowsBillingAction;
 		},
@@ -4739,6 +5872,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		dispose,
 		handleSend,
 		setComposerMode,
+		setAgentHarness,
 		handleAbort,
 		handleForkTurn,
 		handleSteerFollowup,
@@ -4772,6 +5906,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		loadGenerationModelsCatalog,
 		loadPromptTemplates,
 		handleModelSelect,
+		getModelParameterPreference,
+		resetSavedAgentParameterPreferences,
 		handleCreateModelSelect,
 		setGenerationPolicyMode,
 		setGenerationModelSelected,

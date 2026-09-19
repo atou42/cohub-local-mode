@@ -235,6 +235,27 @@ export function normalizeAssistantTurn(
       });
       continue;
     }
+    if (
+      block.type === "system_note" &&
+      typeof block.text === "string" &&
+      ["session_created", "forked", "compacted", "info"].includes(
+        String(block.note_type),
+      )
+    ) {
+      blocks.push({
+        type: "system_note",
+        note_type: block.note_type as
+          | "session_created"
+          | "forked"
+          | "compacted"
+          | "info",
+        text: block.text,
+        ...(block._meta && typeof block._meta === "object"
+          ? { _meta: block._meta as Record<string, unknown> }
+          : {}),
+      });
+      continue;
+    }
     if (block.type === "image") {
       const normalizedImage = normalizeContentBlockSafe(block, { onInvalid: warnInvalidContentBlock("assistant image block") });
       if (normalizedImage?.type === "image") blocks.push(normalizedImage);

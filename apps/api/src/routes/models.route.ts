@@ -2,6 +2,7 @@ import { createLogger } from "@cohub/infra/logging";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { parseAgentHarness } from "@cohub/protocol";
 import {
   createCachedModelsConfig,
   flattenModelsCatalog,
@@ -19,6 +20,11 @@ import { loadPublicGenerationModels } from "../generations/declarations.js";
 import { config } from "../config.js";
 import { useAuth } from "../lib/middleware.js";
 import { redisCommandClient } from "../redis.js";
+import { loadCloudGenerationModels } from "../local-mode/cloud-generation.js";
+import {
+  HarnessCatalogError,
+  loadExternalHarnessCatalog,
+} from "../local-mode/harness-catalog.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -94,7 +100,7 @@ async function loadCachedModels(input: {
   }
 }
 
-async function fetchModelsCatalog(userId: string): Promise<ModelCatalogEntry[]> {
+export async function fetchModelsCatalog(userId: string): Promise<ModelCatalogEntry[]> {
   const platformModels = await loadCachedModels({
     redisKey: PLATFORM_MODELS_REDIS_KEY,
     modelsPath: PLATFORM_MODELS_PATH,
@@ -123,10 +129,24 @@ router.get("/", async (c) => {
   try {
     const modelType = c.req.query("modelType");
     if (modelType === MULTIMODAL_MODEL_TYPE) {
+      if (config.nodeOrigin === "local") {
+        return c.json({ models: await loadCloudGenerationModels(user.uuid) });
+      }
       return c.json(await loadPublicGenerationModels(user.uuid));
     }
 
-    const catalog = await fetchModelsCatalog(user.uuid);
+    const rawHarness = c.req.query("harness");
+    const harness = rawHarness === undefined ? "pi" : parseAgentHarness(rawHarness);
+    if (!harness) {
+      return c.json({ message: "harness must be one of: pi, codex, grok_build, cursor" }, 400);
+    }
+    if (harness !== "pi" && config.nodeOrigin !== "local") {
+      return c.json({ message: "external harness catalogs are only available on a local node" }, 404);
+    }
+
+    const catalog = harness === "pi"
+      ? await fetchModelsCatalog(user.uuid)
+      : await loadExternalHarnessCatalog(harness);
     const grouped: Record<string, ModelCatalogEntry[]> = {};
     for (const entry of catalog) {
       let list = grouped[entry.provider];
@@ -139,6 +159,9 @@ router.get("/", async (c) => {
     return c.json(grouped);
   } catch (error) {
     logger.error("[models] failed to load catalog", error);
+    if (error instanceof HarnessCatalogError) {
+      return c.json({ code: error.code, message: error.message }, 503);
+    }
     return c.json({ message: "failed to load models catalog" }, 502);
   }
 });

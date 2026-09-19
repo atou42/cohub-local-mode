@@ -3,17 +3,13 @@ import {
 	readCachedPromptTemplates,
 	writeCachedPromptTemplates,
 } from "$lib/prompt-template-cache";
-import { sdk } from "$lib/sdk";
-import {
-	type CatalogRefreshOptions,
-	createCatalogRefreshCoordinator,
-} from "./catalog-refresh-coordinator";
+import { sdkForSpaceOrigin } from "$lib/sdk";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 
 export type PromptQuickAction = {
 	name: string;
 	label: string;
 	description: string;
-	/** When set, the prompt expects arguments and the button prefills the composer instead of sending. */
 	argumentHint: string | null;
 };
 
@@ -23,21 +19,9 @@ export function createPromptTemplateController(options: {
 	let items = $state<PromptTemplateCatalogEntry[]>([]);
 	let loaded = $state(false);
 	let loadedFor = $state<string | null>(null);
-	const refreshCoordinator = createCatalogRefreshCoordinator({
-		getSpaceId: options.getSpaceId,
-		refresh: async (targetSpaceId) => {
-			try {
-				const response = await sdk.prompts.list({ spaceId: targetSpaceId });
-				writeCachedPromptTemplates(targetSpaceId, response.prompts);
-				if (options.getSpaceId() !== targetSpaceId) return;
-				items = response.prompts;
-				loaded = true;
-				loadedFor = targetSpaceId;
-			} catch (error) {
-				console.error("Failed to load prompt templates:", error);
-			}
-		},
-	});
+	let refreshError = $state<string | null>(null);
+	let refreshInFlight: Promise<void> | null = null;
+	let refreshInFlightFor: string | null = null;
 
 	function restore(targetSpaceId: string) {
 		const cached = readCachedPromptTemplates(targetSpaceId);
@@ -45,17 +29,54 @@ export function createPromptTemplateController(options: {
 			items = [];
 			loaded = false;
 			loadedFor = null;
+			refreshError = null;
 			return;
 		}
 		items = cached;
 		loaded = true;
 		loadedFor = targetSpaceId;
+		refreshError = null;
 	}
 
-	async function load(loadOptions: CatalogRefreshOptions = {}) {
+	async function refresh(targetSpaceId: string) {
+		if (refreshInFlight && refreshInFlightFor === targetSpaceId) {
+			return refreshInFlight;
+		}
+		const run = (async () => {
+			try {
+				const response = await sdkForSpaceOrigin(
+					resolveSpaceOrigin(targetSpaceId),
+				).prompts.list({ spaceId: targetSpaceId });
+				writeCachedPromptTemplates(targetSpaceId, response.prompts);
+				if (options.getSpaceId() !== targetSpaceId) return;
+				items = response.prompts;
+				loaded = true;
+				loadedFor = targetSpaceId;
+				refreshError = null;
+			} catch (error) {
+				console.error("Failed to load prompt templates:", error);
+				if (options.getSpaceId() !== targetSpaceId) return;
+				loaded = true;
+				loadedFor = targetSpaceId;
+				refreshError =
+					error instanceof Error ? error.message : "Failed to refresh commands";
+			}
+		})();
+		const trackedRun = run.finally(() => {
+			if (refreshInFlight === trackedRun) {
+				refreshInFlight = null;
+				refreshInFlightFor = null;
+			}
+		});
+		refreshInFlight = trackedRun;
+		refreshInFlightFor = targetSpaceId;
+		return trackedRun;
+	}
+
+	async function load() {
 		const targetSpaceId = options.getSpaceId();
 		if (loadedFor !== targetSpaceId) restore(targetSpaceId);
-		await refreshCoordinator.refresh(targetSpaceId, loadOptions);
+		await refresh(targetSpaceId);
 	}
 
 	const quickActions = $derived<PromptQuickAction[]>(
@@ -88,8 +109,11 @@ export function createPromptTemplateController(options: {
 		get loadedFor() {
 			return loadedFor;
 		},
+		get refreshError() {
+			return refreshError;
+		},
 		load,
 		restore,
-		refresh: refreshCoordinator.refresh,
+		refresh,
 	};
 }

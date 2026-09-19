@@ -10,6 +10,7 @@ import {
 	getAuthToken,
 	getCurrentIdTokenClaims,
 	hasRecoverableAuthSession,
+	prepareForAuthInvalidation,
 	setSessionHint,
 } from "$lib/auth";
 import { sdk } from "$lib/sdk";
@@ -204,7 +205,8 @@ class AuthStore {
 		return profile;
 	}
 
-	reset() {
+	async reset() {
+		await prepareForAuthInvalidation();
 		clearCachedMeProfile(this.claims?.sub);
 		setSessionHint(false);
 		this.claims = null;

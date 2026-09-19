@@ -2,6 +2,63 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { TasksApi } from "../src/apis/tasks.js";
 import type { HttpTransport } from "../src/transport.js";
+import type { WebsocketClient, WebsocketEventPayload } from "../src/websocket.js";
+
+test("realtime task updates keep one fallback poll timer and release the room on abort", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let requests = 0;
+	let listener: ((event: WebsocketEventPayload) => void) | undefined;
+	let releases = 0;
+	let unsubscribes = 0;
+	const websocket = {
+		state: "open",
+		retainRooms: () => () => { releases += 1; },
+		on: (_type: string, handler: typeof listener) => {
+			listener = handler;
+			return () => { listener = undefined; unsubscribes += 1; };
+		},
+	} as unknown as WebsocketClient;
+	const transport = {
+		request: async () => {
+			requests += 1;
+			return { run: { id: "task-1", spaceId: "space-1", status: "running" } };
+		},
+	} as unknown as HttpTransport;
+	const controller = new AbortController();
+	const waiting = new TasksApi(transport, websocket).wait("task-1", {
+		signal: controller.signal,
+		pollIntervalMs: 2_000,
+	});
+	const aborted = assert.rejects(waiting, { name: "AbortError" });
+	const flush = async () => {
+		for (let i = 0; i < 4; i += 1) await Promise.resolve();
+	};
+	try {
+		await flush();
+		assert.ok(listener);
+		for (let i = 0; i < 2; i += 1) {
+			t.mock.timers.tick(100);
+			listener({ type: "task.updated", payload: { task: { id: "task-1" } } } as WebsocketEventPayload);
+			await flush();
+		}
+		assert.equal(requests, 3);
+		t.mock.timers.tick(1_800);
+		await flush();
+		assert.equal(requests, 3, "a realtime update must replace the older fallback poll");
+		t.mock.timers.tick(200);
+		await flush();
+		assert.equal(requests, 4);
+	} finally {
+		controller.abort();
+		await aborted;
+	}
+	assert.equal(releases, 1);
+	assert.equal(unsubscribes, 1);
+	const before = requests;
+	t.mock.timers.tick(10_000);
+	await flush();
+	assert.equal(requests, before);
+});
 
 test("wait rejects an already-aborted signal before requesting", async () => {
 	const controller = new AbortController();

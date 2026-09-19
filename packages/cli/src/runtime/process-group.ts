@@ -6,7 +6,14 @@ export class ProcessCleanupUncertainError extends Error {}
 
 async function groupAlive(pid: number): Promise<boolean> {
   try { process.kill(-pid, 0); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    // macOS can report EPERM while a terminated group leader awaits reaping.
+    // Keep polling, never declare success until absence is confirmed.
+    if (process.platform === "darwin" && code === "EPERM") return true;
+    throw error;
+  }
   if (process.platform !== "linux") return true;
   // Linux can retain reparented zombies: they cannot execute, but kill(0) still sees them.
   for (const entry of await readdir("/proc")) {

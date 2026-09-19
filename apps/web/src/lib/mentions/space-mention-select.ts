@@ -1,6 +1,7 @@
 import type { GlobalSearchResult } from "@neta-art/cohub";
 import { mergeCommandResults } from "$lib/command-palette/merge-results";
 import type { CommandPaletteItem } from "$lib/command-palette/types";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import { normalizeSpacePublicProfile } from "$lib/space-profile";
 import {
 	buildSpaceMentionHref,
@@ -29,6 +30,7 @@ export function commandSpaceToMentionSuggestion(
 		spaceProfile: normalizeSpacePublicProfile(item.spaceProfile),
 		href: item.href || buildSpaceMentionHref(item.spaceId),
 		uri: buildSpaceMentionUri(item.spaceId),
+		origin: item.spaceOrigin ?? resolveSpaceOrigin(item.spaceId),
 		activityAt: item.updatedAt,
 		source: mentionSource(item.source),
 		score: item.score,
@@ -66,6 +68,7 @@ function mentionToPaletteItem(
 		viewerTier: item.viewerTier,
 		updatedAt: item.activityAt,
 		source: item.source,
+		spaceOrigin: item.origin,
 	};
 }
 
@@ -121,6 +124,12 @@ export function mergeSpaceMentionSuggestions(input: {
 	const query = input.query?.trim() ?? "";
 	const local = excludeCurrent(input.local, input.currentSpaceId);
 	const remote = excludeCurrent(input.remote, input.currentSpaceId);
+	for (const item of remote) {
+		const existing = local.find((candidate) => candidate.spaceId === item.spaceId);
+		if (existing && existing.origin !== item.origin) {
+			throw new Error(`Space ${item.spaceId} was returned by both local and cloud nodes`);
+		}
+	}
 	if (!query) return local.slice(0, input.limit ?? 50);
 	return mergeCommandResults({
 		local: local.map(mentionToPaletteItem),

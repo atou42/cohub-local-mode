@@ -10,7 +10,6 @@ export async function loadTurnIntermediate(input: {
 	turnId: string;
 	messagesObjectKey: string | null;
 }): Promise<StoredIntermediateMessage[]> {
-	if (!input.messagesObjectKey) return [];
 	const file = await sdk
 		.space(input.spaceId)
 		.session(input.sessionId)

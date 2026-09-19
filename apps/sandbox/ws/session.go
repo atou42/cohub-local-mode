@@ -220,6 +220,7 @@ func (s *Server) sendHeartbeat(session *connectionSession, includeSnapshot bool)
 			FSSearch:           s.isSearchEnabled(),
 			ProcessStart:       true,
 			ProcessStartArgv:   true,
+			ProcessWrite:       true,
 			ProcessAbort:       true,
 		}
 		message.Filesystem = &protocol.SandboxFilesystem{

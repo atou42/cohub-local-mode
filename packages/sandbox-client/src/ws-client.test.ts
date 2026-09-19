@@ -53,7 +53,7 @@ class FakeWebSocket extends EventEmitter {
   }
 }
 
-mock.module("ws", { exports: { default: FakeWebSocket } });
+mock.module("ws", { defaultExport: FakeWebSocket });
 
 const {
   disconnectSandboxWsClient,

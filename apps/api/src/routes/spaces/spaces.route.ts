@@ -4,7 +4,7 @@ import { createLogger } from "@cohub/infra/logging";
 import { getCurrentRequestId } from "@cohub/infra/tracing";
 import { Hono, type Context } from "hono";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { fileWatcherStatusSchema, getDefaultSpaceModsForEnv, harnessSchema, isLocalHarness, runtimeStopConfirmationSchema } from "@cohub/protocol";
+import { fileWatcherStatusSchema, getDefaultSpaceModsForEnv, harnessSchema, isLocalHarness, runtimeStopConfirmationSchema, type AgentHarness } from "@cohub/protocol";
 import {
   parseSpaceSlug,
   validatePublicIdentifierAssignment,
@@ -94,6 +94,16 @@ import { featureGateResponse } from "../../lib/feature-gate.js";
 import { billingBlockedResponse } from "../../lib/billing-blocked.js";
 import { applyRequestSourceToMeta, getRequestSource, resolveSessionSourceFromRequest } from "../../lib/request-source.js";
 import { validatePromptModel } from "../../llm/models.js";
+import {
+  HarnessCatalogError,
+  validateExternalHarnessSelection,
+} from "../../local-mode/harness-catalog.js";
+import {
+  AgentHarnessLockedError,
+  assertAgentHarnessLocked,
+  InvalidAgentHarnessError,
+  resolveAgentHarness,
+} from "../../session-agent-harness.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -119,6 +129,27 @@ async function buildSpacePromptTurnResponse(session: SpaceRouteSessionRecord | n
   return response ? { mode: "immediate" as const, ...response } : null;
 }
 
+const RELAY_AGENT_CLIENT_MESSAGE_CONSTRAINT =
+  "v2_uq_session_turns_agent_client_message";
+
+async function findAgentTurnByClientMessageId(input: {
+  sessionId: string;
+  userUuid: string;
+  clientMessageId: string;
+}) {
+  const [turn] = await db
+    .select({ id: sessionTurns.id })
+    .from(sessionTurns)
+    .where(and(
+      eq(sessionTurns.sessionId, input.sessionId),
+      eq(sessionTurns.userUuid, input.userUuid),
+      eq(sessionTurns.executionKind, "agent"),
+      sql`${sessionTurns.meta}->>'clientMessageId' = ${input.clientMessageId}`,
+    ))
+    .limit(1);
+  return turn?.id ?? null;
+}
+
 type SpacePromptSchedule =
   | { mode?: "immediate" }
   | { mode: "delay"; delayMs?: number }
@@ -139,7 +170,7 @@ const normalizeSpacePromptIntent = (value: unknown): SpacePromptIntent | null =>
   return value === "followup" || value === "steer" ? value : null;
 };
 
-const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 const normalizePromptThinkingLevel = (value: unknown): string | null | undefined => {
   if (value === undefined || value === null) return undefined;
@@ -312,6 +343,8 @@ type SpacePromptInput = {
     meta?: Record<string, unknown>;
   } | null;
   sessionId?: string | null;
+  createSession?: boolean;
+  agentHarness?: AgentHarness | null;
   title?: string | null;
   source?: string | null;
   content?: ContentBlock[];
@@ -319,6 +352,7 @@ type SpacePromptInput = {
   provider?: string | null;
   harness?: "cohub" | "pi" | "codex" | null;
   thinkingLevel?: string | null;
+  serviceTier?: string | null;
   clientMessageId?: string | null;
   generationPolicy?: unknown;
   intent?: SpacePromptIntent | null;
@@ -925,7 +959,11 @@ router.post("/", async (c) => {
     if (!(await hasPermission(user, "checkpoint.view", { spaceId: checkpoint.spaceId }))) return authzDenied(c);
   }
 
-  const createMods = Array.isArray(body.mods) ? body.mods : getDefaultSpaceModsForEnv(config.env);
+  const createMods = Array.isArray(body.mods)
+    ? body.mods
+    : config.nodeOrigin === "local"
+      ? []
+      : getDefaultSpaceModsForEnv(config.env);
   // spaceId is remapped inside createOwnedSpace; placeholder for prepare only.
   const preparedModValues = await prepareSpaceModInserts({
     actor: user,
@@ -939,7 +977,10 @@ router.post("/", async (c) => {
   });
   if (!Array.isArray(preparedModValues)) return c.json({ message: preparedModValues.message }, preparedModValues.status);
 
-  const sandboxProvider = normalizedConfig.sandbox?.provider ?? "cloud";
+  const sandboxProvider =
+    config.nodeOrigin === "local"
+      ? "local"
+      : normalizedConfig.sandbox?.provider ?? "cloud";
   const sandboxAutoDestroy = normalizedConfig.sandbox?.autoDestroy ?? DEFAULT_SPACE_SANDBOX_AUTO_DESTROY;
 
   let space: typeof spaces.$inferSelect | undefined;
@@ -1868,6 +1909,15 @@ router.post("/:id/prompt", async (c) => {
 
   const body = await c.req.json<SpacePromptInput>().catch(() => null);
   if (body?.mode === "create") {
+    if (body.createSession !== undefined) {
+      return c.json({ message: "createSession is only valid for agent prompts" }, 400);
+    }
+    if (body.agentHarness !== undefined && body.agentHarness !== null) {
+      return c.json({ message: "agentHarness is only valid for agent prompts" }, 400);
+    }
+    if (body.serviceTier !== undefined) {
+      return c.json({ message: "serviceTier is only valid for agent prompts" }, 400);
+    }
     const generation = body.generation;
     if (!generation?.model || !Array.isArray(generation.content) || generation.content.length === 0) {
       return c.json({ message: "generation.model and generation.content are required" }, 400);
@@ -1907,14 +1957,50 @@ router.post("/:id/prompt", async (c) => {
   if (!validatePromptContentBlocks(body?.content)) {
     return c.json({ message: "content must be a non-empty ContentBlock array" }, 400);
   }
+  if (body.createSession !== undefined && typeof body.createSession !== "boolean") {
+    return c.json({ message: "createSession must be a boolean" }, 400);
+  }
+  if (body.createSession !== undefined) {
+    const relayCommandId = c.req.header("x-cohub-relay-command-id")?.trim();
+    if (
+      config.nodeOrigin !== "local" ||
+      !relayCommandId ||
+      relayCommandId !== body.clientMessageId?.trim()
+    ) {
+      return c.json(
+        { message: "createSession requires an authenticated local relay command" },
+        403,
+      );
+    }
+    if (!body.sessionId?.trim()) {
+      return c.json({ message: "createSession requires sessionId" }, 400);
+    }
+  }
+  let requestedAgentHarness: AgentHarness | null;
+  try {
+    requestedAgentHarness = resolveAgentHarness(body.agentHarness, null);
+  } catch (error) {
+    if (error instanceof InvalidAgentHarnessError) return c.json({ message: error.message }, 400);
+    throw error;
+  }
   const accessMode = normalizePromptAccessMode(body.accessMode);
   if (!accessMode) return c.json({ message: "accessMode must be one of: read_only, full_access" }, 400);
   const promptIntent = normalizeSpacePromptIntent(body.intent);
   if (!promptIntent) return c.json({ message: "intent must be one of: followup, steer" }, 400);
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
-  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
+  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
   if (body.harness !== undefined && body.harness !== null && !harnessSchema.safeParse(body.harness).success) {
     return c.json({ message: "harness must be one of: cohub, pi, codex" }, 400);
+  }
+  const promptServiceTier = body.serviceTier === undefined
+    ? undefined
+    : body.serviceTier === null
+      ? null
+      : typeof body.serviceTier === "string" && body.serviceTier.trim()
+        ? body.serviceTier.trim()
+        : undefined;
+  if (body.serviceTier !== undefined && body.serviceTier !== null && promptServiceTier === undefined) {
+    return c.json({ message: "serviceTier must be a non-empty string or null" }, 400);
   }
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   if (!(await hasPermission(user, promptPermission, { spaceId }))) return authzDenied(c);
@@ -1927,19 +2013,44 @@ router.post("/:id/prompt", async (c) => {
   let sessionId = body.sessionId?.trim() || null;
   let promptSession: SpaceRouteSessionRecord | null = null;
   let createdPromptSession: SpaceRouteSessionRecord | null = null;
+  let shouldCreatePromptSession = false;
   if (sessionId) {
     const session = await getSpaceSessionById(sessionId);
-    if (!session || session.spaceId !== spaceId) return c.json({ message: "session not found" }, 404);
-    if (!(await hasPermission(user, promptPermission, { spaceId, sessionId }))) {
-      return authzDenied(c);
+    if (!session) {
+      if (body.createSession === true) shouldCreatePromptSession = true;
+      else return c.json({ message: "session not found" }, 404);
+    } else {
+      if (session.spaceId !== spaceId) return c.json({ message: "session not found" }, 404);
+      if (!(await hasPermission(user, promptPermission, { spaceId, sessionId }))) {
+        return authzDenied(c);
+      }
+      promptSession = session;
+      try {
+        assertAgentHarnessLocked(session.agentHarness as AgentHarness, requestedAgentHarness);
+      } catch (error) {
+        if (error instanceof AgentHarnessLockedError) return c.json({ message: error.message }, 409);
+        throw error;
+      }
     }
-    promptSession = session;
   }
+	const effectiveAgentHarness = promptSession?.agentHarness ?? requestedAgentHarness ?? "pi";
+	if (effectiveAgentHarness !== "pi") {
+		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
+		if (sandbox?.provider !== "local") {
+			return c.json({ message: "Codex, Grok Build, and Cursor require a local Space" }, 422);
+		}
+	}
 
   const schedule = body.schedule ?? { mode: "immediate" as const };
   const mode = schedule.mode ?? "immediate";
   if (!["immediate", "delay", "at", "repeat"].includes(mode)) {
     return c.json({ message: "schedule.mode must be one of: immediate, delay, at, repeat" }, 400);
+  }
+  if (shouldCreatePromptSession && mode !== "immediate") {
+    return c.json({ message: "relay-created Sessions require an immediate prompt" }, 400);
+  }
+  if (mode !== "immediate" && !sessionId && requestedAgentHarness && requestedAgentHarness !== "pi") {
+    return c.json({ message: "non-Pi harnesses require an immediate first prompt" }, 400);
   }
 
   const generationPolicy = body.generationPolicy === undefined || body.generationPolicy === null
@@ -1951,15 +2062,35 @@ router.post("/:id/prompt", async (c) => {
 
   const requestedModel = body.model?.trim() || null;
   const localHarness = isLocalHarness(body.harness);
-  const requestedProvider = body.provider?.trim() || (requestedModel && !localHarness ? "cohub" : null);
+  const requestedProvider = body.provider?.trim() || (
+    requestedModel && !localHarness ? (effectiveAgentHarness === "pi" ? "cohub" : effectiveAgentHarness) : null
+  );
+  if (localHarness && effectiveAgentHarness !== "pi") {
+    return c.json({ message: "Session Agent harness cannot be switched to a CLI Runtime" }, 409);
+  }
   if (mode !== "immediate" && localHarness) return c.json({ message: "Local Harness scheduling is unavailable" }, 422);
-  if (
-    requestedModel &&
-    requestedProvider &&
-    !localHarness &&
-    !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))
-  ) {
-    return c.json({ code: "model_unavailable", message: "requested model is not available" }, 422);
+  if (!localHarness && effectiveAgentHarness === "pi") {
+    if (promptServiceTier) {
+      return c.json({ code: "service_tier_unavailable", message: "Speed tiers are not available for Pi" }, 422);
+    }
+    if (requestedModel && requestedProvider &&
+      !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))) {
+      return c.json({ code: "model_unavailable", message: "requested model is not available" }, 422);
+    }
+  } else if (!localHarness && effectiveAgentHarness !== "pi") {
+    try {
+      const selection = await validateExternalHarnessSelection({
+        harness: effectiveAgentHarness,
+        provider: requestedProvider,
+        model: requestedModel,
+        thinkingLevel: promptThinkingLevel ?? null,
+        serviceTier: promptServiceTier ?? null,
+      });
+      if (!selection.ok) return c.json({ code: selection.code, message: selection.message }, 422);
+    } catch (error) {
+      if (error instanceof HarnessCatalogError) return c.json({ code: error.code, message: error.message }, 503);
+      throw error;
+    }
   }
 
   let promptLabelIds: string[] = [];
@@ -2002,19 +2133,21 @@ router.post("/:id/prompt", async (c) => {
     ...(body.model ? { model: body.model } : {}),
     ...(body.provider ? { provider: body.provider } : {}),
     ...(promptThinkingLevel ? { thinkingLevel: promptThinkingLevel } : {}),
+    ...(promptServiceTier !== undefined ? { serviceTier: promptServiceTier } : {}),
     ...(promptLabelIds.length > 0 ? { labelIds: promptLabelIds } : {}),
     ...(scheduledAuth ? { auth: scheduledAuth } : {}),
   };
 
   if (mode === "immediate") {
-    if (!sessionId) {
+    if (!sessionId || shouldCreatePromptSession) {
       promptSession = await createInitialSpaceSession({
         spaceId,
-        sessionId: crypto.randomUUID(),
+        sessionId: sessionId ?? crypto.randomUUID(),
         userUuid: user.uuid,
         title: body.title ?? null,
         source,
         externalSessionId: null,
+        agentHarness: requestedAgentHarness ?? "pi",
         meta: { createdBy: "api_space_prompt" },
       });
       createdPromptSession = promptSession;
@@ -2022,6 +2155,19 @@ router.post("/:id/prompt", async (c) => {
     }
 
     try {
+      const existingTurnId = await findAgentTurnByClientMessageId({
+        sessionId,
+        userUuid: user.uuid,
+        clientMessageId,
+      });
+      if (existingTurnId) {
+        const response = await buildSpacePromptTurnResponse(
+          await getSpaceSessionById(sessionId),
+          existingTurnId,
+        );
+        if (!response) return c.json({ message: "turn not found" }, 500);
+        return c.json(response);
+      }
       if (promptLabelIds.length > 0) {
         await assignLabelsToSession({ db, spaceId, sessionId, labelIds: promptLabelIds, userId: user.uuid });
       }
@@ -2045,6 +2191,7 @@ router.post("/:id/prompt", async (c) => {
         provider: requestedProvider,
         harness: body.harness ?? null,
         thinkingLevel: promptThinkingLevel ?? null,
+        serviceTier: promptServiceTier,
         generationPolicy,
         intent: promptIntent,
         accessMode,
@@ -2060,6 +2207,25 @@ router.post("/:id/prompt", async (c) => {
       // If we created the session for this request, surface its id so clients can retry
       // without spawning another empty session.
       const createdSessionId = createdPromptSession?.id ?? null;
+      if (
+        isPostgresUniqueViolation(
+          error,
+          RELAY_AGENT_CLIENT_MESSAGE_CONSTRAINT,
+        )
+      ) {
+        const existingTurnId = await findAgentTurnByClientMessageId({
+          sessionId,
+          userUuid: user.uuid,
+          clientMessageId,
+        });
+        const response = existingTurnId
+          ? await buildSpacePromptTurnResponse(
+              await getSpaceSessionById(sessionId),
+              existingTurnId,
+            )
+          : null;
+        if (response) return c.json(response);
+      }
       if (error instanceof BillingAccessBlockedError) {
         const res = billingBlockedResponse(c, error);
         if (createdSessionId) {
@@ -2210,12 +2376,26 @@ router.post("/:id/sessions", async (c) => {
   const space = await getSpaceById(spaceId);
   if (!space) return c.json({ message: "space not found" }, 404);
 
-  let body: { title?: string | null; source?: string | null; labelRefs?: unknown };
+  let body: { title?: string | null; source?: string | null; labelRefs?: unknown; agentHarness?: AgentHarness | null };
   try {
-    body = await c.req.json<{ title?: string | null; source?: string | null; labelRefs?: unknown }>();
+    body = await c.req.json<{ title?: string | null; source?: string | null; labelRefs?: unknown; agentHarness?: AgentHarness | null }>();
   } catch {
     return c.json({ message: "invalid json body" }, 400);
   }
+
+  let agentHarness: AgentHarness;
+  try {
+    agentHarness = resolveAgentHarness(body.agentHarness, "pi") ?? "pi";
+  } catch (error) {
+    if (error instanceof InvalidAgentHarnessError) return c.json({ message: error.message }, 400);
+    throw error;
+  }
+	if (agentHarness !== "pi") {
+		const sandbox = await getSpaceSandboxBySpaceId(spaceId);
+		if (sandbox?.provider !== "local") {
+			return c.json({ message: "Codex, Grok Build, and Cursor require a local Space" }, 422);
+		}
+	}
 
   let userLabelIds: string[] = [];
   try {
@@ -2238,6 +2418,7 @@ router.post("/:id/sessions", async (c) => {
     title: body.title ?? null,
     source,
     externalSessionId: null,
+    agentHarness,
     meta: { createdBy: "api_space_session_create" },
   });
 

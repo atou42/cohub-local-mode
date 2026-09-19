@@ -15,19 +15,32 @@ import (
 	"github.com/fsnotify/fsevents"
 )
 
+func openFDNames(t *testing.T) []string {
+	t.Helper()
+	dir, err := os.Open("/dev/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	// Stat-ing dynamic FD aliases can fail while descriptors are being closed.
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
 func TestFSEventsBoundedFDAndBackpressureClose(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadDir("/dev/fd")
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := openFDNames(t)
 	backend, _, err := newFSEventsBackend(root, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = backend.close() })
 	for i := 0; i < 1024; i++ {
 		if err := os.WriteFile(filepath.Join(root, fmt.Sprint(i)), nil, 0600); err != nil {
 			t.Fatal(err)
@@ -35,10 +48,7 @@ func TestFSEventsBoundedFDAndBackpressureClose(t *testing.T) {
 	}
 	// Do not consume output: shutdown must survive a full downstream queue.
 	time.Sleep(time.Second)
-	after, err := os.ReadDir("/dev/fd")
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := openFDNames(t)
 	if len(after)-len(before) > 64 {
 		t.Errorf("FD count grew with files: %d -> %d", len(before), len(after))
 	}

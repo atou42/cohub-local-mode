@@ -1,5 +1,5 @@
 {
-  "id": "41352933-906f-418d-aaa6-bd020807a67e",
+  "id": "ecf4d32b-527e-48a3-9548-8b2e405e9141",
   "prevId": "31c21c09-eba8-4051-b263-ead2497ae591",
   "version": "7",
   "dialect": "postgresql",
@@ -5319,12 +5319,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "harness_index": {
-          "name": "harness_index",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "meta": {
           "name": "meta",
           "type": "jsonb",
@@ -6426,6 +6420,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "agent_harness": {
+          "name": "agent_harness",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pi'"
         },
         "meta": {
           "name": "meta",

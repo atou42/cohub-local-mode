@@ -2,8 +2,15 @@ import type { Handle } from "@sveltejs/kit";
 import { resolvePublicLocale } from "$lib/i18n/public-locale";
 import {
 	isPublicSharePath,
+	PRIVATE_NO_STORE_CACHE_CONTROL,
 	PUBLIC_NOT_FOUND_CACHE_CONTROL,
 } from "$lib/server/public-cache";
+
+function isPrivateAppPath(pathname: string): boolean {
+	return ["/spaces", "/sessions", "/settings"].some(
+		(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+	);
+}
 
 function resolveHtmlLang(pathname: string, html: string): string {
 	const urlLocale = resolvePublicLocale(pathname);
@@ -43,6 +50,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 		!response.headers.has("cache-control")
 	) {
 		response.headers.set("cache-control", PUBLIC_NOT_FOUND_CACHE_CONTROL);
+	}
+
+	if (
+		isPrivateAppPath(event.url.pathname) &&
+		response.headers.get("content-type")?.includes("text/html")
+	) {
+		response.headers.set("cache-control", PRIVATE_NO_STORE_CACHE_CONTROL);
 	}
 
 	return response;

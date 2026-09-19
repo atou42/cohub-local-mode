@@ -2,8 +2,10 @@
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { PaletteOverviewResponse } from "@neta-art/cohub";
 import {
+	Cloud,
 	CornerDownRight,
 	FolderKanban,
+	Laptop,
 	Loader2,
 	MessageSquare,
 	Pin,
@@ -33,7 +35,10 @@ import {
 	revalidatePaletteOverview,
 	schedulePaletteOverviewRevalidate,
 } from "$lib/command-palette/palette-overview";
-import { mergeLocalOverviewIntoSnapshot } from "$lib/command-palette/palette-overview-local";
+import {
+	mergeLocalOverviewIntoSnapshot,
+	mergeLocalSpacesIntoFreshOverview,
+} from "$lib/command-palette/palette-overview-local";
 import { parseCommandPaletteQuery } from "$lib/command-palette/query";
 import {
 	getRecentCommandItems,
@@ -59,6 +64,7 @@ import { authStore } from "$lib/stores/auth.svelte";
 import {
 	fetchSpaceListWithCache,
 	getCachedSpaceListMeta,
+	getSpaceListLoadError,
 	onSpaceListCacheUpdated,
 } from "$lib/stores/space-list-cache";
 import {
@@ -135,6 +141,7 @@ let defaultDone = $state(true);
 let legacyDefaultDone = $state(true);
 let refreshingSpaces = $state(false);
 let remoteError = $state<string | null>(null);
+let spaceListError = $state<string | null>(getSpaceListLoadError());
 let debounceTimer: number | null = null;
 let localController: AbortController | null = null;
 let remoteController: AbortController | null = null;
@@ -284,6 +291,16 @@ const mergedItemsRaw = $derived.by(() => {
 	}
 	// Apply Mine / Pinned filter in space picker mode
 	if (filteredSpaceItems) raw = filteredSpaceItems(raw);
+	if (isSpacePickerMode) {
+		const localSpaces = raw.filter(
+			(item) => item.type === "space" && item.spaceOrigin === "local",
+		);
+		const cloudSpaces = raw.filter(
+			(item) => item.type === "space" && item.spaceOrigin !== "local",
+		);
+		const commands = raw.filter((item) => item.type !== "space");
+		raw = [...localSpaces, ...cloudSpaces, ...commands];
+	}
 	return raw;
 });
 const mergedItems = $derived.by(() => {
@@ -298,6 +315,11 @@ const isSearching = $derived(
 const renderedItems = $derived(
 	mergedItems.length > 0 || !isSearching ? mergedItems : settledItems,
 );
+const hasRenderedLocalSpaces = $derived(
+	renderedItems.some(
+		(item) => item.type === "space" && item.spaceOrigin === "local",
+	),
+);
 const showingSettledItems = $derived(
 	isSearching && mergedItems.length === 0 && settledItems.length > 0,
 );
@@ -309,6 +331,7 @@ const showingSpaceRefreshStatus = $derived(
 );
 const runBlocks = $derived(runResult ?? runProgress ?? []);
 const statusText = $derived.by(() => {
+	if (spaceListError) return spaceListError;
 	const label = typeLabel ?? m.command_type_default({}, { locale });
 	if (trimmedQuery.length < MIN_QUERY_LENGTH && !hasLabelScope) {
 		if (showingSpaceRefreshStatus)
@@ -463,6 +486,24 @@ function itemTimestamp(item: CommandPaletteItem) {
 	};
 }
 
+function getSpaceOriginHeader(item: CommandPaletteItem, index: number) {
+	if (!isSpacePickerMode || item.type !== "space") return null;
+	const origin = item.spaceOrigin === "local" ? "local" : "cloud";
+	const previous = renderedItems[index - 1];
+	const previousOrigin =
+		previous?.type === "space"
+			? previous.spaceOrigin === "local"
+				? "local"
+				: "cloud"
+			: null;
+	return previousOrigin === origin ? null : origin;
+}
+
+function createLocalSpace() {
+	closePalette();
+	void goto("/spaces/new?origin=local");
+}
+
 function resetRunState() {
 	runMode = false;
 	runCommand = "";
@@ -556,11 +597,13 @@ async function refreshSpaceListForDefaultItems(
 			await fetchSpaceListWithCache(async () => await sdk.spaces.list(), {
 				force,
 			});
+			spaceListError = null;
 		} finally {
 			if (activeSpaceListRefreshId === refreshId) refreshingSpaces = false;
 		}
 	} catch (error) {
 		console.warn("[command-palette] space list refresh failed", error);
+		spaceListError = getSpaceListLoadError() ?? "Spaces could not be refreshed.";
 		return;
 	}
 
@@ -645,7 +688,12 @@ function scheduleSearch(plan: typeof searchPlan, spaceId: string | null) {
 			// response is authoritative and replaces the merged frame in place.
 			void revalidatePaletteOverview().then((fresh) => {
 				if (!fresh || token !== searchToken) return;
-				return buildDefaults(fresh)
+				return getLocalPaletteOverview({
+					signal: defaultSignal,
+					viewerUserUuid: myUserUuid,
+				})
+					.then((local) => mergeLocalSpacesIntoFreshOverview(fresh, local))
+					.then(buildDefaults)
 					.then((items) => {
 						if (token === searchToken) applyDefaultItems(items);
 					})
@@ -949,6 +997,7 @@ onMount(() => {
 	// Refresh space items when the space list cache changes (e.g. pin toggle)
 	// so the palette reflects the new isPinned state immediately.
 	const offSpaceListCache = onSpaceListCacheUpdated(() => {
+		spaceListError = getSpaceListLoadError();
 		if (open && !runMode) spaceListRefreshToken += 1;
 	});
 	// Warm the overview when the app returns to the foreground, so the Recent
@@ -1087,11 +1136,32 @@ onMount(() => {
 							</div>
 						</div>
 					{:else}
+						{#if isSpacePickerMode && !hasRenderedLocalSpaces}
+							<div class="space-origin-empty" role="status">
+								<span class="space-origin-title"><Laptop class="h-3.5 w-3.5" /> Local</span>
+								<span class="space-origin-empty-state">No Spaces on this node</span>
+								<button type="button" class="space-origin-action" title="New local Space" aria-label="New local Space" onclick={createLocalSpace}>
+									<Plus class="h-3.5 w-3.5" />
+								</button>
+							</div>
+						{/if}
 						{#each renderedItems as item, index (`${item.type}:${item.id || item.turnId || item.sessionId || item.spaceId}`)}
 							{@const meta = typeMeta(item.type)}
 							{@const Icon = meta.icon}
 							{@const profile = profileFor(item)}
 							{@const timestamp = itemTimestamp(item)}
+							{@const originHeader = getSpaceOriginHeader(item, index)}
+							{#if originHeader}
+								<div class="space-origin-header">
+									{#if originHeader === "local"}<Laptop class="h-3.5 w-3.5" />{:else}<Cloud class="h-3.5 w-3.5" />{/if}
+									<span>{originHeader === "local" ? "Local" : "Cloud"}</span>
+									{#if originHeader === "local"}
+										<button type="button" class="space-origin-action ml-auto" title="New local Space" aria-label="New local Space" onclick={createLocalSpace}>
+											<Plus class="h-3.5 w-3.5" />
+										</button>
+									{/if}
+								</div>
+							{/if}
 							<div
 								class:active={index === activeIndex}
 								class="command-result"
@@ -1250,6 +1320,66 @@ onMount(() => {
 
 	.command-results.searching {
 		opacity: 0.72;
+	}
+
+	.space-origin-header,
+	.space-origin-empty {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-placeholder);
+		font-size: 11px;
+	}
+
+	.space-origin-header {
+		min-height: 28px;
+		padding: 7px 10px 3px;
+		font-weight: 600;
+	}
+
+	.space-origin-header:not(:first-child) {
+		margin-top: 5px;
+		border-top: 1px solid var(--border-subtle);
+		padding-top: 11px;
+	}
+
+	.space-origin-empty {
+		justify-content: space-between;
+		min-height: 38px;
+		padding: 7px 10px;
+		border-bottom: 1px solid var(--border-subtle);
+	}
+
+	.space-origin-title {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-secondary);
+		font-weight: 600;
+	}
+
+	.space-origin-empty-state {
+		margin-left: auto;
+	}
+
+	.space-origin-action {
+		display: inline-flex;
+		height: 26px;
+		width: 26px;
+		flex: 0 0 26px;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--text-tertiary);
+	}
+
+	.space-origin-action:hover,
+	.space-origin-action:focus-visible {
+		background: var(--bg-hover);
+		color: var(--text-primary);
+		outline: none;
 	}
 
 	.command-result {

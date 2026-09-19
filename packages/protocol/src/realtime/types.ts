@@ -337,6 +337,7 @@ export type RealtimeSessionRecord = Pick<
   | "status"
   | "activeTurn"
   | "externalSessionId"
+  | "agentHarness"
   | "latestMessageText"
   | "lastMessageAt"
   | "lastMessageId"

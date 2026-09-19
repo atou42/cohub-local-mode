@@ -5,13 +5,20 @@ import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
 export type SlashCommandMenuItem = {
-	kind: "prompt" | "skill";
+	kind: "prompt" | "skill" | "native_command" | "native_skill";
 	name: string;
 	description: string;
-	scope: SkillCatalogEntry["scope"];
+	scope:
+		| SkillCatalogEntry["scope"]
+		| "harness"
+		| "user"
+		| "repo"
+		| "system"
+		| "admin";
 	source?: SkillCatalogEntry["source"];
 	argumentHint?: string;
 	category?: string;
+	insertionText?: string;
 	matchScore?: number;
 };
 
@@ -26,6 +33,7 @@ type Props = {
 	open?: boolean;
 	selectedIndex?: number;
 	loading?: boolean;
+	error?: string | null;
 	onselect?: (item: SlashCommandMenuItem) => void;
 	onhighlight?: (index: number) => void;
 };
@@ -36,6 +44,7 @@ let {
 	open = false,
 	selectedIndex = 0,
 	loading = false,
+	error = null,
 	onselect,
 	onhighlight,
 }: Props = $props();
@@ -53,7 +62,7 @@ const groupedCommands = $derived.by<GroupedCommand[]>(() => {
 	>();
 	items.forEach((item, index) => {
 		const label =
-			item.kind === "skill"
+			item.kind === "skill" || item.kind === "native_skill"
 				? commandSourceLabel(item)
 				: item.category || item.scope || "Commands";
 		const group = groups.get(label) ?? [];
@@ -84,6 +93,10 @@ function itemId(index: number) {
 
 function commandLabel(item: SlashCommandMenuItem) {
 	return item.kind === "skill" ? `skill:${item.name}` : item.name;
+}
+
+function commandPrefix(item: SlashCommandMenuItem) {
+	return item.kind === "native_skill" ? "$" : "/";
 }
 
 function commandSourceLabel(item: SlashCommandMenuItem) {
@@ -152,6 +165,9 @@ $effect(() => {
 			</div>
 
 			<div bind:this={desktopListEl} class="max-h-[320px] overflow-y-auto py-1.5" data-drawer-swipe-ignore>
+				{#if error}
+					<div class="border-b border-error-soft/20 bg-error-bg/30 px-3 py-2 text-[11px] leading-4 text-error-soft">{m.slash_refresh_failed({}, { locale })} · {error}</div>
+				{/if}
 				{#if loading && items.length === 0}
 					<div class="flex items-center gap-2 px-3 py-3 text-[12px] text-text-tertiary">
 						<Loader2 class="h-3.5 w-3.5 animate-spin text-brand" />
@@ -175,6 +191,7 @@ $effect(() => {
 								{#each group.items as entry (itemKey(entry.item))}
 									{@const active = entry.index === selectedIndex}
 									{@const label = commandLabel(entry.item)}
+									{@const prefix = commandPrefix(entry.item)}
 									<button
 										id={itemId(entry.index)}
 										type="button"
@@ -186,11 +203,11 @@ $effect(() => {
 										onclick={() => onselect?.(entry.item)}
 									>
 										<span class={`absolute left-0 top-2 bottom-2 w-0.5 rounded-full transition-opacity ${active ? 'bg-brand opacity-100' : 'opacity-0'}`}></span>
-										<span class={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border text-[13px] font-semibold transition-colors ${active ? 'border-brand/25 bg-brand/10 text-brand' : 'border-border-subtle bg-bg-primary text-text-tertiary group-hover:text-text-secondary'}`}>/</span>
+										<span class={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border text-[13px] font-semibold transition-colors ${active ? 'border-brand/25 bg-brand/10 text-brand' : 'border-border-subtle bg-bg-primary text-text-tertiary group-hover:text-text-secondary'}`}>{prefix}</span>
 										<span class="min-w-0 flex-1">
 											<span class="flex min-w-0 items-baseline gap-2">
 												<span class="truncate text-[13px] font-medium leading-5">
-													<span class="text-text-tertiary">/</span>{#each highlightParts(label) as part}<span class={part.match ? 'text-brand' : ''}>{part.text}</span>{/each}
+											<span class="text-text-tertiary">{prefix}</span>{#each highlightParts(label) as part}<span class={part.match ? 'text-brand' : ''}>{part.text}</span>{/each}
 												</span>
 												{#if entry.item.argumentHint}
 													<span class="truncate text-[11px] leading-4 text-text-tertiary">{entry.item.argumentHint}</span>
@@ -223,7 +240,7 @@ $effect(() => {
 					<div class="min-w-0">
 						<div class="text-[12px] font-medium text-text-primary">{m.slash_commands({}, { locale })}</div>
 						<div class="mt-0.5 truncate text-[11px] text-text-tertiary">
-							{normalizedQuery ? `Filtering /${normalizedQuery}` : '{m.slash_tap_insert({}, { locale })}'}
+							{normalizedQuery ? `Filtering /${normalizedQuery}` : m.slash_tap_insert({}, { locale })}
 						</div>
 					</div>
 					{#if loading}
@@ -232,6 +249,9 @@ $effect(() => {
 				</div>
 			</div>
 			<div bind:this={mobileListEl} class="max-h-[min(45vh,360px)] overflow-y-auto py-1" data-drawer-swipe-ignore>
+				{#if error}
+					<div class="border-b border-error-soft/20 bg-error-bg/30 px-4 py-2 text-[11px] leading-4 text-error-soft">{m.slash_refresh_failed({}, { locale })} · {error}</div>
+				{/if}
 				{#if loading && items.length === 0}
 					<div class="flex min-h-16 items-center gap-2 px-4 py-3 text-[12px] text-text-tertiary">
 						<Loader2 class="h-3.5 w-3.5 animate-spin text-brand" />
@@ -246,6 +266,7 @@ $effect(() => {
 					{#each items as item, index (itemKey(item))}
 						{@const active = index === selectedIndex}
 						{@const label = commandLabel(item)}
+						{@const prefix = commandPrefix(item)}
 						<button
 							id={itemId(index)}
 							type="button"
@@ -253,10 +274,10 @@ $effect(() => {
 							onpointerdown={(event) => event.preventDefault()}
 							onclick={() => onselect?.(item)}
 						>
-							<span class={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] border text-[13px] font-semibold ${active ? 'border-brand/25 bg-brand/10 text-brand' : 'border-border-subtle bg-bg-primary text-text-tertiary'}`}>/</span>
+							<span class={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] border text-[13px] font-semibold ${active ? 'border-brand/25 bg-brand/10 text-brand' : 'border-border-subtle bg-bg-primary text-text-tertiary'}`}>{prefix}</span>
 							<span class="min-w-0 flex-1">
 								<span class="flex min-w-0 items-baseline gap-2 text-[13px] text-text-primary">
-									<span class="shrink-0 font-medium"><span class="text-text-tertiary">/</span>{label}</span>
+									<span class="shrink-0 font-medium"><span class="text-text-tertiary">{prefix}</span>{label}</span>
 									{#if item.argumentHint}
 										<span class="truncate text-[12px] text-text-tertiary">{item.argumentHint}</span>
 									{/if}

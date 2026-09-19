@@ -21,6 +21,8 @@ import { billingBlockedResponse } from "../lib/billing-blocked.js";
 import { hasPermission } from "../permissions.js";
 import { loadGenerationDeclaration } from "../generations/declarations.js";
 import { createGenerationTaskRequestSchema } from "../generations/schema.js";
+import { loadCloudGenerationModel } from "../local-mode/cloud-generation.js";
+import { config } from "../config.js";
 import { getSpaceSessionById } from "../space-sessions.js";
 import { getSessionTurnById } from "../session-turns.js";
 import { enqueueTask } from "../tasks.js";
@@ -61,6 +63,7 @@ router.post("/", async (c) => {
 
   const request = parsed.data;
   if (!(await hasPermission(user, "generation.create", { spaceId: request.spaceId }))) return authzDenied(c);
+  const relayToCloud = config.nodeOrigin === "local";
 
   let sessionId = request.sessionId?.trim() || null;
   const turnId = request.turnId?.trim() || null;
@@ -83,15 +86,25 @@ router.post("/", async (c) => {
     }
   }
 
-  const declaration = await loadGenerationDeclaration(user.uuid, request.model);
+  const localDeclaration = relayToCloud ? null : await loadGenerationDeclaration(user.uuid, request.model);
+  const declaration = relayToCloud
+    ? await loadCloudGenerationModel(user.uuid, request.model)
+    : localDeclaration;
   if (!declaration) {
     return generationError(c, 404, "generation_model_not_found", `Generation model not found: ${request.model}`);
   }
 
   let parameters: Record<string, unknown> | undefined;
   try {
-    const resolved = createGenerationClient({
-      models: [declaration],
+    if (relayToCloud) {
+      // The cloud worker owns the authoritative adapter validation. The public
+      // catalog intentionally omits provider credentials, so it cannot be
+      // passed to createGenerationClient here.
+      parameters = request.parameters;
+    } else {
+      if (!localDeclaration) throw new Error(`Generation model not found: ${request.model}`);
+      const resolved = createGenerationClient({
+        models: [localDeclaration],
       includeBuiltinModels: false,
     }).validate({
       model: request.model,
@@ -100,6 +113,7 @@ router.post("/", async (c) => {
       meta,
     });
     parameters = resolved.parameters;
+    }
   } catch (error) {
     if (error instanceof GenerationValidationError) {
       return generationError(c, 400, "invalid_generation_input", error.message);
@@ -107,63 +121,58 @@ router.post("/", async (c) => {
     throw error;
   }
 
-  const usageType = resolveGenerationUsageType({
-    adapterType: declaration.adapter?.type,
-    contentTypes: contentTypesFromBlocks(request.content),
-  });
-  let resolvedDiscount: Awaited<ReturnType<typeof billingOperations.getGenerationModelDiscount>>;
-  try {
-    resolvedDiscount = await billingOperations.getGenerationModelDiscount({
-      userId: user.uuid,
-      model: request.model,
+  let modelDiscount: GenerationModelDiscountSnapshot | undefined;
+  let billingDecision: Awaited<ReturnType<typeof billingUsageGate.evaluate>> | null = null;
+  if (!relayToCloud) {
+    const usageType = resolveGenerationUsageType({
+      adapterType: localDeclaration?.adapter?.type,
+      contentTypes: contentTypesFromBlocks(request.content),
     });
-  } catch (error) {
-    logger.error("[Billing] failed to resolve generation model discount before enqueue", {
-      userId: user.uuid,
-      spaceId: request.spaceId,
-      model: request.model,
-      error,
-    });
-    return generationError(
-      c,
-      503,
-      "generation_pricing_unavailable",
-      "Generation pricing is temporarily unavailable. Please try again later.",
-    );
-  }
-  const modelDiscount: GenerationModelDiscountSnapshot = {
-    multiplier: resolvedDiscount.multiplier,
-    resolvedAt: resolvedDiscount.resolvedAt,
-  };
-  if (resolvedDiscount.benefitKey) {
-    logger.info("[Billing] generation model discount resolved", {
-      userId: user.uuid,
-      spaceId: request.spaceId,
-      model: request.model,
-      multiplier: resolvedDiscount.multiplier,
-      benefitKey: resolvedDiscount.benefitKey,
-      resolvedAt: resolvedDiscount.resolvedAt,
-    });
-  }
-  let billingDecision: Awaited<ReturnType<typeof billingUsageGate.evaluate>>;
-  try {
-    billingDecision = isGenerationModelDiscountFree(resolvedDiscount)
-      ? { status: "allowed", balanceState: "zero", netUsd: 0 }
-      : await billingUsageGate.evaluate({
-          userId: user.uuid,
-          usageKind: generationUsageKind(usageType),
-          source: "generation_task",
-          model: request.model,
-          spaceId: request.spaceId,
-          sessionId,
-          turnId,
-        });
-  } catch (error) {
-    if (!isBillingUsageGateUnavailableError(error)) throw error;
-    return generationError(c, 503, "generation_balance_unavailable", error.message);
-  }
-  if (billingDecision.status === "blocked") {
-    return billingBlockedResponse(c, new BillingAccessBlockedError(billingDecision));
+    let resolvedDiscount: Awaited<ReturnType<typeof billingOperations.getGenerationModelDiscount>>;
+    try {
+      resolvedDiscount = await billingOperations.getGenerationModelDiscount({
+        userId: user.uuid,
+        model: request.model,
+      });
+    } catch (error) {
+      logger.error("[Billing] failed to resolve generation model discount before enqueue", {
+        userId: user.uuid,
+        spaceId: request.spaceId,
+        model: request.model,
+        error,
+      });
+      return generationError(c, 503, "generation_pricing_unavailable", "Generation pricing is temporarily unavailable. Please try again later.");
+    }
+    modelDiscount = { multiplier: resolvedDiscount.multiplier, resolvedAt: resolvedDiscount.resolvedAt };
+    if (resolvedDiscount.benefitKey) {
+      logger.info("[Billing] generation model discount resolved", {
+        userId: user.uuid,
+        spaceId: request.spaceId,
+        model: request.model,
+        multiplier: resolvedDiscount.multiplier,
+        benefitKey: resolvedDiscount.benefitKey,
+        resolvedAt: resolvedDiscount.resolvedAt,
+      });
+    }
+    try {
+      billingDecision = isGenerationModelDiscountFree(resolvedDiscount)
+        ? { status: "allowed", balanceState: "zero", netUsd: 0 }
+        : await billingUsageGate.evaluate({
+            userId: user.uuid,
+            usageKind: generationUsageKind(usageType),
+            source: "generation_task",
+            model: request.model,
+            spaceId: request.spaceId,
+            sessionId,
+            turnId,
+          });
+    } catch (error) {
+      if (!isBillingUsageGateUnavailableError(error)) throw error;
+      return generationError(c, 503, "generation_balance_unavailable", error.message);
+    }
+    if (billingDecision.status === "blocked") {
+      return billingBlockedResponse(c, new BillingAccessBlockedError(billingDecision));
+    }
   }
 
   let taskRunId: string;
@@ -180,7 +189,7 @@ router.post("/", async (c) => {
         parameters,
         meta,
         requestSource,
-        modelDiscount,
+        ...(relayToCloud ? { relayToCloud: true } : { modelDiscount }),
       },
     }, {
       attempts: 1,
@@ -201,7 +210,7 @@ router.post("/", async (c) => {
     taskRunId,
     taskType: GENERATION_TASK_TYPE,
     status: "pending",
-    billing: serializeBillingWarning(billingDecision),
+    billing: billingDecision ? serializeBillingWarning(billingDecision) : null,
   } satisfies CreateGenerationTaskResponse, 202);
 });
 

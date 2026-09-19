@@ -25,6 +25,12 @@ import { getViewerTurnActivityBySpace } from "./personal-activity";
 const DEFAULT_SPACE_LIMIT = 50;
 const DEFAULT_SESSION_LIMIT = 20;
 
+export type OriginAwareOverviewSpace = PaletteOverviewSpace &
+	Pick<SpaceRecord, "origin">;
+export type OriginAwareOverview = Omit<PaletteOverviewResponse, "spaces"> & {
+	spaces: OriginAwareOverviewSpace[];
+};
+
 export type LocalOverviewSessionList = {
 	spaceId: string;
 	sessions: SessionRecord[];
@@ -64,7 +70,7 @@ export function buildLocalPaletteOverview(input: {
 	viewerUserUuid: string | null;
 	spaceLimit?: number;
 	sessionLimit?: number;
-}): PaletteOverviewResponse {
+}): OriginAwareOverview {
 	const spaceLimit = input.spaceLimit ?? DEFAULT_SPACE_LIMIT;
 	const sessionLimit = input.sessionLimit ?? DEFAULT_SESSION_LIMIT;
 	// Later entries win: callers pass fresher sources (the space list cache)
@@ -79,9 +85,10 @@ export function buildLocalPaletteOverview(input: {
 		input.viewerUserUuid,
 	);
 
-	const spaces: PaletteOverviewSpace[] = [...spaceById.values()].map(
+	const spaces: OriginAwareOverviewSpace[] = [...spaceById.values()].map(
 		(space) => ({
 			id: space.id,
+			origin: space.origin,
 			name: space.name,
 			description: space.description,
 			ownerProfile: space.ownerProfile ?? null,
@@ -147,9 +154,9 @@ export function buildLocalPaletteOverview(input: {
  * refetched response, so swapping it in later does not re-sort the list.
  */
 export function mergeLocalOverviewIntoSnapshot(
-	snapshot: PaletteOverviewResponse,
-	local: PaletteOverviewResponse,
-): PaletteOverviewResponse {
+	snapshot: OriginAwareOverview,
+	local: OriginAwareOverview,
+): OriginAwareOverview {
 	// Snapshot fields win on conflicts; the local pass only contributes
 	// fresher signals and entries the snapshot has never seen.
 	const spacesById = new Map(snapshot.spaces.map((space) => [space.id, space]));
@@ -161,6 +168,7 @@ export function mergeLocalOverviewIntoSnapshot(
 		}
 		spacesById.set(localSpace.id, {
 			...snap,
+			origin: localSpace.origin ?? snap.origin,
 			// Pinning is an explicit user action — keep either signal so an
 			// unpinned stale cache cannot drop the marker mid-session.
 			isPinned: snap.isPinned || localSpace.isPinned,
@@ -196,5 +204,23 @@ export function mergeLocalOverviewIntoSnapshot(
 		generatedAt: snapshot.generatedAt,
 		spaces: [...spacesById.values()],
 		recentSessions,
+	};
+}
+
+export function mergeLocalSpacesIntoFreshOverview(
+	fresh: PaletteOverviewResponse,
+	local: OriginAwareOverview,
+): OriginAwareOverview {
+	const freshIds = new Set(fresh.spaces.map((space) => space.id));
+	return {
+		...fresh,
+		// Cloud refreshes cannot enumerate this node's Spaces. Do not restore
+		// stale cloud entries or overwrite authoritative cloud fields.
+		spaces: [
+			...fresh.spaces,
+			...local.spaces.filter(
+				(space) => space.origin === "local" && !freshIds.has(space.id),
+			),
+		],
 	};
 }

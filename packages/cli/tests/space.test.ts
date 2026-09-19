@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { Command } from "commander";
 import { explicitSpace, identityKeyFrom, readDefaultSpaceCache } from "../src/space.js";
+import { resolveRuntimeSpace } from "../src/runtime/space-binding.js";
 
 const DAY_MS = 86_400_000;
 const tempDirs: string[] = [];
@@ -86,6 +87,28 @@ test("execution token does not fall back to a local Logto session", () => {
 test("default space cache returns a matching unexpired entry", async () => {
   const path = await cacheFile({ key: "prod:user-alice", spaceId: "space-1", cachedAt: Date.now() });
   assert.equal(readDefaultSpaceCache(path, "prod:user-alice"), "space-1");
+});
+
+test("API endpoints isolate Home caches and directory bindings for the same actor", async () => {
+  const identity = { env: "prod", idToken: jwt({ sub: "same-user" }) };
+  const cloud = identityKeyFrom({ ...identity, apiBaseUrl: "https://api.cohub.live" })!;
+  const local = identityKeyFrom({ ...identity, apiBaseUrl: "http://127.0.0.1:8787" })!;
+  assert.notEqual(cloud, local);
+  assert.equal(local, identityKeyFrom({ ...identity, apiBaseUrl: "http://127.0.0.1:8787/" }));
+  const cache = await cacheFile({ key: cloud, spaceId: "cloud-home", cachedAt: Date.now() });
+  assert.equal(readDefaultSpaceCache(cache, local), null);
+  const legacy = await cacheFile({ key: identityKeyFrom(identity), spaceId: "old-home", cachedAt: Date.now() });
+  assert.equal(readDefaultSpaceCache(legacy, local), null);
+  const root = await mkdtemp(join(tmpdir(), "cohub-endpoint-bindings-"));
+  tempDirs.push(root);
+  const path = join(root, "bindings.json");
+  await resolveRuntimeSpace({ root, path, identityKey: cloud, createSpace: async () => "cloud-space" });
+  const result = await resolveRuntimeSpace({ root, path, identityKey: local, createSpace: async () => "local-space" });
+  assert.equal(result.spaceId, "local-space");
+  for (const [key, expected] of [[cloud, "cloud-space"], [local, "local-space"]]) {
+    const bound = await resolveRuntimeSpace({ root, path, identityKey: key, createSpace: async () => { throw new Error("binding lost"); } });
+    assert.equal(bound.spaceId, expected);
+  }
 });
 
 test("default space cache isolates identities and drops expired or corrupt entries", async () => {

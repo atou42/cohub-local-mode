@@ -573,6 +573,52 @@ test("late cleanup cannot clear a newer session", async () => {
 	assert.equal(state.read().token, null);
 });
 
+test("failed account cleanup preserves credentials and can be retried", async () => {
+	const shared = createSharedState("stale");
+	let stateClears = 0;
+	const state = {
+		...shared,
+		clear: () => {
+			stateClears += 1;
+			shared.clear();
+		},
+	};
+	const failures: Array<Error | null> = [
+		new Error("native cleanup rejected"),
+		new Error("native state reset acknowledgement timed out"),
+		null,
+	];
+	const coordinator = createAuthRefreshCoordinator({
+		state,
+		lock: new SerialLock(),
+		isReusable: () => false,
+		resolveToken: async () => "fresh",
+		clearSession: async () => {
+			const failure = failures.shift();
+			if (failure) throw failure;
+		},
+	});
+	const guard = { rejectedToken: "stale" };
+
+	await assert.rejects(
+		coordinator.clearBrokenSession(guard),
+		/native cleanup rejected/,
+	);
+	assert.equal(stateClears, 0);
+	assert.equal(state.read().token, "stale");
+
+	await assert.rejects(
+		coordinator.clearBrokenSession(guard),
+		/acknowledgement timed out/,
+	);
+	assert.equal(stateClears, 0);
+	assert.equal(state.read().token, "stale");
+
+	assert.equal(await coordinator.clearBrokenSession(guard), true);
+	assert.equal(stateClears, 1);
+	assert.equal(state.read().token, null);
+});
+
 test("late unauthenticated cleanup cannot clear a newly established session", async () => {
 	const state = createSharedState(null);
 	const lock = new SerialLock();

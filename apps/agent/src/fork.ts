@@ -8,18 +8,26 @@ import { db } from "./db.js";
 import { appendTerminalGenerationMessages } from "./generation-session-sync.js";
 import { getAgentSessionFilePath, getAgentSpaceSessionsPath, getAgentWorkspacePath } from "./runtime/paths.js";
 import { SessionManager } from "./runtime/local-session-manager.js";
-import type { AgentSessionForkJobData } from "./queue.js";
+import { prepareExternalHarnessFork } from "./external-harness.js";
+import type { AgentSessionForkJobData, AgentSessionForkJobResult } from "./queue.js";
 
 const tracer = getAgentTracer();
 
 async function appendVisibleGenerationMessages(input: {
-  sessionId: string;
+  parentSessionId: string;
   anchorSequence: number;
   sessionManager: SessionManager;
 }) {
-  const segments = await db.select().from(sessionTurnSegments)
-    .where(eq(sessionTurnSegments.sessionId, input.sessionId))
+  const persistedSegments = await db.select().from(sessionTurnSegments)
+    .where(eq(sessionTurnSegments.sessionId, input.parentSessionId))
     .orderBy(asc(sessionTurnSegments.ordinal));
+  const segments = persistedSegments.length > 0
+    ? persistedSegments
+    : [{
+        sourceSessionId: input.parentSessionId,
+        fromSequence: 1,
+        toSequence: input.anchorSequence,
+      }];
   const rangePredicates = segments.flatMap((segment) => {
     const toSequence = Math.min(segment.toSequence ?? input.anchorSequence, input.anchorSequence);
     if (toSequence < segment.fromSequence) return [];
@@ -73,7 +81,7 @@ async function provisionForkFile(data: AgentSessionForkJobData) {
     }
 
     await appendVisibleGenerationMessages({
-      sessionId: data.sessionId,
+      parentSessionId: data.parentSessionId,
       anchorSequence: data.anchorSequence,
       sessionManager,
     });
@@ -134,7 +142,41 @@ export async function processSessionForkJob(job: import("bullmq").Job<AgentSessi
     },
   }, parentCtx, async () => {
     try {
-      return await provisionForkFile(data);
+      if (data.agentHarness !== "pi") {
+        if (data.forkStrategy === "pi_session") {
+          throw new Error("External Agent Fork cannot use a Pi session strategy");
+        }
+        const model = data.model?.trim();
+        const thinkingLevel = data.thinkingLevel?.trim();
+        if (!model || !thinkingLevel) {
+          throw new Error("External Agent Fork requires model and thinking level");
+        }
+        const prepared = await prepareExternalHarnessFork({
+          harness: data.agentHarness,
+          spaceId: data.spaceId,
+          sessionId: data.sessionId,
+          strategy: data.forkStrategy,
+          parentExternalSessionId: data.parentExternalSessionId,
+          anchorExternalTurnId: data.anchorExternalTurnId,
+          model,
+          thinkingLevel,
+          serviceTier: data.serviceTier,
+        });
+        return {
+          sessionId: data.sessionId,
+          externalSessionId: prepared.externalSessionId,
+          strategy: prepared.strategy,
+        } satisfies AgentSessionForkJobResult;
+      }
+      if (data.forkStrategy !== "pi_session") {
+        throw new Error("Pi Agent Fork requires a Pi session strategy");
+      }
+      await provisionForkFile(data);
+      return {
+        sessionId: data.sessionId,
+        externalSessionId: null,
+        strategy: "pi_session",
+      } satisfies AgentSessionForkJobResult;
     } catch (error) {
       await recordJobFailure(job, error, {
         reason: "session_fork_failed",

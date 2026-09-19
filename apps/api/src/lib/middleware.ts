@@ -186,6 +186,7 @@ export const buildSpaceListItem = async (space: typeof spaces.$inferSelect) => {
     ...space,
     publicProfile: getSpacePublicProfile(space),
     sandboxStatus: sandbox?.status ?? null,
+    origin: config.nodeOrigin,
   };
 };
 
@@ -209,6 +210,7 @@ export const buildSpaceListItems = async (spaceList: typeof spaces.$inferSelect[
     publicProfile: getSpacePublicProfile(space),
     sandboxStatus: statusBySpaceId.get(space.id) ?? null,
     ownerProfile: profileByUserUuid.get(space.userUuid) ?? null,
+    origin: config.nodeOrigin,
   }));
 };
 

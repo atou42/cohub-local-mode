@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { resolveCohubEnvironment } from "@neta-art/cohub";
+import { resolveApiBaseUrl, resolveCohubEnvironment } from "@neta-art/cohub";
 import { readAuthSession } from "./auth.js";
 import { createClient } from "./client.js";
 import { getRuntimeSpaceBinding } from "./runtime/space-binding.js";
@@ -14,7 +14,7 @@ const CACHE_PATH = join(CONFIG_DIR, "default-space.json");
 const CACHE_TTL_MS = 86_400_000;
 
 type DefaultSpaceCache = {
-  /** Identity fingerprint the cached space belongs to (env + subject). */
+  /** Identity fingerprint the cached space belongs to (endpoint + env + subject). */
   key: string;
   spaceId: string;
   cachedAt: number;
@@ -39,22 +39,27 @@ function jwtClaim(token: string | undefined | null, key: string): string | null 
  */
 export function identityKeyFrom(input: {
   env: string;
+  apiBaseUrl?: string;
   executionToken?: string | null;
   idToken?: string | null;
   accessToken?: string | null;
 }): string | null {
+  const prefix = input.apiBaseUrl
+    ? `${input.env}:${JSON.stringify(new URL(input.apiBaseUrl).href.replace(/\/+$/, ""))}`
+    : input.env;
   if (input.executionToken) {
     const actor = jwtClaim(input.executionToken, "actorUserId") ?? jwtClaim(input.executionToken, "sub");
-    return actor ? `${input.env}:${actor}` : null;
+    return actor ? `${prefix}:${actor}` : null;
   }
   const sub = jwtClaim(input.idToken, "sub") ?? jwtClaim(input.accessToken, "sub");
-  return sub ? `${input.env}:${sub}` : null;
+  return sub ? `${prefix}:${sub}` : null;
 }
 
 export function currentIdentityKey(): string | null {
   const session = readAuthSession();
   return identityKeyFrom({
     env: resolveCohubEnvironment(),
+    apiBaseUrl: resolveApiBaseUrl({ baseUrl: process.env.COHUB_API_URL?.trim() || undefined }),
     executionToken: process.env.COHUB_EXECUTION_TOKEN?.trim(),
     idToken: session?.idToken,
     accessToken: session?.accessToken,
@@ -84,9 +89,11 @@ function writeCachedDefaultSpace(key: string, spaceId: string): void {
 }
 
 let defaultSpacePromise: Promise<string | null> | null = null;
+let defaultSpacePromiseKey: string | null = null;
 
 export function clearDefaultSpaceCache(): void {
   defaultSpacePromise = null;
+  defaultSpacePromiseKey = null;
   try {
     rmSync(CACHE_PATH, { force: true });
   } catch {
@@ -112,8 +119,12 @@ export function explicitSpace(program: Command): string | null {
  * Network and auth failures propagate so callers can report them faithfully.
  */
 export function resolveDefaultSpace(): Promise<string | null> {
+  const key = currentIdentityKey();
+  if (key !== defaultSpacePromiseKey) {
+    defaultSpacePromise = null;
+    defaultSpacePromiseKey = key;
+  }
   defaultSpacePromise ??= (async () => {
-    const key = currentIdentityKey();
     if (key) {
       const cached = readDefaultSpaceCache(CACHE_PATH, key);
       if (cached) return cached;

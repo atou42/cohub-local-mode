@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { AgentHarness } from "@cohub/protocol";
 import type {
 	MessageToolCallsFile,
 	SessionTurnRecord,
@@ -44,6 +45,7 @@ type Props = {
 	onOpenUrl?: (href: string, event: MouseEvent) => void | Promise<void>;
 	onForkTurn?: (turn: SessionTurnRecord) => void;
 	forkingTurnId?: string | null;
+	agentHarness?: AgentHarness | null;
 };
 
 let {
@@ -64,6 +66,7 @@ let {
 	onOpenUrl,
 	onForkTurn,
 	forkingTurnId = null,
+	agentHarness = null,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -187,7 +190,7 @@ $effect(() => {
 <div
 	bind:this={bindListEl}
 	data-session-id={sessionId ?? undefined}
-	class="chat-timeline-scroll relative flex-1 min-h-0 overflow-y-auto bg-bg-content px-4 sm:px-6"
+	class="chat-timeline-scroll relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-bg-content px-4 sm:px-6"
 >
 	<div class={`mx-auto max-w-4xl flex flex-col [&>*]:mt-2 pt-6 pb-6`}>
 		{#if loading && timeline.length === 0}
@@ -227,6 +230,7 @@ $effect(() => {
 							onForkTurn={onForkTurn && forkTurn ? () => onForkTurn(forkTurn) : undefined}
 							forkDisabled={Boolean(forkingTurnId)}
 							forking={forkingTurnId === forkTurn?.id}
+							agentHarness={agentHarness}
 					/>
 				{:else if item.kind === 'process' && item.turn}
 						<ProcessCard turn={item.turn} summary={item.summary} intermediateMessages={item.intermediateMessages} streaming={item.streaming} {modelsCatalog} {onLoadIntermediate} {onRequestIntermediateSync} {onLoadToolCalls} {onOpenFile} {onOpenUrl} />
@@ -263,6 +267,7 @@ $effect(() => {
 
 <style>
 	.chat-timeline-scroll {
+		overscroll-behavior-x: none;
 		scrollbar-width: none;
 		-ms-overflow-style: none;
 		/*

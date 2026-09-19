@@ -102,7 +102,7 @@ $effect(() => {
     style="width: {MOBILE_DRAWER_WIDTH_PX}px; max-width: {MOBILE_DRAWER_MAX_WIDTH_VW}vw; {panelStyle}"
   >
     {#if renderContent}
-      <div class="h-full border-l border-border-subtle bg-bg-primary" class:pointer-events-auto={interactive}>
+      <div class="mobile-safe-area-panel mobile-safe-area-panel--right h-full border-l border-border-subtle bg-bg-primary" class:pointer-events-auto={interactive}>
         {@render children()}
       </div>
     {/if}

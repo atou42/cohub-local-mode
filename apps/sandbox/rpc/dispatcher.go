@@ -157,6 +157,8 @@ func (d *Dispatcher) Handle(request protocol.RPCRequest, ownerIdentity string) (
 		return accepted, d.complete(request, accepted.OpID, d.handleFSSearch(request))
 	case "process.start":
 		return accepted, d.handleProcessStart(request, accepted.OpID, ownerIdentity)
+	case "process.write":
+		return accepted, d.complete(request, accepted.OpID, d.handleProcessWrite(request, ownerIdentity))
 	case "process.abort":
 		return accepted, d.complete(request, accepted.OpID, d.handleProcessAbort(request))
 	default:
@@ -270,7 +272,7 @@ type fsGrepParams struct {
 
 const (
 	processStartMaxArgvItems      = 256
-	processStartMaxArgvItemBytes  = 8 * 1024
+	processStartMaxArgvItemBytes  = 32 * 1024
 	processStartMaxArgvTotalBytes = 64 * 1024
 	processOutputQueueSize        = 64
 )
@@ -281,10 +283,17 @@ type processStartParams struct {
 	TimeoutSecs int               `json:"timeoutSecs"`
 	CWD         string            `json:"cwd"`
 	Env         map[string]string `json:"env"`
+	CloseStdin  bool              `json:"closeStdin"`
 }
 
 type processAbortParams struct {
 	ProcessID string `json:"processId"`
+}
+
+type processWriteParams struct {
+	ProcessID string `json:"processId"`
+	Chunk     string `json:"chunk"`
+	Close     bool   `json:"close"`
 }
 
 func (d *Dispatcher) resolvePathForRequest(request protocol.RPCRequest, rawPath string, cwd string) (resolvedSandboxPath, interface{}, bool) {
@@ -1241,13 +1250,21 @@ func (d *Dispatcher) handleProcessStart(request protocol.RPCRequest, opID string
 		return d.failed(request, opID, "NOT_DIRECTORY", fmt.Sprintf("not a directory: %s", resolved.path))
 	}
 
-	processID, stdout, stderr, exitCh, err := d.processManager.StartWithOptions(ownerIdentity, process.StartOptions{
+	startOptions := process.StartOptions{
 		Command:     params.Command,
 		Argv:        params.Argv,
 		CWD:         resolved.path,
 		TimeoutSecs: params.TimeoutSecs,
 		Env:         params.Env,
-	})
+		CloseStdin:  params.CloseStdin,
+	}
+	if commandProvided {
+		if sandboxArgv := localCommandSandboxArgv(d.cfg, params.Command); len(sandboxArgv) > 0 {
+			startOptions.Command = ""
+			startOptions.Argv = sandboxArgv
+		}
+	}
+	processID, stdout, stderr, exitCh, err := d.processManager.StartWithOptions(ownerIdentity, startOptions)
 	if err != nil {
 		d.logger.Error("process:start failed", slog.String("cmd", cmdSummary), slog.String("error", err.Error()))
 		return d.failed(request, opID, "PROCESS_SPAWN_FAILED", err.Error())
@@ -1377,6 +1394,33 @@ func (d *Dispatcher) handleProcessAbort(request protocol.RPCRequest) interface{}
 	return map[string]interface{}{
 		"processId": params.ProcessID,
 		"aborted":   true,
+	}
+}
+
+func (d *Dispatcher) handleProcessWrite(request protocol.RPCRequest, ownerIdentity string) interface{} {
+	var params processWriteParams
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return d.failed(request, "", "BAD_REQUEST", err.Error())
+	}
+	if strings.TrimSpace(params.ProcessID) == "" {
+		return d.failed(request, "", "BAD_REQUEST", "processId is required")
+	}
+	if params.Chunk == "" && !params.Close {
+		return d.failed(request, "", "BAD_REQUEST", "chunk or close is required")
+	}
+	if len(params.Chunk) > 1024*1024 {
+		return d.failed(request, "", "BAD_REQUEST", "process stdin chunk exceeds 1048576 bytes")
+	}
+
+	written, closed, err := d.processManager.Write(params.ProcessID, ownerIdentity, params.Chunk, params.Close)
+	if err != nil {
+		d.logger.Warn("process:write failed", slog.String("processId", params.ProcessID), slog.String("error", err.Error()))
+		return d.failed(request, "", "PROCESS_WRITE_FAILED", err.Error())
+	}
+	return map[string]interface{}{
+		"processId":    params.ProcessID,
+		"writtenBytes": written,
+		"closed":       closed,
 	}
 }
 

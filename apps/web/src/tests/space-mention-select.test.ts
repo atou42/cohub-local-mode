@@ -19,6 +19,7 @@ function suggestion(
 		spaceProfile: { avatarUrl: null },
 		href: `/spaces/${id}`,
 		uri: `cohub://spaces/${id}`,
+		origin: "cloud",
 		activityAt: null,
 		source: "local",
 		score: 0,
@@ -50,6 +51,23 @@ test("tt matches test as a subsequence, like Recent space search", () => {
 	assert.ok(textMatchScore("test-feishu", "tt") > 0);
 	assert.ok(textMatchScore("sandbox test", "tt") > 0);
 	assert.ok(textMatchScore("world_01KSFNYTZ9H8BFPJVRM7HSETTG", "tt") > 0);
+});
+
+test("typed mentions preserve federated local origins", () => {
+	const result = mergeSpaceMentionSuggestions({
+		local: [suggestion("local-space", "Local", { origin: "local" })],
+		remote: [],
+		query: "local",
+	});
+	assert.equal(result[0]?.origin, "local");
+});
+
+test("mentions reject a Space returned by both local and cloud nodes", () => {
+	assert.throws(() => mergeSpaceMentionSuggestions({
+		local: [suggestion("collision", "Local", { origin: "local" })],
+		remote: [suggestion("collision", "Cloud", { source: "remote" })],
+		query: "collision",
+	}), /both local and cloud nodes/);
 });
 
 test("typed @ query ranks owned spaces above public substring hits", () => {

@@ -11,7 +11,14 @@ export type ModelThinkingLevel =
 	| "medium"
 	| "high"
 	| "xhigh"
-	| "max";
+	| "max"
+	| "ultra";
+
+export type ModelServiceTier = {
+	id: string;
+	name: string;
+	description?: string;
+};
 
 const THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"off",
@@ -21,6 +28,7 @@ const THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ]);
 
 /** Read only an explicitly requested level; effective defaults are intentionally ignored. */
@@ -35,17 +43,80 @@ export function getRequestedThinkingLevel(
 		: null;
 }
 
+/** Read an explicitly requested service tier. `null` means Standard. */
+export function getRequestedServiceTier(
+	meta: unknown,
+): string | null | undefined {
+	if (!meta || typeof meta !== "object" || Array.isArray(meta))
+		return undefined;
+	const record = meta as Record<string, unknown>;
+	if (!Object.hasOwn(record, "requestedServiceTier")) return undefined;
+	if (record.requestedServiceTier === null) return null;
+	return typeof record.requestedServiceTier === "string" &&
+		record.requestedServiceTier.trim()
+		? record.requestedServiceTier.trim()
+		: undefined;
+}
+
+export function getModelServiceTiers(
+	item: ModelCatalogItem,
+): ModelServiceTier[] {
+	const value = item.model.serviceTiers;
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((candidate) => {
+		if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+			return [];
+		const record = candidate as Record<string, unknown>;
+		if (
+			typeof record.id !== "string" ||
+			!record.id.trim() ||
+			typeof record.name !== "string" ||
+			!record.name.trim()
+		)
+			return [];
+		return [
+			{
+				id: record.id.trim(),
+				name: record.name.trim(),
+				...(typeof record.description === "string" && record.description.trim()
+					? { description: record.description.trim() }
+					: {}),
+			},
+		];
+	});
+}
+
+export function getFastServiceTier(
+	item: ModelCatalogItem,
+): ModelServiceTier | null {
+	return (
+		getModelServiceTiers(item).find(
+			(tier) =>
+				tier.id.toLowerCase() === "priority" ||
+				tier.name.toLowerCase() === "fast",
+		) ?? null
+	);
+}
+
 /** Compact labels for dense controls (composer, chips). */
 export function formatThinkingLevelShort(level: ModelThinkingLevel): string {
 	switch (level) {
+		case "off":
+			return "O";
 		case "minimal":
 			return "Min";
+		case "low":
+			return "L";
 		case "medium":
-			return "Med";
+			return "M";
+		case "high":
+			return "H";
 		case "xhigh":
-			return "xHigh";
-		default:
-			return level.charAt(0).toUpperCase() + level.slice(1);
+			return "xH";
+		case "max":
+			return "Max";
+		case "ultra":
+			return "U";
 	}
 }
 
@@ -66,6 +137,8 @@ export function formatThinkingLevelFull(level: ModelThinkingLevel): string {
 			return "Extra high";
 		case "max":
 			return "Max";
+		case "ultra":
+			return "Ultra";
 	}
 }
 
@@ -77,6 +150,7 @@ const ALL_THINKING_LEVELS: ModelThinkingLevel[] = [
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ];
 
 export function isModelHidden(item: ModelCatalogItem): boolean {
@@ -97,10 +171,11 @@ export function getSupportedThinkingLevels(
 		| Partial<Record<ModelThinkingLevel, string | null>>
 		| undefined;
 	return ALL_THINKING_LEVELS.filter((level) => {
-		if (!map) return level !== "xhigh" && level !== "max";
+		if (!map) return level !== "xhigh" && level !== "max" && level !== "ultra";
 		const mapped = map[level];
 		if (mapped === null) return false;
-		if (level === "xhigh" || level === "max") return mapped !== undefined;
+		if (level === "xhigh" || level === "max" || level === "ultra")
+			return mapped !== undefined;
 		return true;
 	});
 }
@@ -130,6 +205,7 @@ const CLAMP_ORDER: ModelThinkingLevel[] = [
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ];
 
 /**

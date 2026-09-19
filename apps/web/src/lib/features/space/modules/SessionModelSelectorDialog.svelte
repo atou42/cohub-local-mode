@@ -22,10 +22,21 @@ type BooleanGenerationConstraint = {
 type Props = {
 	open: boolean;
 	models: ModelCatalogItem[];
+	loading?: boolean;
+	error?: string | null;
+	onRetry?: () => void;
 	currentModel: SelectedModel | null;
 	/** Model the session thinking level is bound to. Defaults to currentModel. */
 	thinkingLevelModel?: SelectedModel | null;
 	currentThinkingLevel?: ModelThinkingLevel | null;
+	currentServiceTier?: string | null;
+	getModelParameterPreference?: (model: { provider: string; id: string }) => {
+		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
+	} | null;
+	preferenceNotice?: string | null;
+	preferenceCanReset?: boolean;
+	onResetPreferences?: () => void;
 	modelStatus?: Record<string, ModelStatusEntry> | null;
 	generationModels: PublicGenerationDeclaration[];
 	generationPolicyMode: "auto" | "limited";
@@ -44,6 +55,7 @@ type Props = {
 		provider: string;
 		id: string;
 		thinkingLevel?: ModelThinkingLevel;
+		serviceTier?: string | null;
 	}) => void;
 	onGenerationTabOpen: () => void | Promise<void>;
 	onGenerationPolicyModeChange: (mode: "auto" | "limited") => void;
@@ -69,9 +81,17 @@ type Props = {
 let {
 	open,
 	models,
+	loading = false,
+	error = null,
+	onRetry,
 	currentModel,
 	thinkingLevelModel = null,
 	currentThinkingLevel = null,
+	currentServiceTier = null,
+	getModelParameterPreference,
+	preferenceNotice = null,
+	preferenceCanReset = false,
+	onResetPreferences,
 	modelStatus = null,
 	generationModels,
 	generationPolicyMode,
@@ -95,9 +115,17 @@ let {
 	{onClose}
 	{onSelect}
 	{models}
+	{loading}
+	{error}
+	{onRetry}
 	{currentModel}
 	{thinkingLevelModel}
 	{currentThinkingLevel}
+	{currentServiceTier}
+	{getModelParameterPreference}
+	{preferenceNotice}
+	{preferenceCanReset}
+	{onResetPreferences}
 	{modelStatus}
 	{generationModels}
 	{generationPolicyMode}

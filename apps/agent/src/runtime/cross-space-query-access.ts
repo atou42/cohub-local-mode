@@ -5,6 +5,8 @@ import { spaces } from "@cohub/db";
 import { db } from "../db.js";
 import { assertValidSpaceId } from "./ids.js";
 import type { AgentFileVisibility } from "./workspace-visibility.js";
+import type { AgentSpaceOrigin } from "./space-mention-origins.js";
+import { resolveCloudSpaceFileVisibility } from "./cloud-space-api.js";
 
 const permissionStore = createDrizzlePermissionStore(db);
 
@@ -20,8 +22,15 @@ export async function resolveSpaceFileVisibility(input: {
   actorUserId: string;
   spaceId: string;
   promptAuth?: unknown;
+  origin?: AgentSpaceOrigin;
 }): Promise<AgentFileVisibility> {
   const spaceId = assertValidSpaceId(input.spaceId);
+  if (input.origin === "cloud") {
+    return resolveCloudSpaceFileVisibility({
+      actorUserId: input.actorUserId,
+      spaceId,
+    });
+  }
   const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId)).limit(1);
   if (!space) throw new Error("Space not found.");
 
@@ -43,6 +52,7 @@ export async function assertSpaceFileViewAccess(input: {
   actorUserId: string;
   spaceId: string;
   promptAuth?: unknown;
+  origin?: AgentSpaceOrigin;
 }): Promise<void> {
   await resolveSpaceFileVisibility(input);
 }

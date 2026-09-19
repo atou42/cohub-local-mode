@@ -1,10 +1,17 @@
 import type { SessionTurnRecord } from "@cohub/protocol/model";
-import {
-	resolveHarness,
-	type SessionRecord,
-	type TaskRunRecord,
+import { resolveHarness } from "@cohub/protocol";
+import type {
+	AgentHarness,
+	SessionRecord,
+	TaskRunRecord,
 } from "@neta-art/cohub";
-import type { ModelCatalogItem } from "$lib/model-catalog";
+import {
+	clampThinkingLevel,
+	findModelCatalogItem,
+	getModelDefaultThinkingLevel,
+	type ModelCatalogItem,
+	type ModelThinkingLevel,
+} from "$lib/model-catalog";
 import { mergeTurnsById } from "$lib/stores/turn-cache";
 import type { SessionViewState } from "./session-workspace-controller.svelte";
 
@@ -56,6 +63,25 @@ export function shouldClearComposerDraftAfterSend(
 	mode: SessionComposerSelection["mode"],
 ) {
 	return mode === "agent";
+}
+
+export function resolveAgentPromptThinkingLevel(input: {
+	agentHarness: AgentHarness;
+	catalog: ModelCatalogItem[] | null | undefined;
+	model: { provider: string; id: string } | null;
+	requestedThinkingLevel: ModelThinkingLevel | null;
+}): ModelThinkingLevel | null {
+	if (!input.model) return null;
+	const entry = findModelCatalogItem(input.catalog, {
+		provider: input.model.provider,
+		model: input.model.id,
+	});
+	if (!entry) return null;
+	if (input.requestedThinkingLevel) {
+		return clampThinkingLevel(entry, input.requestedThinkingLevel);
+	}
+	if (input.agentHarness === "pi") return null;
+	return input.requestedThinkingLevel ?? getModelDefaultThinkingLevel(entry);
 }
 
 export function resolveComposerSelectionFromTurn(

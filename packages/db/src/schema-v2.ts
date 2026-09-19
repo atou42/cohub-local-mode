@@ -19,6 +19,7 @@ import {
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { TaskPayload } from "@cohub/protocol/task";
 import type {
+  AgentHarness,
   SessionTurnExecutionKind,
   SessionTurnIntent,
   HarnessArchiveIndex,
@@ -763,6 +764,7 @@ export const spaceSessions = v2.table(
     source: varchar("source", { length: 255 }),
     status: varchar("status", { length: 50 }).default("active"),
     externalSessionId: text("external_session_id"),
+    agentHarness: varchar("agent_harness", { length: 32 }).$type<AgentHarness>().notNull().default("pi"),
     meta: jsonb("meta"),
     latestMessageText: text("latest_message_text"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
@@ -955,6 +957,11 @@ export const sessionTurns = v2.table(
       table.userUuid,
       sql`(${table.meta}->>'clientMessageId')`,
     ).where(sql`${table.executionKind} = 'direct_generation' and ${table.meta}->>'clientMessageId' is not null`),
+    agentClientMessageUniqueIdx: uniqueIndex("v2_uq_session_turns_agent_client_message").on(
+      table.sessionId,
+      table.userUuid,
+      sql`(${table.meta}->>'clientMessageId')`,
+    ).where(sql`${table.executionKind} = 'agent' and ${table.meta}->>'clientMessageId' is not null`),
     directGenerationBarrierIdx: index("v2_idx_session_turns_direct_generation_barrier").on(table.sessionId, table.sequence, table.status).where(sql`${table.executionKind} = 'direct_generation'`),
     createdAtIdx: index("v2_idx_session_turns_created_at").on(table.createdAt),
     userTextSearchIdx: index("v2_idx_session_turns_user_text_trgm").using("gin", table.userText.op("gin_trgm_ops")),

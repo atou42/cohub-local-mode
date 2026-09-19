@@ -1,46 +1,120 @@
 import { randomUUID } from "node:crypto";
 import { UnrecoverableError, type Job } from "bullmq";
+import { and, asc, eq, gte, lte, or, sql } from "drizzle-orm";
 import type { ContentBlock } from "@cohub/protocol/core";
+import type { AgentHarness } from "@cohub/protocol";
+import { sessionTurns, sessionTurnSegments, spaceSessions } from "@cohub/db";
 import { ModelUnavailableError } from "@cohub/core/sessions";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { readPublicAssetImageUrl } from "./public-asset-storage.js";
-import { imageOmittedText, normalizeAgentImage, normalizeContentBlocksImages } from "./image-normalizer.js";
+import {
+  imageOmittedText,
+  normalizeAgentImage,
+  normalizeContentBlocksImages,
+} from "./image-normalizer.js";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { context, trace } from "@opentelemetry/api";
-import { getActiveTraceIdentifiers, getOrCreateRequestId, setRequestContextAttributes } from "@cohub/infra/tracing";
+import {
+  getActiveTraceIdentifiers,
+  getOrCreateRequestId,
+  setRequestContextAttributes,
+} from "@cohub/infra/tracing";
 import { wrapAgentTurn } from "@cohub/infra/tracing/agent";
 import { runInActiveSpan, extractTrace } from "@cohub/infra/tracing/propagator";
 import { getAgentTracer } from "@cohub/infra/tracing/agent";
-import { getSpace } from "./api.js";
-import { abortSessionTurn, failSessionTurn, interruptSessionTurn, persistAssistantMessage, persistUserMessage, publishSessionTurnsUpdated } from "./persistence.js";
+import { getSpace, getSpaceSandbox } from "./api.js";
+import {
+  abortSessionTurn,
+  failSessionTurn,
+  interruptSessionTurn,
+  persistAssistantMessage,
+  persistUserMessage,
+  publishSessionTurnsUpdated,
+} from "./persistence.js";
 import { ensureSandboxConnection } from "./sandbox-pool.js";
 import { createSandboxCodingTools } from "./sandbox/tools.js";
 import { CohubModelRegistry } from "./runtime/model-registry.js";
 import { loadRuntimeModelsConfigs } from "./runtime/models-loader.js";
 import { loadImageToTextConfig } from "./runtime/image-to-text-config.js";
 import { loadSpaceEnvSnapshot } from "./runtime/env-cache.js";
-import { CompactionStateRecoveryError, maybeAutoCompact, OverflowRecoveryError, type CompactionOutcome } from "./runtime/compaction.js";
-import { clearCurrentSessionExecutionAuth, setCurrentSessionExecutionAuth } from "./runtime/session-execution-auth.js";
+import {
+  CompactionStateRecoveryError,
+  maybeAutoCompact,
+  OverflowRecoveryError,
+  type CompactionOutcome,
+} from "./runtime/compaction.js";
+import {
+  clearCurrentSessionExecutionAuth,
+  setCurrentSessionExecutionAuth,
+} from "./runtime/session-execution-auth.js";
 import { resolveSpaceFileVisibility } from "./runtime/cross-space-query-access.js";
+import { mergeSpaceMentionOrigins } from "./runtime/space-mention-origins.js";
 import { normalizeGenerationPolicy } from "@cohub/protocol/generation";
 import { runWithToolExecutionContext } from "./tool-context.js";
-import { loadOrCreateSessionHandle, ensurePendingUserMessage, hasSessionUserMessage, removePendingUserMessage, resetStreamState, drainStreamStateBeforeReset, persistInterruptedAssistantSnapshot, refreshSessionHandleFileSignature, type SessionHandle } from "./session.js";
-import { claimNextTurnBatch, buildUserMessagesForBatch, enqueueNextRunnableTurn, resolveBatchAccessMode, type ClaimedTurnBatch } from "./batch.js";
+import {
+  loadOrCreateSessionHandle,
+  ensurePendingUserMessage,
+  hasSessionUserMessage,
+  removePendingUserMessage,
+  resetStreamState,
+  drainStreamStateBeforeReset,
+  persistInterruptedAssistantSnapshot,
+  refreshSessionHandleFileSignature,
+  type SessionHandle,
+} from "./session.js";
+import {
+  claimNextTurnBatch,
+  buildUserMessagesForBatch,
+  enqueueNextRunnableTurn,
+  resolveBatchAccessMode,
+  type ClaimedTurnBatch,
+} from "./batch.js";
 import { acquireSessionLock } from "./session-lock.js";
 import { defaultJobRetention } from "@cohub/infra/bullmq";
 import { enqueueRuntimeRecovery } from "@cohub/infra/agent-queue";
 import { agentTurnQueue, enqueueAgentTurnJob, type AgentTurnJobData } from "./queue.js";
 import { getAbortEvent } from "./abort.js";
-import { setActiveAbortController, clearActiveAbortController, getActiveAbortEvent, setActiveAbortEvent } from "./active-turns.js";
+import {
+  setActiveAbortController,
+  clearActiveAbortController,
+  getActiveAbortEvent,
+  setActiveAbortEvent,
+} from "./active-turns.js";
 import { sendOutput } from "./redis.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
-import { getPromptAuthScopes, parsePromptEnv, readRuntimeRecovery, type PromptAccessMode } from "@cohub/core/sessions";
+import { db } from "./db.js";
+import {
+  runExternalHarness,
+  splitExternalHarnessContent,
+} from "./external-harness.js";
+import {
+	appendCloudSpaceInstructions,
+	appendCursorLocalContextInstructions,
+	appendLocalGenerationInstructions,
+	appendLocalSessionRegistryInstructions,
+  buildExternalHarnessEnvironment,
+} from "./external-harness-context.js";
+import {
+	ensureLocalSessionRegistryForSpace,
+	recordLocalSessionRegistryFailure,
+	syncLocalSessionRegistry,
+} from "./local-session-registry.js";
+import { createExternalProgressPublisher } from "./external-progress-publisher.js";
+import {
+  buildExternalForkBootstrapPrompt,
+  parsePendingExternalForkBootstrap,
+} from "./external-fork-context.js";
+import {
+  getPromptAuthScopes,
+  parsePromptEnv,
+  readRuntimeRecovery,
+  type PromptAccessMode,
+} from "@cohub/core/sessions";
 import { createAgentExecutionToken } from "./execution-grants.js";
-import { isLocalHarness, resolveHarness } from "@cohub/protocol";
 import { executeRemoteHarnessTurn, markRuntimeRecovery, RuntimeExecutionUncertainError } from "./runtime/remote-runtime.js";
 import { loadRuntimeContext } from "./runtime/context-store.js";
-
+import { resolveHarnessRoute } from "./harness-routing.js";
 
 const sessionHandles = new Map<string, SessionHandle>();
 const tools = createSandboxCodingTools();
@@ -51,6 +125,110 @@ const retryAttemptsByKey = new Map<string, number>();
 const BUSY_RETRY_BASE_DELAY_MS = env.AGENT_BUSY_RETRY_BASE_DELAY_MS;
 const BUSY_RETRY_MAX_DELAY_MS = env.AGENT_BUSY_RETRY_MAX_DELAY_MS;
 
+async function getSessionHarness(sessionId: string) {
+  const [session] = await db
+    .select({
+      agentHarness: spaceSessions.agentHarness,
+      externalSessionId: spaceSessions.externalSessionId,
+      meta: spaceSessions.meta,
+    })
+    .from(spaceSessions)
+    .where(eq(spaceSessions.id, sessionId))
+    .limit(1);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return session;
+}
+
+async function loadExternalForkTranscript(sessionId: string, anchorSequence: number) {
+  const persistedSegments = await db.select().from(sessionTurnSegments)
+    .where(eq(sessionTurnSegments.sessionId, sessionId))
+    .orderBy(asc(sessionTurnSegments.ordinal));
+  if (persistedSegments.length === 0) {
+    throw new Error("External fork transcript segments are missing");
+  }
+  const ranges = persistedSegments.flatMap((segment) => {
+    const toSequence = Math.min(segment.toSequence ?? anchorSequence, anchorSequence);
+    if (toSequence < segment.fromSequence) return [];
+    return [and(
+      eq(sessionTurns.sessionId, segment.sourceSessionId),
+      gte(sessionTurns.sequence, segment.fromSequence),
+      lte(sessionTurns.sequence, toSequence),
+    )];
+  });
+  const visible = or(...ranges);
+  if (!visible) throw new Error("External fork transcript range is empty");
+  return db.select({
+    sequence: sessionTurns.sequence,
+    userText: sessionTurns.userText,
+    assistantText: sessionTurns.assistantText,
+  }).from(sessionTurns).where(visible).orderBy(asc(sessionTurns.sequence));
+}
+
+async function completeExternalForkBootstrap(sessionId: string) {
+  await db.update(spaceSessions).set({
+    meta: sql`jsonb_set(${spaceSessions.meta}, '{agentFork,bootstrapPending}', 'false'::jsonb, false)`,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(spaceSessions.id, sessionId),
+    sql`${spaceSessions.meta}->'agentFork'->>'bootstrapPending' = 'true'`,
+  ));
+}
+
+async function persistExternalHarnessSessionId(input: {
+  sessionId: string;
+  harness: Exclude<AgentHarness, "pi">;
+  externalSessionId: string;
+}) {
+  const externalSessionId = input.externalSessionId.trim();
+  if (!externalSessionId)
+    throw new Error("External harness returned an empty session id");
+  const current = await getSessionHarness(input.sessionId);
+  if (current.agentHarness !== input.harness) {
+    throw new Error(
+      `Session harness changed while ${input.harness} was running`,
+    );
+  }
+  if (
+    current.externalSessionId &&
+    current.externalSessionId !== externalSessionId
+  ) {
+    throw new Error(
+      "External harness session id changed for an existing Cohub Session",
+    );
+  }
+  if (current.externalSessionId === externalSessionId) return;
+  await db
+    .update(spaceSessions)
+    .set({ externalSessionId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(spaceSessions.id, input.sessionId),
+        eq(spaceSessions.agentHarness, input.harness),
+      ),
+    );
+}
+
+function externalPromptFromContent(content: ContentBlock[]) {
+  return content
+    .map((block) => {
+      if (block.type === "text") return block.text;
+      if (block.type === "image") {
+        if (block.source.type === "base64") {
+          throw new Error(
+            "Codex and Grok Build sessions do not support uploaded images yet",
+          );
+        }
+        return `[Image: ${block.source.url}]`;
+      }
+      if (block.type === "shell_command") return block.rawText || block.command;
+      if (block.type === "system_note") return block.text;
+      return "";
+    })
+    .filter((part) => part.trim())
+    .join("\n\n")
+    .trim();
+}
+
 function getRetryKey(data: AgentTurnJobData, reason: RetryReason) {
   return `${reason}:${data.sessionId}`;
 }
@@ -58,22 +236,33 @@ function getRetryKey(data: AgentTurnJobData, reason: RetryReason) {
 function nextRetryDelayMs(key: string) {
   const attempt = (retryAttemptsByKey.get(key) ?? 0) + 1;
   retryAttemptsByKey.set(key, attempt);
-  return Math.min(BUSY_RETRY_MAX_DELAY_MS, BUSY_RETRY_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 12));
+  return Math.min(
+    BUSY_RETRY_MAX_DELAY_MS,
+    BUSY_RETRY_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 12),
+  );
 }
 
 function clearRetryState(data: AgentTurnJobData) {
   retryAttemptsByKey.delete(getRetryKey(data, "session_busy"));
 }
 
-async function requeueTurnJob(data: AgentTurnJobData, reason: RetryReason, job?: Job<AgentTurnJobData>, meta?: Record<string, unknown>) {
+async function requeueTurnJob(
+  data: AgentTurnJobData,
+  reason: RetryReason,
+  job?: Job<AgentTurnJobData>,
+  meta?: Record<string, unknown>,
+) {
   const retryKey = getRetryKey(data, reason);
   const delay = nextRetryDelayMs(retryKey);
-  await enqueueAgentTurnJob({ ...data, reason: "retry" }, {
-    jobId: `agent-session-retry-${reason}-${data.sessionId}-${Math.max(1, Math.ceil(Date.now() / delay))}`,
-    delay,
-    removeOnComplete: true,
-    removeOnFail: defaultJobRetention.removeOnFail,
-  });
+  await enqueueAgentTurnJob(
+    { ...data, reason: "retry" },
+    {
+      jobId: `agent-session-retry-${reason}-${data.sessionId}-${Math.max(1, Math.ceil(Date.now() / delay))}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: defaultJobRetention.removeOnFail,
+    },
+  );
   return { skipped: reason, retryInMs: delay, jobId: job?.id ?? null, ...meta };
 }
 
@@ -81,14 +270,23 @@ type DrainNextQueuedResult = { enqueued: boolean; turnId: string | null };
 
 type SessionSettleMode = "strict" | "best_effort";
 
-async function settleSessionHandle(handle: SessionHandle, mode: SessionSettleMode) {
-  const awaitOrWarn = async (label: "persistence" | "close" | "signature", task: () => Promise<void>) => {
+async function settleSessionHandle(
+  handle: SessionHandle,
+  mode: SessionSettleMode,
+) {
+  const awaitOrWarn = async (
+    label: "persistence" | "close" | "signature",
+    task: () => Promise<void>,
+  ) => {
     if (mode === "strict") {
       await task();
       return;
     }
     await task().catch((error) => {
-      logger.warn(`[Agent] failed to settle session ${handle.sessionId} (${label}):`, error);
+      logger.warn(
+        `[Agent] failed to settle session ${handle.sessionId} (${label}):`,
+        error,
+      );
     });
   };
 
@@ -105,7 +303,11 @@ async function settleSessionHandle(handle: SessionHandle, mode: SessionSettleMod
   });
 }
 
-async function drainNextQueuedTurn(input: { spaceId: string; sessionId: string; reason: string }): Promise<DrainNextQueuedResult> {
+async function drainNextQueuedTurn(input: {
+  spaceId: string;
+  sessionId: string;
+  reason: string;
+}): Promise<DrainNextQueuedResult> {
   try {
     const turnId = await enqueueNextRunnableTurn({
       spaceId: input.spaceId,
@@ -113,11 +315,16 @@ async function drainNextQueuedTurn(input: { spaceId: string; sessionId: string; 
       enqueue: enqueueAgentTurnJob,
     });
     if (turnId) {
-      logger.info(`[Agent] enqueued next runnable turn sessionId=${input.sessionId} turnId=${turnId} reason=${input.reason}`);
+      logger.info(
+        `[Agent] enqueued next runnable turn sessionId=${input.sessionId} turnId=${turnId} reason=${input.reason}`,
+      );
     }
     return { enqueued: Boolean(turnId), turnId: turnId ?? null };
   } catch (error) {
-    logger.warn(`[Agent] failed to enqueue next queued turn spaceId=${input.spaceId} sessionId=${input.sessionId} reason=${input.reason}:`, error);
+    logger.warn(
+      `[Agent] failed to enqueue next queued turn spaceId=${input.spaceId} sessionId=${input.sessionId} reason=${input.reason}:`,
+      error,
+    );
     throw error;
   }
 }
@@ -132,12 +339,17 @@ async function getModelRegistryForUser(userId: string | null | undefined) {
   const configs = await loadRuntimeModelsConfigs(userId?.trim() || null);
   const registry = new CohubModelRegistry({ configs });
   if (registry.getError()) {
-    logger.warn(`[Agent] Model registry warning for ${userId?.trim() || "__platform__"}:`, registry.getError());
+    logger.warn(
+      `[Agent] Model registry warning for ${userId?.trim() || "__platform__"}:`,
+      registry.getError(),
+    );
   }
   return registry;
 }
 
-function contentBlockToBase64ImageContent(block: ContentBlock): ImageContent | null {
+function contentBlockToBase64ImageContent(
+  block: ContentBlock,
+): ImageContent | null {
   if (block.type !== "image" || block.source.type !== "base64") return null;
   return {
     type: "image",
@@ -156,36 +368,57 @@ async function fetchUrlImageContent(url: string): Promise<ImageContent | null> {
     originalSource: "url",
     originalUrl: url,
   });
-  return normalized ? { type: "image", data: normalized.data, mimeType: normalized.mimeType } : null;
+  return normalized
+    ? { type: "image", data: normalized.data, mimeType: normalized.mimeType }
+    : null;
 }
 
-async function contentBlockToImageContent(block: ContentBlock): Promise<ImageContent | null> {
+async function contentBlockToImageContent(
+  block: ContentBlock,
+): Promise<ImageContent | null> {
   if (block.type !== "image") return null;
-  if (block.source.type === "base64") return contentBlockToBase64ImageContent(block);
+  if (block.source.type === "base64")
+    return contentBlockToBase64ImageContent(block);
   return fetchUrlImageContent(block.source.url).catch(() => null);
 }
 
-async function contentBlockToAgentContent(block: ContentBlock): Promise<{ type: "text"; text: string } | ImageContent | null> {
+async function contentBlockToAgentContent(
+  block: ContentBlock,
+): Promise<{ type: "text"; text: string } | ImageContent | null> {
   if (block.type === "text") return { type: "text", text: block.text };
   if (block.type === "image") {
     const image = await contentBlockToImageContent(block);
-    return image ?? { type: "text", text: imageOmittedText("image could not be loaded") };
+    return (
+      image ?? {
+        type: "text",
+        text: imageOmittedText("image could not be loaded"),
+      }
+    );
   }
   return null;
 }
 
-async function contentToAgentMessage(content: ContentBlock[], meta: Record<string, unknown> | null): Promise<AgentMessage> {
+async function contentToAgentMessage(
+  content: ContentBlock[],
+  meta: Record<string, unknown> | null,
+): Promise<AgentMessage> {
   const resolved = await Promise.all(content.map(contentBlockToAgentContent));
-  const agentContent = resolved.filter((block): block is { type: "text"; text: string } | ImageContent => Boolean(block));
+  const agentContent = resolved.filter(
+    (block): block is { type: "text"; text: string } | ImageContent =>
+      Boolean(block),
+  );
   return {
     role: "user",
-    content: agentContent.length > 0 ? agentContent : [{ type: "text", text: "" }],
+    content:
+      agentContent.length > 0 ? agentContent : [{ type: "text", text: "" }],
     timestamp: Date.now(),
     meta: meta ?? null,
   } as unknown as AgentMessage;
 }
 
-function getShellCommandBlock(content: ContentBlock[]): Extract<ContentBlock, { type: "shell_command" }> | null {
+function getShellCommandBlock(
+  content: ContentBlock[],
+): Extract<ContentBlock, { type: "shell_command" }> | null {
   if (content.length !== 1) return null;
   const block = content[0];
   return block?.type === "shell_command" ? block : null;
@@ -194,15 +427,22 @@ function getShellCommandBlock(content: ContentBlock[]): Extract<ContentBlock, { 
 function extractToolResultText(result: unknown): string {
   if (!result || typeof result !== "object") return "";
   const record = result as Record<string, unknown>;
-  const details = record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? record.details as Record<string, unknown>
-    : null;
+  const details =
+    record.details &&
+    typeof record.details === "object" &&
+    !Array.isArray(record.details)
+      ? (record.details as Record<string, unknown>)
+      : null;
   if (typeof details?.rawOutput === "string") return details.rawOutput;
   if (Array.isArray(record.content)) {
     return record.content
-      .map((item) => item && typeof item === "object" && (item as Record<string, unknown>).type === "text"
-        ? String((item as Record<string, unknown>).text ?? "")
-        : "")
+      .map((item) =>
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "text"
+          ? String((item as Record<string, unknown>).text ?? "")
+          : "",
+      )
       .join("");
   }
   return typeof record.content === "string" ? record.content : "";
@@ -236,7 +476,10 @@ type TurnUserMessage = {
   meta: Record<string, unknown>;
 };
 
-function normalizeTurnUserMeta(input: TurnUserMessage, patch?: Record<string, unknown>) {
+function normalizeTurnUserMeta(
+  input: TurnUserMessage,
+  patch?: Record<string, unknown>,
+) {
   return {
     ...input.meta,
     ...(patch ?? {}),
@@ -247,13 +490,16 @@ function normalizeTurnUserMeta(input: TurnUserMessage, patch?: Record<string, un
   };
 }
 
-function setActiveTurnContext(handle: SessionHandle, input: {
-  turnId: string;
-  turnSeq: number;
-  userMessageId: string | null;
-  userMeta: Record<string, unknown> | null;
-  llmRound?: number | null;
-}) {
+function setActiveTurnContext(
+  handle: SessionHandle,
+  input: {
+    turnId: string;
+    turnSeq: number;
+    userMessageId: string | null;
+    userMeta: Record<string, unknown> | null;
+    llmRound?: number | null;
+  },
+) {
   handle.currentTurnId = input.turnId;
   handle.currentTurnSeq = input.turnSeq;
   handle.currentTurnPatchSeq = 0;
@@ -284,7 +530,9 @@ async function runWithRoundAutoCompaction<T>(
   input: {
     actorUserId: string | null;
     abortSignal?: AbortSignal;
-    onCompacted?: (outcome: Extract<CompactionOutcome, { compacted: true }>) => void;
+    onCompacted?: (
+      outcome: Extract<CompactionOutcome, { compacted: true }>,
+    ) => void;
   },
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -302,8 +550,12 @@ async function runWithRoundAutoCompaction<T>(
           force,
         }).catch((error) => {
           // Recovery failures are fatal for both threshold and forced compaction.
-          if (force || error instanceof CompactionStateRecoveryError) throw error;
-          logger.warn(`[Agent] auto-compact check failed sessionId=${handle.sessionId}:`, error);
+          if (force || error instanceof CompactionStateRecoveryError)
+            throw error;
+          logger.warn(
+            `[Agent] auto-compact check failed sessionId=${handle.sessionId}:`,
+            error,
+          );
           return { compacted: false, reason: "error" } as const;
         });
         if (compactOutcome.compacted) {
@@ -319,7 +571,8 @@ async function runWithRoundAutoCompaction<T>(
       }
     }
 
-    const sessionMessages = handle.sessionManager.buildSessionContext().messages;
+    const sessionMessages =
+      handle.sessionManager.buildSessionContext().messages;
     if (!previousTransform) return sessionMessages;
     return await Promise.resolve(previousTransform(sessionMessages, signal));
   };
@@ -338,7 +591,9 @@ async function appendAndPersistUserMessage(input: {
   user: TurnUserMessage;
   meta: Record<string, unknown>;
 }) {
-  const content = await normalizeContentBlocksImages(input.user.content, { readUrlImage: readPublicAssetImageUrl });
+  const content = await normalizeContentBlocksImages(input.user.content, {
+    readUrlImage: readPublicAssetImageUrl,
+  });
   const message = await contentToAgentMessage(content, input.meta);
   const startedAt = new Date().toISOString();
   input.handle.session.agent.state.messages.push(message);
@@ -424,8 +679,11 @@ async function runDirectShellCommandTurn(input: {
     if (input.abortSignal?.aborted) {
       abortFromParent();
     } else {
-      input.abortSignal?.addEventListener("abort", abortFromParent, { once: true });
-      cleanupParentAbort = () => input.abortSignal?.removeEventListener("abort", abortFromParent);
+      input.abortSignal?.addEventListener("abort", abortFromParent, {
+        once: true,
+      });
+      cleanupParentAbort = () =>
+        input.abortSignal?.removeEventListener("abort", abortFromParent);
     }
     handle.activeDirectShellCommand = { turnId: user.turnId, abortController };
 
@@ -434,7 +692,12 @@ async function runDirectShellCommandTurn(input: {
       id: toolUseId,
       name: "bash",
       input: { command: input.command },
-      _meta: { direct: true, source: "shell_command", toolStatus: "running", timing: { startedAt: toolStartedAt } },
+      _meta: {
+        direct: true,
+        source: "shell_command",
+        toolStatus: "running",
+        timing: { startedAt: toolStartedAt },
+      },
     };
     let patchSeq = 0;
     let latestOutput = "";
@@ -486,22 +749,39 @@ async function runDirectShellCommandTurn(input: {
               tool_use_id: toolUseId,
               content: latestOutput,
               is_error: false,
-              _meta: { direct: true, source: "shell_command", partial: true, toolStatus: "running" },
+              _meta: {
+                direct: true,
+                source: "shell_command",
+                partial: true,
+                toolStatus: "running",
+              },
             },
           ];
           publishChain = publishChain
             .then(() => publish(partialBlocks))
             .catch((error) => {
-              logger.error(`[Agent] Failed to publish shell command update for session ${input.sessionId}:`, error);
+              logger.error(
+                `[Agent] Failed to publish shell command update for session ${input.sessionId}:`,
+                error,
+              );
             });
         },
       );
       latestOutput = extractToolResultText(result);
-      const details = result && typeof result === "object" ? (result as unknown as Record<string, unknown>).details as Record<string, unknown> | undefined : undefined;
-      exitCode = typeof details?.exitCode === "number" ? details.exitCode : null;
-      termination = details?.termination && typeof details.termination === "object" && !Array.isArray(details.termination)
-        ? details.termination as Record<string, unknown>
-        : null;
+      const details =
+        result && typeof result === "object"
+          ? ((result as unknown as Record<string, unknown>).details as
+              | Record<string, unknown>
+              | undefined)
+          : undefined;
+      exitCode =
+        typeof details?.exitCode === "number" ? details.exitCode : null;
+      termination =
+        details?.termination &&
+        typeof details.termination === "object" &&
+        !Array.isArray(details.termination)
+          ? (details.termination as Record<string, unknown>)
+          : null;
       timedOut = termination?.reason === "timed_out";
       cancelled = termination?.reason === "aborted" || abortController.signal.aborted;
       outputTruncated = details?.outputTruncated === true || termination?.outputTruncated === true;
@@ -510,20 +790,37 @@ async function runDirectShellCommandTurn(input: {
       executionFailed = true;
       cancelled = abortController.signal.aborted;
       errorMessage = error instanceof Error ? error.message : String(error);
-      latestOutput = latestOutput ? `${latestOutput}\n\n${errorMessage}` : errorMessage;
+      latestOutput = latestOutput
+        ? `${latestOutput}\n\n${errorMessage}`
+        : errorMessage;
       exitCode = null;
       if (!cancelled) {
-        logger.error(`[Agent] Direct shell command failed sessionId=${input.sessionId}:`, error);
+        logger.error(
+          `[Agent] Direct shell command failed sessionId=${input.sessionId}:`,
+          error,
+        );
       }
     }
 
     const isError = executionFailed || cancelled || timedOut || outputTruncated || (exitCode != null && exitCode !== 0);
     const toolCompletedAt = new Date().toISOString();
-    const toolDurationMs = Math.max(0, new Date(toolCompletedAt).getTime() - new Date(toolStartedAt).getTime());
-    const toolTiming = { startedAt: toolStartedAt, completedAt: toolCompletedAt, durationMs: toolDurationMs };
+    const toolDurationMs = Math.max(
+      0,
+      new Date(toolCompletedAt).getTime() - new Date(toolStartedAt).getTime(),
+    );
+    const toolTiming = {
+      startedAt: toolStartedAt,
+      completedAt: toolCompletedAt,
+      durationMs: toolDurationMs,
+    };
     const finalToolUseBlock: ContentBlock = {
       ...toolUseBlock,
-      _meta: { direct: true, source: "shell_command", toolStatus: isError ? "failed" : "done", timing: toolTiming },
+      _meta: {
+        direct: true,
+        source: "shell_command",
+        toolStatus: isError ? "failed" : "done",
+        timing: toolTiming,
+      },
     };
     const finalToolResultBlock: ContentBlock = {
       type: "tool_result",
@@ -546,7 +843,10 @@ async function runDirectShellCommandTurn(input: {
         ...(errorMessage ? { errorMessage } : {}),
       },
     };
-    const assistantContent: ContentBlock[] = [finalToolUseBlock, finalToolResultBlock];
+    const assistantContent: ContentBlock[] = [
+      finalToolUseBlock,
+      finalToolResultBlock,
+    ];
     await publishChain;
     await publish(assistantContent, true);
 
@@ -578,13 +878,17 @@ async function runDirectShellCommandTurn(input: {
           exitCode,
           cancelled,
           timedOut,
-          timeoutSecs: typeof termination?.timeoutSecs === "number" ? termination.timeoutSecs : null,
+          timeoutSecs:
+            typeof termination?.timeoutSecs === "number"
+              ? termination.timeoutSecs
+              : null,
         }),
       },
     } as never;
     handle.session.agent.state.messages.push(assistantMessage);
     const entryId = handle.sessionManager.appendMessage(assistantMessage);
-    (assistantMessage as unknown as Record<string, unknown>).sessionEntryId = entryId;
+    (assistantMessage as unknown as Record<string, unknown>).sessionEntryId =
+      entryId;
 
     const completedAt = new Date().toISOString();
 
@@ -595,14 +899,16 @@ async function runDirectShellCommandTurn(input: {
       event: {
         type: "turn_end",
         message: assistantMessage as Record<string, unknown>,
-        toolResults: [{
-          toolCallId: toolUseId,
-          toolName: "bash",
-          input: { command: input.command },
-          content: latestOutput,
-          isError,
-          _meta: finalToolResultBlock._meta,
-        }],
+        toolResults: [
+          {
+            toolCallId: toolUseId,
+            toolName: "bash",
+            input: { command: input.command },
+            content: latestOutput,
+            isError,
+            _meta: finalToolResultBlock._meta,
+          },
+        ],
       },
       userId: input.actorUserId,
       turnId: user.turnId,
@@ -631,7 +937,10 @@ async function prepareHandle(input: {
   const [modelRegistry, imageToTextConfig] = await Promise.all([
     getModelRegistryForUser(input.actorUserId),
     loadImageToTextConfig(input.actorUserId).catch((error) => {
-      logger.warn("[ImageToText] config unavailable; continuing without fallback", error);
+      logger.warn(
+        "[ImageToText] config unavailable; continuing without fallback",
+        error,
+      );
       return null;
     }),
   ]);
@@ -660,30 +969,55 @@ async function prepareHandle(input: {
 }
 
 function resolveRequestedModel(ownerMeta: Record<string, unknown>) {
-  const provider = typeof ownerMeta.provider === "string" && ownerMeta.provider.trim() ? ownerMeta.provider.trim() : null;
-  const model = typeof ownerMeta.model === "string" && ownerMeta.model.trim() ? ownerMeta.model.trim() : null;
+  const provider =
+    typeof ownerMeta.provider === "string" && ownerMeta.provider.trim()
+      ? ownerMeta.provider.trim()
+      : null;
+  const model =
+    typeof ownerMeta.model === "string" && ownerMeta.model.trim()
+      ? ownerMeta.model.trim()
+      : null;
   return provider && model ? { provider, id: model } : undefined;
 }
 
-function resolveRequestedThinkingLevel(ownerMeta: Record<string, unknown>): string | null | undefined {
+function resolveRequestedThinkingLevel(
+  ownerMeta: Record<string, unknown>,
+): string | null | undefined {
   if (typeof ownerMeta.requestedThinkingLevel !== "string") return undefined;
   const trimmed = ownerMeta.requestedThinkingLevel.trim();
   return trimmed || null;
 }
 
+function resolveRequestedServiceTier(
+  ownerMeta: Record<string, unknown>,
+): string | null | undefined {
+  if (!Object.hasOwn(ownerMeta, "requestedServiceTier")) return undefined;
+  if (ownerMeta.requestedServiceTier === null) return null;
+  if (typeof ownerMeta.requestedServiceTier !== "string") return undefined;
+  const trimmed = ownerMeta.requestedServiceTier.trim();
+  return trimmed || undefined;
+}
+
 function resolveActorUserId(ownerMeta: Record<string, unknown>) {
-  return typeof ownerMeta.userId === "string" && ownerMeta.userId.trim() ? ownerMeta.userId.trim() : null;
+  return typeof ownerMeta.userId === "string" && ownerMeta.userId.trim()
+    ? ownerMeta.userId.trim()
+    : null;
 }
 
 function resolveSourceClientId(ownerMeta: Record<string, unknown>) {
   const sourceClientId = ownerMeta.sourceClientId;
-  return typeof sourceClientId === "string" && sourceClientId.trim() ? sourceClientId.trim() : null;
+  return typeof sourceClientId === "string" && sourceClientId.trim()
+    ? sourceClientId.trim()
+    : null;
 }
 
 function resolveContextHookEnv(ownerMeta: Record<string, unknown>) {
-  const context = ownerMeta.context && typeof ownerMeta.context === "object" && !Array.isArray(ownerMeta.context)
-    ? ownerMeta.context as Record<string, unknown>
-    : null;
+  const context =
+    ownerMeta.context &&
+    typeof ownerMeta.context === "object" &&
+    !Array.isArray(ownerMeta.context)
+      ? (ownerMeta.context as Record<string, unknown>)
+      : null;
   if (context?.kind !== "space_hook") return null;
   const env = context.env;
   if (!env || typeof env !== "object" || Array.isArray(env)) return null;
@@ -701,7 +1035,9 @@ function resolvePromptEnv(ownerMeta: Record<string, unknown>) {
   try {
     userEnv = parsePromptEnv(ownerMeta.env);
   } catch (error) {
-    logger.warn(`[Agent] ignoring invalid prompt env: ${error instanceof Error ? error.message : String(error)}`);
+    logger.warn(
+      `[Agent] ignoring invalid prompt env: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const hookEnv = resolveContextHookEnv(ownerMeta);
   if (!userEnv && !hookEnv) return null;
@@ -724,20 +1060,31 @@ async function createTurnExecutionToken(input: {
     spaceId: input.spaceId,
     sessionId: input.sessionId,
     turnId: input.turnId,
-    source: typeof input.source === "string" && input.source.trim() ? input.source.trim() : "agent_turn",
+    source:
+      typeof input.source === "string" && input.source.trim()
+        ? input.source.trim()
+        : "agent_turn",
     scopes: getPromptAuthScopes(input.promptAuth, input.spaceId),
   });
 }
 
-function filterToolsForAccessMode(allTools: AgentTool[], accessMode: PromptAccessMode) {
+function filterToolsForAccessMode(
+  allTools: AgentTool[],
+  accessMode: PromptAccessMode,
+) {
   if (accessMode === "full_access") return allTools;
   const readOnlyTools = new Set(["read", "ls", "find", "grep"]);
   return allTools.filter((tool) => readOnlyTools.has(tool.name));
 }
 
-async function configureHandleAccessMode(handle: SessionHandle, accessMode: PromptAccessMode) {
+async function configureHandleAccessMode(
+  handle: SessionHandle,
+  accessMode: PromptAccessMode,
+) {
   if (handle.currentAccessMode === accessMode) return;
-  await handle.session.configureTools(filterToolsForAccessMode(tools, accessMode));
+  await handle.session.configureTools(
+    filterToolsForAccessMode(tools, accessMode),
+  );
   handle.currentAccessMode = accessMode;
 }
 
@@ -752,7 +1099,9 @@ async function failActiveTurn(input: {
   turnId: string;
   error: unknown;
 }) {
-  const errorMessage = formatTurnFailureMessage(input.error).slice(0, 2000) || "Agent turn failed.";
+  const errorMessage =
+    formatTurnFailureMessage(input.error).slice(0, 2000) ||
+    "Agent turn failed.";
   try {
     await failSessionTurn({
       spaceId: input.spaceId,
@@ -762,7 +1111,10 @@ async function failActiveTurn(input: {
     });
     return true;
   } catch (failError) {
-    logger.error(`[Agent] failed to mark turn failed sessionId=${input.sessionId} turnId=${input.turnId}:`, failError);
+    logger.error(
+      `[Agent] failed to mark turn failed sessionId=${input.sessionId} turnId=${input.turnId}:`,
+      failError,
+    );
     return false;
   }
 }
@@ -770,22 +1122,33 @@ async function failActiveTurn(input: {
 function getSpaceBootstrapMeta(meta: unknown) {
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
   const bootstrap = (meta as Record<string, unknown>).bootstrap;
-  if (!bootstrap || typeof bootstrap !== "object" || Array.isArray(bootstrap)) return null;
+  if (!bootstrap || typeof bootstrap !== "object" || Array.isArray(bootstrap))
+    return null;
   return bootstrap as Record<string, unknown>;
 }
 
 function logSpaceBootstrapWarning(spaceId: string, meta: unknown) {
   const bootstrap = getSpaceBootstrapMeta(meta);
-  const status = typeof bootstrap?.status === "string" ? bootstrap.status : null;
+  const status =
+    typeof bootstrap?.status === "string" ? bootstrap.status : null;
   if (!status || status === "ready") return;
-  logger.warn(`[Agent] space bootstrap is not ready; continuing execution spaceId=${spaceId} status=${status} stage=${typeof bootstrap?.stage === "string" ? bootstrap.stage : ""} error=${typeof bootstrap?.errorMessage === "string" ? bootstrap.errorMessage : ""}`);
+  logger.warn(
+    `[Agent] space bootstrap is not ready; continuing execution spaceId=${spaceId} status=${status} stage=${typeof bootstrap?.stage === "string" ? bootstrap.stage : ""} error=${typeof bootstrap?.errorMessage === "string" ? bootstrap.errorMessage : ""}`,
+  );
 }
 
-type PostReleaseDrain = { spaceId: string; sessionId: string; reason: string } | null;
+type PostReleaseDrain = {
+  spaceId: string;
+  sessionId: string;
+  reason: string;
+} | null;
 
 function getQueueWaitMs(job: Pick<Job<unknown>, "timestamp" | "processedOn">) {
   if (!job.timestamp) return null;
-  const processedAt = job.processedOn && job.processedOn >= job.timestamp ? job.processedOn : Date.now();
+  const processedAt =
+    job.processedOn && job.processedOn >= job.timestamp
+      ? job.processedOn
+      : Date.now();
   return Math.max(0, processedAt - job.timestamp);
 }
 
@@ -793,519 +1156,1105 @@ export async function processAgentTurnJob(job: Job<AgentTurnJobData>) {
   const data = job.data;
   const requestId = getOrCreateRequestId(data.requestId);
   const queueWaitMs = getQueueWaitMs(job);
-  const parentCtx = extractTrace((data.trace ?? data) as Record<string, unknown>);
-  return runInActiveSpan(agentTracer, "agent.turn_job.process", {
-    attributes: {
-      "cohub.request_id": requestId,
-      "cohub.space_id": data.spaceId,
-      "cohub.session_id": data.sessionId,
-      "job.id": job.id ?? "",
-      "job.attempt": job.attemptsMade,
-      ...(job.timestamp ? { "agent.queue.enqueued_at_ms": job.timestamp } : {}),
-      ...(job.processedOn ? { "agent.queue.processed_on_ms": job.processedOn } : {}),
-      ...(job.delay ? { "agent.queue.delay_ms": job.delay } : {}),
-      ...(queueWaitMs != null ? { "agent.queue.wait_ms": queueWaitMs } : {}),
+  const parentCtx = extractTrace(
+    (data.trace ?? data) as Record<string, unknown>,
+  );
+  return runInActiveSpan(
+    agentTracer,
+    "agent.turn_job.process",
+    {
+      attributes: {
+        "cohub.request_id": requestId,
+        "cohub.space_id": data.spaceId,
+        "cohub.session_id": data.sessionId,
+        "job.id": job.id ?? "",
+        "job.attempt": job.attemptsMade,
+        ...(job.timestamp
+          ? { "agent.queue.enqueued_at_ms": job.timestamp }
+          : {}),
+        ...(job.processedOn
+          ? { "agent.queue.processed_on_ms": job.processedOn }
+          : {}),
+        ...(job.delay ? { "agent.queue.delay_ms": job.delay } : {}),
+        ...(queueWaitMs != null ? { "agent.queue.wait_ms": queueWaitMs } : {}),
+      },
     },
-  }, parentCtx, async (jobSpan) => {
-    setRequestContextAttributes(jobSpan, getActiveTraceIdentifiers(requestId, trace.setSpan(context.active(), jobSpan)));
-    if (queueWaitMs != null) jobSpan.addEvent("agent.queue.dequeued", { "agent.queue.wait_ms": queueWaitMs });
-    const lock = await acquireSessionLock(data.sessionId);
-    if (!lock) {
-      logger.info(`[Agent] session locked; skipped wakeup sessionId=${data.sessionId} reason=${data.reason ?? "prompt"}`);
-      return { skipped: "session_locked", jobId: job.id ?? null };
-    }
-    let activeTurn: { id: string; controller: AbortController } | null = null;
-    const onLeaseLost = () => activeTurn?.controller.abort();
-    lock.signal.addEventListener("abort", onLeaseLost, { once: true });
-    let claimedBatch: ClaimedTurnBatch | null = null;
-    let handle: SessionHandle | null = null;
-    let handleSettled = false;
-    let terminalHandled = false;
-    let caughtError: unknown = null;
-    let drainAfterRelease: PostReleaseDrain = null;
-
-    try {
-      const claim = await claimNextTurnBatch(data);
-      if (claim.kind === "noop") {
-        clearRetryState(data);
-        return { skipped: "noop" };
-      }
-      if (claim.kind === "busy") {
-        const result = await requeueTurnJob(data, "session_busy", job, {
-          activeTurnId: claim.activeTurnId,
-          activeStatus: claim.activeStatus,
-          activeUpdatedAt: claim.activeUpdatedAt?.toISOString() ?? null,
+    parentCtx,
+    async (jobSpan) => {
+      setRequestContextAttributes(
+        jobSpan,
+        getActiveTraceIdentifiers(
+          requestId,
+          trace.setSpan(context.active(), jobSpan),
+        ),
+      );
+      if (queueWaitMs != null)
+        jobSpan.addEvent("agent.queue.dequeued", {
+          "agent.queue.wait_ms": queueWaitMs,
         });
-        if ((result.retryInMs ?? 0) >= BUSY_RETRY_MAX_DELAY_MS) {
-          logger.warn(`[Agent] session busy retry delayed sessionId=${data.sessionId} activeTurnId=${claim.activeTurnId} delayMs=${result.retryInMs}`);
-        }
-        return result;
+      const lock = await acquireSessionLock(data.sessionId);
+      if (!lock) {
+        logger.info(
+          `[Agent] session locked; skipped wakeup sessionId=${data.sessionId} reason=${data.reason ?? "prompt"}`,
+        );
+        return { skipped: "session_locked", jobId: job.id ?? null };
       }
+      let activeTurn: { id: string; controller: AbortController } | null = null;
+      let claimedBatch: ClaimedTurnBatch | null = null;
+      let handle: SessionHandle | null = null;
+      let handleSettled = false;
+      let terminalHandled = false;
+      let caughtError: unknown = null;
+      let drainAfterRelease: PostReleaseDrain = null;
+      const onLeaseLost = () => activeTurn?.controller.abort();
+      lock.signal.addEventListener("abort", onLeaseLost, { once: true });
 
-      clearRetryState(data);
-      const { batch } = claim;
-      claimedBatch = batch;
-      await publishSessionTurnsUpdated({
-        sessionId: data.sessionId,
-        turnIds: batch.turns.map((turn) => turn.id),
-      }).catch((error) => logger.warn("[Realtime] failed to publish claimed turn updates", error));
-      const ownerMeta = (batch.ownerTurn.meta && typeof batch.ownerTurn.meta === "object" && !Array.isArray(batch.ownerTurn.meta)
-        ? batch.ownerTurn.meta as Record<string, unknown>
-        : {});
-      const actorUserId = resolveActorUserId(ownerMeta);
-      const sourceClientId = resolveSourceClientId(ownerMeta);
-      if (!actorUserId) throw new Error("Agent turn requires actorUserId for execution token");
-      const promptContext = ownerMeta.context && typeof ownerMeta.context === "object" && !Array.isArray(ownerMeta.context)
-        ? ownerMeta.context as Record<string, unknown>
-        : null;
-      const fileVisibility = await resolveSpaceFileVisibility({
-        actorUserId,
-        spaceId: data.spaceId,
-        promptAuth: promptContext?.auth,
-      });
-      const accessMode = resolveBatchAccessMode(batch);
-      const generationPolicy = normalizeGenerationPolicy(ownerMeta.generationPolicy);
-      const promptEnv = resolvePromptEnv(ownerMeta);
-      const abortEvent = await getAbortEvent(batch.ownerTurn.id);
-      if (abortEvent) {
-        if (abortEvent.reason === "interrupt" && abortEvent.continuedByTurnId) {
-          await interruptSessionTurn({
-            spaceId: data.spaceId,
-            sessionId: data.sessionId,
-            turnId: batch.ownerTurn.id,
-            continuedByTurnId: abortEvent.continuedByTurnId,
-          });
-        } else {
-          await abortSessionTurn({
-            spaceId: data.spaceId,
-            sessionId: data.sessionId,
-            turnId: batch.ownerTurn.id,
-            actorUserId,
-          });
-        }
-        terminalHandled = true;
-        drainAfterRelease = { spaceId: data.spaceId, sessionId: data.sessionId, reason: "abort_precheck" };
-        return { skipped: "abort_requested", turnId: batch.ownerTurn.id };
-      }
-      lock.signal.throwIfAborted();
-      const requestedHarness = resolveHarness(ownerMeta);
-      if (isLocalHarness(requestedHarness)) {
-        if (fileVisibility !== "full") throw new Error("Local Harness requires full workspace access");
-        const remoteController = new AbortController();
-        activeTurn = { id: batch.ownerTurn.id, controller: remoteController };
-        setActiveAbortController(batch.ownerTurn.id, remoteController);
-        const remoteAbort = await getAbortEvent(batch.ownerTurn.id);
-        if (remoteAbort) {
-          setActiveAbortEvent(remoteAbort);
-          remoteController.abort();
-        }
-        try {
-          await executeRemoteHarnessTurn({
-            spaceId: data.spaceId,
-            sessionId: data.sessionId,
-            batch,
-            actorUserId,
-            accessMode,
-            requestedThinkingLevel: resolveRequestedThinkingLevel(ownerMeta),
-            harness: requestedHarness,
-            provider: typeof ownerMeta.provider === "string" ? ownerMeta.provider : null,
-            model: typeof ownerMeta.model === "string" ? ownerMeta.model : null,
-            requestId,
-            abortSignal: remoteController.signal,
-            leaseSignal: lock.signal,
-          });
-          terminalHandled = true;
-          drainAfterRelease = { spaceId: data.spaceId, sessionId: data.sessionId, reason: "remote_turn_complete" };
-          return { ownerTurnId: batch.ownerTurn.id, mergedTurnIds: batch.mergedTurns.map((turn) => turn.id), userMessageCount: batch.turns.length };
-        } finally {
-          clearActiveAbortController(batch.ownerTurn.id, remoteController);
-        }
-      }
-
-      const spaceInfo = await getSpace({ spaceId: data.spaceId }).catch(() => null);
-      logSpaceBootstrapWarning(data.spaceId, spaceInfo?.space?.meta);
-      const spaceEnv = await loadSpaceEnvSnapshot(data.spaceId);
-      handle = await prepareHandle({
-        spaceId: data.spaceId,
-        sessionId: data.sessionId,
-        actorUserId,
-        requestedModel: resolveRequestedModel(ownerMeta),
-        requestedThinkingLevel: resolveRequestedThinkingLevel(ownerMeta),
-        beforeTurnSequence: batch.turns[0]?.sequence ?? batch.ownerTurn.sequence,
-      });
-      const activeHandle = handle;
       try {
-        await configureHandleAccessMode(activeHandle, accessMode);
-      } catch (error) {
-        logger.error(`[Agent] failed to configure tools sessionId=${data.sessionId} turnId=${batch.ownerTurn.id} accessMode=${accessMode}:`, error);
-        throw error;
-      }
+        const claim = await claimNextTurnBatch(data);
+        if (claim.kind === "noop") {
+          clearRetryState(data);
+          return { skipped: "noop" };
+        }
+        if (claim.kind === "busy") {
+          const result = await requeueTurnJob(data, "session_busy", job, {
+            activeTurnId: claim.activeTurnId,
+            activeStatus: claim.activeStatus,
+            activeUpdatedAt: claim.activeUpdatedAt?.toISOString() ?? null,
+          });
+          if ((result.retryInMs ?? 0) >= BUSY_RETRY_MAX_DELAY_MS) {
+            logger.warn(
+              `[Agent] session busy retry delayed sessionId=${data.sessionId} activeTurnId=${claim.activeTurnId} delayMs=${result.retryInMs}`,
+            );
+          }
+          return result;
+        }
 
-      if (accessMode === "full_access") warmupSandboxConnection(data.spaceId);
-
-      const executionModel = {
-        provider: activeHandle.session.agent.state.model.provider,
-        id: activeHandle.session.agent.state.model.id,
-      };
-      const rawTurnUserMessages: TurnUserMessage[] = buildUserMessagesForBatch(batch)
-        .filter((item) => Boolean(item.userMessageId))
-        .map((item) => ({
-          turnId: item.turnId,
-          turnSeq: item.turnSeq,
-          userMessageId: item.userMessageId,
-          content: item.content,
-          meta: item.meta,
-        }));
-      const turnUserMessages = await Promise.all(rawTurnUserMessages.map(async (item) => ({
-        ...item,
-        content: await normalizeContentBlocksImages(item.content, { readUrlImage: readPublicAssetImageUrl }),
-      })));
-      for (const item of turnUserMessages) {
-        const meta = normalizeTurnUserMeta(item);
-        ensurePendingUserMessage(activeHandle, {
-          userMessageId: item.userMessageId,
-          turnId: item.turnId,
-          turnSeq: item.turnSeq,
-          content: item.content,
-          meta,
+        clearRetryState(data);
+        const { batch } = claim;
+        claimedBatch = batch;
+        await publishSessionTurnsUpdated({
+          sessionId: data.sessionId,
+          turnIds: batch.turns.map((turn) => turn.id),
+        }).catch((error) =>
+          logger.warn(
+            "[Realtime] failed to publish claimed turn updates",
+            error,
+          ),
+        );
+        const ownerMeta =
+          batch.ownerTurn.meta &&
+          typeof batch.ownerTurn.meta === "object" &&
+          !Array.isArray(batch.ownerTurn.meta)
+            ? (batch.ownerTurn.meta as Record<string, unknown>)
+            : {};
+        const actorUserId = resolveActorUserId(ownerMeta);
+        const sourceClientId = resolveSourceClientId(ownerMeta);
+        if (!actorUserId)
+          throw new Error(
+            "Agent turn requires actorUserId for execution token",
+          );
+        const promptContext =
+          ownerMeta.context &&
+          typeof ownerMeta.context === "object" &&
+          !Array.isArray(ownerMeta.context)
+            ? (ownerMeta.context as Record<string, unknown>)
+            : null;
+        const fileVisibility = await resolveSpaceFileVisibility({
+          actorUserId,
+          spaceId: data.spaceId,
+          promptAuth: promptContext?.auth,
         });
-      }
+        const accessMode = resolveBatchAccessMode(batch);
+        const generationPolicy = normalizeGenerationPolicy(
+          ownerMeta.generationPolicy,
+        );
+        const promptEnv = resolvePromptEnv(ownerMeta);
+        const abortEvent = await getAbortEvent(batch.ownerTurn.id);
+        if (abortEvent) {
+          if (
+            abortEvent.reason === "interrupt" &&
+            abortEvent.continuedByTurnId
+          ) {
+            await interruptSessionTurn({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              turnId: batch.ownerTurn.id,
+              continuedByTurnId: abortEvent.continuedByTurnId,
+            });
+          } else {
+            await abortSessionTurn({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              turnId: batch.ownerTurn.id,
+              actorUserId,
+            });
+          }
+          terminalHandled = true;
+          drainAfterRelease = {
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            reason: "abort_precheck",
+          };
+          return { skipped: "abort_requested", turnId: batch.ownerTurn.id };
+        }
+        lock.signal.throwIfAborted();
+        // Only an explicit Turn harness selects the new Runtime; omitted/cohub turns
+        // continue through the persisted Session agentHarness below.
+        const turnRoute = resolveHarnessRoute(ownerMeta);
+        if (turnRoute.kind === "runtime") {
+          if (fileVisibility !== "full") {
+            throw new Error("Local Harness requires full workspace access");
+          }
+          const remoteController = new AbortController();
+          activeTurn = { id: batch.ownerTurn.id, controller: remoteController };
+          setActiveAbortController(batch.ownerTurn.id, remoteController);
+          const remoteAbort = await getAbortEvent(batch.ownerTurn.id);
+          if (remoteAbort) {
+            setActiveAbortEvent(remoteAbort);
+            remoteController.abort();
+          }
+          try {
+            await executeRemoteHarnessTurn({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              batch,
+              actorUserId,
+              accessMode,
+              requestedThinkingLevel: resolveRequestedThinkingLevel(ownerMeta),
+              harness: turnRoute.harness,
+              provider:
+                typeof ownerMeta.provider === "string"
+                  ? ownerMeta.provider
+                  : null,
+              model:
+                typeof ownerMeta.model === "string" ? ownerMeta.model : null,
+              requestId,
+              abortSignal: remoteController.signal,
+              leaseSignal: lock.signal,
+            });
+            terminalHandled = true;
+            drainAfterRelease = {
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              reason: "remote_turn_complete",
+            };
+            return {
+              ownerTurnId: batch.ownerTurn.id,
+              mergedTurnIds: batch.mergedTurns.map((turn) => turn.id),
+              userMessageCount: batch.turns.length,
+            };
+          } finally {
+            clearActiveAbortController(batch.ownerTurn.id, remoteController);
+          }
+        }
+        const spaceInfo = await getSpace({ spaceId: data.spaceId }).catch(
+          () => null,
+        );
+        logSpaceBootstrapWarning(data.spaceId, spaceInfo?.space?.meta);
+        const sessionHarness = await getSessionHarness(data.sessionId);
+        await ensureLocalSessionRegistryForSpace(data.spaceId);
+        if (sessionHarness.agentHarness !== "pi") {
+          const harness = sessionHarness.agentHarness;
+          const requestedModel = resolveRequestedModel(ownerMeta);
+          const requestedThinkingLevel = resolveRequestedThinkingLevel(ownerMeta);
+          const requestedServiceTier = resolveRequestedServiceTier(ownerMeta);
+          if (!requestedModel || requestedModel.provider !== harness) {
+            throw new UnrecoverableError(
+              `${harness} turn is missing its validated model selection`,
+            );
+          }
+          if (!requestedThinkingLevel) {
+            throw new UnrecoverableError(
+              `${harness} turn is missing its validated effort selection`,
+            );
+          }
+          const sandbox = (await getSpaceSandbox({ spaceId: data.spaceId }))
+            ?.sandbox;
+          if (sandbox?.provider !== "local") {
+            throw new UnrecoverableError(
+              `${harness} is only available when the Space uses a local sandbox`,
+            );
+          }
 
-      const ownerUserMessageId = batch.executionBatch.anchorUserMessageId ?? turnUserMessages.at(-1)?.userMessageId ?? null;
-      const executionScopes = getPromptAuthScopes(promptContext?.auth, data.spaceId);
-      const executionToken = await createTurnExecutionToken({
-        accessMode,
-        actorUserId,
-        spaceId: data.spaceId,
-        sessionId: data.sessionId,
-        turnId: batch.ownerTurn.id,
-        source: ownerMeta.source,
-        promptAuth: promptContext?.auth,
-      });
-      const turnMetrics = { llmRoundCount: 0, toolCallCount: 0 };
-      const assistantMessageTiming = { startedAt: null as string | null };
-      const abortController = new AbortController();
-      activeTurn = { id: batch.ownerTurn.id, controller: abortController };
-      if (lock.signal.aborted) abortController.abort();
-      setActiveAbortController(batch.ownerTurn.id, abortController);
-      const pendingAbortEvent = await getAbortEvent(batch.ownerTurn.id);
-      if (pendingAbortEvent) {
-        setActiveAbortEvent(pendingAbortEvent);
-        abortController.abort();
-      }
+          const externalMessages = buildUserMessagesForBatch(batch).filter(
+            (item) => Boolean(item.userMessageId),
+          );
+          for (const item of externalMessages) {
+            await persistUserMessage({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              userMessageId: item.userMessageId,
+              turnId: item.turnId,
+              content: item.content,
+              meta: normalizeTurnUserMeta({
+                turnId: item.turnId,
+                turnSeq: item.turnSeq,
+                userMessageId: item.userMessageId,
+                content: item.content,
+                meta: item.meta,
+              }),
+            });
+          }
+          const rawPrompt = externalMessages
+            .map((item) => externalPromptFromContent(item.content))
+            .filter(Boolean)
+            .join("\n\n");
+          if (!rawPrompt) throw new Error(`${harness} requires a text prompt`);
+          const promptWithContext = appendLocalSessionRegistryInstructions(
+            appendLocalGenerationInstructions(
+              appendCloudSpaceInstructions(
+                rawPrompt,
+                externalMessages.map((item) => item.content),
+              ),
+            ),
+          );
+          let prompt = harness === "cursor"
+            ? appendCursorLocalContextInstructions(promptWithContext)
+            : promptWithContext;
+          const pendingForkBootstrap = parsePendingExternalForkBootstrap(sessionHarness.meta);
+          if (pendingForkBootstrap) {
+            prompt = buildExternalForkBootstrapPrompt({
+              harness,
+              turns: await loadExternalForkTranscript(
+                data.sessionId,
+                pendingForkBootstrap.anchorSequence,
+              ),
+              prompt,
+            });
+          }
+          const anchorUserMessageId =
+            batch.executionBatch.anchorUserMessageId ??
+            externalMessages.at(-1)?.userMessageId ??
+            null;
+          if (!anchorUserMessageId) {
+            throw new Error(
+              "External harness turn is missing an anchor user message",
+            );
+          }
 
-      setActiveTurnContext(activeHandle, {
-        turnId: batch.ownerTurn.id,
-        turnSeq: batch.ownerTurn.sequence,
-        userMessageId: ownerUserMessageId,
-        userMeta: ownerMeta,
-        llmRound: 0,
-      });
-      activeHandle.currentExecutionTurnIds = new Set(batch.executionBatch.turnIds);
-      await drainStreamStateBeforeReset(activeHandle);
-      resetStreamState(activeHandle);
+          const externalExecutionScopes = getPromptAuthScopes(
+            promptContext?.auth,
+            data.spaceId,
+          );
+          const externalExecutionToken = await createAgentExecutionToken({
+            actorUserId,
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            turnId: null,
+            source:
+              typeof ownerMeta.source === "string" && ownerMeta.source.trim()
+                ? ownerMeta.source.trim()
+                : "external_harness",
+            scopes: externalExecutionScopes,
+          });
+          const externalEnvironment = buildExternalHarnessEnvironment({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            actorUserId,
+            executionToken: externalExecutionToken,
+            apiBaseUrl: env.INTERNAL_API_BASE_URL ?? "",
+            cliPath: env.LOCAL_COHUB_CLI_PATH ?? "",
+          });
+          const externalExecutionContextKey = [
+            actorUserId,
+            [...externalExecutionScopes].sort().join(","),
+            Math.floor(Date.now() / (12 * 60 * 60_000)),
+          ].join(":");
 
-      const messages = await Promise.all(turnUserMessages
-        .filter((item) => !hasSessionUserMessage(activeHandle, item.userMessageId))
-        .map((item) => contentToAgentMessage(item.content, normalizeTurnUserMeta(item))));
+          const abortController = new AbortController();
+          activeTurn = { id: batch.ownerTurn.id, controller: abortController };
+          if (lock.signal.aborted) abortController.abort();
+          setActiveAbortController(batch.ownerTurn.id, abortController);
+          const pendingAbortEvent = await getAbortEvent(batch.ownerTurn.id);
+          if (pendingAbortEvent) {
+            setActiveAbortEvent(pendingAbortEvent);
+            abortController.abort();
+          }
+          let identityUpdate = Promise.resolve();
+          const startedAt = new Date().toISOString();
+          const streamMessageId = `turn:${batch.ownerTurn.id}:assistant:0`;
+          let latestExternalProgress: ContentBlock[] = [];
+          const externalProgressPublisher = createExternalProgressPublisher({
+            publish: async ({ seq, baseSeq, content, turnEnd }) => {
+              await sendOutput({
+                  type: "stream_update",
+                  spaceId: data.spaceId,
+                  sessionId: data.sessionId,
+                  turnId: batch.ownerTurn.id,
+                  seq,
+                  baseSeq,
+                  content,
+                  snapshotContent: content,
+                  messageId: streamMessageId,
+                  messageOrdinal: 0,
+                  sourceMessageId: anchorUserMessageId,
+                  anchorUserMessageId,
+                  timestamp: Date.now(),
+                  ...(turnEnd ? { turnEnd: true } : {}),
+              });
+            },
+            onError: (error) => {
+              logger.warn(
+                `[ExternalHarness] failed to publish live progress harness=${harness} sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}`,
+                error,
+              );
+            },
+          });
 
-      const directShellItem = accessMode === "full_access" && turnUserMessages.length === 1 ? turnUserMessages[0] : null;
-      const directShellCommand = directShellItem ? getShellCommandBlock(directShellItem.content) : null;
-      if (directShellItem && directShellCommand) {
-        await wrapAgentTurn(agentTracer, {
-          action: "prompt",
-          mode: "prompt",
+          const publishExternalProgress = (
+            content: ContentBlock[],
+            turnEnd = false,
+          ) => {
+            latestExternalProgress = externalProgressPublisher.enqueue(
+              content,
+              turnEnd,
+            );
+          };
+
+          try {
+            const result = await runExternalHarness({
+              harness,
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              turnId: batch.ownerTurn.id,
+              prompt,
+              environment: externalEnvironment,
+              executionContextKey: externalExecutionContextKey,
+              externalSessionId: sessionHarness.externalSessionId,
+              accessMode,
+              model: requestedModel.id,
+              thinkingLevel: requestedThinkingLevel,
+              serviceTier: harness === "codex" ? requestedServiceTier : undefined,
+              abortSignal: abortController.signal,
+              onExternalSessionId: (externalSessionId) => {
+                identityUpdate = identityUpdate.then(() =>
+                  persistExternalHarnessSessionId({
+                    sessionId: data.sessionId,
+                    harness,
+                    externalSessionId,
+                  }),
+                );
+              },
+              onProgress: (progress) => {
+                publishExternalProgress(
+                  progress.content,
+                  progress.kind === "completed",
+                );
+              },
+            });
+            await Promise.all([identityUpdate, externalProgressPublisher.flush()]);
+            const externalProgressPublishError =
+              externalProgressPublisher.getLastError();
+            if (externalProgressPublishError) {
+              logger.warn(
+                `[ExternalHarness] completed with degraded live delivery harness=${harness} sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}`,
+                externalProgressPublishError,
+              );
+            }
+            const externalContent = splitExternalHarnessContent(result.content);
+            const assistantMeta = {
+              turnId: batch.ownerTurn.id,
+              agentHarness: harness,
+              externalSessionId: result.externalSessionId,
+              requestedThinkingLevel,
+              effectiveThinkingLevel: result.thinkingLevel,
+              ...(harness === "codex" && result.externalSessionId && result.externalTurnId
+                ? {
+                    forkCheckpoint: {
+                      version: 1,
+                      harness: "codex",
+                      externalSessionId: result.externalSessionId,
+                      externalTurnId: result.externalTurnId,
+                    },
+                  }
+                : {}),
+              ...(harness === "codex"
+                ? {
+                    requestedServiceTier: requestedServiceTier ?? null,
+                    effectiveServiceTier: requestedServiceTier ?? null,
+                  }
+                : {}),
+            };
+            if (externalContent.intermediate.length > 0) {
+              await persistAssistantMessage({
+                spaceId: data.spaceId,
+                spaceSessionId: data.sessionId,
+                userMessageId: anchorUserMessageId,
+                turnId: batch.ownerTurn.id,
+                userId: actorUserId,
+                startedAt,
+                completedAt: new Date().toISOString(),
+                messageOrdinal: 0,
+                thinkingLevel: result.thinkingLevel,
+                event: {
+                  type: "turn_end",
+                  message: {
+                    role: "assistant",
+                    content: externalContent.intermediate,
+                    provider: result.provider,
+                    model: result.model,
+                    stopReason: "tool_use",
+                    usage: null,
+                    meta: assistantMeta,
+                  },
+                },
+              });
+            }
+            await persistAssistantMessage({
+              spaceId: data.spaceId,
+              spaceSessionId: data.sessionId,
+              userMessageId: anchorUserMessageId,
+              turnId: batch.ownerTurn.id,
+              userId: actorUserId,
+              startedAt,
+              completedAt: new Date().toISOString(),
+              messageOrdinal: externalContent.intermediate.length > 0 ? 1 : 0,
+              thinkingLevel: result.thinkingLevel,
+              event: {
+                type: "turn_end",
+                message: {
+                  role: "assistant",
+                  content: externalContent.final,
+                  provider: result.provider,
+                  model: result.model,
+                  stopReason: result.stopReason,
+                  usage: result.usage,
+                  meta: assistantMeta,
+                },
+              },
+            });
+            if (pendingForkBootstrap) {
+              await completeExternalForkBootstrap(data.sessionId);
+            }
+            terminalHandled = true;
+            drainAfterRelease = {
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              reason: "external_harness_complete",
+            };
+            clearRetryState(data);
+            return {
+              ownerTurnId: batch.ownerTurn.id,
+              mergedTurnIds: batch.mergedTurns.map((turn) => turn.id),
+              userMessageCount: externalMessages.length,
+              harness,
+            };
+          } catch (error) {
+            if (
+              abortController.signal.aborted ||
+              (error instanceof Error && error.message === "aborted")
+            ) {
+              await Promise.all([
+                identityUpdate,
+                externalProgressPublisher.flush(),
+              ]);
+              await abortSessionTurn({
+                spaceId: data.spaceId,
+                sessionId: data.sessionId,
+                turnId: batch.ownerTurn.id,
+                actorUserId,
+              });
+              terminalHandled = true;
+              drainAfterRelease = {
+                spaceId: data.spaceId,
+                sessionId: data.sessionId,
+                reason: "external_harness_aborted",
+              };
+              return { skipped: "abort_requested", turnId: batch.ownerTurn.id };
+            }
+            await Promise.all([identityUpdate, externalProgressPublisher.flush()]);
+            if (latestExternalProgress.length > 0) {
+              await persistAssistantMessage({
+                spaceId: data.spaceId,
+                spaceSessionId: data.sessionId,
+                userMessageId: anchorUserMessageId,
+                turnId: batch.ownerTurn.id,
+                userId: actorUserId,
+                startedAt,
+                completedAt: new Date().toISOString(),
+                messageOrdinal: 0,
+                thinkingLevel: requestedThinkingLevel,
+                event: {
+                  type: "turn_end",
+                  message: {
+                    role: "assistant",
+                    content: latestExternalProgress,
+                    provider: harness,
+                    model: requestedModel.id,
+                    stopReason: "tool_use",
+                    usage: null,
+                    meta: {
+                      turnId: batch.ownerTurn.id,
+                      agentHarness: harness,
+                      externalSessionId: sessionHarness.externalSessionId,
+                      requestedThinkingLevel,
+                      effectiveThinkingLevel: requestedThinkingLevel,
+                      ...(harness === "codex"
+                        ? {
+                            requestedServiceTier: requestedServiceTier ?? null,
+                            effectiveServiceTier: requestedServiceTier ?? null,
+                          }
+                        : {}),
+                      runtimeFailed: true,
+                    },
+                  },
+                },
+              });
+            }
+            throw error;
+          }
+        }
+        const spaceEnv = await loadSpaceEnvSnapshot(data.spaceId);
+        handle = await prepareHandle({
+          spaceId: data.spaceId,
+          sessionId: data.sessionId,
+          actorUserId,
+          requestedModel: resolveRequestedModel(ownerMeta),
+          requestedThinkingLevel: resolveRequestedThinkingLevel(ownerMeta),
+          beforeTurnSequence: batch.turns[0]?.sequence ?? batch.ownerTurn.sequence,
+        });
+        const activeHandle = handle;
+        try {
+          await configureHandleAccessMode(activeHandle, accessMode);
+        } catch (error) {
+          logger.error(
+            `[Agent] failed to configure tools sessionId=${data.sessionId} turnId=${batch.ownerTurn.id} accessMode=${accessMode}:`,
+            error,
+          );
+          throw error;
+        }
+
+        if (accessMode === "full_access") warmupSandboxConnection(data.spaceId);
+
+        const executionModel = {
+          provider: activeHandle.session.agent.state.model.provider,
+          id: activeHandle.session.agent.state.model.id,
+        };
+        const rawTurnUserMessages: TurnUserMessage[] =
+          buildUserMessagesForBatch(batch)
+            .filter((item) => Boolean(item.userMessageId))
+            .map((item) => ({
+              turnId: item.turnId,
+              turnSeq: item.turnSeq,
+              userMessageId: item.userMessageId,
+              content: item.content,
+              meta: item.meta,
+            }));
+        const turnUserMessages = await Promise.all(
+          rawTurnUserMessages.map(async (item) => ({
+            ...item,
+            content: await normalizeContentBlocksImages(item.content, {
+              readUrlImage: readPublicAssetImageUrl,
+            }),
+          })),
+        );
+        const spaceMentionOrigins = mergeSpaceMentionOrigins(
+          turnUserMessages.map((item) => item.content),
+        );
+        for (const item of turnUserMessages) {
+          const meta = normalizeTurnUserMeta(item);
+          ensurePendingUserMessage(activeHandle, {
+            userMessageId: item.userMessageId,
+            turnId: item.turnId,
+            turnSeq: item.turnSeq,
+            content: item.content,
+            meta,
+          });
+        }
+
+        const ownerUserMessageId =
+          batch.executionBatch.anchorUserMessageId ??
+          turnUserMessages.at(-1)?.userMessageId ??
+          null;
+        const executionScopes = getPromptAuthScopes(
+          promptContext?.auth,
+          data.spaceId,
+        );
+        const executionToken = await createTurnExecutionToken({
+          accessMode,
+          actorUserId,
           spaceId: data.spaceId,
           sessionId: data.sessionId,
           turnId: batch.ownerTurn.id,
+          source: ownerMeta.source,
+          promptAuth: promptContext?.auth,
+        });
+        const turnMetrics = { llmRoundCount: 0, toolCallCount: 0 };
+        const assistantMessageTiming = { startedAt: null as string | null };
+        const abortController = new AbortController();
+        activeTurn = { id: batch.ownerTurn.id, controller: abortController };
+        if (lock.signal.aborted) abortController.abort();
+        setActiveAbortController(batch.ownerTurn.id, abortController);
+        const pendingAbortEvent = await getAbortEvent(batch.ownerTurn.id);
+        if (pendingAbortEvent) {
+          setActiveAbortEvent(pendingAbortEvent);
+          abortController.abort();
+        }
+
+        setActiveTurnContext(activeHandle, {
+          turnId: batch.ownerTurn.id,
           turnSeq: batch.ownerTurn.sequence,
-          userMessageId: directShellItem.userMessageId,
-          requestId,
-          modelProvider: executionModel.provider,
-          modelId: executionModel.id,
-          isResumedSession: activeHandle.sessionManager.buildSessionContext().messages.length > 0,
-        }, async (turnSpan) => {
-          await runWithToolExecutionContext({
+          userMessageId: ownerUserMessageId,
+          userMeta: ownerMeta,
+          llmRound: 0,
+        });
+        activeHandle.currentExecutionTurnIds = new Set(
+          batch.executionBatch.turnIds,
+        );
+        await drainStreamStateBeforeReset(activeHandle);
+        resetStreamState(activeHandle);
+
+        const messages = await Promise.all(
+          turnUserMessages
+            .filter(
+              (item) =>
+                !hasSessionUserMessage(activeHandle, item.userMessageId),
+            )
+            .map((item) =>
+              contentToAgentMessage(item.content, normalizeTurnUserMeta(item)),
+            ),
+        );
+
+        const directShellItem =
+          accessMode === "full_access" && turnUserMessages.length === 1
+            ? turnUserMessages[0]
+            : null;
+        const directShellCommand = directShellItem
+          ? getShellCommandBlock(directShellItem.content)
+          : null;
+        if (directShellItem && directShellCommand) {
+          await wrapAgentTurn(
+            agentTracer,
+            {
+              action: "prompt",
+              mode: "prompt",
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              turnId: batch.ownerTurn.id,
+              turnSeq: batch.ownerTurn.sequence,
+              userMessageId: directShellItem.userMessageId,
+              requestId,
+              modelProvider: executionModel.provider,
+              modelId: executionModel.id,
+              isResumedSession:
+                activeHandle.sessionManager.buildSessionContext().messages
+                  .length > 0,
+            },
+            async (turnSpan) => {
+              await runWithToolExecutionContext(
+                {
+                  spaceId: data.spaceId,
+                  sessionId: data.sessionId,
+                  turnId: batch.ownerTurn.id,
+                  turnSeq: batch.ownerTurn.sequence,
+                  anchorUserMessageId: directShellItem.userMessageId,
+                  llmRound: 0,
+                  model: executionModel,
+                  actorUserId,
+                  executionToken,
+                  executionScopes,
+                  sourceClientId,
+                  fileVisibility,
+                  spaceMentionOrigins,
+                  requestId,
+                  metrics: turnMetrics,
+                  assistantMessageTiming,
+                  generationPolicy,
+                  spaceEnv,
+                  env: promptEnv,
+                  abortSignal: abortController.signal,
+                },
+                async () => {
+                  logger.debug(
+                    `[Agent] shell-command:start sessionId=${data.sessionId}`,
+                  );
+                  await runDirectShellCommandTurn({
+                    handle: activeHandle,
+                    tools,
+                    spaceId: data.spaceId,
+                    sessionId: data.sessionId,
+                    user: directShellItem,
+                    command: directShellCommand.command,
+                    rawText: directShellCommand.rawText,
+                    actorUserId,
+                    executionToken,
+                    executionScopes,
+                    turnMetrics,
+                    abortSignal: abortController.signal,
+                  });
+                  logger.debug(
+                    `[Agent] shell-command:end sessionId=${data.sessionId}`,
+                  );
+                },
+              );
+              turnSpan.setAttribute("agent.llm_round_count", 0);
+              turnSpan.setAttribute(
+                "agent.tool_count",
+                turnMetrics.toolCallCount,
+              );
+              turnSpan.setAttribute("agent.outcome", "ok");
+            },
+          );
+
+          await settleSessionHandle(activeHandle, "strict");
+          handleSettled = true;
+          if (!abortController.signal.aborted) terminalHandled = true;
+          drainAfterRelease = {
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            reason: "direct_shell_complete",
+          };
+          clearRetryState(data);
+          return {
+            ownerTurnId: batch.ownerTurn.id,
+            mergedTurnIds: batch.mergedTurns.map((turn) => turn.id),
+            userMessageCount: turnUserMessages.length,
+          };
+        }
+
+        if (messages.length === 0) {
+          logger.info(
+            `[Agent] batch has no new user messages; continuing ownerTurn=${batch.ownerTurn.id}`,
+          );
+        }
+
+        await wrapAgentTurn(
+          agentTracer,
+          {
+            action: "prompt",
+            mode: "prompt",
             spaceId: data.spaceId,
             sessionId: data.sessionId,
             turnId: batch.ownerTurn.id,
             turnSeq: batch.ownerTurn.sequence,
-            anchorUserMessageId: directShellItem.userMessageId,
-            llmRound: 0,
-            model: executionModel,
-            actorUserId,
-            executionToken,
-            executionScopes,
-            sourceClientId,
-            fileVisibility,
+            userMessageId: ownerUserMessageId,
             requestId,
-            metrics: turnMetrics,
-            assistantMessageTiming,
-            generationPolicy,
-            spaceEnv,
-            env: promptEnv,
-            abortSignal: abortController.signal,
-          }, async () => {
-            logger.debug(`[Agent] shell-command:start sessionId=${data.sessionId}`);
-            await runDirectShellCommandTurn({
-              handle: activeHandle,
-              tools,
-              spaceId: data.spaceId,
-              sessionId: data.sessionId,
-              user: directShellItem,
-              command: directShellCommand.command,
-              rawText: directShellCommand.rawText,
-              actorUserId,
-              executionToken,
-              executionScopes,
-              turnMetrics,
-              abortSignal: abortController.signal,
-            });
-            logger.debug(`[Agent] shell-command:end sessionId=${data.sessionId}`);
-          });
-          turnSpan.setAttribute("agent.llm_round_count", 0);
-          turnSpan.setAttribute("agent.tool_count", turnMetrics.toolCallCount);
-          turnSpan.setAttribute("agent.outcome", "ok");
-        });
+            modelProvider: executionModel.provider,
+            modelId: executionModel.id,
+            isResumedSession:
+              activeHandle.sessionManager.buildSessionContext().messages
+                .length > 0,
+          },
+          async (turnSpan) => {
+            await runWithToolExecutionContext(
+              {
+                spaceId: data.spaceId,
+                sessionId: data.sessionId,
+                turnId: batch.ownerTurn.id,
+                turnSeq: batch.ownerTurn.sequence,
+                anchorUserMessageId: ownerUserMessageId,
+                llmRound: 0,
+                model: executionModel,
+                actorUserId,
+                executionToken,
+                executionScopes,
+                sourceClientId,
+                fileVisibility,
+                spaceMentionOrigins,
+                requestId,
+                metrics: turnMetrics,
+                assistantMessageTiming,
+                generationPolicy,
+                spaceEnv,
+                env: promptEnv,
+                abortSignal: abortController.signal,
+              },
+              async () => {
+                try {
+                  if (abortController.signal.aborted)
+                    throw new Error("aborted");
+                  const abortPromise = new Promise<never>((_, reject) => {
+                    abortController.signal.addEventListener(
+                      "abort",
+                      () => {
+                        activeHandle.activeDirectShellCommand?.abortController.abort();
+                        activeHandle.session.abort().catch(() => undefined);
+                        reject(new Error("aborted"));
+                      },
+                      { once: true },
+                    );
+                  });
+                  await runWithRoundAutoCompaction(
+                    activeHandle,
+                    {
+                      actorUserId,
+                      abortSignal: abortController.signal,
+                      onCompacted: (compactOutcome) => {
+                        turnSpan.addEvent("agent.auto_compact", {
+                          "agent.compaction.tokens_before":
+                            compactOutcome.tokensBefore,
+                          "agent.compaction.estimated_tokens_after":
+                            compactOutcome.estimatedTokensAfter,
+                          "agent.compaction.summary_length":
+                            compactOutcome.summary.length,
+                          "agent.compaction.duration_ms":
+                            compactOutcome.durationMs,
+                          "agent.compaction.attempt_count":
+                            compactOutcome.attemptCount,
+                          ...(compactOutcome.compactSequence != null
+                            ? {
+                                "agent.compaction.compact_sequence":
+                                  compactOutcome.compactSequence,
+                              }
+                            : {}),
+                        });
+                      },
+                    },
+                    async () => {
+                      if (messages.length > 0) {
+                        await Promise.race([
+                          activeHandle.session.promptMessages(messages),
+                          abortPromise,
+                        ]);
+                      } else {
+                        await Promise.race([
+                          (async () => {
+                            await activeHandle.session.agent.continue();
+                            await activeHandle.session.waitForIdle();
+                          })(),
+                          abortPromise,
+                        ]);
+                      }
+                    },
+                  );
+                } catch (error) {
+                  if (
+                    abortController.signal.aborted ||
+                    (error instanceof Error && error.message === "aborted")
+                  ) {
+                    const abortEvent = getActiveAbortEvent(batch.ownerTurn.id);
+                    await activeHandle.session.abort().catch(() => undefined);
+                    await persistInterruptedAssistantSnapshot(activeHandle, {
+                      abortEvent,
+                      actorUserId,
+                      fallbackTurnId: batch.ownerTurn.id,
+                      fallbackUserMessageId: ownerUserMessageId,
+                    }).catch((snapshotError) => {
+                      logger.warn(
+                        `[Agent] failed to persist interrupted snapshot sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}:`,
+                        snapshotError,
+                      );
+                    });
+                    await activeHandle.persistenceChain.catch(() => undefined);
+                    if (
+                      abortEvent?.reason === "interrupt" &&
+                      abortEvent.continuedByTurnId
+                    ) {
+                      await interruptSessionTurn({
+                        spaceId: data.spaceId,
+                        sessionId: data.sessionId,
+                        turnId: batch.ownerTurn.id,
+                        continuedByTurnId: abortEvent.continuedByTurnId,
+                      });
+                      terminalHandled = true;
+                    } else {
+                      await abortSessionTurn({
+                        spaceId: data.spaceId,
+                        sessionId: data.sessionId,
+                        turnId: batch.ownerTurn.id,
+                        actorUserId,
+                      });
+                      terminalHandled = true;
+                    }
+                    await settleSessionHandle(activeHandle, "best_effort");
+                    handleSettled = true;
+                    return;
+                  }
+                  throw error;
+                }
+              },
+            );
+            turnSpan.setAttribute(
+              "agent.llm_round_count",
+              turnMetrics.llmRoundCount,
+            );
+            turnSpan.setAttribute(
+              "agent.tool_count",
+              turnMetrics.toolCallCount,
+            );
+            turnSpan.setAttribute("agent.outcome", "ok");
+          },
+        );
 
         await settleSessionHandle(activeHandle, "strict");
         handleSettled = true;
         if (!abortController.signal.aborted) terminalHandled = true;
-        drainAfterRelease = { spaceId: data.spaceId, sessionId: data.sessionId, reason: "direct_shell_complete" };
+        drainAfterRelease = {
+          spaceId: data.spaceId,
+          sessionId: data.sessionId,
+          reason: "turn_complete",
+        };
         clearRetryState(data);
         return {
           ownerTurnId: batch.ownerTurn.id,
           mergedTurnIds: batch.mergedTurns.map((turn) => turn.id),
           userMessageCount: turnUserMessages.length,
         };
-      }
-
-      if (messages.length === 0) {
-        logger.info(`[Agent] batch has no new user messages; continuing ownerTurn=${batch.ownerTurn.id}`);
-      }
-
-      await wrapAgentTurn(agentTracer, {
-        action: "prompt",
-        mode: "prompt",
-        spaceId: data.spaceId,
-        sessionId: data.sessionId,
-        turnId: batch.ownerTurn.id,
-        turnSeq: batch.ownerTurn.sequence,
-        userMessageId: ownerUserMessageId,
-        requestId,
-        modelProvider: executionModel.provider,
-        modelId: executionModel.id,
-        isResumedSession: activeHandle.sessionManager.buildSessionContext().messages.length > 0,
-      }, async (turnSpan) => {
-        await runWithToolExecutionContext({
-          spaceId: data.spaceId,
-          sessionId: data.sessionId,
-          turnId: batch.ownerTurn.id,
-          turnSeq: batch.ownerTurn.sequence,
-          anchorUserMessageId: ownerUserMessageId,
-          llmRound: 0,
-          model: executionModel,
-          actorUserId,
-          executionToken,
-          executionScopes,
-          sourceClientId,
-          fileVisibility,
-          requestId,
-          metrics: turnMetrics,
-          assistantMessageTiming,
-          generationPolicy,
-          spaceEnv,
-          env: promptEnv,
-          abortSignal: abortController.signal,
-        }, async () => {
-          try {
-            if (abortController.signal.aborted) throw new Error("aborted");
-            const abortPromise = new Promise<never>((_, reject) => {
-              abortController.signal.addEventListener("abort", () => {
-                activeHandle.activeDirectShellCommand?.abortController.abort();
-                activeHandle.session.abort().catch(() => undefined);
-                reject(new Error("aborted"));
-              }, { once: true });
-            });
-            await runWithRoundAutoCompaction(activeHandle, {
-              actorUserId,
-              abortSignal: abortController.signal,
-              onCompacted: (compactOutcome) => {
-                turnSpan.addEvent("agent.auto_compact", {
-                  "agent.compaction.tokens_before": compactOutcome.tokensBefore,
-                  "agent.compaction.estimated_tokens_after": compactOutcome.estimatedTokensAfter,
-                  "agent.compaction.summary_length": compactOutcome.summary.length,
-                  "agent.compaction.duration_ms": compactOutcome.durationMs,
-                  "agent.compaction.attempt_count": compactOutcome.attemptCount,
-                  ...(compactOutcome.compactSequence != null
-                    ? { "agent.compaction.compact_sequence": compactOutcome.compactSequence }
-                    : {}),
-                });
-              },
-            }, async () => {
-              if (messages.length > 0) {
-                await Promise.race([activeHandle.session.promptMessages(messages), abortPromise]);
-              } else {
-                await Promise.race([
-                  (async () => {
-                    await activeHandle.session.agent.continue();
-                    await activeHandle.session.waitForIdle();
-                  })(),
-                  abortPromise,
-                ]);
-              }
-            });
-          } catch (error) {
-            if (abortController.signal.aborted || (error instanceof Error && error.message === "aborted")) {
-              const abortEvent = getActiveAbortEvent(batch.ownerTurn.id);
-              await activeHandle.session.abort().catch(() => undefined);
-              await persistInterruptedAssistantSnapshot(activeHandle, {
-                abortEvent,
-                actorUserId,
-                fallbackTurnId: batch.ownerTurn.id,
-                fallbackUserMessageId: ownerUserMessageId,
-              }).catch((snapshotError) => {
-                logger.warn(`[Agent] failed to persist interrupted snapshot sessionId=${data.sessionId} turnId=${batch.ownerTurn.id}:`, snapshotError);
+      } catch (error) {
+        if (error instanceof RuntimeExecutionUncertainError) {
+          // The Runtime may already have changed local files. Surface the uncertain
+          // Session immediately and wait for reconnect or explicit confirmation.
+          terminalHandled = true;
+          const ownerTurn = claimedBatch?.ownerTurn;
+          const turnId = ownerTurn?.id;
+          if (ownerTurn) {
+            const route = resolveHarnessRoute(ownerTurn.meta);
+            if (route.kind === "runtime") {
+              const recoveryMeta = await markRuntimeRecovery(ownerTurn.id, {
+                state: "attention",
+                reason: "transport_disconnected",
+                detectedAt: new Date().toISOString(),
               });
-              await activeHandle.persistenceChain.catch(() => undefined);
-              if (abortEvent?.reason === "interrupt" && abortEvent.continuedByTurnId) {
-                await interruptSessionTurn({
+              const recovery = readRuntimeRecovery(recoveryMeta);
+              await publishSessionTurnsUpdated({
+                sessionId: data.sessionId,
+                turnIds: [ownerTurn.id],
+              });
+              if (recovery?.ownerUserId) {
+                await enqueueRuntimeRecovery(agentTurnQueue, {
                   spaceId: data.spaceId,
                   sessionId: data.sessionId,
-                  turnId: batch.ownerTurn.id,
-                  continuedByTurnId: abortEvent.continuedByTurnId,
+                  expectedTurnId: ownerTurn.id,
+                  expectedHarness: route.harness,
+                  expectedOwnerUserId: recovery.ownerUserId,
                 });
-                terminalHandled = true;
-              } else {
-                await abortSessionTurn({
-                  spaceId: data.spaceId,
-                  sessionId: data.sessionId,
-                  turnId: batch.ownerTurn.id,
-                  actorUserId,
-                });
-                terminalHandled = true;
               }
-              await settleSessionHandle(activeHandle, "best_effort");
-              handleSettled = true;
-              return;
             }
-            throw error;
           }
-        });
-        turnSpan.setAttribute("agent.llm_round_count", turnMetrics.llmRoundCount);
-        turnSpan.setAttribute("agent.tool_count", turnMetrics.toolCallCount);
-        turnSpan.setAttribute("agent.outcome", "ok");
-      });
-
-      await settleSessionHandle(activeHandle, "strict");
-      handleSettled = true;
-      if (!abortController.signal.aborted) terminalHandled = true;
-      drainAfterRelease = { spaceId: data.spaceId, sessionId: data.sessionId, reason: "turn_complete" };
-      clearRetryState(data);
-      return {
-        ownerTurnId: batch.ownerTurn.id,
-        mergedTurnIds: batch.mergedTurns.map((turn) => turn.id),
-        userMessageCount: turnUserMessages.length,
-      };
-    } catch (error) {
-      if (error instanceof RuntimeExecutionUncertainError) {
-        // The Runtime may already have changed local files. Surface the uncertain
-        // Session immediately and wait for reconnect or explicit confirmation.
-        terminalHandled = true;
-        const ownerTurn = claimedBatch?.ownerTurn;
-        const turnId = ownerTurn?.id;
-        if (ownerTurn) {
-          const harness = resolveHarness(ownerTurn.meta);
-          const recoveryMeta = await markRuntimeRecovery(ownerTurn.id, {
-            state: "attention",
-            reason: "transport_disconnected",
-            detectedAt: new Date().toISOString(),
+          logger.error(
+            "[Runtime] execution outcome requires reconciliation",
+            { sessionId: data.sessionId, error },
+          );
+          return { skipped: "runtime_outcome_unknown", turnId };
+        }
+        caughtError = error;
+        const ownerTurnId =
+          activeTurn?.id ?? claimedBatch?.ownerTurn.id ?? null;
+        if (ownerTurnId) {
+          logger.error(
+            `[Agent] turn failed sessionId=${data.sessionId} turnId=${ownerTurnId}:`,
+            error,
+          );
+          terminalHandled = await failActiveTurn({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            turnId: ownerTurnId,
+            error,
           });
-          const recovery = readRuntimeRecovery(recoveryMeta);
-          await publishSessionTurnsUpdated({ sessionId: data.sessionId, turnIds: [ownerTurn.id] });
-          if (isLocalHarness(harness) && recovery?.ownerUserId) {
-            await enqueueRuntimeRecovery(agentTurnQueue, {
+          drainAfterRelease = {
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            reason: "turn_failed",
+          };
+        }
+        if (error instanceof ModelUnavailableError) {
+          throw new UnrecoverableError(error.message);
+        }
+        throw error;
+      } finally {
+        if (activeTurn)
+          clearActiveAbortController(activeTurn.id, activeTurn.controller);
+        const ownerTurnId = claimedBatch?.ownerTurn.id ?? null;
+        if (ownerTurnId && !terminalHandled) {
+          const reconciled = await failActiveTurn({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+            turnId: ownerTurnId,
+            error:
+              caughtError ??
+              new Error("Agent turn exited without terminal state."),
+          });
+          if (reconciled)
+            drainAfterRelease = drainAfterRelease ?? {
               spaceId: data.spaceId,
               sessionId: data.sessionId,
-              expectedTurnId: ownerTurn.id,
-              expectedHarness: harness,
-              expectedOwnerUserId: recovery.ownerUserId,
+              reason: "turn_reconciled",
+            };
+        }
+        // Reset residual per-turn state to prevent leakage into the next turn
+        // on the same reused session handle. handleSettled is true only on
+        // normal exits (success/abort) where event handlers + settleSessionHandle
+        // have already cleaned up; on error exits — even when failActiveTurn
+        // marked the DB turn terminal — the agent may still be streaming and
+        // per-turn fields are still set.
+        if (handle && !handleSettled) {
+          await handle.session.abort().catch(() => undefined);
+          clearActiveTurnContext(handle, data.sessionId);
+          handle.toolExecutionStartedAtById.clear();
+          if (claimedBatch) {
+            for (const userMessageId of claimedBatch.executionBatch
+              .userMessageIds) {
+              removePendingUserMessage(handle, userMessageId);
+            }
+          }
+          if (caughtError instanceof CompactionStateRecoveryError) {
+            sessionHandles.delete(handle.sessionKey);
+            clearCurrentSessionExecutionAuth(handle.sessionId);
+            await handle.persistenceChain.catch(() => undefined);
+            await handle.sessionManager.close().catch(() => undefined);
+            handle.session.dispose();
+          } else {
+            await settleSessionHandle(
+              handle,
+              terminalHandled ? "strict" : "best_effort",
+            );
+          }
+        }
+        if (handle && claimedBatch && terminalHandled) {
+          try {
+            // Cloud sessions rebuild from durable platform data, so only the resume marker
+            // is persisted alongside the native log; no native snapshot is archived.
+            const completedContext = await loadRuntimeContext({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              throughTurnId: claimedBatch.ownerTurn.id,
+              headOnly: true,
             });
+            const previousMarker = handle.sessionManager
+              .getCustomEntries("cohub.context")
+              .at(-1)?.data as Record<string, unknown> | undefined;
+            handle.sessionManager.appendCustomEntry("cohub.context", {
+              ...previousMarker,
+              revision: completedContext.revision,
+              throughTurnId: completedContext.throughTurnId,
+            });
+            await handle.sessionManager.close();
+            await refreshSessionHandleFileSignature(handle);
+          } catch (error) {
+            logger.warn(
+              "[SessionContext] failed to record the resume marker",
+              error,
+            );
           }
         }
-        logger.error("[Runtime] execution outcome requires reconciliation", { sessionId: data.sessionId, error });
-        return { skipped: "runtime_outcome_unknown", turnId };
-      }
-      caughtError = error;
-      const ownerTurnId = activeTurn?.id ?? claimedBatch?.ownerTurn.id ?? null;
-      if (ownerTurnId) {
-        logger.error(`[Agent] turn failed sessionId=${data.sessionId} turnId=${ownerTurnId}:`, error);
-        terminalHandled = await failActiveTurn({
-          spaceId: data.spaceId,
-          sessionId: data.sessionId,
-          turnId: ownerTurnId,
-          error,
-        });
-        drainAfterRelease = { spaceId: data.spaceId, sessionId: data.sessionId, reason: "turn_failed" };
-      }
-      if (error instanceof ModelUnavailableError) {
-        throw new UnrecoverableError(error.message);
-      }
-      throw error;
-    } finally {
-      if (activeTurn) clearActiveAbortController(activeTurn.id, activeTurn.controller);
-      const ownerTurnId = claimedBatch?.ownerTurn.id ?? null;
-      if (ownerTurnId && !terminalHandled) {
-        const reconciled = await failActiveTurn({
-          spaceId: data.spaceId,
-          sessionId: data.sessionId,
-          turnId: ownerTurnId,
-          error: caughtError ?? new Error("Agent turn exited without terminal state."),
-        });
-        if (reconciled) drainAfterRelease = drainAfterRelease ?? { spaceId: data.spaceId, sessionId: data.sessionId, reason: "turn_reconciled" };
-      }
-      // Reset residual per-turn state to prevent leakage into the next turn
-      // on the same reused session handle. handleSettled is true only on
-      // normal exits (success/abort) where event handlers + settleSessionHandle
-      // have already cleaned up; on error exits — even when failActiveTurn
-      // marked the DB turn terminal — the agent may still be streaming and
-      // per-turn fields are still set.
-      if (handle && !handleSettled) {
-        await handle.session.abort().catch(() => undefined);
-        clearActiveTurnContext(handle, data.sessionId);
-        handle.toolExecutionStartedAtById.clear();
+        if (claimedBatch) clearRetryState(data);
+        lock.signal.removeEventListener("abort", onLeaseLost);
+        await lock.release();
         if (claimedBatch) {
-          for (const userMessageId of claimedBatch.executionBatch.userMessageIds) {
-            removePendingUserMessage(handle, userMessageId);
-          }
+          await syncLocalSessionRegistry({
+            spaceId: data.spaceId,
+            sessionId: data.sessionId,
+          }).catch(async (error) => {
+            logger.error(
+              `[LocalSessionRegistry] failed to sync sessionId=${data.sessionId}`,
+              error,
+            );
+            await recordLocalSessionRegistryFailure({
+              spaceId: data.spaceId,
+              sessionId: data.sessionId,
+              error,
+            }).catch((recordError) => {
+              logger.error(
+                `[LocalSessionRegistry] failed to record sync error sessionId=${data.sessionId}`,
+                recordError,
+              );
+            });
+          });
         }
-        if (caughtError instanceof CompactionStateRecoveryError) {
-          sessionHandles.delete(handle.sessionKey);
-          clearCurrentSessionExecutionAuth(handle.sessionId);
-          await handle.persistenceChain.catch(() => undefined);
-          await handle.sessionManager.close().catch(() => undefined);
-          handle.session.dispose();
-        } else {
-          await settleSessionHandle(handle, terminalHandled ? "strict" : "best_effort");
-        }
+        if (drainAfterRelease) await drainNextQueuedTurn(drainAfterRelease);
       }
-      if (handle && claimedBatch && terminalHandled) {
-        try {
-          // Cloud sessions rebuild from durable platform data, so only the resume marker
-          // is persisted alongside the native log — no native snapshot is archived.
-          const completedContext = await loadRuntimeContext({ spaceId: data.spaceId, sessionId: data.sessionId, throughTurnId: claimedBatch.ownerTurn.id, headOnly: true });
-          const previousMarker = handle.sessionManager.getCustomEntries("cohub.context").at(-1)?.data as Record<string, unknown> | undefined;
-          handle.sessionManager.appendCustomEntry("cohub.context", { ...previousMarker, revision: completedContext.revision, throughTurnId: completedContext.throughTurnId });
-          await handle.sessionManager.close();
-          await refreshSessionHandleFileSignature(handle);
-        } catch (error) { logger.warn("[SessionContext] failed to record the resume marker", error); }
-      }
-      if (claimedBatch) clearRetryState(data);
-      lock.signal.removeEventListener("abort", onLeaseLost);
-      await lock.release();
-      if (drainAfterRelease) await drainNextQueuedTurn(drainAfterRelease);
-    }
-  });
+    },
+  );
 }
 
 export const __test = {
@@ -1325,7 +2274,10 @@ export async function disposeAllSessionHandles() {
       clearCurrentSessionExecutionAuth(handle.sessionId);
       handle.session.dispose();
     } catch (error) {
-      logger.error(`[Agent] failed to dispose session ${handle.sessionId}:`, error);
+      logger.error(
+        `[Agent] failed to dispose session ${handle.sessionId}:`,
+        error,
+      );
     }
   }
   sessionHandles.clear();

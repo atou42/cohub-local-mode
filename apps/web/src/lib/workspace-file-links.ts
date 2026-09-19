@@ -26,8 +26,9 @@ function stripQueryAndHash(value: string) {
 }
 
 function safeDecodeUri(value: string) {
+	if (/%(?:2f|5c)/i.test(value)) return null;
 	try {
-		return decodeURI(value);
+		return decodeURIComponent(value);
 	} catch {
 		return null;
 	}
@@ -98,16 +99,14 @@ export function normalizeWorkspaceFileLinkTarget(
 	const withoutQuery = stripQueryAndHash(raw).trim();
 	if (!withoutQuery) return null;
 
-	const decoded = safeDecodeUri(withoutQuery)?.trim();
-	if (!decoded || decoded.startsWith("#")) return null;
-	if (decoded.startsWith("//")) return null;
-	if (decoded.includes("\\") || hasControlCharacter(decoded)) return null;
-
-	const { path: pathWithPosition, position } = extractLinePosition(decoded);
+	// Encoded punctuation belongs to the filename, not a URL or line suffix.
+	const { path: encodedPath, position } = extractLinePosition(withoutQuery);
+	if (SCHEME_PATTERN.test(encodedPath)) return null;
+	const pathWithPosition = safeDecodeUri(encodedPath);
 	if (!pathWithPosition) return null;
-	// A leading scheme (http:, mailto:, cohub:, …) is not a workspace file. This
-	// runs after position extraction so `file.ts:12` isn't mistaken for a scheme.
-	if (SCHEME_PATTERN.test(pathWithPosition)) return null;
+	if (pathWithPosition.startsWith("//")) return null;
+	if (pathWithPosition.includes("\\") || hasControlCharacter(pathWithPosition))
+		return null;
 	if (pathWithPosition === "/workspace" || pathWithPosition === "workspace")
 		return null;
 

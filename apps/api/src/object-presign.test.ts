@@ -16,6 +16,23 @@ const storage: PresignStorageConfig = {
 };
 
 describe("object presigning", () => {
+  it("uses path-style bucket URLs for a local S3 endpoint", () => {
+    const signed = createPresignedPutObjectUrl(
+      {
+        ...storage,
+        endpoint: "http://127.0.0.1:9000",
+        publicEndpoint: "http://127.0.0.1:9000",
+        bucket: "cohub-assets",
+      },
+      "chat-attachments/user/file.txt",
+      "text/plain",
+    );
+    const url = new URL(signed.uploadUrl);
+
+    assert.equal(url.host, "127.0.0.1:9000");
+    assert.equal(url.pathname, "/cohub-assets/chat-attachments/user/file.txt");
+  });
+
   it("signs an R2 PUT with immutable attachment headers", () => {
     const signed = createPresignedPutObjectUrl(
       storage,

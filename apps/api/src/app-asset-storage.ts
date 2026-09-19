@@ -1,5 +1,12 @@
-import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
-import { buildPublicObjectUrl, type PresignStorageConfig } from "./object-presign.js";
+import {
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import {
+  buildPublicObjectUrl,
+  type PresignStorageConfig,
+} from "./object-presign.js";
 import { config } from "./config.js";
 
 let s3Client: S3Client | null = null;
@@ -20,7 +27,12 @@ const requireStorage = (): PresignStorageConfig & {
   secretAccessKey: string;
 } => {
   const storage = getStorage();
-  if (!storage.bucket || !storage.endpoint || !storage.accessKeyId || !storage.secretAccessKey) {
+  if (
+    !storage.bucket ||
+    !storage.endpoint ||
+    !storage.accessKeyId ||
+    !storage.secretAccessKey
+  ) {
     throw new Error("app asset storage is not configured");
   }
   return {
@@ -37,7 +49,7 @@ const getS3Client = () => {
   s3Client ??= new S3Client({
     endpoint: storage.endpoint,
     region: storage.region,
-    forcePathStyle: false,
+    forcePathStyle: config.s3ForcePathStyle,
     credentials: {
       accessKeyId: storage.accessKeyId,
       secretAccessKey: storage.secretAccessKey,
@@ -46,7 +58,8 @@ const getS3Client = () => {
   return s3Client;
 };
 
-const encodeObjectKeyPath = (objectKey: string) => objectKey.split("/").map(encodeURIComponent).join("/");
+const encodeObjectKeyPath = (objectKey: string) =>
+  objectKey.split("/").map(encodeURIComponent).join("/");
 
 export const createAppAssetPublicUrl = (objectKey: string) => {
   const baseUrl = config.appAssetCdnBaseUrl || config.publicAssetCdnBaseUrl;
@@ -74,7 +87,9 @@ const appAssetPrefixFromObjectKey = (objectKey: string) => {
   return normalized.slice(0, slash + 1);
 };
 
-export const deleteAppAssetsByObjectKey = async (objectKey: string | null | undefined) => {
+export const deleteAppAssetsByObjectKey = async (
+  objectKey: string | null | undefined,
+) => {
   if (!objectKey) return { deleted: 0 };
   const prefix = appAssetPrefixFromObjectKey(objectKey);
   if (!prefix) return { deleted: 0 };
@@ -83,24 +98,32 @@ export const deleteAppAssetsByObjectKey = async (objectKey: string | null | unde
   let continuationToken: string | undefined;
   let deleted = 0;
   do {
-    const listed = await client.send(new ListObjectsV2Command({
-      Bucket: storage.bucket,
-      Prefix: prefix,
-      ContinuationToken: continuationToken,
-    }));
+    const listed = await client.send(
+      new ListObjectsV2Command({
+        Bucket: storage.bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
     const objects = (listed.Contents ?? [])
       .map((item) => item.Key)
-      .filter((key): key is string => typeof key === "string" && key.length > 0);
+      .filter(
+        (key): key is string => typeof key === "string" && key.length > 0,
+      );
     for (let i = 0; i < objects.length; i += 1000) {
       const batch = objects.slice(i, i + 1000);
       if (batch.length === 0) continue;
-      await client.send(new DeleteObjectsCommand({
-        Bucket: storage.bucket,
-        Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
-      }));
+      await client.send(
+        new DeleteObjectsCommand({
+          Bucket: storage.bucket,
+          Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+        }),
+      );
       deleted += batch.length;
     }
-    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    continuationToken = listed.IsTruncated
+      ? listed.NextContinuationToken
+      : undefined;
   } while (continuationToken);
   return { deleted };
 };

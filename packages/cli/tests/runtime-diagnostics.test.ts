@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import {
   readRuntimeDiagnosticEvents,
@@ -47,13 +46,13 @@ test("incremental diagnostics reader never loses bursts beyond the display limit
   try {
     const diagnostics = new RuntimeDiagnostics({ root, spaceId, runtimeId, logFlushIntervalMs: 5 });
     for (let sequence = 0; sequence < 5; sequence += 1) diagnostics.log("info", "fixture", { sequence });
-    await delay(20);
+    await diagnostics["flushLogBuffer"]();
 
     const reader = new RuntimeDiagnosticReader(root);
     assert.deepEqual((await reader.read({ limit: 2 })).map((event) => event.sequence), [3, 4]);
 
     for (let sequence = 5; sequence < 25; sequence += 1) diagnostics.log("info", "fixture", { sequence });
-    await delay(20);
+    await diagnostics["flushLogBuffer"]();
     assert.deepEqual(
       (await reader.read({ limit: 2 })).map((event) => event.sequence),
       Array.from({ length: 20 }, (_, index) => index + 5),

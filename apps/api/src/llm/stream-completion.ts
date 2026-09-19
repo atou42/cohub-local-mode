@@ -34,7 +34,7 @@ function resolveThinkingLevelForModel(model: RuntimeLlmModel, requested?: string
   const fallback = normalizeThinkingLevel(model.defaultThinkingLevel) ?? (model.reasoning ? "high" : "off");
   const level = normalizeThinkingLevel(requested) ?? fallback;
   if (!model.reasoning || level === "off") return undefined;
-  return clampThinkingLevel(model, level) as ThinkingLevel;
+  return clampThinkingLevel(model, level as ThinkingLevel) as ThinkingLevel;
 }
 
 function contentBlocksToPiContent(blocks: ContentBlock[]): string | Array<{ type: "text"; text: string } | ImageContent> {

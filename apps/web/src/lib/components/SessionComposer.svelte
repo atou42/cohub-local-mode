@@ -1,6 +1,8 @@
 <script lang="ts">
 import type { ViewportContext } from "@cohub/protocol";
 import type {
+	AgentHarness,
+	HarnessCapabilityCatalog,
 	PromptTemplateCatalogEntry,
 	SkillCatalogEntry,
 	VoiceInputClient,
@@ -8,6 +10,7 @@ import type {
 import {
 	Check,
 	ChevronDown,
+	LockKeyhole,
 	Maximize2,
 	Mic,
 	Minimize2,
@@ -15,6 +18,7 @@ import {
 	X,
 } from "lucide-svelte";
 import { onMount } from "svelte";
+import AgentHarnessLogo from "$lib/components/AgentHarnessLogo.svelte";
 import ComposerModelTrigger from "$lib/components/composer/ComposerModelTrigger.svelte";
 import ComposerSelect from "$lib/components/composer/ComposerSelect.svelte";
 import ComposerSubmitButton from "$lib/components/composer/ComposerSubmitButton.svelte";
@@ -71,6 +75,7 @@ import {
 import { m } from "$lib/paraglide/messages.js";
 import { sdk } from "$lib/sdk";
 import { authStore } from "$lib/stores/auth.svelte";
+import { registerSpaceOrigin } from "$lib/space-origin";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
 import { entriesFromFiles, type LocalUploadEntry } from "$lib/upload-entries";
 
@@ -113,6 +118,8 @@ type Props = {
 	onlocalmodelchange?: (model: SelectedModel | null) => void;
 	/** Compact thinking level suffix; null/empty hides. */
 	thinkingLevelLabel?: string | null;
+	/** Compact service-tier suffix; null/empty hides Standard. */
+	serviceTierLabel?: string | null;
 	/** Compact generation-policy suffix; null/empty hides (Auto). */
 	generationPolicyLabel?: string | null;
 	/** Quick prompt action chips rendered above the composer surface. */
@@ -122,6 +129,9 @@ type Props = {
 	promptTemplatesLoaded?: boolean;
 	skills?: SkillCatalogEntry[];
 	skillsLoaded?: boolean;
+	harnessCapabilities?: HarnessCapabilityCatalog | null;
+	harnessCapabilitiesLoaded?: boolean;
+	slashCatalogError?: string | null;
 	currentSpaceId?: string | null;
 	mobileAutoFocusOnMount?: boolean;
 	onsubmit: () => void;
@@ -132,6 +142,10 @@ type Props = {
 	onremoveattachment?: (id: string) => void;
 	onremoveviewport?: (id: string) => void;
 	onModelSelect?: () => void;
+	showAgentHarness?: boolean;
+	agentHarness?: AgentHarness;
+	agentHarnessLocked?: boolean;
+	onAgentHarnessChange?: (harness: AgentHarness) => void;
 };
 
 let {
@@ -158,6 +172,7 @@ let {
 	localModel = null,
 	onlocalmodelchange,
 	thinkingLevelLabel = null,
+	serviceTierLabel = null,
 	generationPolicyLabel = null,
 	quickActions = [],
 	onquickaction,
@@ -165,6 +180,9 @@ let {
 	promptTemplatesLoaded = true,
 	skills = [],
 	skillsLoaded = true,
+	harnessCapabilities = null,
+	harnessCapabilitiesLoaded = true,
+	slashCatalogError = null,
 	currentSpaceId = null,
 	mobileAutoFocusOnMount = false,
 	onsubmit,
@@ -173,6 +191,10 @@ let {
 	onremoveattachment,
 	onremoveviewport,
 	onModelSelect,
+	showAgentHarness = false,
+	agentHarness = "pi",
+	agentHarnessLocked = false,
+	onAgentHarnessChange,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -247,6 +269,7 @@ let selectionChangeBound = false;
 let isComposerExpanded = $state(false);
 let hasTextareaOverflow = $state(false);
 let showModeMenu = $state(false);
+let showAgentHarnessMenu = $state(false);
 let voiceClient: VoiceInputClient | null = null;
 let voicePrefix = "";
 let voiceSuffix = "";
@@ -264,6 +287,16 @@ const SLASH_COMMAND_QUERY_LIMIT = 80;
 const COMPOSER_MENTION_MIRROR_TEXT_LIMIT = 50_000;
 const BLUR_MENU_CLOSE_MS = 120;
 const LOCAL_MENTION_SEARCH_RETRY_MS = 80;
+const AGENT_HARNESS_OPTIONS: Array<{ value: AgentHarness; label: string }> = [
+	{ value: "pi", label: "Pi" },
+	{ value: "codex", label: "Codex" },
+	{ value: "grok_build", label: "Grok Build" },
+	{ value: "cursor", label: "Cursor" },
+];
+const agentHarnessLabel = $derived(
+	AGENT_HARNESS_OPTIONS.find((option) => option.value === agentHarness)
+		?.label ?? agentHarness,
+);
 
 let isTextareaFocused = $state(false);
 let resizeFrame: number | null = null;
@@ -282,6 +315,7 @@ const modelControlAriaLabel = $derived(
 		thinkingLevelLabel
 			? m.composer_thinking_label({ level: thinkingLevelLabel }, { locale })
 			: null,
+		serviceTierLabel ? `Speed ${serviceTierLabel}` : null,
 		generationPolicyLabel
 			? m.composer_generation_label(
 					{ policy: generationPolicyLabel },
@@ -362,7 +396,7 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 		});
 	}
 
-	for (const item of skills) {
+	for (const item of agentHarness === "pi" ? skills : []) {
 		const label = `skill:${item.name}`;
 		const name = item.name.toLowerCase();
 		const labelLower = label.toLowerCase();
@@ -387,6 +421,49 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 		});
 	}
 
+	for (const item of harnessCapabilities?.commands ?? []) {
+		const name = item.name.toLowerCase();
+		const description = item.description.toLowerCase();
+		const category = item.category.toLowerCase();
+		let matchScore = 0;
+		if (!query) matchScore = 11;
+		else if (name.startsWith(query)) matchScore = 100;
+		else if (name.includes(query)) matchScore = 80;
+		else if (category.includes(query)) matchScore = 64;
+		else if (description.includes(query)) matchScore = 48;
+		else continue;
+		scored.push({
+			kind: "native_command",
+			name: item.name,
+			description: item.description,
+			scope: "harness",
+			argumentHint: item.argumentHint,
+			category: item.category,
+			insertionText: item.insertionText,
+			matchScore,
+		});
+	}
+
+	for (const item of harnessCapabilities?.skills ?? []) {
+		const name = item.name.toLowerCase();
+		const description = item.description.toLowerCase();
+		let matchScore = 0;
+		if (!query) matchScore = 10;
+		else if (name.startsWith(query)) matchScore = 100;
+		else if (name.includes(query)) matchScore = 80;
+		else if (description.includes(query)) matchScore = 48;
+		else continue;
+		scored.push({
+			kind: "native_skill",
+			name: item.name,
+			description: item.description,
+			scope: item.scope,
+			category: "Codex Skills",
+			insertionText: item.insertionText,
+			matchScore,
+		});
+	}
+
 	return scored.sort((a, b) => {
 		const scoreDelta = (b.matchScore ?? 0) - (a.matchScore ?? 0);
 		if (scoreDelta !== 0) return scoreDelta;
@@ -403,7 +480,10 @@ const filteredPromptTemplates = $derived.by<SlashCommandMenuItem[]>(() => {
 const slashCommandQuery = $derived(slashCommandToken?.query ?? "");
 const slashCommandActive = $derived(slashCommandToken !== null);
 const slashCommandLoading = $derived(
-	slashCommandActive && (!promptTemplatesLoaded || !skillsLoaded),
+	slashCommandActive &&
+		(!promptTemplatesLoaded ||
+			(agentHarness === "pi" && !skillsLoaded) ||
+			!harnessCapabilitiesLoaded),
 );
 
 const spaceMentionItems = $derived(
@@ -706,7 +786,8 @@ function applyPromptTemplate(item: SlashCommandMenuItem) {
 	const firstSpace = trimmedStart.indexOf(" ");
 	const suffix = firstSpace === -1 ? "" : trimmedStart.slice(firstSpace);
 	const command =
-		item.kind === "skill" ? `/skill:${item.name}` : `/${item.name}`;
+		item.insertionText?.trimEnd() ??
+		(item.kind === "skill" ? `/skill:${item.name}` : `/${item.name}`);
 	value = `${leadingWhitespace}${command}${suffix || " "}`;
 	showPromptSuggestions = false;
 	selectedPromptIndex = 0;
@@ -979,6 +1060,7 @@ function scheduleSpaceMentionSearch(
 function applySpaceMention(item: SpaceMentionSuggestion) {
 	const trigger = spaceMentionTrigger;
 	if (!trigger) return;
+	registerSpaceOrigin({ id: item.spaceId, origin: item.origin });
 	const snippet = `${buildSpaceMentionMarkdown({ spaceId: item.spaceId, label: item.name })} `;
 	value = value.slice(0, trigger.start) + snippet + value.slice(trigger.end);
 	showSpaceMentions = false;
@@ -1239,7 +1321,7 @@ $effect(() => {
 });
 </script>
 
-<div class="px-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2 sm:px-4 sm:pb-4">
+<div class="px-2 pb-3 pt-2 sm:px-4 sm:pb-4">
 	<div class={`relative mx-auto transition-[max-width] duration-200 ${isComposerExpanded ? 'max-w-[var(--chat-composer-expanded-max-width)]' : 'max-w-[var(--chat-composer-max-width)]'}`}>
 		{#if quickActions.length > 0}
 			<div class="mb-2">
@@ -1495,6 +1577,7 @@ $effect(() => {
 						query={slashCommandQuery}
 						selectedIndex={selectedPromptIndex}
 						loading={slashCommandLoading}
+						error={slashCatalogError}
 						onhighlight={(index) => {
 							selectedPromptIndex = index;
 						}}
@@ -1579,7 +1662,7 @@ $effect(() => {
 								</div>
 							{/if}
 
-							{#if onharnesschange && mode === "agent" && (localRuntime || harnesses.length > 1 || harness !== "cohub")}
+							{#if !showAgentHarness && onharnesschange && mode === "agent" && (localRuntime || harnesses.length > 1 || harness !== "cohub")}
 								<ComposerSelect
 									value={harness}
 									options={harnessOptions}
@@ -1601,11 +1684,57 @@ $effect(() => {
 									title={localModelTitle}
 								/>
 							{/if}
+							{#if showAgentHarness && mode === "agent"}
+								<div class="relative shrink-0">
+									<button
+										type="button"
+										class="flex h-7 w-7 items-center justify-center rounded-full border border-border-subtle text-[11px] leading-none text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/40 disabled:cursor-default disabled:opacity-70 sm:w-auto sm:max-w-[10rem] sm:justify-start sm:gap-1.5 sm:px-2"
+										disabled={disabled || sending || agentHarnessLocked}
+										aria-label={`Agent harness ${agentHarnessLabel}${agentHarnessLocked ? ", locked for this Session" : ""}`}
+										aria-expanded={showAgentHarnessMenu}
+										aria-haspopup="menu"
+										title={agentHarnessLocked ? `${agentHarnessLabel} is locked after the first turn` : "Choose agent harness"}
+										onclick={() => { showAgentHarnessMenu = !showAgentHarnessMenu; }}
+										onkeydown={(event) => { if (event.key === "Escape") showAgentHarnessMenu = false; }}
+									>
+										<span class="relative inline-flex shrink-0">
+											<AgentHarnessLogo harness={agentHarness} class="h-6 w-6 sm:h-5 sm:w-5" />
+											{#if agentHarnessLocked}
+												<LockKeyhole class="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-bg-input p-px opacity-80 sm:hidden" />
+											{/if}
+										</span>
+										<span class="hidden min-w-0 truncate sm:inline">{agentHarnessLabel}</span>
+										{#if agentHarnessLocked}
+											<LockKeyhole class="hidden h-3 w-3 shrink-0 opacity-55 sm:block" />
+										{:else}
+											<ChevronDown class="hidden h-3 w-3 shrink-0 opacity-45 sm:block" />
+										{/if}
+									</button>
+									{#if showAgentHarnessMenu && !agentHarnessLocked}
+										<button type="button" class="fixed inset-0 z-30 cursor-default" aria-hidden="true" tabindex="-1" onclick={() => { showAgentHarnessMenu = false; }}></button>
+										<div class="absolute bottom-full left-0 z-40 mb-1.5 w-40 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg" role="menu" aria-label="Agent harness">
+											{#each AGENT_HARNESS_OPTIONS as option}
+												<button
+													type="button"
+													class={`flex min-h-10 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors hover:bg-bg-hover ${agentHarness === option.value ? "text-text-primary" : "text-text-secondary"}`}
+													role="menuitemradio"
+													aria-checked={agentHarness === option.value}
+												onclick={() => { onAgentHarnessChange?.(option.value); showAgentHarnessMenu = false; }}
+											>
+												<AgentHarnessLogo harness={option.value} class="h-5 w-5" />
+												<span class="flex-1">{option.label}</span>
+													{#if agentHarness === option.value}<Check class="h-3.5 w-3.5 text-brand" />{/if}
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/if}
 
 							{#if onModelSelect}
 								<ComposerModelTrigger
 									label={modelControlLabel}
-									meta={[thinkingLevelLabel, generationPolicyLabel].filter(
+									meta={[thinkingLevelLabel, serviceTierLabel, generationPolicyLabel].filter(
 										(value): value is string => Boolean(value),
 									)}
 									ariaLabel={modelControlAriaLabel}

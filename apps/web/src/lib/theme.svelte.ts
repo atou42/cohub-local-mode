@@ -1,10 +1,9 @@
-import { syncSystemChromeColor } from "$lib/system-chrome";
+import { syncSpaceChromeTheme } from "$lib/space-chrome-theme";
 import {
 	getSystemTheme,
 	isThemeMode,
 	type ResolvedTheme,
 	resolveThemeMode,
-	THEME_COLOR,
 	THEME_STORAGE_KEY,
 	type ThemeMode,
 } from "$lib/theme-registry";
@@ -22,7 +21,7 @@ function applyTheme(mode: ThemeMode, skipDom = false) {
 	_resolved = resolved;
 	if (!skipDom && typeof document !== "undefined") {
 		document.documentElement.setAttribute("data-theme", resolved);
-		syncSystemChromeColor(THEME_COLOR[resolved]);
+		syncSpaceChromeTheme();
 	}
 }
 
@@ -53,9 +52,9 @@ if (typeof window !== "undefined") {
 	applyTheme(initial, true);
 	// Custom space styles load after the shell boots; the space-style-changed
 	// event below re-syncs the color once those overrides are applied.
-	syncSystemChromeColor(THEME_COLOR[resolveThemeMode(initial)]);
+	syncSpaceChromeTheme();
 	window.addEventListener("cohub:space-style-changed", () => {
-		syncSystemChromeColor(THEME_COLOR[_resolved]);
+		syncSpaceChromeTheme();
 	});
 
 	// React to system preference changes (only affects "system" mode).

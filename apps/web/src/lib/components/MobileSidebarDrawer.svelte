@@ -94,7 +94,7 @@ $effect(() => {
     style="width: {MOBILE_DRAWER_WIDTH_PX}px; max-width: {MOBILE_DRAWER_MAX_WIDTH_VW}vw; {panelStyle}"
   >
     {#if renderContent}
-      <div class="h-full border-r border-border-subtle bg-bg-primary" class:pointer-events-auto={interactive}>
+      <div class="mobile-safe-area-panel mobile-safe-area-panel--left h-full border-r border-border-subtle bg-bg-primary" class:pointer-events-auto={interactive}>
         <Sidebar isMobile mode={mode} onClose={closeDrawer} />
       </div>
     {/if}

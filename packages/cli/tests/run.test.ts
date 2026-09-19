@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { resolveCohubEnvironment } from "@neta-art/cohub";
+import { currentIdentityKey } from "../src/space.js";
 import { parseRunCliOptions } from "../src/commands/run.js";
 
 const roots: string[] = [];
@@ -27,7 +27,7 @@ test("cohub run uses the current directory Runtime binding", async () => {
   try {
     await writeFile(path, `${JSON.stringify({
       version: 1,
-      bindings: [{ root, key: `${resolveCohubEnvironment()}:user-alice`, spaceId: "space-runtime" }],
+      bindings: [{ root, key: currentIdentityKey(), spaceId: "space-runtime" }],
     })}\n`);
     const options = await parseRunCliOptions(["run", "--", "git", "status"], { cwd: root, bindingsPath: path });
     assert.equal(options.spaceId, "space-runtime");

@@ -21,6 +21,8 @@ import { recordAuthTrace } from "./auth-observability.js";
 import { verifyPreviewSessionToken, type PreviewSessionPrincipal } from "./preview-sessions.js";
 import { verifyAppSessionToken, type AppSessionPrincipal } from "./app-sessions.js";
 import { assertRequiredConfig, config } from "./config.js";
+import { isManagedLocalSandboxRelayToken } from "./local-sandbox-supervisor-auth.js";
+import { loadExternalHarnessCatalog } from "./local-mode/harness-catalog.js";
 
 import router from "./routes/index.js";
 
@@ -76,7 +78,16 @@ app.use(
       "Baggage",
       "Sentry-Trace",
     ],
-    exposeHeaders: ["X-Request-Id", "X-Trace-Id", "X-Span-Id", "Traceparent", "Tracestate", "Baggage", "Sentry-Trace"],
+    exposeHeaders: [
+      "X-Request-Id",
+      "X-Trace-Id",
+      "X-Span-Id",
+      "X-Cohub-Local-Node",
+      "Traceparent",
+      "Tracestate",
+      "Baggage",
+      "Sentry-Trace",
+    ],
     credentials: true,
   }),
 );
@@ -108,6 +119,17 @@ app.use(async (c, next) => {
   c.set("principal", null);
 
   if (token) {
+    if (
+      c.req.path === "/internal/gateway/local-sandbox/authorize" &&
+      isManagedLocalSandboxRelayToken({
+        nodeOrigin: config.nodeOrigin,
+        expectedToken: config.localSandboxRelayToken,
+        providedToken: token,
+      })
+    ) {
+      await next();
+      return;
+    }
     const executionAuth = await consumeExecutionAuthFromToken(token).catch((error) => {
       logger.warn("[API] Failed to verify execution token:", error);
       return null;
@@ -254,6 +276,7 @@ configureBillingRuntime({
 const server = serve({
   fetch: app.fetch,
   port,
+  hostname: process.env.HOST ?? "0.0.0.0",
   serverOptions: {
     requestTimeout: 0,
     keepAliveTimeout: 75_000,
@@ -261,3 +284,14 @@ const server = serve({
 });
 server.setTimeout(0);
 logger.info(`@cohub/api listening on :${port}`);
+
+// Warm the expensive Cursor ACP catalog while the local node is starting. The
+// disk cache makes later restarts instant, while this first probe no longer
+// blocks the HTTP listener or the Space bootstrap path.
+if (config.nodeOrigin === "local") {
+  void loadExternalHarnessCatalog("cursor").catch((error) => {
+    logger.warn("[models] Cursor catalog prewarm failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}

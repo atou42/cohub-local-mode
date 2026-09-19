@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { AgentHarness } from "@cohub/protocol";
 import type { ContentBlock } from "@cohub/protocol/core";
 import { resolveHarness } from "@neta-art/cohub";
 import {
@@ -10,6 +11,9 @@ import {
 	Loader2,
 	TriangleAlert,
 } from "lucide-svelte";
+import { onDestroy } from "svelte";
+import { getChatMessageForkState } from "$lib/chat-message-fork";
+import { formatCompactModelLabel } from "$lib/compact-control-labels";
 import MessageContentFlow from "$lib/components/MessageContentFlow.svelte";
 import UserIdentity from "$lib/components/UserIdentity.svelte";
 import {
@@ -25,6 +29,7 @@ import {
 } from "$lib/format-usage";
 import { getGenerationCostPresentation } from "$lib/generation-cost";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { resolveMessageAuthorProfile } from "$lib/message-author-profile";
 import {
 	findModelCatalogItem,
 	formatThinkingLevelShort,
@@ -34,6 +39,7 @@ import {
 } from "$lib/model-catalog";
 import { m } from "$lib/paraglide/messages.js";
 import type { ChatMessage } from "$lib/session-tree";
+import { authStore } from "$lib/stores/auth.svelte";
 import {
 	formatCompactAbsoluteTime,
 	formatFullAbsoluteTime,
@@ -51,6 +57,7 @@ type Props = {
 	onForkTurn?: () => void;
 	forkDisabled?: boolean;
 	forking?: boolean;
+	agentHarness?: AgentHarness | null;
 };
 
 const {
@@ -64,6 +71,7 @@ const {
 	onForkTurn,
 	forkDisabled = false,
 	forking = false,
+	agentHarness = null,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -132,11 +140,20 @@ const isCancelledBeforeDispatch = $derived(
 		message.meta?.turn?.meta?.cancelledBeforeDispatch === true,
 );
 
+const resolvedAuthorProfile = $derived(
+	resolveMessageAuthorProfile({
+		messageAuthorUuid: message.authorUuid,
+		messageAuthorProfile: message.authorProfile,
+		currentUserUuid: authStore.userUuid,
+		currentUserProfile: authStore.profile,
+	}),
+);
+
 const cancelledByDisplay = $derived.by(() => {
 	const userId = message.meta?.turn?.meta?.cancelledByUserId;
 	if (typeof userId !== "string" || !userId.trim()) return "";
-	if (message.authorProfile?.userUuid === userId)
-		return message.authorProfile.displayName;
+	if (resolvedAuthorProfile?.userUuid === userId)
+		return resolvedAuthorProfile.displayName;
 	return userId.replaceAll("-", "").slice(0, 8);
 });
 
@@ -203,37 +220,32 @@ const defaultExpandToolCalls = $derived(
 		(message.content ?? []).some((block) => block.type === "tool_use"),
 );
 
-const hasForkCheckpoint = $derived(
-	Boolean(
-		message.meta?.turn &&
-			(typeof message.meta.turn.meta?.agentSessionEntryId === "string" ||
-				(message.meta.turn.meta?.agent &&
-					typeof message.meta.turn.meta.agent === "object" &&
-					!Array.isArray(message.meta.turn.meta.agent) &&
-					typeof (message.meta.turn.meta.agent as Record<string, unknown>)
-						.leafEntryId === "string")),
-	),
-);
+const metaActionButtonClass =
+	"shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50";
 
-const isTerminalDirectGeneration = $derived(
-	message.meta?.turn?.executionKind === "direct_generation" &&
-		["completed", "failed", "interrupted", "cancelled"].includes(
-			message.meta.turn.status,
-		),
+const forkState = $derived(
+	getChatMessageForkState(message, Boolean(onForkTurn), agentHarness),
 );
+let forkHintVisible = $state(false);
+let forkHintTimer: ReturnType<typeof setTimeout> | null = null;
 
-const canFork = $derived(
-	Boolean(
-		onForkTurn &&
-			(hasForkCheckpoint || isTerminalDirectGeneration) &&
-			message.role === "assistant" &&
-			message.meta?.messageKind &&
-			["assistant_final", "assistant_error", "assistant_interrupted"].includes(
-				message.meta.messageKind,
-			) &&
-			message.meta?.streaming !== true,
-	),
-);
+function handleForkClick() {
+	if (forkDisabled) return;
+	if (forkState.available) {
+		onForkTurn?.();
+		return;
+	}
+	forkHintVisible = true;
+	if (forkHintTimer) clearTimeout(forkHintTimer);
+	forkHintTimer = setTimeout(() => {
+		forkHintVisible = false;
+		forkHintTimer = null;
+	}, 2400);
+}
+
+onDestroy(() => {
+	if (forkHintTimer) clearTimeout(forkHintTimer);
+});
 
 function fallbackUserName(uuid?: string | null): string {
 	if (!uuid) return m.common_user({}, { locale });
@@ -242,7 +254,7 @@ function fallbackUserName(uuid?: string | null): string {
 }
 
 const userDisplayName = $derived(
-	message.authorProfile?.displayName?.trim() ||
+	resolvedAuthorProfile?.displayName?.trim() ||
 		fallbackUserName(message.authorUuid),
 );
 
@@ -274,6 +286,9 @@ const modelName = $derived(
 );
 
 const modelDisplayName = $derived(message.meta?.model ? modelName : "");
+const compactModelDisplayName = $derived(
+	formatCompactModelLabel(modelDisplayName),
+);
 
 const modelHoverText = $derived(
 	message.meta?.provider && message.meta?.model
@@ -391,7 +406,7 @@ const tokenDisplay = $derived.by(() => {
 		const inputLabel = `↑${formatTokenCount(displayInputTokens)}`;
 		parts.push(
 			cachedInputTokens > 0
-				? `${inputLabel} (${m.chat_cached({ count: formatTokenCount(cachedInputTokens) }, { locale })})`
+				? `${inputLabel} (${formatTokenCount(cachedInputTokens)})`
 				: inputLabel,
 		);
 	}
@@ -482,7 +497,7 @@ const inputContextPercent = $derived.by(() => {
 });
 
 function getTokenDisplayClass(percent: number | null) {
-	const base = "tabular-nums shrink-0 cursor-default transition-colors";
+	const base = "min-w-0 truncate tabular-nums cursor-default transition-colors";
 	if (percent === null || percent < 60)
 		return `${base} text-text-placeholder/65`;
 	if (percent < 85) return `${base} text-warning-soft/85`;
@@ -554,11 +569,11 @@ function handleCopy() {
 
     {#if (message.role === 'assistant' && (message.meta?.model || hasUsage || hasDuration || timeDisplay || harnessLabel)) || (message.role === 'user' && timeDisplay)}
       <!-- Meta bar: copy | identity/model | tokens | time -->
-      <div class="mt-1 flex items-center gap-1 px-2 text-[11px] text-text-placeholder/50 select-none">
+      <div class="mt-1 flex w-full min-w-0 max-w-full items-center gap-1 overflow-hidden px-2 text-[11px] text-text-placeholder/50 select-none">
         <!-- Copy button -->
         <button
           type="button"
-          class="shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+          class={metaActionButtonClass}
           onclick={(e) => { e.stopPropagation(); handleCopy(); }}
           title={m.chat_copy_message({}, { locale })}
         >
@@ -569,20 +584,25 @@ function handleCopy() {
           {/if}
         </button>
 
-        {#if canFork}
-          <button
-            type="button"
-            class="shrink-0 inline-flex items-center p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity disabled:cursor-default disabled:opacity-50"
-            onclick={(e) => { e.stopPropagation(); if (!forkDisabled) onForkTurn?.(); }}
-            title={m.chat_fork_here({}, { locale })}
-            disabled={forkDisabled}
-          >
-            {#if forking}
-              <Loader2 class="w-3.5 h-3.5 animate-spin" />
-            {:else}
-              <GitFork class="w-3.5 h-3.5" />
-            {/if}
-          </button>
+        {#if forkState.visible}
+          <span class="relative shrink-0">
+            <button
+              type="button"
+              class={metaActionButtonClass}
+              class:opacity-35={!forkState.available && !forkDisabled}
+              onclick={(e) => { e.stopPropagation(); handleForkClick(); }}
+              title={forkState.available ? m.chat_fork_here({}, { locale }) : m.chat_fork_unavailable({}, { locale })}
+              aria-label={forkState.available ? m.chat_fork_here({}, { locale }) : m.chat_fork_unavailable({}, { locale })}
+              aria-disabled={!forkState.available || forkDisabled}
+              disabled={forkDisabled}
+            >
+              {#if forking}
+                <Loader2 class="w-3.5 h-3.5 animate-spin" />
+              {:else}
+                <GitFork class="w-3.5 h-3.5" />
+              {/if}
+            </button>
+          </span>
         {/if}
 
         {#if message.role === 'user'}
@@ -595,8 +615,8 @@ function handleCopy() {
             <!-- User identity -->
             <UserIdentity
               name={userDisplayName}
-              avatarUrl={message.authorProfile?.avatarUrl}
-              username={message.authorProfile?.username}
+              avatarUrl={resolvedAuthorProfile?.avatarUrl}
+              username={resolvedAuthorProfile?.username}
               title={userDisplayName}
               size="xxs"
               class="text-inherit"
@@ -620,35 +640,50 @@ function handleCopy() {
             </span>
           {/if}
 
-          <!-- Model (truncates when space is tight) -->
-          {#if modelDisplayName}
-            <span class="min-w-0 truncate cursor-default" title={modelHoverText}>
-              {modelDisplayName}
+          {#if modelDisplayName || requestedThinkingLevel}
+            <span
+              data-chat-meta-group="model"
+              class="inline-flex min-w-0 shrink-[3] items-center gap-0.5 overflow-hidden"
+            >
+              <!-- Model (truncates when space is tight) -->
+              {#if modelDisplayName}
+                <span class="min-w-0 truncate cursor-default" title={modelHoverText}>
+                  <span class="sm:hidden">{compactModelDisplayName}</span>
+                  <span class="hidden sm:inline">{modelDisplayName}</span>
+                </span>
+              {/if}
+
+              {#if requestedThinkingLevel}
+                <span class="shrink-0 text-text-placeholder/65">
+                  {requestedThinkingLevelShort}
+                </span>
+              {/if}
             </span>
           {/if}
 
-          {#if requestedThinkingLevel}
-            <span class="shrink-0 text-text-placeholder/65">
-              {requestedThinkingLevelShort}
-            </span>
-          {/if}
+          {#if (hasUsage && tokenDisplay) || hasDuration || visibleCost}
+            <span
+              data-chat-meta-group="usage"
+              class="inline-flex min-w-0 shrink items-center gap-1 overflow-hidden"
+            >
+              <!-- Tokens -->
+              {#if hasUsage && tokenDisplay}
+                <span class={getTokenDisplayClass(inputContextPercent)} title={tokenDetailText}>
+                  {tokenDisplay}
+                </span>
+              {/if}
 
-          <!-- Tokens -->
-          {#if hasUsage && tokenDisplay}
-            <span class={getTokenDisplayClass(inputContextPercent)} title={tokenDetailText}>
-              {tokenDisplay}
-            </span>
-          {/if}
+              {#if hasDuration}
+                <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={durationDetailText}>
+                  {durationDisplay}
+                </span>
+              {/if}
 
-          {#if hasDuration}
-            <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={durationDetailText}>
-              {durationDisplay}
-            </span>
-          {/if}
-
-          {#if visibleCost}
-            <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={visibleCost.detail}>
-              {visibleCost.label}
+              {#if visibleCost}
+                <span class="shrink-0 tabular-nums cursor-default text-text-placeholder/65" title={visibleCost.detail}>
+                  {visibleCost.label}
+                </span>
+              {/if}
             </span>
           {/if}
 
@@ -664,6 +699,11 @@ function handleCopy() {
           </time>
         {/if}
       </div>
+      {#if forkHintVisible}
+        <div role="status" class="mt-1 px-2 text-[11px] text-text-secondary">
+          {m.chat_fork_unavailable({}, { locale })}
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}

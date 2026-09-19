@@ -5,12 +5,14 @@ target/
 configs/
 .idea/
 output/
+apps/sandbox/.local-build/
 
 # Local rendered manifests (do not commit)
 rendered/
 
 # Environment variables
 .env
+deploy/local-mode/.env
 
 # K8s secrets (do not commit)
 deploy/api/prod/secrets.yaml
@@ -29,6 +31,7 @@ docs/examples/work-capability-lab/whale-shrine/data/
 
 # Changelog generation drafts
 .changelog-draft/
+.playwright-cli/
 
 # K8s rendered files (generated)
 deploy/api/prod/rendered/

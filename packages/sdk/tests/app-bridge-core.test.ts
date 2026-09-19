@@ -197,7 +197,6 @@ test("legacy work authorize and purchase replies preserve their protocol", async
 	try {
 		const config = makeConfig({ viewerUuid: "viewer-uuid" });
 		const core = createAppBridgeCore(config);
-
 		await core.handleMessage(
 			messageEvent({
 				type: "cohub.work.authorize",

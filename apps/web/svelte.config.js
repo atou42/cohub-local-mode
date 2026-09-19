@@ -1,6 +1,8 @@
 import { fileURLToPath, URL } from "node:url";
 import adapter from "@sveltejs/adapter-cloudflare";
 
+const wranglerConfig = process.env.COHUB_WEB_WRANGLER_CONFIG?.trim();
+
 const protocolDir = fileURLToPath(
 	new URL("../../packages/protocol/src", import.meta.url),
 );
@@ -13,7 +15,8 @@ const config = {
 		sourcemap: true,
 	},
 	kit: {
-		adapter: adapter(),
+		adapter: adapter(wranglerConfig ? { config: wranglerConfig } : undefined),
+		outDir: process.env.COHUB_WEB_BUILD_OUT_DIR?.trim() || ".svelte-kit",
 		output: {
 			bundleStrategy: "split",
 		},

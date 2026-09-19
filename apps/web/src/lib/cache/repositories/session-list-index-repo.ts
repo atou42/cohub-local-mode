@@ -159,6 +159,7 @@ function sessionFromPreview(
 		status: item.preview.status,
 		activeTurn: item.preview.activeTurn,
 		externalSessionId: null,
+		agentHarness: "pi",
 		meta: null,
 		latestMessageText: item.preview.latestMessageText,
 		lastMessageAt: item.lastMessageAt,

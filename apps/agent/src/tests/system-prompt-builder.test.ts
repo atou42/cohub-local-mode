@@ -148,3 +148,15 @@ assert.ok(!promptWithMod.includes("Live workspace skill description"), "should n
 assert.ok(!promptWithMod.includes("live-only-skill"), "should not expose live-only Mod skills");
 assert.ok(!promptWithMod.includes("Live workspace Mod context."), "should not load Mod context from the live workspace");
 assert.ok(!promptWithMod.includes("Live workspace append prompt."), "should not load Mod append prompts from the live workspace");
+
+const previousNodeOrigin = process.env.COHUB_NODE_ORIGIN;
+process.env.COHUB_NODE_ORIGIN = "local";
+const localPrompt = await buildCohubSystemPrompt({
+  cwd: workspace,
+  selectedTools: ["read"],
+});
+assert.ok(localPrompt.includes("/workspace/.cohub/local-sessions"), "should expose the shared Local Mode session directory");
+assert.ok(localPrompt.includes("transcript.jsonl"), "should explain the normalized cross-harness transcript");
+assert.ok(localPrompt.includes("read-only"), "should keep native harness artifacts read-only");
+if (previousNodeOrigin === undefined) delete process.env.COHUB_NODE_ORIGIN;
+else process.env.COHUB_NODE_ORIGIN = previousNodeOrigin;

@@ -86,6 +86,11 @@ import {
 import { DESKTOP_SHELL_MIN_WIDTH_PX } from "$lib/layout/breakpoints";
 import { useCompactShell } from "$lib/layout/compact-shell.svelte";
 import { DURATION_PANEL } from "$lib/motion.svelte";
+import {
+	getNativeFocusViewState,
+	subscribeNativeFocusViewState,
+	toggleNativeSessionFocus,
+} from "$lib/native-activity";
 import { sdk } from "$lib/sdk";
 import {
 	activateSpaceConfig,
@@ -97,6 +102,7 @@ import {
 	subscribeSpaceConfigBackgroundAction,
 } from "$lib/space-config";
 import type { SpaceFsNode } from "$lib/space-fs";
+import { resolveSpaceOrigin } from "$lib/space-origin";
 import {
 	buildSpaceCheckpointRoute,
 	buildSpaceCronjobRoute,
@@ -280,6 +286,7 @@ const isRouteDetailView = $derived(
 		routeView === "task",
 );
 let space = $state<SpaceRecord | null>(null);
+let nativeFocusState = $state(getNativeFocusViewState());
 let spaceConfig = $state<SpaceConfig | null>(null);
 let newChatProfileExpanded = $state(false);
 let newChatProfileCanExpand = $state(false);
@@ -369,6 +376,7 @@ const sessionChat = createSessionChatHost({
 	getConnectionState: () => connectionStateBox.current,
 	canManageSessionAccess: () => canManageSessionAccess,
 	hasSpace: () => Boolean(space),
+	isLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 });
 
 // Host is the unique owner of chat controllers and session records.
@@ -636,6 +644,7 @@ const spaceStatus = createSpaceStatusController({
 	getPageVisible: () => pageVisible,
 	getPageOnline: () => pageOnline,
 	getPageMounted: () => pageMounted,
+	getIsLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 	onSpaceLoaded: (nextSpace) => {
 		space = nextSpace;
 		portPreview.setEndpoints(extractPublicEndpoints(nextSpace));
@@ -685,6 +694,7 @@ const fileWorkspace = createFileWorkspaceController({
 	getCanEditFiles: () => canEditFiles,
 	getActiveFsReadonly: () => activeFsReadonly,
 	getSpaceHasMinimalAccess: () => spaceHasMinimalAccess,
+	getIsLocalSpace: () => resolveSpaceOrigin(spaceId) === "local",
 	onOpenInlineFile: (path) => openInlineFile(path),
 	onOpenInlineBoard: (path) => openInlineBoard(path),
 	onCloseInlineBoard: () => closeInlineBoard(),
@@ -2416,6 +2426,9 @@ function handleSessionVimKeydown(event: KeyboardEvent) {
 
 onMount(() => {
 	pageMounted = true;
+	const offNativeFocus = subscribeNativeFocusViewState((state) => {
+		nativeFocusState = state;
+	});
 	spaceRealtime.start();
 	spacePresence.start();
 	sessionChat.loadSessionScrollAnchors();
@@ -2569,6 +2582,7 @@ onMount(() => {
 		},
 	);
 	return () => {
+		offNativeFocus();
 		offDesktopCommandHost();
 		if (activeSessionId)
 			sessionChat.captureCurrentScrollAnchor(activeSessionId);
@@ -3021,6 +3035,12 @@ const headerContext = $derived({
 	rightSidebarAvailable,
 	// Icon tracks effective hide (column folded or empty rail with no preview).
 	rightSidebarCollapsed: filesChromeEffectivelyHidden,
+	nativeActivityEnabled: nativeFocusState.enabled,
+	isActiveSessionFocused: Boolean(
+		activeSessionId &&
+			nativeFocusState.explicitFocus?.spaceId === spaceId &&
+			nativeFocusState.explicitFocus.sessionId === activeSessionId,
+	),
 });
 const sessionRenameState = $derived({
 	renaming: sessionRenaming,
@@ -3053,6 +3073,9 @@ const headerActions = {
 	},
 	insertHeaderReference,
 	toggleRightSidebar,
+	toggleNativeSessionFocus: () => {
+		if (activeSessionId) toggleNativeSessionFocus(spaceId, activeSessionId);
+	},
 };
 </script>
 

@@ -9,6 +9,7 @@ import { mergeLocalOverviewIntoSnapshot } from "$lib/command-palette/palette-ove
 import { searchRemoteCommandItems } from "$lib/command-palette/remote-search";
 import type { CommandPaletteItem } from "$lib/command-palette/types";
 import { sdk } from "$lib/sdk";
+import { registerSpaceOrigin } from "$lib/space-origin";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
 import type { SpaceMentionSuggestion } from "./space";
 import { commandSpaceToMentionSuggestion } from "./space-mention-select";
@@ -114,6 +115,7 @@ export async function resolveSpaceMentionLabels(
 						fetch(input, { ...init, signal: options?.signal }),
 					);
 				cacheSpaceRecordSoon(space);
+				registerSpaceOrigin(space);
 				const name = space.name ?? space.title;
 				if (name) resolved.set(spaceId, name);
 			} catch (error) {
@@ -141,8 +143,12 @@ export async function searchRemoteSpaceMentions(
 		limit: options?.limit ?? REMOTE_LIMIT,
 		types: ["space"],
 	});
-	return result
+	const items = result
 		.map(remoteSearchToSuggestion)
 		.filter(isMentionSuggestion)
 		.filter((item) => item.spaceId !== options?.currentSpaceId);
+	for (const item of items) {
+		registerSpaceOrigin({ id: item.spaceId, origin: item.origin });
+	}
+	return items;
 }

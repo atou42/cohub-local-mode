@@ -1,6 +1,8 @@
 <script lang="ts">
 import "../../app.css";
+import { onMount } from "svelte";
 import { page } from "$app/state";
+import { markCohubClientHealthy } from "$lib/asset-import-recovery";
 
 const { children } = $props();
 
@@ -8,6 +10,10 @@ const { children } = $props();
 const isPublicAppPath = $derived.by(() => {
 	const segments = page.url.pathname.split("/").filter(Boolean);
 	return segments.length === 4 && segments[2] === "w";
+});
+
+onMount(() => {
+	if (page.status < 400) markCohubClientHealthy();
 });
 </script>
 

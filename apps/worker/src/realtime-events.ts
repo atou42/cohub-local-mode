@@ -114,6 +114,7 @@ export async function dispatchSessionUpdated(input: { session: typeof spaceSessi
     title: input.session.title,
     source: input.session.source,
     status: input.session.status,
+    agentHarness: input.session.agentHarness,
     externalSessionId: input.session.externalSessionId,
     latestMessageText: input.session.latestMessageText ?? null,
     lastMessageAt: toIsoOrNull(input.session.lastMessageAt),

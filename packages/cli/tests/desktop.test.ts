@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { resolveCohubEnvironment } from "@neta-art/cohub";
+import { currentIdentityKey } from "../src/space.js";
 import { Command } from "commander";
 import { registerDesktop, registerLegacyUi, resolveOpenSurface, resolveOptionalSpaceId } from "../src/commands/desktop.js";
 
@@ -48,7 +48,7 @@ test("desktop open uses the current directory binding without falling back to Ho
   try {
     await writeFile(bindingsPath, `${JSON.stringify({
       version: 1,
-      bindings: [{ root, key: `${resolveCohubEnvironment()}:user-alice`, spaceId: "space-runtime" }],
+      bindings: [{ root, key: currentIdentityKey(), spaceId: "space-runtime" }],
     })}\n`);
     const { open } = createProgram();
     assert.equal(await resolveOptionalSpaceId(open, { cwd: root, bindingsPath }), "space-runtime");

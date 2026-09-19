@@ -18,17 +18,17 @@ for (const table of [sessionTurns, spaceSessions]) {
   await engine.exec(`create table v2."${config.name}" (${columns.join(",")})`);
 }
 const tickets = new Map(), objects = new Map();
-mock.module("../src/db/index.js", { exports: { db: database } });
-mock.module("../src/config.js", { exports: { config: { env: "test", turnObjectS3Endpoint: "https://oss-us-west-1.aliyuncs.com", turnObjectS3Region: "us-west-1", turnObjectS3Bucket: "test", turnObjectS3AccessKeyId: "access", turnObjectS3SecretAccessKey: "secret" } } });
-mock.module("../src/lib/middleware.js", { exports: {
+mock.module("../src/db/index.js", { namedExports: { db: database } });
+mock.module("../src/config.js", { namedExports: { config: { env: "test", turnObjectS3Endpoint: "https://oss-us-west-1.aliyuncs.com", turnObjectS3Region: "us-west-1", turnObjectS3Bucket: "test", turnObjectS3AccessKeyId: "access", turnObjectS3SecretAccessKey: "secret" } } });
+mock.module("../src/lib/middleware.js", { namedExports: {
   useAuth: (c) => ({ uuid: c.req.header("x-user") ?? "owner" }), requireValidId: (id) => /^[a-f0-9-]{36}$/.test(id), authzDenied: (c) => c.json({ message: "forbidden" }, 403),
 } });
-mock.module("../src/permissions.js", { exports: { hasPermission: async (user) => user.uuid !== "denied" } });
-mock.module("../src/redis.js", { exports: { redisCommandClient: { set: async (key, value) => tickets.set(key, value), get: async (key) => tickets.get(key) } } });
-mock.module("../src/space-upload-storage.js", { exports: { consumeSpaceUploadQuota: async () => {}, SpaceUploadRateLimitError: class extends Error {} } });
-mock.module("../src/turn-object-storage.js", { exports: { headTurnObject: async (key) => objects.get(key) ?? {} } });
-mock.module("../src/session-output.js", { exports: { dispatchTurnUpdated: async () => {} } });
-mock.module("../src/session-turns.js", { exports: { getSessionTurnById: async () => null } });
+mock.module("../src/permissions.js", { namedExports: { hasPermission: async (user) => user.uuid !== "denied" } });
+mock.module("../src/redis.js", { namedExports: { redisCommandClient: { set: async (key, value) => tickets.set(key, value), get: async (key) => tickets.get(key) } } });
+mock.module("../src/space-upload-storage.js", { namedExports: { consumeSpaceUploadQuota: async () => {}, SpaceUploadRateLimitError: class extends Error {} } });
+mock.module("../src/turn-object-storage.js", { namedExports: { headTurnObject: async (key) => objects.get(key) ?? {} } });
+mock.module("../src/session-output.js", { namedExports: { dispatchTurnUpdated: async () => {} } });
+mock.module("../src/session-turns.js", { namedExports: { getSessionTurnById: async () => null } });
 const { default: route } = await import("../src/routes/spaces/runtime-archives.route.js");
 const app = new Hono().route("/:id/runtime/archives", route);
 after(() => engine.close());

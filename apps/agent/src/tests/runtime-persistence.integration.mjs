@@ -38,20 +38,20 @@ const db = new Proxy(database, { get(target, key) {
   } })));
   const value = target[key]; return typeof value === "function" ? value.bind(target) : value;
 } });
-mock.module("../db.js", { exports: { db } });
-mock.module("../env.js", { exports: { env: { ENV: "test", AGENT_STALE_ACTIVE_TURN_MS: 60_000 } } });
-mock.module("../logger.js", { exports: { logger: { warn() {}, error() {}, debug() {} } } });
-mock.module("../redis.js", { exports: {
+mock.module("../db.js", { namedExports: { db } });
+mock.module("../env.js", { namedExports: { env: { ENV: "test", AGENT_STALE_ACTIVE_TURN_MS: 60_000 } } });
+mock.module("../logger.js", { namedExports: { logger: { warn() {}, error() {}, debug() {} } } });
+mock.module("../redis.js", { namedExports: {
   redis: { hget: async () => "gateway-node" }, publishRealtimeEnvelope: async (event) => { publications.push(event); }, clearPersistedSessionStreamSnapshot: async () => {}, getGatewayNodeOutboundStreamKey: () => "test",
   xaddWithMaxlen: async (_redis, _key, ...args) => { if (gatewayUnavailable) throw new Error("gateway unavailable"); gatewayCommands.push(JSON.parse(args.at(-1))); },
 } });
-mock.module("../queue.js", { exports: { agentTurnQueue: { add: async () => {} }, enqueueAgentTurnJob: async (job) => { if (queueUnavailable) throw new Error("queue unavailable"); wakes.push(job); } } });
-mock.module("../session-message-postprocess-queue.js", { exports: { enqueueSessionMessagePostprocess: async (job) => { if (queueUnavailable) throw new Error("queue unavailable"); processed.push(job); } } });
-mock.module("../session-title-queue.js", { exports: { enqueueSessionTitleGeneration: async () => {} } });
-mock.module("../reference-index.js", { exports: { indexTurnReferences: () => {} } });
-mock.module("../turn-object-storage.js", { exports: { buildTurnObjectPrefix: () => "test/", writeTurnObjectJson: async () => ({ sizeBytes: 0 }) } });
-mock.module("../session-lock.js", { exports: { acquireSessionLock: async () => null } });
-mock.module("../runtime/remote-runtime.js", { exports: { executeRemoteHarnessTurn: async () => {}, markRuntimeRecovery: async () => {} } });
+mock.module("../queue.js", { namedExports: { agentTurnQueue: { add: async () => {} }, enqueueAgentTurnJob: async (job) => { if (queueUnavailable) throw new Error("queue unavailable"); wakes.push(job); } } });
+mock.module("../session-message-postprocess-queue.js", { namedExports: { enqueueSessionMessagePostprocess: async (job) => { if (queueUnavailable) throw new Error("queue unavailable"); processed.push(job); } } });
+mock.module("../session-title-queue.js", { namedExports: { enqueueSessionTitleGeneration: async () => {} } });
+mock.module("../reference-index.js", { namedExports: { indexTurnReferences: () => {} } });
+mock.module("../turn-object-storage.js", { namedExports: { buildTurnObjectPrefix: () => "test/", writeTurnObjectJson: async () => ({ sizeBytes: 0 }) } });
+mock.module("../session-lock.js", { namedExports: { acquireSessionLock: async () => null } });
+mock.module("../runtime/remote-runtime.js", { namedExports: { executeRemoteHarnessTurn: async () => {}, markRuntimeRecovery: async () => {} } });
 const { persistAssistantMessage, persistBatchUserMessages, persistUserMessage } = await import("../persistence.js");
 const { claimNextTurnBatch, loadClaimedTurnBatch, resolveBatchAccessMode } = await import("../batch.js");
 const { createRuntimeContextReader } = await import("../runtime/context-reader.js");

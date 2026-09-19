@@ -46,8 +46,10 @@ type ManagedProcess struct {
 	OwnerIdentity string
 	Cmd           *exec.Cmd
 	Cancel        context.CancelFunc
+	Stdin         io.WriteCloser
 
 	mu            sync.Mutex
+	stdinClosed   bool
 	terminating   bool
 	stopReason    string
 	stopRequested bool
@@ -103,6 +105,7 @@ type StartOptions struct {
 	CWD         string
 	TimeoutSecs int
 	Env         map[string]string
+	CloseStdin  bool
 }
 
 func (m *Manager) Start(ownerIdentity string, command string, cwd string, timeoutSecs int, extraEnv map[string]string) (string, io.ReadCloser, io.ReadCloser, <-chan ExitInfo, error) {
@@ -171,6 +174,16 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 		cmd.Env = inheritedEnv
 	}
 
+	// A nil stdin gives non-interactive commands EOF without a managed writer.
+	var stdin io.WriteCloser
+	if !options.CloseStdin {
+		var err error
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			return "", nil, nil, nil, fmt.Errorf("stdin pipe: %w", err)
+		}
+	}
+
 	// io.Pipe (instead of StdoutPipe/StderrPipe) keeps output consumption
 	// under our control: Wait closes the StdoutPipe read end as soon as the
 	// child exits, which races with outstanding readers and can silently
@@ -196,7 +209,7 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 
 	m.startedTotal.Add(1)
 	processID := uuid.NewString()
-	managed := &ManagedProcess{ID: processID, OwnerIdentity: ownerIdentity, Cmd: cmd, Cancel: cancel}
+	managed := &ManagedProcess{ID: processID, OwnerIdentity: ownerIdentity, Cmd: cmd, Cancel: cancel, Stdin: stdin, stdinClosed: options.CloseStdin}
 
 	m.mu.Lock()
 	m.processes[processID] = managed
@@ -261,6 +274,7 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 		delete(m.processes, processID)
 		m.mu.Unlock()
 		m.completedTotal.Add(1)
+		managed.closeStdin()
 		cancel()
 		reason, stopped := managed.stopState()
 		if !stopped || reason == "" {
@@ -270,6 +284,41 @@ func (m *Manager) StartWithOptions(ownerIdentity string, options StartOptions) (
 	}()
 
 	return processID, stdoutReader, stderrReader, exitCh, nil
+}
+
+func (m *Manager) Write(processID string, ownerIdentity string, chunk string, closeStdin bool) (int, bool, error) {
+	m.mu.Lock()
+	managed, ok := m.processes[processID]
+	m.mu.Unlock()
+	if !ok {
+		return 0, false, fmt.Errorf("process not found")
+	}
+	if managed.OwnerIdentity != ownerIdentity {
+		return 0, false, fmt.Errorf("process owner mismatch")
+	}
+
+	managed.mu.Lock()
+	defer managed.mu.Unlock()
+	if managed.stdinClosed || managed.Stdin == nil {
+		return 0, true, fmt.Errorf("process stdin is closed")
+	}
+
+	written := 0
+	var err error
+	if chunk != "" {
+		written, err = io.WriteString(managed.Stdin, chunk)
+		if err != nil {
+			return written, managed.stdinClosed, fmt.Errorf("write process stdin: %w", err)
+		}
+	}
+	if closeStdin {
+		err = managed.Stdin.Close()
+		managed.stdinClosed = true
+		if err != nil {
+			return written, true, fmt.Errorf("close process stdin: %w", err)
+		}
+	}
+	return written, managed.stdinClosed, nil
 }
 
 func (m *Manager) Abort(processID string) error {
@@ -390,4 +439,14 @@ func (p *ManagedProcess) stopState() (reason string, requested bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.stopReason, p.stopRequested
+}
+
+func (p *ManagedProcess) closeStdin() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stdinClosed || p.Stdin == nil {
+		return
+	}
+	_ = p.Stdin.Close()
+	p.stdinClosed = true
 }

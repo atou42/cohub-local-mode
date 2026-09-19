@@ -27,7 +27,6 @@ import { provideMarkdownWorkspaceAsset } from "$lib/markdown-asset-context";
 import { m } from "$lib/paraglide/messages.js";
 import type { NewChatBackgroundConfig } from "$lib/space-config";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
-import { modelsCatalogStore } from "$lib/stores/models-catalog.svelte";
 import { modelsStatusStore } from "$lib/stores/models-status.svelte";
 import { entriesFromDataTransfer } from "$lib/upload-entries";
 import SessionRuntimeRecovery from "./SessionRuntimeRecovery.svelte";
@@ -108,7 +107,7 @@ let showModelSelector = $state(false);
 let showCreateModelSelector = $state(false);
 let draftDropKind = $state<ChatDraftDropKind | null>(null);
 let draftDropCounter = 0;
-const modelsCatalog = $derived(modelsCatalogStore.items);
+const modelsCatalog = $derived(host.modelsCatalog);
 const modelsStatus = $derived(modelsStatusStore.status);
 const generationModelsCatalog = $derived(host.generationModelsCatalog);
 const generationPolicyMode = $derived(host.generationPolicyMode);
@@ -356,6 +355,7 @@ async function handleDraftDrop(event: DragEvent) {
 					onMarkdownRendered={host.handleTimelineMarkdownRendered}
 					onForkTurn={host.handleForkTurn}
 					forkingTurnId={host.forkingTurnId}
+					agentHarness={host.activeAgentHarness}
 					loading={host.activeSessionInitialLoadingVisible}
 					loadingOlder={activeSessionState?.loadingOlder ?? false}
 					onOpenFile={(target) => {
@@ -417,6 +417,30 @@ async function handleDraftDrop(event: DragEvent) {
 			{#if activeSessionId && runtimeRecoveryTurn}
 				<SessionRuntimeRecovery spaceId={host.spaceId} sessionId={activeSessionId} turnId={runtimeRecoveryTurn.id} />
 			{/if}
+			{#if host.queuedRelayCancels.length > 0}
+				<div
+					class="mx-auto w-full max-w-4xl px-4 pb-1 sm:px-6"
+					class:bg-chat-panel={!hasCustomPage}
+				>
+					{#each host.queuedRelayCancels as item (item.commandId)}
+						<div
+							class="mb-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-text-tertiary"
+						>
+							<span class="min-w-0 flex-1 truncate">Waiting in queue</span>
+							<button
+								type="button"
+								class="shrink-0 rounded px-1.5 py-1 text-text-secondary hover:bg-bg-surface hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+								disabled={Boolean(
+									host.cancellingRelayCommandIds[item.commandId],
+								)}
+								onclick={() => {
+									void host.cancelQueuedRelayCommand(item.commandId);
+								}}>Withdraw</button
+							>
+						</div>
+					{/each}
+				</div>
+			{/if}
 			<div
 				bind:this={composerHostEl}
 				class:relative={shouldShowNewChatBackground}
@@ -444,7 +468,12 @@ async function handleDraftDrop(event: DragEvent) {
 					localModels={host.runtimeCatalog?.capabilities?.models.filter((model) => model.harness === host.composerHarness) ?? []}
 					localModel={host.localModel}
 					onlocalmodelchange={host.setLocalModel}
+					showAgentHarness={host.showAgentHarnessSelector}
+					agentHarness={host.activeAgentHarness}
+					agentHarnessLocked={host.agentHarnessLocked}
+					onAgentHarnessChange={host.setAgentHarness}
 					thinkingLevelLabel={host.composerMode === "agent" ? host.activeSessionThinkingLevelLabel : null}
+					serviceTierLabel={host.composerMode === "agent" ? host.activeSessionServiceTierLabel : null}
 					generationPolicyLabel={host.composerMode === "agent" ? host.generationPolicyLabel : null}
 					quickActions={host.quickPromptActions}
 					onquickaction={(action) => {
@@ -459,6 +488,9 @@ async function handleDraftDrop(event: DragEvent) {
 					promptTemplatesLoaded={host.promptTemplatesLoaded}
 					skills={host.skills}
 					skillsLoaded={host.skillsLoaded}
+					harnessCapabilities={host.harnessCapabilities}
+					harnessCapabilitiesLoaded={host.harnessCapabilitiesLoaded}
+					slashCatalogError={host.slashCatalogError}
 					onpickattachment={host.handlePickAttachments}
 					onremoveattachment={host.handleRemoveAttachment}
 					onremoveviewport={host.handleRemoveViewportContext}
@@ -600,9 +632,19 @@ async function handleDraftDrop(event: DragEvent) {
 			}}
 			onSelect={host.handleModelSelect}
 			models={modelsCatalog ?? []}
+			loading={host.modelsCatalogLoading}
+			error={host.modelsCatalogError}
+			onRetry={() => {
+				void host.loadModelsCatalog();
+			}}
 			currentModel={activeSessionModel}
 			thinkingLevelModel={host.activeSessionTurnModel ?? activeSessionModel}
 			currentThinkingLevel={host.activeSessionThinkingLevel}
+			currentServiceTier={host.activeSessionServiceTier}
+			getModelParameterPreference={host.getModelParameterPreference}
+			preferenceNotice={host.parameterPreferenceNotice}
+			preferenceCanReset={host.parameterPreferencesInvalid}
+			onResetPreferences={host.resetSavedAgentParameterPreferences}
 			modelStatus={modelsStatus?.models ?? null}
 			generationModels={generationModelsCatalog ?? []}
 			{generationPolicyMode}

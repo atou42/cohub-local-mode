@@ -9,6 +9,9 @@
       "@cohub/billing": [
         "../../packages/billing/src/index.ts"
       ],
+      "@neta-art/cohub-cli/auth": [
+        "../../packages/cli/src/auth.ts"
+      ],
       "@cohub/db": [
         "../../packages/db/src/index.ts"
       ],

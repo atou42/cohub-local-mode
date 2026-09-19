@@ -1,7 +1,9 @@
 import { chmod, lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
-const LOCAL_TMP_ROOT = "/tmp/cohub-worker";
+const LOCAL_TMP_ROOT = join(realpathSync(tmpdir()), "cohub-worker");
 const SAFE_SEGMENT = /[^a-zA-Z0-9._-]/g;
 
 const safeSegment = (value: string) => {

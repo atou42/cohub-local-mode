@@ -18,6 +18,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="color-scheme" content="light dark" />
+    <script src="/preboot-recovery.js"></script>
     <!-- Favicons are set per-route (Work pages use Work icons; others use shell defaults). -->
     <script>
       (() => {
@@ -26,7 +27,7 @@
         var href = isPublicWorkUrl
           ? `/app.webmanifest?start_url=${encodeURIComponent(location.pathname)}`
           : '/manifest.webmanifest';
-        document.write(`<link rel="manifest" href="${href}" />`);
+        document.write(`<link rel="manifest" href="${href}" crossorigin="use-credentials" />`);
       })();
     </script>
     <meta name="theme-color" content="#FFFFFF" />

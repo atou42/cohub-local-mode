@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+unset FORCE_COLOR
+export NO_COLOR=1
+exec pnpm --dir "$repo_root" --filter @neta-art/cohub-cli exec tsx src/index.ts "$@"

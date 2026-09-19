@@ -74,11 +74,20 @@ export type RegisterSessionInput = {
   spaceId: string;
   sessionId: string;
   userUuid: string;
+  agentHarness?: AgentHarness;
   title?: string | null;
   source?: string | null;
   externalSessionId?: string | null;
   meta?: Record<string, unknown> | null;
 };
+
+export const AGENT_HARNESSES = ["pi", "codex", "grok_build", "cursor"] as const;
+export type AgentHarness = (typeof AGENT_HARNESSES)[number];
+
+export const parseAgentHarness = (value: unknown): AgentHarness | null =>
+  typeof value === "string" && AGENT_HARNESSES.includes(value as AgentHarness)
+    ? value as AgentHarness
+    : null;
 
 export type PersistMessageInput = {
   spaceId: string;
@@ -156,6 +165,7 @@ export type SessionRecord = {
   status: string | null;
   activeTurn?: SessionActiveTurn | null;
   externalSessionId: string | null;
+  agentHarness: AgentHarness;
   meta: Record<string, unknown> | null;
   latestMessageText: string | null;
   lastMessageAt: string | null;

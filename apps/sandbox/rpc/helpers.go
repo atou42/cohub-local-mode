@@ -295,12 +295,31 @@ func resolveSandboxPath(cfg env.Config, rawPath string, cwd string) (resolvedSan
 	cleaned = mapVirtualWorkspacePath(cfg, cleaned)
 
 	if cfg.Fence {
-		if err := ensureWithinRoot(cfg.WorkspaceDir, cleaned); err != nil {
+		roots := []string{
+			cfg.WorkspaceDir,
+			cfg.PlatformAgentsDir,
+			cfg.UserAgentsDir,
+		}
+		roots = append(roots, cfg.WritableRoots...)
+		if err := ensureWithinAnyRoot(roots, cleaned); err != nil {
 			return resolvedSandboxPath{}, err
 		}
 	}
 
 	return resolvedSandboxPath{path: cleaned}, nil
+}
+
+func ensureWithinAnyRoot(roots []string, cleaned string) error {
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if ensureWithinRoot(root, cleaned) == nil {
+			return nil
+		}
+	}
+	return errPathOutsideRoot
 }
 
 // errPathOutsideRoot is returned when a fenced sandbox receives a path that

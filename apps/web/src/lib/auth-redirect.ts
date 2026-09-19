@@ -5,6 +5,7 @@ import {
 	clearBrokenAuthSession,
 	getAuthSessionSnapshot,
 	hasRecentAuthCompletion,
+	prepareForAuthInvalidation,
 	sanitizeRedirectPath,
 	signInAfterUnauthorized,
 	signInWithRedirectPath,
@@ -87,6 +88,7 @@ export const redirectToSignIn = async (
 			});
 			if (!started) return;
 		} else {
+			await prepareForAuthInvalidation();
 			clearAuthToken();
 			await signInWithRedirectPath(safePath);
 		}

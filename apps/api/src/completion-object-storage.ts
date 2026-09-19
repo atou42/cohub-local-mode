@@ -9,15 +9,23 @@ const IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable";
 let s3Client: S3Client | null = null;
 
 const getS3Client = () => {
-  if (!config.turnObjectS3Bucket) throw new Error("TURN_OBJECT_S3_BUCKET is required for completion object storage");
-  if (!config.turnObjectS3Endpoint) throw new Error("TURN_OBJECT_S3_ENDPOINT is required for completion object storage");
+  if (!config.turnObjectS3Bucket)
+    throw new Error(
+      "TURN_OBJECT_S3_BUCKET is required for completion object storage",
+    );
+  if (!config.turnObjectS3Endpoint)
+    throw new Error(
+      "TURN_OBJECT_S3_ENDPOINT is required for completion object storage",
+    );
   if (!config.turnObjectS3AccessKeyId || !config.turnObjectS3SecretAccessKey) {
-    throw new Error("TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for completion object storage");
+    throw new Error(
+      "TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for completion object storage",
+    );
   }
   s3Client ??= new S3Client({
     endpoint: config.turnObjectS3Endpoint,
     region: config.turnObjectS3Region,
-    forcePathStyle: false,
+    forcePathStyle: config.s3ForcePathStyle,
     credentials: {
       accessKeyId: config.turnObjectS3AccessKeyId,
       secretAccessKey: config.turnObjectS3SecretAccessKey,
@@ -81,14 +89,16 @@ export async function writeCompletionArchive(record: CompletionArchiveRecord) {
   });
   const content = `${JSON.stringify(record)}\n`;
   const sha256 = createHash("sha256").update(content).digest("hex");
-  await getS3Client().send(new PutObjectCommand({
-    Bucket: config.turnObjectS3Bucket,
-    Key: objectKey,
-    Body: content,
-    ContentType: "application/json; charset=utf-8",
-    CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
-    Metadata: { sha256 },
-  }));
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: config.turnObjectS3Bucket,
+      Key: objectKey,
+      Body: content,
+      ContentType: "application/json; charset=utf-8",
+      CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
+      Metadata: { sha256 },
+    }),
+  );
   return { objectKey, sha256 };
 }
 

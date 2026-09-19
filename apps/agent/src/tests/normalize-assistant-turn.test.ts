@@ -150,3 +150,41 @@ const tu6 = case6.content.find((b) => b.type === "tool_use") as { id: string; na
 assert.equal(tu6?.id, "tool-6");
 assert.equal(tu6?.name, "edit");
 assert.deepEqual(tu6?.input, { path: "/workspace/a.ts" });
+
+// Case 7: runtime timeline notes must survive persistence normalization
+const case7 = normalizeAssistantTurn(
+  {
+    content: [
+      {
+        type: "system_note",
+        note_type: "info",
+        text: "Codex connected",
+        _meta: {
+          runtimeEvent: {
+            kind: "status",
+            eventType: "runtime.connected",
+            at: "2026-08-25T09:00:00.000Z",
+          },
+          streamIndex: 0,
+        },
+      },
+    ],
+  },
+  [],
+);
+
+assert.deepEqual(case7.content, [
+  {
+    type: "system_note",
+    note_type: "info",
+    text: "Codex connected",
+    _meta: {
+      runtimeEvent: {
+        kind: "status",
+        eventType: "runtime.connected",
+        at: "2026-08-25T09:00:00.000Z",
+      },
+      streamIndex: 0,
+    },
+  },
+]);

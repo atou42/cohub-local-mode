@@ -32,7 +32,7 @@ import { getSpaceSandboxBySpaceId, updateSpaceSandbox } from "./space-sandboxes.
 import { buildSessionOutputsForPersistedMessage, dispatchSessionOutputs, dispatchTurnFinalized, dispatchTurnUpdated } from "./session-output.js";
 import { dispatchLabelAssignmentsUpdated, dispatchSessionCreated, dispatchSessionUpdated, dispatchTurnCreated } from "./realtime-events.js";
 import { finalizeSessionTurnFromMessage, getSessionTurnById, hydrateTurnAuthorProfiles } from "./session-turns.js";
-import { enqueueAgentSessionForkJob } from "./agent-turn-queue.js";
+import { prepareAgentSessionFork, type AgentSessionForkJobData } from "./agent-turn-queue.js";
 import { requestAgentTurnAbort } from "./agent-turn-abort.js";
 import { countToolCallsInContent, deriveMessagePreviewText } from "./session-content.js";
 import { fallbackPublicUserProfile, getProfilesByUuids } from "./user-profiles.js";
@@ -80,7 +80,7 @@ export class SpaceEnvValidationError extends Error {
 const normalizeRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 function extractThinkingLevel(meta: unknown): ModelThinkingLevel | null {
   const record = normalizeRecord(meta);
@@ -236,6 +236,7 @@ export const createInitialSpaceSession = async (input: RegisterSessionInput) => 
     source: input.source ?? null,
     status: "active",
     externalSessionId: input.externalSessionId ?? null,
+    agentHarness: input.agentHarness ?? "pi",
     meta: sanitizePostgresJsonValue(title ? setSessionTitleMeta(participantMeta, { source: "user" }) : participantMeta),
     lastMessageAt: new Date(),
     lastMessageId: null,
@@ -268,6 +269,7 @@ export const registerSpaceSession = async (input: RegisterSessionInput) => {
       source: input.source ?? null,
       status: "active",
       externalSessionId: input.externalSessionId ?? null,
+      agentHarness: input.agentHarness ?? "pi",
       meta: sanitizePostgresJsonValue(title ? setSessionTitleMeta(participantMeta, { source: "user" }) : participantMeta),
       lastMessageAt: new Date(),
       lastMessageId: null,
@@ -830,9 +832,9 @@ export const listSessionMessages = async (spaceSessionId: string, options?: { cu
   return db.select().from(sessionMessages).where(and(eq(sessionMessages.sessionId, spaceSessionId), gt(sessionMessages.sequence, cursor))).orderBy(asc(sessionMessages.sequence)).limit(limit);
 };
 
-export const enqueueSessionFork = async (input: { spaceId: string; sessionId: string; parentSessionId: string; anchorTurnId: string; anchorSequence: number; anchorEntryId?: string | null }) => {
+export const enqueueSessionFork = async (input: Omit<AgentSessionForkJobData, "requestId" | "trace">) => {
   const traceCarrier = injectTrace();
-  await enqueueAgentSessionForkJob({
+  return prepareAgentSessionFork({
     ...input,
     requestId: getOrCreateRequestId(),
     trace: traceCarrier,

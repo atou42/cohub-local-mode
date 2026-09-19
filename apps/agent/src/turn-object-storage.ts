@@ -11,23 +11,41 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isRetryableStorageError = (error: unknown) => {
   if (!error || typeof error !== "object") return false;
-  const value = error as { $metadata?: { httpStatusCode?: number }; name?: string; code?: string };
+  const value = error as {
+    $metadata?: { httpStatusCode?: number };
+    name?: string;
+    code?: string;
+  };
   const status = value.$metadata?.httpStatusCode;
-  if (typeof status === "number") return status === 408 || status === 429 || status >= 500;
+  if (typeof status === "number")
+    return status === 408 || status === 429 || status >= 500;
   const code = value.name ?? value.code ?? "";
-  return /Abort|Timeout|Throttl|SlowDown|Networking|ECONN|EAI_AGAIN|ETIMEDOUT/i.test(code);
+  return /Abort|Timeout|Throttl|SlowDown|Networking|ECONN|EAI_AGAIN|ETIMEDOUT/i.test(
+    code,
+  );
 };
 
 const getS3Client = () => {
-  if (!env.TURN_OBJECT_S3_BUCKET) throw new Error("TURN_OBJECT_S3_BUCKET is required for turn object storage");
-  if (!env.TURN_OBJECT_S3_ENDPOINT) throw new Error("TURN_OBJECT_S3_ENDPOINT is required for turn object storage");
-  if (!env.TURN_OBJECT_S3_ACCESS_KEY_ID || !env.TURN_OBJECT_S3_SECRET_ACCESS_KEY) {
-    throw new Error("TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for turn object storage");
+  if (!env.TURN_OBJECT_S3_BUCKET)
+    throw new Error(
+      "TURN_OBJECT_S3_BUCKET is required for turn object storage",
+    );
+  if (!env.TURN_OBJECT_S3_ENDPOINT)
+    throw new Error(
+      "TURN_OBJECT_S3_ENDPOINT is required for turn object storage",
+    );
+  if (
+    !env.TURN_OBJECT_S3_ACCESS_KEY_ID ||
+    !env.TURN_OBJECT_S3_SECRET_ACCESS_KEY
+  ) {
+    throw new Error(
+      "TURN_OBJECT_S3_ACCESS_KEY_ID and TURN_OBJECT_S3_SECRET_ACCESS_KEY are required for turn object storage",
+    );
   }
   s3Client ??= new S3Client({
     endpoint: env.TURN_OBJECT_S3_ENDPOINT,
     region: env.TURN_OBJECT_S3_REGION,
-    forcePathStyle: false,
+    forcePathStyle: env.S3_FORCE_PATH_STYLE,
     credentials: {
       accessKeyId: env.TURN_OBJECT_S3_ACCESS_KEY_ID,
       secretAccessKey: env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
@@ -44,15 +62,23 @@ export const sanitizeTurnObjectKey = (objectKey: string) => {
     throw new Error("invalid object key");
   }
   const normalized = normalize(raw).replace(/^\/+/, "");
-  if (normalized !== raw || normalized.startsWith("..") || normalized.includes("/../")) {
+  if (
+    normalized !== raw ||
+    normalized.startsWith("..") ||
+    normalized.includes("/../")
+  ) {
     throw new Error("invalid object key");
   }
   return normalized;
 };
 
-const envObjectKeyPrefix = () => env.ENV === "dev" ? "dev/" : "";
+const envObjectKeyPrefix = () => (env.ENV === "dev" ? "dev/" : "");
 
-export const buildTurnObjectPrefix = (input: { spaceId: string; sessionId: string; turnId: string }) =>
+export const buildTurnObjectPrefix = (input: {
+  spaceId: string;
+  sessionId: string;
+  turnId: string;
+}) =>
   `${envObjectKeyPrefix()}spaces/${input.spaceId}/sessions/${input.sessionId}/turns/${input.turnId}/`;
 
 export type PreparedTurnObject = { content: string; sha256: string; sizeBytes: number };
@@ -69,7 +95,10 @@ export const writeTurnObjectContent = async (objectKey: string, prepared: Prepar
 
   for (let attempt = 1; attempt <= env.TURN_OBJECT_S3_MAX_ATTEMPTS; attempt++) {
     const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), env.TURN_OBJECT_S3_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => abortController.abort(),
+      env.TURN_OBJECT_S3_TIMEOUT_MS,
+    );
     try {
       await getS3Client().send(new PutObjectCommand({
         Bucket: env.TURN_OBJECT_S3_BUCKET,
@@ -82,7 +111,11 @@ export const writeTurnObjectContent = async (objectKey: string, prepared: Prepar
       return { sizeBytes: prepared.sizeBytes, sha256: prepared.sha256 };
     } catch (error) {
       lastError = error;
-      if (attempt >= env.TURN_OBJECT_S3_MAX_ATTEMPTS || !isRetryableStorageError(error)) break;
+      if (
+        attempt >= env.TURN_OBJECT_S3_MAX_ATTEMPTS ||
+        !isRetryableStorageError(error)
+      )
+        break;
       await sleep(200 * attempt);
     } finally {
       clearTimeout(timeout);

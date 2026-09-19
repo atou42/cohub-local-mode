@@ -48,14 +48,24 @@ export type LoadSkillsOptions = {
 
 const SKILLS_DIR = ".agents/skills";
 const CHECKPOINT_META_PATH = ".cohub/system/checkpoint-meta.v1.json";
-const SANDBOX_PLATFORM_SKILLS_PATH = "/configs/platform/.agents/skills";
+const CLOUD_SANDBOX_PLATFORM_SKILLS_PATH = "/configs/platform/.agents/skills";
 const SANDBOX_USER_SKILLS_PATH = "/configs/user/.agents/skills";
 const SANDBOX_WORKSPACE_SKILLS_PATH = "/workspace/.agents/skills";
 
 const inflightByCacheKey = new Map<string, Promise<SkillsConfig | null>>();
 
 function getPlatformSkillsDir() {
+  if (process.env.COHUB_NODE_ORIGIN === "local") {
+    const localSkillsPath = process.env.LOCAL_AGENT_SKILLS_PATH?.trim();
+    if (localSkillsPath) return localSkillsPath;
+  }
   return join(config.platformConfigRoot, "platform", SKILLS_DIR);
+}
+
+function getPlatformSkillsSandboxDir() {
+  return process.env.COHUB_NODE_ORIGIN === "local"
+    ? getPlatformSkillsDir()
+    : CLOUD_SANDBOX_PLATFORM_SKILLS_PATH;
 }
 
 function getUserSkillsDir(userId: string) {
@@ -227,7 +237,7 @@ async function fetchSkills(options: LoadSkillsOptions): Promise<Skill[]> {
   const platformSkills = await loadCachedSkills({
     redisKey: PLATFORM_SKILLS_REDIS_KEY,
     dir: getPlatformSkillsDir(),
-    sandboxDir: SANDBOX_PLATFORM_SKILLS_PATH,
+    sandboxDir: getPlatformSkillsSandboxDir(),
     scope: "platform",
     allowMissing: true,
   });

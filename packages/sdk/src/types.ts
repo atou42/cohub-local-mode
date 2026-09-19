@@ -1,4 +1,5 @@
 import type {
+	AgentHarness,
   SessionBindingRecord as ProtocolSessionBindingRecord,
   SessionRecord as ProtocolSessionRecord,
   SessionForkRecord,
@@ -13,6 +14,13 @@ import type {
   SpaceTurnListItem as ProtocolSpaceTurnListItem,
   SpaceTurnsResponse as ProtocolSpaceTurnsResponse,
 } from "@cohub/protocol/model";
+export type {
+	HarnessCapabilityCatalog,
+	HarnessCapabilityCommand,
+	HarnessCapabilitySkill,
+} from "@cohub/protocol";
+
+export type { AgentHarness } from "@cohub/protocol/model";
 import type {
   ModelStatusEntry,
   ModelStatusResponse,
@@ -873,6 +881,8 @@ export type SpaceRecord = {
   ownerProfile?: Pick<UserProfile, "userUuid" | "username" | "displayName" | "avatarUrl"> | null;
   /** Whether the viewer has pinned this space (only present in list responses). */
   isPinned?: boolean;
+  /** Node that owns this Space's data and execution. */
+  origin?: "cloud" | "local";
 };
 
 export type SpaceConfigInput = {
@@ -978,6 +988,10 @@ export type SessionTurnResponse = {
 
 export type SessionTurnSignedUrlsResponse = {
   urls: Record<string, string>;
+};
+
+export type SessionTurnIntermediateResponse = {
+  messages: StoredIntermediateMessage[];
 };
 
 export type SessionTurnStreamSnapshotResponse = {
@@ -1164,6 +1178,7 @@ export type PaletteOverviewResponse = {
 
 export type CreateSpaceSessionInput = {
   title?: string | null;
+  agentHarness?: AgentHarness;
   /** Optional channel; falls back to X-Cohub-Source-Via. */
   source?: string | null;
   labelRefs?: string[];
@@ -1230,6 +1245,10 @@ export type CreateSpacePromptInput = {
     meta?: Record<string, unknown>;
   } | null;
   sessionId?: string | null;
+  /** Local relay only: materialize the caller-selected Session id if missing. */
+  createSession?: boolean;
+  /** Agent harness for a new Session. Existing Sessions reject changes. */
+  agentHarness?: AgentHarness;
   title?: string | null;
   /** Optional channel; falls back to X-Cohub-Source-Via. */
   source?: string | null;
@@ -1240,6 +1259,8 @@ export type CreateSpacePromptInput = {
   harness?: "cohub" | "pi" | "codex" | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: ModelThinkingLevel | null;
+  /** External harness service tier. `null` explicitly selects Standard. */
+  serviceTier?: string | null;
   clientMessageId?: string | null;
   generationPolicy?: GenerationPolicy | null;
   intent?: "followup" | "steer" | "compact" | null;

@@ -31,7 +31,8 @@ async function runReadTool(input: {
   const tool = createSpaceAwareReadTool({
     sandboxTool: createStubTool("sandbox"),
     crossSpaceTool: createStubTool("pvc"),
-    checkAccess: async () => input.visibility ?? "full",
+    remoteCloudTool: createStubTool("cloud-api"),
+    checkAccess: async (_spaceId, _provider) => input.visibility ?? "full",
     resolveSandboxProvider: async () => input.targetProvider,
   });
 
@@ -41,7 +42,7 @@ async function runReadTool(input: {
 
 const cloudResult = await runReadTool({ targetProvider: "cloud" });
 assert.equal(cloudResult.content[0]?.type, "text");
-assert.equal(cloudResult.content[0]?.text, "pvc");
+assert.equal(cloudResult.content[0]?.text, "cloud-api");
 assert.deepEqual(cloudResult.details, { params: { path: "README.md" }, spaceId: TARGET_SPACE_ID });
 
 const localResult = await runReadTool({ targetProvider: "local" });
@@ -51,7 +52,7 @@ assert.deepEqual(localResult.details, { params: { path: "README.md" }, spaceId: 
 
 const shortUuidResult = await runReadTool({ targetProvider: "cloud", spaceId: SHORT_TARGET_SPACE_ID });
 assert.equal(shortUuidResult.content[0]?.type, "text");
-assert.equal(shortUuidResult.content[0]?.text, "pvc");
+assert.equal(shortUuidResult.content[0]?.text, "cloud-api");
 assert.deepEqual(shortUuidResult.details, { params: { path: "README.md" }, spaceId: SHORT_TARGET_SPACE_ID });
 
 await assert.rejects(
