@@ -2,6 +2,7 @@
 import type { SpacePortStatus } from "@cohub/protocol/ports";
 import {
 	Check,
+	Copy,
 	ExternalLink,
 	Globe,
 	Loader2,
@@ -11,7 +12,12 @@ import {
 import { onDestroy } from "svelte";
 import type { PreviewCaptureTarget } from "$lib/features/preview-mark";
 import PreviewMarkHost from "$lib/features/preview-mark/ui/PreviewMarkHost.svelte";
-import WindowFloatChrome from "$lib/features/space/modules/WindowFloatChrome.svelte";
+import PreviewHeader from "$lib/features/space/modules/PreviewHeader.svelte";
+import type {
+	PreviewChrome,
+	PreviewHeaderAction,
+} from "$lib/features/space/modules/preview-header";
+import { previewHeaderVariant } from "$lib/features/space/modules/preview-header";
 import type { Window } from "$lib/features/space/modules/windows";
 import { toIntlTag } from "$lib/i18n/format";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -22,30 +28,27 @@ const {
 	url,
 	status = "unknown",
 	observedAt,
-	immersive = false,
 	windows = [],
-	filesVisible = false,
+	chrome,
+	isMobile,
 	onActivateWindow,
 	onCloseWindow,
-	onToggleFiles,
-	onExitFloat,
 	onPublish,
 }: {
 	port: string;
 	url: string;
 	status?: SpacePortStatus | "unknown";
 	observedAt?: number;
-	immersive?: boolean;
 	windows?: Window[];
-	filesVisible?: boolean;
+	chrome: PreviewChrome;
+	isMobile: boolean;
 	onActivateWindow?: (kind: Window["kind"], key: string) => void;
 	onCloseWindow?: (kind: Window["kind"], key: string) => void;
-	onToggleFiles?: () => void | Promise<void>;
-	onExitFloat?: () => void | Promise<void>;
 	onPublish?: () => void;
 } = $props();
 
 const locale = $derived(getLocale());
+const immersive = $derived(chrome.immersive);
 
 let frameVersion = $state(0);
 let loading = $state(true);
@@ -118,6 +121,46 @@ async function copyUrl() {
 	}, 1500);
 }
 
+const headerActions = $derived.by((): PreviewHeaderAction[] => {
+	const list: PreviewHeaderAction[] = [
+		{
+			id: "refresh",
+			label: m.port_refresh({}, { locale }),
+			icon: RefreshCw,
+			primary: true,
+			disabled: !url,
+			run: refresh,
+		},
+		{
+			id: "open-external",
+			label: m.port_open_external({}, { locale }),
+			icon: ExternalLink,
+			primary: true,
+			disabled: !url,
+			run: () => {
+				if (url) window.open(url, "_blank", "noreferrer");
+			},
+		},
+		{
+			id: "copy-url",
+			label: m.port_copy_url({}, { locale }),
+			icon: copied ? Check : Copy,
+			disabled: !url,
+			run: () => copyUrl(),
+		},
+	];
+	if (onPublish) {
+		list.push({
+			id: "publish",
+			label: m.port_publish({}, { locale }),
+			icon: Rocket,
+			disabled: !url,
+			run: () => onPublish?.(),
+		});
+	}
+	return list;
+});
+
 $effect(() => {
 	// Only restart the loading indicator when the embeddable src identity changes.
 	const src = iframeSrc;
@@ -144,98 +187,32 @@ onDestroy(() => {
 });
 </script>
 
-{#snippet PortActions()}
-	<span
-		class="port-status-dot {status === 'listening'
-			? 'is-listening'
-			: status === 'closed'
-				? 'is-closed'
-				: ''}"
-		title={statusLabel}
-	></span>
-	<button
-		type="button"
-		class="preview-icon-btn"
-		onclick={refresh}
-		title={m.port_refresh({}, { locale })}
-		disabled={!url}
+<div class="port-preview relative flex h-full min-w-0 flex-col bg-bg-content">
+	<PreviewHeader
+		{windows}
+		variant={previewHeaderVariant({ isMobile, immersive })}
+		actions={headerActions}
+		{chrome}
+		onActivate={onActivateWindow ?? (() => {})}
+		onClose={onCloseWindow ?? (() => {})}
 	>
-		<RefreshCw class="h-4 w-4" />
-	</button>
-	<button
-		type="button"
-		class="preview-icon-btn preview-context-secondary"
-		onclick={() => void copyUrl()}
-		title={m.port_copy_url({}, { locale })}
-		disabled={!url}
-	>
-		{#if copied}
-			<Check class="h-4 w-4 text-success-soft" />
-		{:else}
-			<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-		{/if}
-	</button>
-	{#if onPublish}
-		<button
-			type="button"
-			class="preview-icon-btn preview-context-secondary"
-			onclick={onPublish}
-			title={m.port_publish({}, { locale })}
-			disabled={!url}
-		>
-			<Rocket class="h-4 w-4" />
-		</button>
-	{/if}
-	<a
-		class="preview-icon-btn"
-		href={url}
-		target="_blank"
-		rel="noreferrer"
-		title={m.port_open_external({}, { locale })}
-		aria-disabled={!url}
-	>
-		<ExternalLink class="h-4 w-4" />
-	</a>
-	{#if canEmbed}
-		<div class="preview-context-secondary">
-			<PreviewMarkHost bind:open={markOpen} target={markTarget} />
-		</div>
-	{/if}
-{/snippet}
-
-<div class="port-preview relative flex h-full min-w-0 flex-col bg-bg-content" class:port-preview--immersive={immersive}>
-	{#if immersive && onActivateWindow && onCloseWindow && onExitFloat}
-		<WindowFloatChrome
-			tabs={windows}
-			{filesVisible}
-			onActivate={onActivateWindow}
-			onClose={onCloseWindow}
-			onToggleFiles={onToggleFiles}
-			onExit={onExitFloat}
-		>
-			{#snippet context()}{@render PortActions()}{/snippet}
-		</WindowFloatChrome>
-	{:else}
-		<div class="preview-chrome flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-surface px-3">
-			<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-bg-primary text-text-secondary">
-				<Globe class="h-3.5 w-3.5" />
-			</div>
-			<div class="min-w-0 flex-1">
-				<div class="flex min-w-0 items-center gap-2">
-					<span class="truncate text-[13px] font-medium text-text-primary">:{port}</span>
-					<span class="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none {status === 'listening' ? 'border-success-soft/30 bg-success-bg text-success-soft' : status === 'closed' ? 'border-error-soft/30 bg-error-bg text-error-soft' : 'border-border-subtle bg-bg-primary text-text-tertiary'}">
-						<span class="h-1.5 w-1.5 rounded-full {status === 'listening' ? 'bg-success-soft' : status === 'closed' ? 'bg-error-soft' : 'bg-text-placeholder'}"></span>
-						{statusLabel}
-					</span>
-					{#if observedLabel}
-						<span class="hidden text-[11px] text-text-tertiary sm:inline">{observedLabel}</span>
-					{/if}
-				</div>
-				<div class="truncate text-[11px] text-text-tertiary" title={url}>{url}</div>
-			</div>
-			{@render PortActions()}
-		</div>
-	{/if}
+		{#snippet controls()}
+			<span
+				class="port-status-dot {status === 'listening'
+					? 'is-listening'
+					: status === 'closed'
+						? 'is-closed'
+						: ''}"
+				title={statusLabel}
+			></span>
+			{#if observedLabel}
+				<span class="port-observed hidden sm:inline">{observedLabel}</span>
+			{/if}
+			{#if canEmbed}
+				<PreviewMarkHost bind:open={markOpen} target={markTarget} />
+			{/if}
+		{/snippet}
+	</PreviewHeader>
 
 	{#if status === "closed"}
 		<div class="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -283,10 +260,6 @@ onDestroy(() => {
 </div>
 
 <style>
-	.port-preview--immersive {
-		position: relative;
-	}
-
 	.port-status-dot {
 		height: 7px;
 		width: 7px;
@@ -303,6 +276,13 @@ onDestroy(() => {
 		background: var(--error-soft);
 	}
 
+	.port-observed {
+		flex: 0 0 auto;
+		color: var(--text-tertiary);
+		font-size: 11px;
+		white-space: nowrap;
+	}
+
 	.port-loading-notice--immersive {
 		top: 58px;
 		left: var(--preview-safe-left, 10px);
@@ -314,33 +294,6 @@ onDestroy(() => {
 		border-radius: 7px;
 	}
 
-	.preview-icon-btn {
-		display: inline-flex;
-		height: 32px;
-		width: 32px;
-		flex-shrink: 0;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--text-tertiary);
-		text-decoration: none;
-		cursor: pointer;
-		transition: background 120ms ease, color 120ms ease, transform 120ms ease;
-	}
-	.preview-icon-btn:hover {
-		background: var(--bg-hover);
-		color: var(--text-secondary);
-	}
-	.preview-icon-btn:active {
-		transform: scale(0.96);
-	}
-	.preview-icon-btn:disabled,
-	.preview-icon-btn[aria-disabled="true"] {
-		opacity: 0.45;
-		pointer-events: none;
-	}
 	.preview-action-btn {
 		display: inline-flex;
 		min-height: 32px;
@@ -365,8 +318,8 @@ onDestroy(() => {
 		color: var(--brand-contrast-fg);
 	}
 
-	@container (max-width: 560px) {
-		.preview-context-secondary {
+	@container preview-header (max-width: 460px) {
+		.port-observed {
 			display: none;
 		}
 	}

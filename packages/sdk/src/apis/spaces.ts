@@ -1,11 +1,13 @@
 import type { SpacePublicEndpoints } from "@cohub/protocol/ports";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { BoardAuthoringItemSchema } from "@cohub/protocol";
+import { BoardAuthoringItemSchema, SPACE_HOOK_WEBHOOK_SECRET_HEADER } from "@cohub/protocol";
 import type {
   PublicFileCreateUploadInput,
   PublicFileCreateUploadResponse,
   PublicFileListResponse,
   PublicFileUrlResponse,
+  SpaceWebhookListItem,
+  SpaceWebhookTriggerResponse,
 } from "@cohub/protocol";
 import {
   getRealtimeBoardRoom,
@@ -103,6 +105,8 @@ import type {
   BoardPlaybackSnapshot,
   BoardSemanticMutation,
   BoardSummary,
+  BoardTransactionsPage,
+  BoardTransactionsReadInput,
   ChannelConfig,
   ChannelHealth,
 } from "../types.js";
@@ -178,6 +182,7 @@ export type SessionSubscriptionHandlers = {
   patchState?: (result: SessionPatchApplyResult) => void;
   turnUpdated?: (event: WebsocketEventPayload) => void;
   turnFinalized?: (event: WebsocketEventPayload) => void;
+  /** A failed turn, or a rejected subscription (`system.subscribe.error`). */
   error?: (event: WebsocketEventPayload) => void;
   persisted?: (event: WebsocketEventPayload) => void;
   event?: (event: WebsocketEventPayload) => void;
@@ -821,6 +826,22 @@ class SessionTurnsClient {
   }
 }
 
+/**
+ * Routes a rejected subscription for `room` (for example a missing
+ * `space.view` permission) to `onRejected`. Without this an unauthorized
+ * subscriber would simply never receive events, with no way to tell.
+ */
+const onRoomRejected = (
+  websocketClient: WebsocketClient,
+  room: string,
+  onRejected: (event: WebsocketEventPayload) => void,
+) =>
+  websocketClient.on("event", (event) => {
+    if (event.type !== "system.subscribe.error") return;
+    const rejected = (event.payload as { rejected?: Array<{ room?: string }> }).rejected;
+    if (rejected?.some((entry) => entry.room === room)) onRejected(event);
+  });
+
 class SessionRealtimeClient {
   private readonly patchReducer = new SessionPatchReducer();
 
@@ -835,7 +856,12 @@ class SessionRealtimeClient {
       throw new Error("realtime transport is not configured for this client");
     }
     ensureRealtimeConnected(this.websocketClient);
-    const releaseRoom = this.websocketClient.retainRooms([getRealtimeSpaceRoom(this.spaceId)]);
+    const room = getRealtimeSpaceRoom(this.spaceId);
+    const releaseRoom = this.websocketClient.retainRooms([room]);
+    const offRejected = onRoomRejected(this.websocketClient, room, (event) => {
+      handlers.event?.(event);
+      handlers.error?.(event);
+    });
     const unsubscribe = this.websocketClient.on("event", (event) => {
       if (event.spaceId !== this.spaceId || event.sessionId !== this.sessionId) return;
       handlers.event?.(event);
@@ -901,6 +927,7 @@ class SessionRealtimeClient {
     });
     return () => {
       unsubscribe();
+      offRejected();
       releaseRoom();
     };
   }
@@ -1123,13 +1150,16 @@ export class SpaceEventsApi {
       throw new Error("realtime transport is not configured for this client");
     }
     ensureRealtimeConnected(this.websocketClient);
-    const releaseRoom = this.websocketClient.retainRooms([getRealtimeSpaceRoom(this.spaceId)]);
+    const room = getRealtimeSpaceRoom(this.spaceId);
+    const releaseRoom = this.websocketClient.retainRooms([room]);
+    const offRejected = onRoomRejected(this.websocketClient, room, handler);
     const offEvent = this.websocketClient.on("event", (event) => {
       if (event.spaceId !== this.spaceId) return;
       handler(event);
     });
     return () => {
       offEvent();
+      offRejected();
       releaseRoom();
     };
   }
@@ -1377,6 +1407,41 @@ export class SpaceModsApi {
         body: JSON.stringify({ ids }),
       },
     );
+  }
+}
+
+/**
+ * Inbound webhooks declared by `.cohub/hooks/<name>.yml` with `on.event: webhook`.
+ * The trigger endpoint is unauthenticated; the hook's optional `on.secret` is the credential.
+ */
+export class SpaceWebhooksApi {
+  constructor(
+    private readonly transport: HttpTransport,
+    private readonly spaceId: string,
+  ) {}
+
+  list(customFetch?: Fetch) {
+    return this.transport.request<{ items: SpaceWebhookListItem[] }>(
+      `/api/spaces/${this.spaceId}/webhooks`,
+      { fetch: customFetch },
+    );
+  }
+
+  /** Path a caller POSTs to; prefix with the API origin. */
+  path(name: string) {
+    return `/api/spaces/${this.spaceId}/webhooks/${encodeURIComponent(name)}`;
+  }
+
+  trigger(name: string, body: unknown = null, options: { secret?: string | null } = {}) {
+    return this.transport.request<SpaceWebhookTriggerResponse>(this.path(name), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.secret ? { [SPACE_HOOK_WEBHOOK_SECRET_HEADER]: options.secret } : {}),
+      },
+      body: JSON.stringify(body ?? null),
+      skipUnauthorizedHandler: true,
+    });
   }
 }
 
@@ -1804,6 +1869,11 @@ export class BoardClient {
     return this.boards.authoring(this.id, input, customFetch);
   }
 
+  /** Read-only transaction log, newest first; the first page carries the current rows. */
+  transactions(input: BoardTransactionsReadInput = {}, customFetch?: Fetch) {
+    return this.boards.transactions(this.id, input, customFetch);
+  }
+
   mutateSemantic(
     input: Omit<BoardSemanticMutation, "mutationId" | "dryRun"> & {
       mutationId?: string;
@@ -1927,6 +1997,18 @@ export class SpaceBoardsApi {
   capabilities(boardId: string, customFetch?: Fetch) {
     return this.transport.request<BoardCapabilities>(
       `/api/spaces/${this.spaceId}/boards/${boardId}/capabilities`,
+      { fetch: customFetch },
+    );
+  }
+
+  transactions(boardId: string, input: BoardTransactionsReadInput = {}, customFetch?: Fetch) {
+    const params = new URLSearchParams();
+    if (input.before !== undefined) params.set("before", String(input.before));
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.snapshot !== undefined) params.set("snapshot", String(input.snapshot));
+    const query = params.toString();
+    return this.transport.request<BoardTransactionsPage>(
+      `/api/spaces/${this.spaceId}/boards/${boardId}/transactions${query ? `?${query}` : ""}`,
       { fetch: customFetch },
     );
   }
@@ -2145,6 +2227,7 @@ export class SpaceClient {
   readonly activity: SpaceActivityApi;
   readonly channels: SpaceChannelsApi;
   readonly mods: SpaceModsApi;
+  readonly webhooks: SpaceWebhooksApi;
   readonly env: SpaceEnvApi;
   readonly sandbox: SpaceSandboxApi;
   readonly invitations: SpaceInvitationsApi;
@@ -2169,6 +2252,7 @@ export class SpaceClient {
     this.activity = new SpaceActivityApi(transport, id);
     this.channels = new SpaceChannelsApi(transport, id);
     this.mods = new SpaceModsApi(transport, id);
+    this.webhooks = new SpaceWebhooksApi(transport, id);
     this.env = new SpaceEnvApi(transport, id);
     this.sandbox = new SpaceSandboxApi(transport, id);
     this.invitations = new SpaceInvitationsApi(transport, id);
@@ -2181,6 +2265,40 @@ export class SpaceClient {
     return this.transport.request<SpaceRecord>(`/api/spaces/${this.id}`, {
       fetch: customFetch,
     });
+  }
+
+  prepareRuntimeArchive(index: import("@cohub/protocol").HarnessArchiveIndex, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<{ uploads: import("@cohub/protocol").RuntimeArchiveUpload[] }>(`/api/spaces/${this.id}/runtime/archives/prepare`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(index), signal: options.signal,
+    });
+  }
+
+  commitRuntimeArchive(index: import("@cohub/protocol").HarnessArchiveIndex, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<{ ready: true }>(`/api/spaces/${this.id}/runtime/archives/commit`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(index), signal: options.signal,
+    });
+  }
+
+  getRuntimeArchive(sessionId: string, turnId: string, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<import("@cohub/protocol").RuntimeArchivePage>(
+      `/api/spaces/${this.id}/runtime/archives/${sessionId}/${turnId}`, { signal: options.signal },
+    );
+  }
+
+  getRuntime(customFetch?: Fetch) {
+    return this.transport.request<import("@cohub/protocol").RuntimeStatus>(
+      `/api/spaces/${this.id}/runtime`, { fetch: customFetch },
+    );
+  }
+
+  getSessionRuntime(sessionId: string, customFetch?: Fetch) {
+    return this.transport.request<import("@cohub/protocol").RuntimeSessionRecoveryStatus>(
+      `/api/spaces/${this.id}/sessions/${sessionId}/runtime`, { fetch: customFetch },
+    );
+  }
+
+  confirmRuntimeStopped(sessionId: string, confirmation: import("@cohub/protocol").RuntimeStopConfirmation) {
+    return this.transport.request<{ accepted: true }>(`/api/spaces/${this.id}/sessions/${sessionId}/runtime/confirm-stopped`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(confirmation) });
   }
 
   getStartup(customFetch?: Fetch) {

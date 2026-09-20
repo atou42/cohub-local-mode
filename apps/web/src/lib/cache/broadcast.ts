@@ -9,7 +9,8 @@ export type CacheBroadcastStore =
 	| "label_trees"
 	| "label_items"
 	| "resource_labels"
-	| "user_profiles";
+	| "user_profiles"
+	| "palette_overview";
 
 export type CacheBroadcastMessage = {
 	type: "cache-updated" | "cache-deleted" | "cache-scope-invalidated";

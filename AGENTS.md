@@ -7,13 +7,16 @@
 7. IndexedDB data always comes from reliable server data
 8. Default data loading strategy: prefer local data for interaction, silently fetch related server data to refresh cache and UI, minimize layout-disrupting loading states, and avoid render thrashing or layout jumps
 9. Care about multi-client sync experience; design elegant and efficient real-time events
-10. All copy should be in English and stay concise
+10. All copy must be bilingual (EN/ZH) and concise.
+
+## Git commit
+
+Add `Cohub-Session: https://cohub.live/spaces/${COHUB_SPACE_ID}/sessions/${COHUB_SESSION_ID}` as a footer, if the environment variables are set.
 
 ## Release Workflow
 
 ```bash
-# 1. Publish npm packages
-pnpm changeset version && pnpm release
+# 1. Publish npm packages: merge the "Version Packages" PR opened by CI
 
 # 2. Generate changelog and create project tag
 pnpm changelog:release v1.99.0

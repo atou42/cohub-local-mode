@@ -1,10 +1,11 @@
 <script lang="ts">
-import type { AppRecord } from "@neta-art/cohub";
+import type { AppRecord, AppVersionRecord } from "@neta-art/cohub";
 import {
 	Check,
 	Copy,
 	ExternalLink,
 	Loader2,
+	MessageSquare,
 	PanelRight,
 	Pencil,
 	Power,
@@ -19,6 +20,11 @@ import {
 } from "$lib/features/app/app-realtime";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import {
+	buildSpaceSessionRoute,
+	buildSpaceSessionTurnRoute,
+} from "$lib/space-routes";
+import { authStore } from "$lib/stores/auth.svelte";
 import { formatDateTime } from "../space-utils";
 import AppPromotions from "./AppPromotions.svelte";
 import AppViewStats from "./AppViewStats.svelte";
@@ -35,6 +41,8 @@ type Props = {
 	ownerUsername: string | null;
 	spaceSlug: string | null;
 	canEditSpace: boolean;
+	/** Whether the viewer may create, publish, and manage Apps (builder capability). */
+	canManageApp: boolean;
 	onDetailLoaded?: (app: AppRecord | null) => void;
 	/** Show this app in the workspace window pane, beside the detail page. */
 	onPreviewApp?: (app: AppRecord) => void;
@@ -46,6 +54,7 @@ let {
 	ownerUsername,
 	spaceSlug,
 	canEditSpace,
+	canManageApp,
 	onDetailLoaded,
 	onPreviewApp,
 }: Props = $props();
@@ -57,11 +66,15 @@ const appDetailController = createAppDetailController({
 	getRouteAppId: () => routeAppId,
 	getOwnerUsername: () => ownerUsername,
 	getSpaceSlug: () => spaceSlug,
-	getCanViewStats: () => canEditSpace,
+	getCanViewStats: () => canManageApp,
 	onDetailLoaded: (app) => onDetailLoaded?.(app),
 });
 
 const appDetail = $derived(appDetailController.detail);
+// Hosts delete any App; builders only the Apps they published themselves.
+const canDeleteApp = $derived(
+	canEditSpace || (canManageApp && appDetail?.userUuid === authStore.userUuid),
+);
 const appDetailLoading = $derived(appDetailController.loading);
 const appDetailError = $derived(appDetailController.error);
 const appActionInProgress = $derived(appDetailController.actionInProgress);
@@ -85,6 +98,17 @@ const workCanToggleHideCohubBar = $derived(
 const workStats = $derived(appDetailController.stats);
 const workStatsLoading = $derived(appDetailController.statsLoading);
 const workStatsError = $derived(appDetailController.statsError);
+
+/** Deep link into the session (and turn) that produced a version, when visible. */
+function versionSessionRoute(
+	source: AppVersionRecord["source"],
+): string | null {
+	const session = source?.session;
+	if (!session) return null;
+	return source?.turnSequence !== undefined
+		? buildSpaceSessionTurnRoute(spaceId, session.id, source.turnSequence)
+		: buildSpaceSessionRoute(spaceId, session.id);
+}
 
 $effect(() => {
 	appDetailController.syncRoute();
@@ -166,6 +190,7 @@ onDestroy(() => {
               <span>{m.app_view_new_tab({}, { locale })}</span>
             </a>
           {/if}
+          {#if canManageApp}
           <button type="button" class="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-[5px] bg-bg-elevated px-3 py-2 text-[12px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary sm:w-auto" onclick={() => { appDetailController.syncFormFromDetail(); appDetailController.editMode = !appDetailController.editMode; }}>
             <Pencil class="h-3.5 w-3.5" />
             <span>{appDetailController.editMode ? m.close_edit({}, { locale }) : m.common_edit({}, { locale })}</span>
@@ -174,21 +199,26 @@ onDestroy(() => {
             {#if appActionInProgress}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else if appDetail.status === 'published'}<Power class="h-3.5 w-3.5" />{:else}<Rocket class="h-3.5 w-3.5" />{/if}
             <span>{appDetail.status === 'published' ? 'Disable' : 'Publish'}</span>
           </button>
+          {/if}
+          {#if canDeleteApp}
           <button type="button" class="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-[5px] px-3 py-2 text-[12px] font-medium text-text-tertiary transition-colors hover:bg-bg-hover hover:text-error-soft disabled:opacity-50 sm:w-auto" onclick={appDetailController.deleteApp} disabled={appActionInProgress || appDeleteInProgress}>
             {#if appDeleteInProgress}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Trash2 class="h-3.5 w-3.5" />{/if}
             <span>{appDeleteInProgress ? 'Deleting…' : 'Delete'}</span>
           </button>
+          {/if}
         </div>
       </header>
 
-      {#if canEditSpace && !appDetailController.editMode}
-        <AppViewStats
-          stats={workStats}
-          loading={workStatsLoading}
-          error={workStatsError}
-          onRetry={() => void appDetailController.loadStats(appDetail.id)}
-        />
-        {#if publicRoute && appDetail.status === 'published'}
+      {#if !appDetailController.editMode}
+        {#if canManageApp}
+          <AppViewStats
+            stats={workStats}
+            loading={workStatsLoading}
+            error={workStatsError}
+            onRetry={() => void appDetailController.loadStats(appDetail.id)}
+          />
+        {/if}
+        {#if canEditSpace && publicRoute && appDetail.status === 'published'}
           <AppPromotions appId={appDetail.id} publicRoute={publicRoute} />
         {/if}
       {/if}
@@ -285,7 +315,7 @@ onDestroy(() => {
                   <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-text-placeholder">Target</div>
                   <div class="mt-1 font-mono text-[11px] text-text-placeholder">Current v{appDetail.latestVersion || 0}</div>
                 </div>
-                {#if appDetail.status === 'published'}
+                {#if canManageApp && appDetail.status === 'published'}
                   <button type="button" class="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-[5px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg transition-colors hover:bg-brand-hover disabled:opacity-50 sm:w-auto" onclick={() => void appDetailController.publishVersion()} disabled={appPublishSubmitting}>
                     {#if appPublishSubmitting}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Rocket class="h-3.5 w-3.5" />{/if}
                     <span>{appPublishSubmitting ? 'Updating…' : 'Update version'}</span>
@@ -353,12 +383,23 @@ onDestroy(() => {
           {:else if appVersions.length}
             <div class="divide-y divide-border-subtle/60">
               {#each appVersions as version (version.id)}
-                <div class="py-3 text-[12px] sm:grid sm:grid-cols-[96px_minmax(0,1fr)_180px] sm:items-center sm:gap-3 sm:py-2.5">
+                {@const sessionHref = versionSessionRoute(version.source)}
+                <div class="py-3 text-[12px] sm:grid sm:grid-cols-[88px_minmax(0,1fr)_minmax(0,200px)_150px] sm:items-center sm:gap-3 sm:py-2.5">
                   <div class="flex items-center gap-2 px-1">
                     <span class="font-mono text-text-primary">v{version.version}</span>
                     {#if version.id === appDetail.currentVersionId}<span class="rounded-full bg-brand-muted px-2 py-0.5 text-[10px] font-medium text-brand">Current</span>{/if}
                   </div>
                   <div class="mt-1 truncate font-mono text-text-tertiary sm:mt-0" title={`${version.targetType}:${version.targetRef}`}>{version.targetType}:{version.targetRef}</div>
+                  {#if sessionHref && version.source?.session}
+                    <a class="mt-1 flex min-w-0 items-center gap-1.5 text-text-secondary transition-colors hover:text-brand sm:mt-0" href={sessionHref} target="_blank" rel="noopener noreferrer" title={version.source.session.title ?? version.source.session.id}>
+                      <MessageSquare class="h-3.5 w-3.5 shrink-0 text-text-placeholder" aria-hidden="true" />
+                      <span class="truncate">{version.source.session.title || 'Untitled session'}</span>
+                    </a>
+                  {:else if version.source?.via}
+                    <div class="mt-1 truncate text-text-placeholder sm:mt-0">via {version.source.via}</div>
+                  {:else}
+                    <div class="mt-1 text-text-placeholder sm:mt-0">—</div>
+                  {/if}
                   <div class="mt-1 font-mono text-text-placeholder sm:mt-0">{formatDateTime(version.createdAt)}</div>
                 </div>
               {/each}

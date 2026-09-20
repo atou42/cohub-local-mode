@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device=device-width, initial-scale=1">
+  <title>App Commerce Demo</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; background: #11100e; color: #f4efe5; }
+    .card { max-width: 560px; margin: 0 auto; border: 1px solid #2f2a22; background: #181613; border-radius: 14px; padding: 20px; }
+    .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #aaa196; }
+    h1 { margin: 8px 0 10px; font-size: 28px; }
+    p { color: #c6bfb5; line-height: 1.6; }
+    .meta { display: grid; gap: 10px; margin: 18px 0; }
+    .row { display: flex; justify-content: space-between; gap: 12px; border: 1px solid #2a261f; background: #211f1a; border-radius: 10px; padding: 12px 14px; }
+    .label { color: #8f8679; font-size: 12px; }
+    .value { font-size: 14px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+    button { height: 42px; border: 0; border-radius: 10px; background: #ff5a1f; color: #1b0d05; font-weight: 700; padding: 0 16px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .hint { margin-top: 12px; font-size: 12px; color: #8f8679; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">Credit consumption example</div>
+    <h1>App Commerce Demo</h1>
+    <p>Hardcode a Space-owned credit pack key, check the viewer's balance, consume credits for metered actions, and prompt purchase when empty.</p>
+    <div class="meta">
+      <div class="row"><span class="label">Balance</span><span id="balance" class="value">Loading…</span></div>
+      <div class="row"><span class="label">Status</span><span id="status" class="value">Ready</span></div>
+      <div class="row"><span class="label">Checkout</span><span id="checkout" class="value">Idle</span></div>
+      <div class="row"><span class="label">Order</span><span id="order" class="value mono">—</span></div>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <button type="button" id="action">Export (10 credits)</button>
+      <button type="button" id="buy">Buy credits</button>
+    </div>
+    <div class="hint">Set <span class="mono">CREDIT_PRODUCT_KEY</span> for your own App.</div>
+  </main>
+
+  <script type="module">
+    const CREDIT_PRODUCT_KEY = "credit_pack";
+    const SDK_URL = "https://esm.sh/@neta-art/cohub?bundle&target=es2022";
+
+    const balanceEl = document.getElementById("balance");
+    const statusEl = document.getElementById("status");
+    const checkoutEl = document.getElementById("checkout");
+    const orderEl = document.getElementById("order");
+    const actionBtn = document.getElementById("action");
+    const buyBtn = document.getElementById("buy");
+
+    const { createCohubClient } = await import(SDK_URL);
+    const cohub = createCohubClient();
+
+    async function render() {
+      const [{ products }, { credits }, checkoutState] = await Promise.all([
+        cohub.app.commerce.resolveProducts({ productKeys: [CREDIT_PRODUCT_KEY] }),
+        cohub.app.commerce.getEntitlements(),
+        cohub.app.commerce.getCheckoutState(),
+      ]);
+
+      const product = products[0] ?? null;
+
+      balanceEl.textContent = `${credits.available} credits`;
+      checkoutEl.textContent = checkoutState.status ?? "Idle";
+      orderEl.textContent = checkoutState.orderId ?? "—";
+
+      if (checkoutState.orderId) {
+        try {
+          const { order } = await cohub.app.commerce.getOrder(checkoutState.orderId);
+          checkoutEl.textContent = `${checkoutState.status ?? "returned"} · ${order.status}`;
+          orderEl.textContent = order.id;
+          if (order.status === "paid") {
+            statusEl.textContent = "Credits added — refreshing…";
+          }
+        } catch (error) {
+          checkoutEl.textContent = error instanceof Error ? error.message : "Order lookup failed";
+        }
+      }
+
+      actionBtn.disabled = credits.available <= 0;
+      buyBtn.disabled = !product || credits.available > 0;
+    }
+
+    actionBtn.onclick = async () => {
+      actionBtn.disabled = true;
+      try {
+        const result = await cohub.app.commerce.consumeCredits({
+          amount: 10,
+          operationId: crypto.randomUUID(),
+          reason: "Export high-res image",
+        });
+        if (result.status === "consumed") {
+          balanceEl.textContent = `${result.remaining} credits`;
+          statusEl.textContent = "Consumed 10 credits";
+          if (result.remaining <= 0) buyBtn.disabled = false;
+        } else {
+          statusEl.textContent = "Insufficient credits — buy a pack";
+          buyBtn.disabled = false;
+        }
+      } catch (error) {
+        statusEl.textContent = error instanceof Error ? error.message : "Consumption failed";
+      } finally {
+        actionBtn.disabled = false;
+      }
+    };
+
+    buyBtn.onclick = async () => {
+      buyBtn.disabled = true;
+      try {
+        const checkout = await cohub.app.commerce.purchase({ productKey: CREDIT_PRODUCT_KEY });
+        if (!checkout?.checkoutUsable) {
+          checkoutEl.textContent = checkout?.message ?? "Checkout unavailable";
+          buyBtn.disabled = false;
+        }
+      } catch (error) {
+        checkoutEl.textContent = error instanceof Error ? error.message : "Purchase failed";
+        buyBtn.disabled = false;
+      }
+    };
+
+    render().catch((error) => {
+      statusEl.textContent = error instanceof Error ? error.message : "Failed to load";
+      actionBtn.disabled = true;
+      buyBtn.disabled = true;
+    });
+  </script>
+</body>
+</html>

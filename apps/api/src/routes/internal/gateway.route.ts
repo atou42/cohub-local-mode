@@ -389,6 +389,7 @@ router.post("/local-sandbox/status", async (c) => {
     wsEndpoint?: string | null;
     hostname?: string | null;
     gatewayNodeId?: string | null;
+    runtimeId?: string | null;
   }>().catch(() => null);
   const spaceId = typeof body?.spaceId === "string" ? body.spaceId.trim() : "";
   if (!spaceId || !requireValidId(spaceId)) return c.json({ ok: false, message: "spaceId is required" }, 400);
@@ -421,6 +422,7 @@ router.post("/local-sandbox/status", async (c) => {
         wsEndpoint: wsEndpoint || null,
         hostname: body?.hostname ?? null,
         gatewayNodeId: body?.gatewayNodeId ?? null,
+        runtimeId: body?.runtimeId ?? null,
       },
     });
   } else {

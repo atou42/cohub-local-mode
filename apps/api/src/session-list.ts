@@ -1,6 +1,7 @@
+import { SESSION_SOURCE_KEYS } from "@cohub/core/labels/session-source";
+
 export const DEFAULT_SESSION_LIST_LIMIT = 20;
 export const MAX_SESSION_LIST_LIMIT = 100;
-
 /** Standard UUID (space_sessions.id is uuid). */
 const SESSION_LIST_CURSOR_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,6 +23,45 @@ export type SessionListActivityRow = {
   id: string;
   lastMessageAt: Date | string | null;
 };
+
+/**
+ * Source kinds a cross-space session list can be filtered by, comma-separated
+ * in `?source=`. Keys come from `SESSION_SOURCE_KEYS` so the vocabulary stays
+ * shared with the source labels in a space sidebar.
+ */
+export type SessionSourceFilter = {
+  keys: readonly string[];
+};
+
+/**
+ * Parses `?source=web,feishu`. Returns null when the param is absent, and
+ * throws for unknown keys so a typo fails loudly instead of silently
+ * returning everything.
+ */
+export const parseSessionSourceKeys = (
+  value: string | null | undefined,
+): SessionSourceFilter | null => {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const keys = [...new Set(raw.split(",").map((key) => key.trim().toLowerCase()).filter(Boolean))];
+  if (keys.length === 0) return null;
+  const unknown = keys.filter((key) => !SESSION_SOURCE_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw new InvalidSessionSourceFilterError(unknown);
+  }
+  return { keys };
+};
+
+export class InvalidSessionSourceFilterError extends Error {
+  constructor(readonly unknownKeys: readonly string[]) {
+    super(`unknown session source keys: ${unknownKeys.join(", ")}`);
+    this.name = "InvalidSessionSourceFilterError";
+  }
+}
+
+/** Local resolution used for `other`, which has no raw source value of its own. */
+export const isOtherSessionSource = (key: string) => key === "other";
+
 
 export const encodeSessionListCursor = (
   session: Pick<SessionListActivityRow, "id" | "lastMessageAt"> | null | undefined,

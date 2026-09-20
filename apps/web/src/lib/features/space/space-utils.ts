@@ -58,13 +58,7 @@ export function displayOwnerHandle(
 	return username ? `@${username}` : null;
 }
 
-export function formatFileSize(bytes: number): string {
-	if (bytes === 0) return "0 B";
-	const units = ["B", "KB", "MB", "GB"];
-	const i = Math.floor(Math.log(bytes) / Math.log(1024));
-	const value = bytes / 1024 ** i;
-	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
-}
+export { formatBytes as formatFileSize } from "$lib/format-bytes";
 
 export function formatTokenCount(n: number): string {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;

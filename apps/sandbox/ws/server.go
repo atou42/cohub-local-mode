@@ -43,6 +43,7 @@ type Server struct {
 	sessionIDsByIdentity    map[string]map[string]struct{}
 	cleanupTimersByIdentity map[string]*time.Timer
 	fsResyncOnAttach        bool
+	searchEnabled           bool
 
 	healthMu                 sync.Mutex
 	cachedZombieProcessCount int
@@ -85,6 +86,18 @@ func (s *Server) SetFSResyncOnAttach(enabled bool) {
 	s.mu.Lock()
 	s.fsResyncOnAttach = enabled
 	s.mu.Unlock()
+}
+
+func (s *Server) SetSearchEnabled(enabled bool) {
+	s.mu.Lock()
+	s.searchEnabled = enabled
+	s.mu.Unlock()
+}
+
+func (s *Server) isSearchEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.searchEnabled
 }
 
 func (s *Server) shouldResyncFSOnAttach() bool {

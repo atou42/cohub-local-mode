@@ -1,18 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SPACE_HOOKS_CACHE_TTL_SEC,
   SPACE_HOOKS_EMPTY_CACHE_TTL_SEC,
+  getSpaceHooksRedisKey,
 } from "@cohub/protocol";
 import {
   buildHookRunCommand,
   buildSpaceHookDefinitionFingerprint,
   buildSpaceHookEnv,
   buildSpaceHookPromptText,
+  loadSpaceHookDefinitions,
   mergeSpaceHookExecutionEnv,
   parseSpaceHookDefinition,
   partitionSpaceHooksForEvent,
   resolveSpaceHooksCacheTtlSec,
+  resolveWebhookHook,
+  shouldInvalidateSpaceHooksCache,
   spaceHookMatchesEvent,
 } from "./index.js";
 
@@ -655,10 +662,95 @@ test("buildSpaceHookEnv summarizes fs changes without resync/truncated flags", (
   assert.equal(emptyFsEnv.COHUB_HOOK_FS_KINDS, "");
 });
 
-test("resolveSpaceHooksCacheTtlSec uses the same TTL for positive and empty caches", () => {
+test("resolveSpaceHooksCacheTtlSec uses a short TTL for empty caches", () => {
   assert.equal(resolveSpaceHooksCacheTtlSec(3), SPACE_HOOKS_CACHE_TTL_SEC);
   assert.equal(resolveSpaceHooksCacheTtlSec(0), SPACE_HOOKS_EMPTY_CACHE_TTL_SEC);
-  assert.equal(SPACE_HOOKS_EMPTY_CACHE_TTL_SEC, SPACE_HOOKS_CACHE_TTL_SEC);
+  assert.equal(SPACE_HOOKS_EMPTY_CACHE_TTL_SEC, 30);
+  assert.notEqual(SPACE_HOOKS_EMPTY_CACHE_TTL_SEC, SPACE_HOOKS_CACHE_TTL_SEC);
+});
+
+test("shouldInvalidateSpaceHooksCache only matches hook declaration paths", () => {
+  assert.equal(shouldInvalidateSpaceHooksCache([".cohub/hooks/on-fs.yml"]), true);
+  assert.equal(shouldInvalidateSpaceHooksCache(["src/a.ts", ".cohub/hooks"]), true);
+  assert.equal(shouldInvalidateSpaceHooksCache(["src/a.ts"]), false);
+});
+
+function createMemoryRedis() {
+  const store = new Map<string, { value: string; ttl: number }>();
+  return {
+    store,
+    async get(key: string) {
+      return this.store.get(key)?.value ?? null;
+    },
+    async set(key: string, value: string, _mode: "EX", ttl: number) {
+      this.store.set(key, { value, ttl });
+    },
+    async del(...keys: string[]) {
+      for (const key of keys) this.store.delete(key);
+      return keys.length;
+    },
+  };
+}
+
+test("loadSpaceHookDefinitions does not cache empty when the workspace is missing", async () => {
+  const redis = createMemoryRedis();
+  const workspaceDir = join(tmpdir(), `cohub-hooks-missing-${Date.now()}-${process.pid}`);
+  const result = await loadSpaceHookDefinitions({
+    spaceId: "space-missing",
+    workspaceDir,
+    redis,
+  });
+  assert.equal(result.definitions.length, 0);
+  assert.equal(result.cache, "miss");
+  assert.equal(redis.store.size, 0);
+});
+
+test("loadSpaceHookDefinitions caches empty when the workspace exists without hooks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-hooks-empty-"));
+  try {
+    const redis = createMemoryRedis();
+    const result = await loadSpaceHookDefinitions({
+      spaceId: "space-empty",
+      workspaceDir: root,
+      redis,
+    });
+    assert.equal(result.definitions.length, 0);
+    assert.equal(result.cache, "miss");
+    const cached = redis.store.get(getSpaceHooksRedisKey("space-empty"));
+    assert.ok(cached);
+    assert.equal(cached.ttl, SPACE_HOOKS_EMPTY_CACHE_TTL_SEC);
+    assert.equal(JSON.parse(cached.value).definitions.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadSpaceHookDefinitions caches present definitions with the long TTL", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-hooks-present-"));
+  try {
+    await mkdir(join(root, ".cohub", "hooks"), { recursive: true });
+    await writeFile(
+      join(root, ".cohub", "hooks", "on-ready.yml"),
+      `schema: cohub.space-hook.v1
+on:
+  event: space.workspace.ready
+run: echo ready
+`,
+    );
+    const redis = createMemoryRedis();
+    const result = await loadSpaceHookDefinitions({
+      spaceId: "space-present",
+      workspaceDir: root,
+      redis,
+    });
+    assert.equal(result.definitions.length, 1);
+    assert.equal(result.definitions[0]?.event, "space.workspace.ready");
+    const cached = redis.store.get(getSpaceHooksRedisKey("space-present"));
+    assert.ok(cached);
+    assert.equal(cached.ttl, SPACE_HOOKS_CACHE_TTL_SEC);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("buildSpaceHookPromptText only mirrors present context fields", () => {
@@ -677,4 +769,78 @@ test("buildSpaceHookPromptText only mirrors present context fields", () => {
   assert.match(text, /- turnId: turn-1/);
   assert.equal(text.includes("payload"), false);
   assert.equal(text.includes("tasks.get"), false);
+});
+
+test("parseSpaceHookDefinition accepts webhook hooks with uses", () => {
+  const hook = parseSpaceHookDefinition(
+    `
+schema: cohub.space-hook.v1
+on:
+  event: webhook
+  secret: wh_123
+uses: alice/tools/mail-inbox/deliver
+with:
+  dir: inbox/mail
+`,
+    ".cohub/hooks/mail.yml",
+  );
+  assert.equal(hook.event, "webhook");
+  assert.equal(hook.secret, "wh_123");
+  assert.equal(hook.action, "uses");
+  assert.deepEqual(hook.uses, { username: "alice", spaceSlug: "tools", appSlug: "mail-inbox", action: "deliver" });
+});
+
+test("parseSpaceHookDefinition rejects malformed uses and misplaced secret", () => {
+  assert.throws(
+    () => parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nuses: alice/app\n", ".cohub/hooks/x.yml"),
+    /uses must be username\/space\/app\/action/,
+  );
+  assert.throws(
+    () => parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nuses: /a/b/c/d\n", ".cohub/hooks/x.yml"),
+    /uses must be username\/space\/app\/action/,
+  );
+  assert.throws(
+    () => parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nuses: a/b/c/d/\n", ".cohub/hooks/x.yml"),
+    /uses must be username\/space\/app\/action/,
+  );
+  assert.throws(
+    () => parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: checkpoint.created\n  secret: s\nrun: echo\n", ".cohub/hooks/x.yml"),
+    /on.secret is only supported for webhook/,
+  );
+  assert.throws(
+    () => parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo\nuses: a/b/c/d\n", ".cohub/hooks/x.yml"),
+    /exactly one of run, prompt or uses/,
+  );
+});
+
+test("webhook hooks are addressed by file name, not broadcast", () => {
+  const mail = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo mail\n", ".cohub/hooks/mail.yml");
+  const other = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo other\n", ".cohub/hooks/other.yaml");
+  const event = { id: "e", type: "webhook", timestamp: 1, spaceId: "s", payload: { name: "mail", body: { a: 1 }, headers: {} } };
+  assert.equal(spaceHookMatchesEvent(mail, event).matched, true);
+  assert.deepEqual(spaceHookMatchesEvent(other, event), { matched: false, reason: "webhook_name" });
+
+  const env = buildSpaceHookEnv({ event, hookPath: mail.path, taskRunId: "t", executionUserId: "u" });
+  assert.equal(env.COHUB_HOOK_WEBHOOK_NAME, "mail");
+  assert.equal(env.COHUB_HOOK_WEBHOOK_BODY, '{"a":1}');
+  assert.match(buildSpaceHookPromptText({ promptText: "go", env }), /- webhook: mail\n- body:\n```json\n\{"a":1\}\n```/);
+});
+
+test("resolveWebhookHook enforces the declared secret", () => {
+  const open = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo\n", ".cohub/hooks/open.yml");
+  const locked = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\n  secret: top\nrun: echo\n", ".cohub/hooks/locked.yml");
+  const fs = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: space.fs.changed\nrun: echo\n", ".cohub/hooks/fs.yml");
+  const definitions = [open, locked, fs];
+  assert.equal(resolveWebhookHook(definitions, { name: "open" }).status, "ok");
+  assert.equal(resolveWebhookHook(definitions, { name: "locked" }).status, "unauthorized");
+  assert.equal(resolveWebhookHook(definitions, { name: "locked", secret: "nope" }).status, "unauthorized");
+  assert.equal(resolveWebhookHook(definitions, { name: "locked", secret: "top" }).status, "ok");
+  assert.equal(resolveWebhookHook(definitions, { name: "fs" }).status, "not_found");
+  assert.equal(resolveWebhookHook(definitions, { name: "missing" }).status, "not_found");
+});
+
+test("resolveWebhookHook rejects duplicate webhook file names", () => {
+  const yml = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo yml\n", ".cohub/hooks/mail.yml");
+  const yaml = parseSpaceHookDefinition("schema: cohub.space-hook.v1\non:\n  event: webhook\nrun: echo yaml\n", ".cohub/hooks/mail.yaml");
+  assert.equal(resolveWebhookHook([yml, yaml], { name: "mail" }).status, "ambiguous");
 });

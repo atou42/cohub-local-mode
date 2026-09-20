@@ -1,8 +1,13 @@
-import type { ChannelEnvelope, UserSessionListItem } from "@neta-art/cohub";
+import type {
+	ChannelEnvelope,
+	UserSessionListItem,
+	UserSessionSourceKey,
+} from "@neta-art/cohub";
 import { getCacheUserKeyAsync } from "$lib/cache/keys";
 import { sdk } from "$lib/sdk";
 import { mergeSessionRecord } from "$lib/session-record-merge";
 import { sortSessionsByRecentActivity } from "$lib/session-sort";
+import { reconcileGenerationStateFromSessionList } from "$lib/stores/session-generation-list-reconcile";
 import {
 	emptyUserSessionListPageInfo,
 	getCachedUserSessionListSnapshot,
@@ -31,7 +36,10 @@ function isTurnNotifyEvent(
 	);
 }
 
-export function createUserSessionListController() {
+export function createUserSessionListController(input?: {
+	source?: readonly UserSessionSourceKey[];
+}) {
+	let source = $state<readonly UserSessionSourceKey[]>(input?.source ?? []);
 	let sessions = $state<UserSessionListItem[]>([]);
 	let pageInfo = $state(emptyUserSessionListPageInfo());
 	let loading = $state(false);
@@ -44,13 +52,17 @@ export function createUserSessionListController() {
 	let realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 	let stopRealtime: (() => void) | null = null;
 
-	function applySnapshot(next: {
-		sessions: UserSessionListItem[];
-		pageInfo?: { hasMore: boolean; nextCursor: string | null } | null;
-	}) {
+	function applySnapshot(
+		next: {
+			sessions: UserSessionListItem[];
+			pageInfo?: { hasMore: boolean; nextCursor: string | null } | null;
+		},
+		options?: { authoritative?: boolean; requestStartedAt?: number },
+	) {
 		sessions = sortSessionsByRecentActivity(
 			next.sessions,
 		) as UserSessionListItem[];
+		reconcileGenerationStateFromSessionList(sessions, options);
 		if (next.pageInfo) {
 			pageInfo = {
 				hasMore: Boolean(next.pageInfo.hasMore),
@@ -71,15 +83,18 @@ export function createUserSessionListController() {
 	async function refresh(options?: { force?: boolean }) {
 		if (refreshing && !options?.force) return;
 		const seq = ++refreshSeq;
+		const requestSource = source;
 		const requestUserKey = await getCacheUserKeyAsync();
 		const shouldShowLoading = sessions.length === 0;
 		if (shouldShowLoading) loading = true;
 		else refreshing = true;
 		error = null;
 		try {
+			const requestStartedAt = Date.now();
 			const result = await sdk.user.listSessions({
 				limit: PAGE_SIZE,
 				cursor: null,
+				source: requestSource,
 			});
 			if (seq !== refreshSeq) return;
 			const currentUserKey = await getCacheUserKeyAsync();
@@ -87,7 +102,10 @@ export function createUserSessionListController() {
 
 			const nextSessions = (result.sessions ?? []) as UserSessionListItem[];
 			const nextPageInfo = result.pageInfo ?? emptyUserSessionListPageInfo();
-			applySnapshot({ sessions: nextSessions, pageInfo: nextPageInfo });
+			applySnapshot(
+				{ sessions: nextSessions, pageInfo: nextPageInfo },
+				{ authoritative: true, requestStartedAt },
+			);
 			await setCachedUserSessionList(nextSessions, nextPageInfo, {
 				mode: "replace",
 				expectedUserKey: requestUserKey,
@@ -110,14 +128,17 @@ export function createUserSessionListController() {
 	async function loadMore() {
 		if (loadingMore || !pageInfo.hasMore || !pageInfo.nextCursor) return;
 		const seq = ++loadMoreSeq;
+		const requestSource = source;
 		const requestUserKey = await getCacheUserKeyAsync();
 		const cursor = pageInfo.nextCursor;
 		loadingMore = true;
 		error = null;
 		try {
+			const requestStartedAt = Date.now();
 			const result = await sdk.user.listSessions({
 				limit: PAGE_SIZE,
 				cursor,
+				source: requestSource,
 			});
 			if (seq !== loadMoreSeq) return;
 			const currentUserKey = await getCacheUserKeyAsync();
@@ -138,7 +159,10 @@ export function createUserSessionListController() {
 			const merged = sortSessionsByRecentActivity([
 				...byId.values(),
 			]) as UserSessionListItem[];
-			applySnapshot({ sessions: merged, pageInfo: nextPageInfo });
+			applySnapshot(
+				{ sessions: merged, pageInfo: nextPageInfo },
+				{ authoritative: true, requestStartedAt },
+			);
 			await setCachedUserSessionList(merged, nextPageInfo, {
 				mode: "replace",
 				expectedUserKey: requestUserKey,
@@ -163,6 +187,28 @@ export function createUserSessionListController() {
 
 	function findById(sessionId: string) {
 		return sessions.find((session) => session.id === sessionId) ?? null;
+	}
+
+	/**
+	 * Switch the server-side filter. Drops the current page set and invalidates
+	 * in-flight requests; the next refresh walks matching rows only.
+	 */
+	async function setSource(next: readonly UserSessionSourceKey[]) {
+		if (
+			next.length === source.length &&
+			next.every((key, index) => key === source[index])
+		)
+			return;
+		source = next;
+		refreshSeq += 1;
+		loadMoreSeq += 1;
+		sessions = [];
+		pageInfo = emptyUserSessionListPageInfo();
+		loading = false;
+		loadingMore = false;
+		refreshing = false;
+		error = null;
+		await refresh({ force: true });
 	}
 
 	function scheduleRealtimeRefresh() {
@@ -224,6 +270,9 @@ export function createUserSessionListController() {
 	}
 
 	return {
+		get source() {
+			return source;
+		},
 		get sessions() {
 			return sessions;
 		},
@@ -250,6 +299,7 @@ export function createUserSessionListController() {
 		loadMore,
 		upsertSession,
 		findById,
+		setSource,
 		subscribeCache,
 		subscribeRealtime,
 	};

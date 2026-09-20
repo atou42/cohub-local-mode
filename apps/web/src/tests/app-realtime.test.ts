@@ -4,6 +4,7 @@ import type { ChannelEnvelope } from "@cohub/protocol/realtime";
 import type { AppRecord, AppVersionRecord } from "@neta-art/cohub";
 import {
 	createAppMutationBuffer,
+	isNewerAppSnapshot,
 	parseAppVersionPublished,
 	upsertAppSnapshot,
 	upsertAppVersion,
@@ -83,6 +84,16 @@ test("upsertAppSnapshot ignores older and stale same-version snapshots", () => {
 			?.latestVersion,
 		4,
 	);
+});
+
+test("isNewerAppSnapshot accepts a different app regardless of version", () => {
+	const current = app(5, "2026-07-20T05:00:00.000Z");
+	const other: AppRecord = {
+		...app(1, "2026-07-20T01:00:00.000Z"),
+		id: "work-2",
+	};
+	// Switching to a lower-version app must not be treated as a stale snapshot.
+	assert.equal(isNewerAppSnapshot(current, other), true);
 });
 
 test("upsertAppVersion deduplicates and keeps newest versions first", () => {

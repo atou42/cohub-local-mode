@@ -49,10 +49,12 @@ export type PublicApiFailure = {
 export async function loadPublicAppDetail(
 	path: PublicAppPath | null,
 	fetcher: typeof fetch,
+	options: { version?: number | null } = {},
 ): Promise<{ ok: true; detail: AppDetailResponse } | PublicApiFailure> {
 	if (!path) return { ok: false, status: 0 };
+	const query = options.version != null ? `?cohub_v=${options.version}` : "";
 	const url = apiUrl(
-		`/api/apps/by-slug/${encodeURIComponent(path.username)}/${encodeURIComponent(path.spaceSlug)}/${encodeURIComponent(path.appSlug)}`,
+		`/api/apps/by-slug/${encodeURIComponent(path.username)}/${encodeURIComponent(path.spaceSlug)}/${encodeURIComponent(path.appSlug)}${query}`,
 	);
 	const response = await fetcher(url).catch(() => null);
 	if (!response) return { ok: false, status: 502 };

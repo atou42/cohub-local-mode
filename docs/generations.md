@@ -57,7 +57,7 @@ type GenerationTaskResult = {
 
 Generation requests share the platform credit balance with LLM turns.
 
-1. **Preflight gate** — `POST /api/generations` and the worker re-check the caller's balance before enqueue/execute. Video generation requires at least `$0.60`; a lower balance returns the standard 402 `billing` conversion payload before the provider is called. Other paid generations require a positive balance. Video balance lookup failures fail closed with a temporary-unavailable error.
+1. **Preflight gate** — `POST /api/generations` and the worker re-check the caller's balance before enqueue/execute. Video generation requires at least `$1.01`; a lower balance returns the standard 402 `billing` conversion payload before the provider is called. Other paid generations require a positive balance. Video balance lookup failures fail closed with a temporary-unavailable error.
 2. **Post-success charge** — after a successful provider call, the worker applies the request-time model discount snapshot to the official provider `cost` (USD), then attempts to record the effective charge amount:
 
 ```ts
@@ -164,6 +164,7 @@ See the full examples:
 - [`docs/examples/generations/gemini-3.1-flash-image-preview.yaml`](./examples/generations/gemini-3.1-flash-image-preview.yaml)
 - [`docs/examples/generations/seedance-2-0-fast.yaml`](./examples/generations/seedance-2-0-fast.yaml)
 - [`docs/examples/generations/seedance-2-0.yaml`](./examples/generations/seedance-2-0.yaml)
+- [`docs/examples/generations/seedance-2-5.yaml`](./examples/generations/seedance-2-5.yaml)
 - [`docs/examples/generations/suno_music.yaml`](./examples/generations/suno_music.yaml)
 
 ## CLI
@@ -175,6 +176,11 @@ cohub generate "a cyberpunk cat in neon rain" \
   --model gpt-image-2 \
   --param size=1024x1024 \
   --param quality=high
+
+cohub generate "a ceramic cup isolated on a transparent background" \
+  --model gpt-image-2 \
+  --param background=transparent \
+  --param output_format=png
 
 cohub generate "same character, smiling" \
   --model gpt-image-2 \
@@ -204,6 +210,13 @@ cohub generate "keep the character identity from all reference images" \
   --image reference_image=https://example.com/reference-2.png \
   --param duration=5
 
+cohub generate "Lip-sync to this spoken take" \
+  --model seedance-2-0-fast \
+  --image reference_image=https://example.com/portrait.png \
+  --audio reference_audio=https://example.com/speech.mp3 \
+  --param duration=8 \
+  --param ratio=9:16
+
 cohub generate "uplifting cinematic pop with warm piano and clear chorus" \
   --model suno_music \
   --param operation=music \
@@ -214,4 +227,6 @@ cohub generate "write a hopeful chorus about sunrise after a storm" \
   --param operation=lyrics
 ```
 
-Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles in one request.
+Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request. Seedance 2 reference audio is additive to image or video; audio-only is rejected.
+
+Platform `.cohub/generations` YAML is what the API/worker validate against (`includeBuiltinModels: false`). Copy the Seedance examples above onto the live PVC if you want reference audio accepted in production.

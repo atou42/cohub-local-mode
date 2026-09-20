@@ -30,6 +30,24 @@ const {
 	onNavigationOpen,
 }: Props = $props();
 
+const hostContext = $derived(
+	currentSpaceId
+		? {
+				invocation: {
+					surface: "background" as const,
+					source: "route" as const,
+					spaceId: currentSpaceId,
+				},
+				shell: {
+					surface: "background" as const,
+					space: { id: currentSpaceId },
+					session: null,
+					turn: null,
+				},
+			}
+		: null,
+);
+
 let state = $state<
 	| { status: "loading" }
 	| {
@@ -65,9 +83,8 @@ $effect(() => {
 		owner={data.owner}
 		content={data.content ?? null}
 		launchState={appUrl}
-		invocation={currentSpaceId
-			? { surface: "background", source: "route", spaceId: currentSpaceId }
-			: undefined}
+		invocation={hostContext?.invocation}
+		shell={hostContext?.shell}
 		onComposerChip={(chip) => onComposerChip?.(data.app.id, chip)}
 		onNavigationOpen={onNavigationOpen}
 	/>

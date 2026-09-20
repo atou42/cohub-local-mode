@@ -14,6 +14,7 @@ import ThinkingBlocks from "$lib/components/ThinkingBlocks.svelte";
 import ToolCallList from "$lib/components/ToolCallList.svelte";
 import ViewportContextBlocks from "$lib/components/ViewportContextBlocks.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { useMarkdownWorkspaceAsset } from "$lib/markdown-asset-context";
 import {
 	type ResourceMentionTextToken,
 	tokenizeResourceMentionText,
@@ -111,6 +112,8 @@ function generationMediaForBlocks(blocks: TextBlock[]) {
 	}
 	return media;
 }
+
+const resolveWorkspaceAsset = useMarkdownWorkspaceAsset();
 
 const userTextBlocks = $derived(
 	content.filter(
@@ -280,7 +283,7 @@ const segments = $derived.by(() => {
 		<div class={index === 0 ? "" : "mt-2"}>
 			{#if segment.type === 'text'}
 				{@const generationMedia = isStreaming ? [] : generationMediaForBlocks(segment.blocks)}
-				<MarkdownView blocks={segment.blocks} variant="chat" {isStreaming} onStart={onMarkdownSegmentStart} onRendered={onMarkdownSegmentRendered} {onOpenFile} {onOpenUrl} />
+				<MarkdownView blocks={segment.blocks} variant="chat" {isStreaming} onStart={onMarkdownSegmentStart} onRendered={onMarkdownSegmentRendered} {onOpenFile} {onOpenUrl} {resolveWorkspaceAsset} />
 				{#if generationMedia.length > 0}
 					<div class="mt-3 space-y-2">
 						{#each generationMedia as media (media.url)}

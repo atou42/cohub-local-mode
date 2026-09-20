@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SpaceEventsApi } from "../src/apis/spaces.js";
+import { SpaceClient, SpaceEventsApi } from "../src/apis/spaces.js";
 import type {
 	WebsocketClient,
 	WebsocketEventPayload,
@@ -48,4 +48,43 @@ test("SpaceEventsApi routes published Work versions for the selected Space", () 
 	assert.deepEqual(received, ["app.version.published"]);
 	stop();
 	assert.equal(released, 1);
+});
+
+test("a rejected room subscription reaches the subscriber", () => {
+	let emit: ((event: WebsocketEventPayload) => void) | null = null;
+	const websocket = {
+		state: "open",
+		retainRooms: () => () => undefined,
+		on(type: string, handler: (event: WebsocketEventPayload) => void) {
+			assert.equal(type, "event");
+			const previous = emit;
+			emit = (event) => {
+				previous?.(event);
+				handler(event);
+			};
+			return () => undefined;
+		},
+	} as unknown as WebsocketClient;
+
+	const spaceEvents: string[] = [];
+	new SpaceEventsApi(websocket, "space-1").subscribe((event) => {
+		spaceEvents.push(event.type);
+	});
+	const sessionErrors: string[] = [];
+	new SpaceClient("space-1", {} as never, websocket)
+		.session("session-1")
+		.subscribe({ error: (event) => sessionErrors.push(event.type) });
+
+	const publish = emit as unknown as (event: WebsocketEventPayload) => void;
+	publish({
+		type: "system.subscribe.error",
+		payload: { rejected: [{ room: "space:space-2", code: "FORBIDDEN", message: "" }] },
+	} as WebsocketEventPayload);
+	publish({
+		type: "system.subscribe.error",
+		payload: { rejected: [{ room: "space:space-1", code: "FORBIDDEN", message: "" }] },
+	} as WebsocketEventPayload);
+
+	assert.deepEqual(spaceEvents, ["system.subscribe.error"]);
+	assert.deepEqual(sessionErrors, ["system.subscribe.error"]);
 });

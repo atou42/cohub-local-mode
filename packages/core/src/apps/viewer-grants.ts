@@ -31,7 +31,8 @@ export function delegatedAppAuthorization(
   app: { status: string; spaceId: string; appScopes: unknown } | null | undefined,
   targetSpaceId: string,
 ): DelegatedAppAuthorization {
-  if (!app || app.status !== "published") return { active: false };
+  if (!app) return { active: false };
+  if (app.status !== "published") return { active: false };
   const appScopes = app.spaceId === targetSpaceId
     ? normalizeAppPublisherScopes(app.appScopes as string[])
     : [];

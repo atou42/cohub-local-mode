@@ -3,6 +3,7 @@ import type { ContentBlock } from "@cohub/protocol/core";
 import type { GenerationPolicy } from "@cohub/protocol/generation";
 import type { SessionTurnIntent } from "@cohub/protocol/model";
 import { isRequestSourceClientId } from "@cohub/protocol/provenance";
+import { harnessSchema, isLocalHarness } from "@cohub/protocol/runtime";
 import { normalizeContentBlocks } from "../content/normalize.js";
 import type { PromptEnv } from "./prompt-env.js";
 
@@ -131,6 +132,7 @@ export type SkillUsageMeta = {
 };
 
 export type PromptAccessMode = "read_only" | "full_access";
+export type PromptHarness = "cohub" | "pi" | "codex";
 
 export type SubmitSessionPromptInput = {
   spaceId: string;
@@ -142,6 +144,8 @@ export type SubmitSessionPromptInput = {
   sourceClientId?: string | null;
   model?: string | null;
   provider?: string | null;
+  /** Agent implementation for this turn. Cloud/local runtime is resolved by the Space. */
+  harness?: PromptHarness | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: string | null;
   /** External harness service tier. `null` explicitly selects Standard. */
@@ -239,6 +243,7 @@ export type SessionPromptDependencies = {
     turnId: string;
     errorMessage: string;
   }): Promise<unknown>;
+  validateLocalHarness?(input: SubmitSessionPromptInput): Promise<void>;
   validatePromptModel?(input: { userId: string; provider: string; model: string }): Promise<boolean>;
   billingUsageGate?: BillingUsageGate;
 };
@@ -251,6 +256,11 @@ export class SubmitSessionPromptError extends Error {
     super(message);
     this.name = "SubmitSessionPromptError";
   }
+}
+
+export class HarnessUnavailableError extends Error {
+  readonly code = "harness_unavailable";
+  constructor(message = "Local Harness is unavailable / 本地 Harness 不可用") { super(message); this.name = "HarnessUnavailableError"; }
 }
 
 export class ModelUnavailableError extends Error {
@@ -273,7 +283,7 @@ function normalizeDirectShellCommandContent(content: ContentBlock[]): ContentBlo
   return [{ type: "shell_command", command, rawText } satisfies ContentBlock];
 }
 
-function normalizePromptModelProvider(input: Pick<SubmitSessionPromptInput, "model" | "provider">): {
+function normalizePromptModelProvider(input: Pick<SubmitSessionPromptInput, "model" | "provider" | "harness">): {
   model: string | null;
   provider: string | null;
 } {
@@ -281,7 +291,7 @@ function normalizePromptModelProvider(input: Pick<SubmitSessionPromptInput, "mod
   const provider = input.provider?.trim() || null;
   return {
     model,
-    provider: provider ?? (model ? "cohub" : null),
+    provider: provider ?? (model && !isLocalHarness(input.harness) ? "cohub" : null),
   };
 }
 
@@ -359,6 +369,14 @@ export const submitSessionPrompt = async (
   if (!Array.isArray(input.content) || input.content.length === 0) throw new Error("content is required");
 
   const modelProvider = normalizePromptModelProvider(input);
+  if (input.harness != null && !harnessSchema.safeParse(input.harness).success) throw new Error("Invalid Harness");
+  const localHarness = isLocalHarness(input.harness);
+  if (localHarness) {
+    if (input.harness === "pi" && input.accessMode === "read_only") throw new Error("Pi cannot enforce read-only access");
+    if (input.env && Object.keys(input.env).length) throw new Error("Local Harness uses its native environment; per-turn environment overrides are unavailable");
+    if (!deps.validateLocalHarness) throw new Error("Local Harness execution is unavailable on this prompt entry point");
+    await deps.validateLocalHarness(input);
+  }
   const modelPrevalidated = Boolean(
     modelProvider.model &&
     modelProvider.provider &&
@@ -369,6 +387,7 @@ export const submitSessionPrompt = async (
     modelProvider.model &&
     modelProvider.provider &&
     !modelPrevalidated &&
+    !localHarness &&
     deps.validatePromptModel &&
     !(await deps.validatePromptModel({ userId, provider: modelProvider.provider, model: modelProvider.model }))
   ) {
@@ -387,7 +406,9 @@ export const submitSessionPrompt = async (
     });
   }
 
-  const { content: expandedContent, promptTemplate, skillUsage } = await expandPromptContent(deps, {
+  const { content: expandedContent, promptTemplate, skillUsage } = localHarness
+    ? { content: input.content, promptTemplate: null, skillUsage: null }
+    : await expandPromptContent(deps, {
     content: input.content,
     userId,
     spaceId: input.spaceId,
@@ -413,7 +434,7 @@ export const submitSessionPrompt = async (
     : input.serviceTier === null
       ? null
       : undefined;
-  const billingDecision: BillingAccessDecision | null = isDirectShellCommand
+  const billingDecision: BillingAccessDecision | null = isDirectShellCommand || localHarness
     ? null
     : (await deps.billingUsageGate?.evaluate({
       userId,
@@ -438,6 +459,7 @@ export const submitSessionPrompt = async (
     llm: isDirectShellCommand ? false : undefined,
     model: modelProvider.model,
     provider: modelProvider.provider,
+    harness: input.harness ?? "cohub",
     requestedThinkingLevel,
     ...(requestedServiceTier !== undefined ? { requestedServiceTier } : {}),
     promptTemplate,

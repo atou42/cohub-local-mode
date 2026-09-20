@@ -1,226 +1,80 @@
-import type { GlobalSearchResult, SpaceRecord } from "@neta-art/cohub";
+import type { GlobalSearchResult } from "@neta-art/cohub";
 import {
-	idbGetAllByIndex,
-	idbGetSomeByIndex,
-	type SessionListCacheRecord,
-	type SpaceRecordCacheRecord,
-} from "$lib/cache/db";
-import { getCacheUserKey } from "$lib/cache/keys";
-import { recencyScore, textMatchScore } from "$lib/command-palette/score";
+	getCommandPaletteDefaultItems,
+	getLocalPaletteOverview,
+} from "$lib/command-palette/default-items";
+import { searchLocalCommandItems } from "$lib/command-palette/local-search";
+import { getPaletteOverviewSnapshot } from "$lib/command-palette/palette-overview";
+import { mergeLocalOverviewIntoSnapshot } from "$lib/command-palette/palette-overview-local";
+import { searchRemoteCommandItems } from "$lib/command-palette/remote-search";
+import type { CommandPaletteItem } from "$lib/command-palette/types";
 import { sdk } from "$lib/sdk";
-import { getSpaceOrigin, registerSpaceOrigin } from "$lib/space-origin";
-import {
-	getSpacePublicProfile,
-	normalizeSpacePublicProfile,
-} from "$lib/space-profile";
-import { getCachedSpaceList } from "$lib/stores/space-list-cache";
+import { registerSpaceOrigin } from "$lib/space-origin";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
-import {
-	buildSpaceMentionHref,
-	buildSpaceMentionUri,
-	type SpaceMentionSuggestion,
-} from "./space";
+import type { SpaceMentionSuggestion } from "./space";
+import { commandSpaceToMentionSuggestion } from "./space-mention-select";
+
+export { mergeSpaceMentionSuggestions } from "./space-mention-select";
 
 const SPACE_LINK_RESOLVE_LIMIT = 20;
-
-const LOCAL_LIMIT = 24;
 const REMOTE_LIMIT = 30;
-const LOCAL_ACTIVITY_SESSION_LIST_SCAN_LIMIT = 120;
 
-function compactText(value: string | null | undefined, limit: number) {
-	const text = (value ?? "").replace(/\s+/g, " ").trim();
-	if (!text) return null;
-	return text.length > limit
-		? `${text.slice(0, Math.max(0, limit - 1))}…`
-		: text;
+function isMentionSuggestion(
+	item: SpaceMentionSuggestion | null,
+): item is SpaceMentionSuggestion {
+	return item !== null;
 }
 
-function scoreSpace(input: {
-	name: string | null | undefined;
-	description?: string | null;
-	query: string;
-	activityAt?: string | null;
-}) {
-	const nameScore = textMatchScore(input.name, input.query);
-	const descriptionScore =
-		textMatchScore(input.description, input.query) * 0.72;
-	const textScore = Math.max(nameScore, descriptionScore);
-	const fresh = recencyScore(input.activityAt);
-	const score = textScore * 0.82 + fresh * 0.18;
-	return { score, textScore, recencyScore: fresh };
+function toMentionSuggestions(
+	items: CommandPaletteItem[],
+	currentSpaceId?: string | null,
+) {
+	return items
+		.map(commandSpaceToMentionSuggestion)
+		.filter(isMentionSuggestion)
+		.filter((item) => item.spaceId !== currentSpaceId);
 }
 
-function spaceName(space: Pick<SpaceRecord, "name" | "title" | "id">) {
-	return space.name ?? space.title ?? `space:${space.id.slice(0, 8)}`;
-}
-
-function localSpaceToSuggestion(
-	space: SpaceRecord,
-	query: string,
-	activityAt?: string | null,
-): SpaceMentionSuggestion | null {
-	const spaceActivityAt =
-		activityAt ??
-		space.lastActivityAt ??
-		space.updatedAt ??
-		space.createdAt ??
-		null;
-	const scored = scoreSpace({
-		name: space.name ?? space.title,
-		description: space.description,
-		query,
-		activityAt: spaceActivityAt,
-	});
-	if (query.trim() && scored.textScore <= 0) return null;
-	return {
-		type: "space",
-		id: space.id,
-		spaceId: space.id,
-		name: spaceName(space),
-		description: compactText(space.description, 180),
-		ownerProfile: space.ownerProfile ?? null,
-		spaceProfile: getSpacePublicProfile(space),
-		href: buildSpaceMentionHref(space.id),
-		uri: buildSpaceMentionUri(space.id),
-		origin: getSpaceOrigin(space),
-		activityAt: spaceActivityAt,
-		source: "local",
-		...scored,
-	};
-}
-
-function remoteSpaceToSuggestion(
+function remoteSearchToSuggestion(
 	item: GlobalSearchResult,
 ): SpaceMentionSuggestion | null {
 	if (item.type !== "space") return null;
-	const ownerProfile = "ownerProfile" in item ? item.ownerProfile : null;
-	const spaceProfile = "spaceProfile" in item ? item.spaceProfile : null;
-	return {
-		type: "space",
-		id: item.spaceId,
-		spaceId: item.spaceId,
-		name: item.title || item.spaceName || `space:${item.spaceId.slice(0, 8)}`,
-		description: compactText(item.excerpt ?? null, 180),
-		ownerProfile: ownerProfile ?? null,
-		spaceProfile: normalizeSpacePublicProfile(spaceProfile),
-		href: item.href || buildSpaceMentionHref(item.spaceId),
-		uri: buildSpaceMentionUri(item.spaceId),
-		origin: "cloud",
-		activityAt: item.updatedAt,
+	return commandSpaceToMentionSuggestion({
+		...item,
+		excerpt: item.excerpt ?? null,
+		spaceName: item.spaceName ?? null,
+		sessionTitle: item.sessionTitle ?? null,
+		viewerRelation: item.viewerRelation ?? null,
+		viewerTier: item.effectiveTier ?? undefined,
 		source: "remote",
-		score: item.score,
-		textScore: item.textScore,
-		recencyScore: item.recencyScore,
-	};
-}
-
-function sortSuggestions(items: SpaceMentionSuggestion[]) {
-	return [...items].sort((a, b) => {
-		const scoreDelta = b.score - a.score;
-		if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
-		const textDelta = b.textScore - a.textScore;
-		if (Math.abs(textDelta) > 0.0001) return textDelta;
-		return timeValue(b.activityAt) - timeValue(a.activityAt);
 	});
 }
 
-function timeValue(value: string | null | undefined) {
-	const time = new Date(value ?? 0).getTime();
-	return Number.isFinite(time) ? time : 0;
-}
-
-function sessionActivityAt(
-	session: Pick<SpaceRecord, "updatedAt" | "createdAt"> & {
-		lastMessageAt?: string | null;
-	},
-) {
-	return (
-		session.lastMessageAt ?? session.updatedAt ?? session.createdAt ?? null
-	);
-}
-
-function newerTime(
-	current: string | null | undefined,
-	candidate: string | null | undefined,
-): string | null {
-	return timeValue(candidate) > timeValue(current)
-		? (candidate ?? null)
-		: (current ?? null);
-}
-
-async function getLocalSessionActivityBySpace(
-	userKey: string,
-	options?: { signal?: AbortSignal },
-) {
-	const activityBySpace = new Map<string, string | null>();
-	const sessionLists = await idbGetSomeByIndex<SessionListCacheRecord>(
-		"session_lists",
-		"by_updated_at",
-		IDBKeyRange.lowerBound(0),
-		{
-			limit: LOCAL_ACTIVITY_SESSION_LIST_SCAN_LIMIT,
-			direction: "prev",
-			filter: (record) => record.userKey === userKey,
-		},
-	);
-	shouldAbort(options?.signal);
-	for (const record of sessionLists) {
-		if (record.userKey !== userKey) continue;
-		let activityAt = record.watermark;
-		for (const session of record.sessions) {
-			activityAt = newerTime(activityAt, sessionActivityAt(session));
-		}
-		const current = activityBySpace.get(record.spaceId);
-		activityBySpace.set(record.spaceId, newerTime(current, activityAt) ?? null);
-	}
-	return activityBySpace;
-}
-
-function shouldAbort(signal?: AbortSignal) {
-	if (signal?.aborted) throw new DOMException("Search aborted", "AbortError");
-}
-
-export function mergeSpaceMentionSuggestions(input: {
-	local: SpaceMentionSuggestion[];
-	remote: SpaceMentionSuggestion[];
+async function searchRecentSpaceDefaults(options?: {
+	signal?: AbortSignal;
 	currentSpaceId?: string | null;
-	limit?: number;
+	viewerUserUuid?: string | null;
 }) {
-	const byId = new Map<string, SpaceMentionSuggestion>();
-	for (const item of input.local) {
-		if (item.spaceId === input.currentSpaceId) continue;
-		byId.set(item.spaceId, item);
-	}
-	for (const item of input.remote) {
-		if (item.spaceId === input.currentSpaceId) continue;
-		const existing = byId.get(item.spaceId);
-		if (!existing) {
-			byId.set(item.spaceId, item);
-			continue;
-		}
-		if (existing.origin !== item.origin) {
-			throw new Error(
-				`Space ${item.spaceId} was returned by both local and cloud nodes`,
-			);
-		}
-		byId.set(item.spaceId, {
-			...existing,
-			...item,
-			ownerProfile: item.ownerProfile ?? existing.ownerProfile,
-			spaceProfile: normalizeSpacePublicProfile(
-				item.spaceProfile ?? existing.spaceProfile,
-			),
-			description: item.description ?? existing.description,
-			source: "local+remote",
-			score: Math.max(existing.score, item.score),
-			textScore: Math.max(existing.textScore, item.textScore),
-			recencyScore: Math.max(existing.recencyScore, item.recencyScore),
-		});
-	}
-	return sortSuggestions([...byId.values()]).slice(
-		0,
-		input.limit ?? REMOTE_LIMIT,
+	const localOverview = await getLocalPaletteOverview({
+		signal: options?.signal,
+		viewerUserUuid: options?.viewerUserUuid,
+	});
+	const snapshot = getPaletteOverviewSnapshot().data;
+	const hasSnapshotItems = Boolean(
+		snapshot?.spaces.length || snapshot?.recentSessions.length,
 	);
+	const overview =
+		snapshot && hasSnapshotItems
+			? mergeLocalOverviewIntoSnapshot(snapshot, localOverview)
+			: localOverview;
+	return getCommandPaletteDefaultItems({
+		query: "",
+		resourceTypes: ["space"],
+		currentSpaceId: options?.currentSpaceId,
+		signal: options?.signal,
+		viewerUserUuid: options?.viewerUserUuid,
+		paletteOverview: overview,
+	});
 }
 
 export async function searchLocalSpaceMentions(
@@ -228,51 +82,19 @@ export async function searchLocalSpaceMentions(
 	options?: {
 		signal?: AbortSignal;
 		currentSpaceId?: string | null;
-		limit?: number;
+		viewerUserUuid?: string | null;
 	},
 ): Promise<SpaceMentionSuggestion[]> {
 	const normalized = query.trim();
-	const spaces: SpaceRecord[] = [];
-	const seen = new Set<string>();
-	const add = (space: SpaceRecord) => {
-		if (space.id === options?.currentSpaceId || seen.has(space.id)) return;
-		seen.add(space.id);
-		spaces.push(space);
-	};
-
-	for (const space of getCachedSpaceList() ?? []) add(space);
-	shouldAbort(options?.signal);
-
-	const userKey = getCacheUserKey();
-	const records = await idbGetAllByIndex<SpaceRecordCacheRecord>(
-		"space_records",
-		"by_updated_at",
-		IDBKeyRange.lowerBound(0),
-	);
-	shouldAbort(options?.signal);
-	for (const record of records) {
-		if (record.userKey !== userKey) continue;
-		add(record.space);
-	}
-
-	const activityBySpace = normalized
-		? null
-		: await getLocalSessionActivityBySpace(userKey, {
-				signal: options?.signal,
-			});
-	shouldAbort(options?.signal);
-
-	const items = spaces
-		.map((space) =>
-			localSpaceToSuggestion(
-				space,
-				normalized,
-				activityBySpace?.get(space.id) ?? null,
-			),
-		)
-		.filter((item): item is SpaceMentionSuggestion => Boolean(item));
-
-	return sortSuggestions(items).slice(0, options?.limit ?? LOCAL_LIMIT);
+	const items =
+		normalized.length < 2
+			? await searchRecentSpaceDefaults(options)
+			: await searchLocalCommandItems(normalized, {
+					signal: options?.signal,
+					resourceTypes: ["space"],
+					viewerUserUuid: options?.viewerUserUuid,
+				});
+	return toMentionSuggestions(items, options?.currentSpaceId);
 }
 
 export async function resolveSpaceMentionLabels(
@@ -316,17 +138,15 @@ export async function searchRemoteSpaceMentions(
 ): Promise<SpaceMentionSuggestion[]> {
 	const q = query.trim();
 	if (q.length < 2) return [];
-	const fetcher: typeof fetch = (input, init) =>
-		fetch(input, { ...init, signal: options?.signal });
-	const result = await sdk.search.query(
-		{ q, limit: options?.limit ?? REMOTE_LIMIT, types: ["space"] },
-		fetcher,
-	);
-	const items = result.items
-		.map(remoteSpaceToSuggestion)
-		.filter((item): item is SpaceMentionSuggestion =>
-			Boolean(item && item.spaceId !== options?.currentSpaceId),
-		);
+	const result = await searchRemoteCommandItems(q, {
+		signal: options?.signal,
+		limit: options?.limit ?? REMOTE_LIMIT,
+		types: ["space"],
+	});
+	const items = result
+		.map(remoteSearchToSuggestion)
+		.filter(isMentionSuggestion)
+		.filter((item) => item.spaceId !== options?.currentSpaceId);
 	for (const item of items) {
 		registerSpaceOrigin({ id: item.spaceId, origin: item.origin });
 	}

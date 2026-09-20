@@ -143,9 +143,15 @@ const sessionListRefreshInFlight = new Map<string, Promise<SessionRecord[]>>();
 function refreshSessionListCache(
 	spaceId: string,
 	fetcher: () => Promise<SessionListCacheFetchResult>,
+	onRefresh?: (sessions: SessionRecord[]) => void,
 ): Promise<SessionRecord[]> {
 	const inFlight = sessionListRefreshInFlight.get(spaceId);
-	if (inFlight) return inFlight;
+	if (inFlight) {
+		return inFlight.then((sessions) => {
+			onRefresh?.(sessions);
+			return sessions;
+		});
+	}
 
 	const run = (async () => {
 		await getCacheUserKeyAsync();
@@ -158,6 +164,7 @@ function refreshSessionListCache(
 			result.pageInfo ?? DEFAULT_SESSION_LIST_PAGE_INFO,
 			result.forks,
 		);
+		onRefresh?.(snapshot.sessions);
 		return snapshot.sessions;
 	})().finally(() => {
 		if (sessionListRefreshInFlight.get(spaceId) === run) {
@@ -172,16 +179,27 @@ function refreshSessionListCache(
 export async function fetchSessionListWithCache(
 	spaceId: string,
 	fetcher: () => Promise<SessionListCacheFetchResult>,
-	options?: { force?: boolean },
+	options?: {
+		force?: boolean;
+		onBackgroundRefresh?: (sessions: SessionRecord[]) => void;
+	},
 ): Promise<SessionRecord[]> {
 	const cached = !options?.force
 		? await getCachedSessionListSnapshot(spaceId).catch(() => null)
 		: null;
 	if (cached) {
-		void refreshSessionListCache(spaceId, fetcher).catch(() => undefined);
+		void refreshSessionListCache(
+			spaceId,
+			fetcher,
+			options?.onBackgroundRefresh,
+		).catch(() => undefined);
 		return cached.sessions;
 	}
-	return refreshSessionListCache(spaceId, fetcher);
+	return refreshSessionListCache(
+		spaceId,
+		fetcher,
+		options?.onBackgroundRefresh,
+	);
 }
 
 export async function fetchSessionListWithPageInfoCache(

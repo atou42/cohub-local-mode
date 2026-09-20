@@ -23,6 +23,7 @@ import type {
   BOARD_ANIMATION_CHANNEL_CAPABILITIES,
   BoardComposition,
 } from "./board-composition.js";
+import type { RequestSource } from "./provenance.js";
 
 // Note: value re-exports from board-constants are intentionally omitted here.
 // The barrel (index.ts) already re-exports them via `export * from
@@ -370,6 +371,61 @@ export type BoardValidationResult = {
   valid: boolean;
   diagnostics: BoardDiagnostic[];
   peakCost: BoardRenderCost;
+};
+
+/**
+ * One applied Board transaction as recorded in the log, with the server-computed
+ * inverse of every operation. Read-only: replay walks the log in either
+ * direction without touching Board rows.
+ */
+export type BoardTransactionRecord = {
+  id: string;
+  txId: string;
+  baseVersion: number;
+  /** Board version this transaction produced. */
+  version: number;
+  actorId: string;
+  clientId: string | null;
+  undoGroupId: string | null;
+  source: RequestSource | null;
+  createdAt: string;
+  operations: BoardTransactionOperation[];
+};
+
+export type BoardTransactionOperation = {
+  type: BoardOperation["type"];
+  payload: Record<string, unknown>;
+  inverse: Record<string, unknown> | null;
+};
+
+export const BOARD_TRANSACTIONS_DEFAULT_LIMIT = 200;
+export const BOARD_TRANSACTIONS_MAX_LIMIT = 500;
+
+/** Typed input; HTTP routes decode query strings before parsing. */
+export const BoardTransactionsReadInputSchema = z.object({
+  /** Return transactions with `version < before`. Omit for the newest page. */
+  before: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(BOARD_TRANSACTIONS_MAX_LIMIT).default(BOARD_TRANSACTIONS_DEFAULT_LIMIT),
+  /** Include the current rows on the newest page (default true). Tail refreshes turn this off. */
+  snapshot: z.boolean().default(true),
+});
+export type BoardTransactionsReadInput = z.input<typeof BoardTransactionsReadInputSchema>;
+
+/**
+ * A page of the transaction log, newest first. The newest page (no `before`)
+ * carries the current rows unless `snapshot=false`, so a replay can start from
+ * the live state and walk inverses backwards; older pages carry transactions only.
+ */
+export type BoardTransactionsPage = {
+  board: { id: string; version: number };
+  transactions: BoardTransactionRecord[];
+  /** Version to pass as `before` for the next older page, or null when exhausted. */
+  nextBefore: number | null;
+  snapshot?: {
+    board: BoardRecord;
+    nodes: BoardNodeRecord[];
+    connections: BoardConnectionRecord[];
+  };
 };
 
 export type BoardCapabilities = {

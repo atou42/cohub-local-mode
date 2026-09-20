@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { basename } from "node:path";
-import { getCohubContext, HttpError, type CohubHttpClient, type Permission, type AppCreateInput, type AppMeta, type AppStatus, type AppUpdateInput, type AppViewStatsResponse, type AppVisibility } from "@neta-art/cohub";
+import { getCohubContext, HttpError, type CohubHttpClient, type Permission, type AppCreateInput, type AppMeta, type AppStatus, type AppUpdateInput, type AppVersionRecord, type AppViewStatsResponse, type AppVisibility } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient as createDefaultClient, createClientWithAccessToken } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
@@ -9,6 +8,7 @@ import { resolveSpace } from "../space.js";
 import { downloadApp } from "../app-download.js";
 import { getAppByRef, parseAppRef } from "../app-ref.js";
 import { checkAppTarget } from "../app-target.js";
+import { putBytes, putLocalFile } from "../http-put.js";
 import { registerAppCommerce } from "./app-commerce.js";
 import { collectPublicUpload } from "./public.js";
 
@@ -31,6 +31,14 @@ function parseJsonObject(value: string | undefined, name: string): Record<string
     // handled below
   }
   return error(`Invalid ${name}`, `${name} must be a JSON object`);
+}
+
+/** Human-readable version provenance: a session title, a channel, or blank. */
+function formatVersionSource(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const source = value as AppVersionRecord["source"];
+  if (source?.session) return source.session.title?.trim() || source.session.id;
+  return source?.via ? `via ${source.via}` : "";
 }
 
 function parseJsonValue(value: string | undefined, name: string): unknown {
@@ -91,13 +99,13 @@ async function uploadLocalAppSource(client: CohubHttpClient, spaceId: string, so
         sessionId: uploadId,
         file: { size: file.size, mimeType: file.mimeType, filename: basename(file.publicPath) },
       });
-      const response = await fetch(plan.asset.uploadUrl, {
-        method: "PUT",
+      await putLocalFile({
+        url: plan.asset.uploadUrl,
+        filePath: file.localPath,
+        size: file.size,
         headers: plan.asset.uploadHeaders,
-        body: createReadStream(file.localPath) as never,
-        duplex: "half",
-      } as RequestInit & { duplex: "half" });
-      if (!response.ok) throw new Error(`Failed to upload ${file.publicPath}: HTTP ${response.status}`);
+        label: file.publicPath,
+      });
       const path = directoryPrefix && file.publicPath.startsWith(`${directoryPrefix}/`)
         ? file.publicPath.slice(directoryPrefix.length + 1)
         : basename(file.publicPath);
@@ -114,12 +122,13 @@ async function uploadLocalAppSource(client: CohubHttpClient, spaceId: string, so
     sessionId: uploadId,
     file: { size: manifestBlob.size, mimeType: "application/json", filename: "manifest.json" },
   });
-  const manifestResponse = await fetch(manifestPlan.asset.uploadUrl, {
-    method: "PUT",
-    headers: manifestPlan.asset.uploadHeaders,
+  await putBytes({
+    url: manifestPlan.asset.uploadUrl,
     body: manifestBlob,
+    size: manifestBlob.size,
+    headers: manifestPlan.asset.uploadHeaders,
+    label: "app source manifest",
   });
-  if (!manifestResponse.ok) throw new Error(`Failed to upload app source manifest: HTTP ${manifestResponse.status}`);
   const manifestAsset = manifestPlan.asset;
   return { sourceRef: manifestAsset.objectKey, targetRef: source.targetType === "file" ? files[0]?.path ?? "" : "." };
 }
@@ -306,7 +315,7 @@ export function registerApps(program: Command, dependencies: { createClient?: ty
     .description("List apps in the target space")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(appsCmd);
+      const spaceId = await resolveSpace(appsCmd);
       const client = createClient();
       try {
         const result = await client.apps.listBySpace(spaceId);
@@ -444,7 +453,7 @@ export function registerApps(program: Command, dependencies: { createClient?: ty
       const source = target.targetType === "port"
         ? "workspace"
         : opts.source ? parseChoice(opts.source, "source", ["workspace", "local"] as const) : resolveDefaultAppSource();
-      const spaceId = resolveSpace(appsCmd);
+      const spaceId = await resolveSpace(appsCmd);
       const client = createClient();
       let { targetType, targetRef } = target;
       let sourceRef: string | null = null;
@@ -524,7 +533,7 @@ export function registerApps(program: Command, dependencies: { createClient?: ty
     .option("--app-scope <scope>", "Scope granted directly to the app runtime (space.view, session.view, file.view, file.edit, taskrun.view, session.prompt.readonly, session.prompt.fullaccess, command.execute)", collectOption, [])
     .option("--viewer-scope <scope>", "Deprecated: viewer grants are no longer gated by the app configuration", collectOption, [])
     .option("--clear-app-scopes", "Clear app runtime scopes")
-    .option("--clear-viewer-scopes", "Clear viewer-requestable scopes")
+    .option("--clear-viewer-scopes", "Deprecated: clear legacy scope metadata")
     .option("--meta <json>", "App metadata as a JSON object")
     .option("--hide-cohub-bar", "Hide the Cohub footer bar on the public app page")
     .option("--show-cohub-bar", "Show the Cohub footer bar on the public app page")
@@ -617,6 +626,7 @@ export function registerApps(program: Command, dependencies: { createClient?: ty
           { key: "id", label: "ID" },
           { key: "targetType", label: "Target" },
           { key: "targetRef", label: "Ref" },
+          { key: "source", label: "Source", format: formatVersionSource },
           { key: "createdAt", label: "Created" },
         ]);
       } catch (e: unknown) {
@@ -746,14 +756,16 @@ export function registerApps(program: Command, dependencies: { createClient?: ty
     .description("Grant an app scopes as the current user")
     .requiredOption("--scope <scope>", "Scope to grant (repeatable)", collectOption, [])
     .option("--space <spaceId>", "Target space; defaults to the app's own space")
+    .option("--extend", "Add scopes without replacing active grants")
     .option("--json", "Output as JSON")
-    .action(async (appRef: string, opts: { scope: string[]; space?: string; json?: boolean }) => {
+    .action(async (appRef: string, opts: { scope: string[]; space?: string; extend?: boolean; json?: boolean }) => {
       const client = createClient();
       try {
         const detail = await getAppByRef(client, appRef);
         const result = await client.apps.authorize(detail.app.id, {
           scopes: opts.scope as Permission[],
           ...(opts.space ? { spaceId: opts.space } : {}),
+          ...(opts.extend ? { scopeMode: "extend" as const } : {}),
         });
         if (jsonRequested(opts)) return outJson(result);
         ok(`Granted ${result.grant.scopes.join(", ")} on space ${result.grant.spaceId}`);

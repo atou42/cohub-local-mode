@@ -4,10 +4,13 @@ import { CohubClient } from "../src/client.js";
 import {
 	createSlugAppIdResolver,
 	createAppRuntime,
+	AppRuntimeApi,
 	ParentBridgeTransport,
 	PopupBrokerTransport,
 	resolveAppTransport,
 	type AppContextChangedListener,
+	type AppDiagnostic,
+	type AppDiagnosticListener,
 	type AppRuntimeTransport,
 } from "../src/app-runtime.js";
 
@@ -19,6 +22,58 @@ afterEach(() => {
 	globalThis.window = originalWindow;
 	globalThis.document = originalDocument;
 	globalThis.localStorage = originalLocalStorage;
+});
+
+test("broker reuses fresh tokens in memory without restoring or persisting another account", async () => {
+	const store: Record<string, string> = { "cohub:app-token:app-1": "previous-account" };
+	globalThis.localStorage = {
+		getItem: (key: string) => store[key] ?? null,
+		setItem: (key: string, value: string) => { store[key] = value; },
+		removeItem: (key: string) => { delete store[key]; },
+	} as Storage;
+	let handler: ((event: MessageEvent) => void) | null = null;
+	let opens = 0;
+	globalThis.window = {
+		location: { origin: "https://app.example" },
+		open: () => {
+			opens++;
+			const popup = {
+				closed: false,
+				close() { this.closed = true; },
+				postMessage(message: Record<string, unknown>) {
+					queueMicrotask(() => handler?.({ source: popup, origin: "https://cohub.live", data: {
+						type: "cohub.app.authorize.result", requestId: message.requestId, token: `fresh-${opens}`,
+						result: { status: "granted", requestedTarget: { kind: "account" }, target: { kind: "account" }, resolution: "requested",
+							grant: { id: "grant", spaceId: "home", scopes: ["user.space.list"], expiresAt: null } },
+					} } as MessageEvent));
+				},
+			};
+			queueMicrotask(() => handler?.({ source: popup, origin: "https://cohub.live", data: { type: "cohub.app.broker.ready", authorizationVersion: 2 } } as MessageEvent));
+			return popup;
+		},
+		addEventListener: (_type: string, callback: (event: MessageEvent) => void) => { handler = callback; },
+		removeEventListener: () => { handler = null; },
+	} as unknown as Window & typeof globalThis;
+	const transport = () => new PopupBrokerTransport({ brokerOrigin: "https://cohub.live", appId: "app-1" });
+	const runtime = createAppRuntime(transport(), "app-1");
+	assert.equal(store["cohub:app-token:app-1"], undefined);
+	store["cohub:app-token:app-1"] = "legacy-writer";
+	await runtime.authorize({ target: { kind: "account" }, scopes: ["user.space.list"] });
+	assert.deepEqual(await Promise.all([runtime.getAccessToken(), runtime.getAccessToken()]), ["fresh-1", "fresh-1"]);
+	assert.equal(opens, 1);
+	assert.equal(store["cohub:app-token:app-1"], undefined);
+	assert.equal(await runtime.getAccessToken({ forceRefresh: true }), "fresh-2");
+	assert.equal(await runtime.getAccessToken(), "fresh-2");
+	assert.equal(opens, 2);
+	assert.equal(store["cohub:app-token:app-1"], undefined);
+	store["cohub:app-token:app-1"] = "previous-account";
+	const reloaded = createAppRuntime(transport(), undefined, async () => "app-1");
+	assert.equal(await reloaded.getAccessToken(), "fresh-3");
+	assert.equal(await reloaded.getAccessToken(), "fresh-3");
+	assert.equal(opens, 3);
+	assert.equal(store["cohub:app-token:app-1"], undefined);
+	runtime.dispose();
+	reloaded.dispose();
 });
 
 test("work runtime ignores non-string ancestor origins", async () => {
@@ -101,6 +156,122 @@ test("ParentBridgeTransport does not announce readiness without a trusted parent
 
 	new ParentBridgeTransport().subscribeContextChanged(() => {});
 	assert.equal(posts, 0);
+});
+
+test("ParentBridgeTransport forwards host diagnostics to subscribers", () => {
+	let handler: ((event: MessageEvent) => void) | null = null;
+	const parent = { postMessage: () => {} };
+	globalThis.window = {
+		parent,
+		location: { ancestorOrigins: ["https://dev.cohub.live"] },
+		addEventListener: (_type: "message", next: (event: MessageEvent) => void) => {
+			handler = next;
+		},
+		removeEventListener: () => {
+			handler = null;
+		},
+	} as unknown as Window & typeof globalThis;
+	globalThis.document = { referrer: "" } as Document;
+
+	const transport = new ParentBridgeTransport();
+	const seen: AppDiagnostic[] = [];
+	const unsubscribe = transport.subscribeDiagnostics((diagnostic) => seen.push(diagnostic));
+	const emit = (data: unknown, origin = "https://dev.cohub.live") => {
+		handler?.({ data, origin, source: parent } as unknown as MessageEvent);
+	};
+
+	emit({ type: "cohub.app.context.changed", context: {} });
+	emit({ type: "cohub.app.diagnostic", code: "space_inaccessible", message: "unknown Space" });
+	assert.deepEqual(seen, [{ code: "space_inaccessible", message: "unknown Space" }]);
+
+	emit(
+		{ type: "cohub.app.diagnostic", code: "space_inaccessible", message: "forged" },
+		"https://evil.example",
+	);
+	assert.equal(seen.length, 1);
+	unsubscribe();
+});
+
+test("AppRuntimeApi.dispose removes pointer listeners", () => {
+	const added = new Set<string>();
+	const removed: string[] = [];
+	globalThis.window = {
+		addEventListener: (type: string) => {
+			added.add(type);
+		},
+		removeEventListener: (type: string) => {
+			removed.push(type);
+		},
+	} as unknown as Window & typeof globalThis;
+
+	const transport: AppRuntimeTransport = {
+		request: async () => null,
+		notify: () => {},
+	};
+	const runtime = new AppRuntimeApi(transport);
+	runtime.requestConfigure({ inputRegion: [{ x: 0, y: 0, width: 1, height: 1 }] });
+	assert.equal(added.has("pointermove"), true);
+
+	runtime.dispose();
+	assert.deepEqual(removed.slice().sort(), [
+		"pointercancel",
+		"pointerdown",
+		"pointermove",
+		"pointerup",
+	]);
+});
+
+test("ParentBridgeTransport announces readiness when diagnostics are subscribed", () => {
+	let posted: { origin: string; protocol?: string; type?: string } | null = null;
+	const parent = {
+		postMessage: (message: Record<string, unknown>, origin: string) => {
+			posted = { origin, protocol: String(message.protocol), type: String(message.type) };
+		},
+	};
+	globalThis.window = {
+		parent,
+		location: { ancestorOrigins: ["https://dev.cohub.live"] },
+		addEventListener: () => {},
+		removeEventListener: () => {},
+	} as unknown as Window & typeof globalThis;
+	globalThis.document = { referrer: "" } as Document;
+
+	new ParentBridgeTransport().subscribeDiagnostics(() => {});
+
+	assert.deepEqual(posted, {
+		origin: "https://dev.cohub.live",
+		protocol: "cohub.app.runtime",
+		type: "ready",
+	});
+});
+
+test("AppRuntimeApi warns on host diagnostics", () => {
+	const warnings: unknown[][] = [];
+	const originalWarn = console.warn;
+	console.warn = (...args: unknown[]) => {
+		warnings.push(args);
+	};
+	try {
+		let listener: AppDiagnosticListener | null = null;
+		let unsubscribed = false;
+		const transport: AppRuntimeTransport = {
+			request: async () => null,
+			subscribeDiagnostics: (next) => {
+				listener = next;
+				return () => {
+					unsubscribed = true;
+				};
+			},
+		};
+		const runtime = new AppRuntimeApi(transport);
+		listener?.({ code: "space_inaccessible", message: "bad Space" });
+		assert.equal(warnings.length, 1);
+		assert.match(String(warnings[0]?.[0]), /bad Space/);
+		runtime.dispose();
+		assert.equal(unsubscribed, true);
+	} finally {
+		console.warn = originalWarn;
+	}
 });
 
 test("AppRuntimeApi sends navigation targets and optional calls through the bridge", async () => {
@@ -212,6 +383,73 @@ test("AppRuntimeApi delegates context change subscriptions to its transport", ()
 	assert.equal(spaceId, "space-1");
 	unsubscribe();
 	assert.equal(subscribed, null);
+});
+
+test("requestConfigure reports the pointer while a rect region is active and still delivers the release after opting out", () => {
+	const listeners = new Map<string, (event: { clientX: number; clientY: number; buttons?: number }) => void>();
+	const notified: Record<string, unknown>[] = [];
+	globalThis.window = {
+		addEventListener: (type: string, handler: (event: { clientX: number; clientY: number; buttons?: number }) => void) => {
+			listeners.set(type, handler);
+		},
+		removeEventListener: () => {},
+	} as unknown as Window & typeof globalThis;
+
+	let frame: FrameRequestCallback | null = null;
+	const originalRaf = globalThis.requestAnimationFrame;
+	const originalCancel = globalThis.cancelAnimationFrame;
+	globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+		frame = callback;
+		return 1;
+	}) as typeof requestAnimationFrame;
+	globalThis.cancelAnimationFrame = (() => {
+		frame = null;
+	}) as typeof cancelAnimationFrame;
+
+	try {
+		const transport: AppRuntimeTransport = {
+			request: () => Promise.resolve(null),
+			notify: (message) => notified.push(message),
+		};
+		const runtime = createAppRuntime(transport);
+
+		runtime.requestConfigure({ inputRegion: [{ x: 0, y: 0, width: 10, height: 10 }] });
+		listeners.get("pointermove")?.({ clientX: 5, clientY: 6, buttons: 1 });
+		frame?.(0);
+		assert.deepEqual(notified.at(-1), {
+			protocol: "cohub.app.runtime",
+			version: 1,
+			type: "pointer",
+			x: 5,
+			y: 6,
+			down: true,
+		});
+
+		// Opting out stops moves...
+		runtime.requestConfigure({ inputRegion: "none" });
+		const settled = notified.length;
+		listeners.get("pointermove")?.({ clientX: 7, clientY: 8, buttons: 0 });
+		assert.equal(notified.length, settled);
+
+		// ...but the in-flight release is still delivered so the host can clear.
+		listeners.get("pointerup")?.({ clientX: 9, clientY: 10 });
+		assert.deepEqual(notified.at(-1), {
+			protocol: "cohub.app.runtime",
+			version: 1,
+			type: "pointer",
+			x: 9,
+			y: 10,
+			down: false,
+		});
+
+		// A later release with no press in flight stays silent.
+		const afterRelease = notified.length;
+		listeners.get("pointerup")?.({ clientX: 11, clientY: 12 });
+		assert.equal(notified.length, afterRelease);
+	} finally {
+		globalThis.requestAnimationFrame = originalRaf;
+		globalThis.cancelAnimationFrame = originalCancel;
+	}
 });
 
 test("AppRuntimeApi delegates to the injected transport", async () => {
@@ -652,6 +890,88 @@ test("requestSpaceAuthorization resolves the picked space and records the consen
 	]);
 });
 
+test("requestCreateSpaceAuthorization sends the create payload and records consent", async () => {
+	const store: Record<string, string> = {};
+	globalThis.localStorage = {
+		getItem: (key: string) => store[key] ?? null,
+		setItem: (key: string, value: string) => {
+			store[key] = value;
+		},
+		removeItem: (key: string) => {
+			delete store[key];
+		},
+	} as Storage;
+
+	const calls: { message: Record<string, unknown> }[] = [];
+	const transport: AppRuntimeTransport = {
+		request<T>(message: Record<string, unknown>): Promise<T | null> {
+			calls.push({ message });
+			return Promise.resolve({
+				token: "created-token",
+				space: { id: "space-new", name: "Whale Shrine" },
+			} as T);
+		},
+	};
+	const runtime = createAppRuntime(transport, "work-1");
+
+	const result = await runtime.requestCreateSpaceAuthorization({
+		scopes: ["file.view", "session.view"],
+		space: {
+			name: "Whale Shrine",
+			bootstrapSource: { type: "checkpoint", checkpointId: "ckpt-1" },
+		},
+		reason: "Create a workspace from this template.",
+	});
+
+	assert.deepEqual(result, { granted: true, space: { id: "space-new", name: "Whale Shrine" } });
+	assert.equal(calls[0].message.type, "cohub.app.authorize");
+	assert.equal(calls[0].message.selectSpace, undefined);
+	assert.equal(calls[0].message.spaceId, undefined);
+	assert.deepEqual(calls[0].message.createSpace, {
+		name: "Whale Shrine",
+		bootstrapSource: { type: "checkpoint", checkpointId: "ckpt-1" },
+	});
+	assert.deepEqual(JSON.parse(store["cohub:app-auth-grants:work-1"]), [
+		{ spaceId: "space-new", scopes: ["file.view", "session.view"] },
+	]);
+});
+
+test("requestCreateSpaceAuthorization reports a persisted space without a grant", async () => {
+	globalThis.localStorage = {
+		getItem: () => null,
+		setItem: () => {},
+		removeItem: () => {},
+	} as Storage;
+	const transport: AppRuntimeTransport = {
+		request: () => Promise.resolve({ token: null, space: { id: "space-new", name: "Demo" } }),
+	};
+	const runtime = createAppRuntime(transport, "work-1");
+
+	const result = await runtime.requestCreateSpaceAuthorization({
+		scopes: ["file.view"],
+		space: { name: "Demo" },
+	});
+	assert.deepEqual(result, { granted: false, space: { id: "space-new", name: "Demo" } });
+});
+
+test("requestCreateSpaceAuthorization reports denial without a space", async () => {
+	globalThis.localStorage = {
+		getItem: () => null,
+		setItem: () => {},
+		removeItem: () => {},
+	} as Storage;
+	const transport: AppRuntimeTransport = {
+		request: () => Promise.resolve({ token: null, space: null }),
+	};
+	const runtime = createAppRuntime(transport, "work-1");
+
+	const result = await runtime.requestCreateSpaceAuthorization({
+		scopes: ["file.view"],
+		space: { name: "Demo" },
+	});
+	assert.deepEqual(result, { granted: false, space: null });
+});
+
 test("requestSpaceAuthorization reports denial without a space", async () => {
 	globalThis.localStorage = {
 		getItem: () => null,
@@ -896,7 +1216,7 @@ test("createSlugAppIdResolver resolves appId from getBySlug and caches it", asyn
 			);
 			return {
 				ok: true,
-				json: async () => ({ work: { id: "resolved-work-id" } }),
+				json: async () => ({ app: { id: "resolved-work-id" } }),
 			} as Response;
 		}) as typeof globalThis.fetch,
 	});

@@ -5,6 +5,7 @@ const DEFAULT_TOKEN_BASE = "https://bots.qq.com";
 const TOKEN_REFRESH_AHEAD_MS = 5 * 60_000;
 const QQ_API_TIMEOUT_MS = 15_000;
 const MAX_RETRY_AFTER_MS = 2_147_483_647;
+const GATEWAY_BOT_TTL_MS = 10 * 60_000;
 
 export const parseRetryAfterMs = (value: string | null, now = Date.now()): number | undefined => {
   if (!value?.trim()) return undefined;
@@ -27,6 +28,68 @@ export class QQApiError extends Error {
     this.name = "QQApiError";
   }
 }
+
+export type QQSessionStartLimit = {
+  remaining: number;
+  resetAt: number;
+  maxConcurrency: number;
+};
+
+type QQGatewayCacheEntry = {
+  url: string;
+  fetchedAt: number;
+  limit: QQSessionStartLimit | null;
+};
+
+const gatewayCache = new Map<string, QQGatewayCacheEntry>();
+const gatewayRefresh = new Map<string, Promise<QQGatewayCacheEntry>>();
+
+export const qqWebsocketUrlFromApiBase = (apiBase: string) => {
+  const url = new URL(apiBase);
+  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  url.pathname = "/websocket";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+};
+
+export const isQQRateLimitError = (error: unknown): error is QQApiError => {
+  if (!(error instanceof QQApiError)) return false;
+  if (error.status === 429) return true;
+  const text = `${error.bizMessage ?? ""} ${error.message}`.toLowerCase();
+  return (
+    text.includes("频率限制") ||
+    text.includes("rate limit") ||
+    text.includes("too many requests") ||
+    text.includes("session start limit")
+  );
+};
+
+export const parseQQGatewayBot = (data: unknown, now = Date.now()): { url: string; limit: QQSessionStartLimit | null } => {
+  const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const url = typeof record.url === "string" ? record.url.trim() : "";
+  const raw = record.session_start_limit && typeof record.session_start_limit === "object"
+    ? record.session_start_limit as Record<string, unknown>
+    : null;
+  const remaining = typeof raw?.remaining === "number" && Number.isFinite(raw.remaining) ? raw.remaining : null;
+  const resetAfter = typeof raw?.reset_after === "number" && Number.isFinite(raw.reset_after) ? raw.reset_after : null;
+  const maxConcurrency = typeof raw?.max_concurrency === "number" && Number.isFinite(raw.max_concurrency) ? raw.max_concurrency : 1;
+  const limit = remaining != null && resetAfter != null
+    ? { remaining, resetAt: now + Math.max(0, resetAfter), maxConcurrency }
+    : null;
+  return { url, limit };
+};
+
+const needsGatewayRefresh = (cached: QQGatewayCacheEntry | undefined, now: number) => {
+  if (!cached) return true;
+  if (now - cached.fetchedAt > GATEWAY_BOT_TTL_MS) return true;
+  return Boolean(cached.limit && cached.limit.remaining <= 0 && now >= cached.limit.resetAt);
+};
+
+const sessionStartRetryAfterMs = (limit: QQSessionStartLimit | null | undefined, now: number) => {
+  if (!limit || limit.remaining > 0 || now >= limit.resetAt) return undefined;
+  return Math.max(0, limit.resetAt - now);
+};
 
 export enum QQMediaFileType {
   IMAGE = 1,
@@ -92,10 +155,73 @@ export class QQApiClient {
     return promise;
   }
 
-  async getGatewayUrl() {
-    const data = await this.request<{ url: string }>("GET", "/gateway");
-    if (!data.url) throw new Error("QQ gateway URL is missing");
-    return data.url;
+  websocketUrl() {
+    return gatewayCache.get(this.gatewayCacheKey)?.url ?? qqWebsocketUrlFromApiBase(this.apiBase);
+  }
+
+  invalidateGateway() {
+    gatewayCache.delete(this.gatewayCacheKey);
+  }
+
+  // Best-effort: learn session_start_limit before IDENTIFY. Resume skips this.
+  // A rate-limited GET /gateway/bot never blocks the well-known websocket URL.
+  async prepareSessionStart() {
+    const now = Date.now();
+    const key = this.gatewayCacheKey;
+    let cached = gatewayCache.get(key);
+    if (needsGatewayRefresh(cached, now)) {
+      try {
+        cached = await this.refreshGateway();
+      } catch {
+        cached = {
+          url: cached?.url ?? qqWebsocketUrlFromApiBase(this.apiBase),
+          fetchedAt: now,
+          limit: cached?.limit ?? null,
+        };
+        gatewayCache.set(key, cached);
+      }
+    }
+    const retryAfterMs = sessionStartRetryAfterMs(cached?.limit, now);
+    if (retryAfterMs != null) {
+      throw new QQApiError(
+        "QQ API GET /gateway/bot failed: 429 session start limit exceeded",
+        429,
+        "/gateway/bot",
+        undefined,
+        "session start limit exceeded",
+        Math.max(1_000, retryAfterMs),
+      );
+    }
+    if (cached?.limit && cached.limit.remaining > 0) cached.limit.remaining -= 1;
+  }
+
+  async refreshGateway() {
+    const key = this.gatewayCacheKey;
+    const existing = gatewayRefresh.get(key);
+    if (existing) return existing;
+    const promise = this.fetchGatewayBot().finally(() => gatewayRefresh.delete(key));
+    gatewayRefresh.set(key, promise);
+    return promise;
+  }
+
+  private get appId() {
+    return this.credentials.appId.trim();
+  }
+
+  private get gatewayCacheKey() {
+    return `${this.appId}
+${this.apiBase}`;
+  }
+
+  private async fetchGatewayBot() {
+    const parsed = parseQQGatewayBot(await this.request<unknown>("GET", "/gateway/bot"));
+    const entry: QQGatewayCacheEntry = {
+      url: parsed.url || qqWebsocketUrlFromApiBase(this.apiBase),
+      fetchedAt: Date.now(),
+      limit: parsed.limit,
+    };
+    gatewayCache.set(this.gatewayCacheKey, entry);
+    return entry;
   }
 
   async sendC2CMessage(openid: string, content: string, msgId?: string, markdownSupport = false) {

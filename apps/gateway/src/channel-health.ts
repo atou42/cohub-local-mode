@@ -96,6 +96,20 @@ export function classifyChannelError(raw: unknown): {
   }
 
   if (
+    text.includes("频率限制") ||
+    text.includes("rate limit") ||
+    text.includes("too many requests") ||
+    text.includes("session start limit") ||
+    /\b429\b/.test(text)
+  ) {
+    return {
+      reasonCode: "rate_limit",
+      message: "Rate limited",
+      detail,
+    };
+  }
+
+  if (
     text.includes("unauthorized") ||
     text.includes("401") ||
     text.includes("403") ||

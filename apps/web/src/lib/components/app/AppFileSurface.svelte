@@ -2,16 +2,29 @@
 import type { SpaceFsFileResponse, WorkContent } from "@neta-art/cohub";
 import { Download } from "lucide-svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
-import FilePreviewSurface from "$lib/components/FilePreviewSurface.svelte";
+import FileContentPreview from "$lib/components/FileContentPreview.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
 const locale = $derived(getLocale());
 
 import { isTextMime, tryResolveTextFileResponse } from "$lib/space-file-text";
+import type { ResolveWorkspaceAsset } from "$lib/workspace-assets";
+import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 
-const { content }: { content: Extract<WorkContent, { kind: "file" }> } =
-	$props();
+const {
+	content,
+	isMobile = false,
+	resolveWorkspaceAsset,
+	onOpenFile,
+	onOpenUrl,
+}: {
+	content: Extract<WorkContent, { kind: "file" }>;
+	isMobile?: boolean;
+	resolveWorkspaceAsset?: ResolveWorkspaceAsset;
+	onOpenFile?: (target: WorkspaceFileLinkTarget) => void | Promise<void>;
+	onOpenUrl?: (href: string, event: MouseEvent) => void | Promise<void>;
+} = $props();
 
 function responseFromContent(value: typeof content): SpaceFsFileResponse {
 	const text = isTextMime(value.mimeType);
@@ -79,7 +92,15 @@ $effect(() => {
 		{#if loading}
 			<CenteredLoading label="Loading file…" size="panel" />
 		{:else}
-			<FilePreviewSurface {file} source={file.content} downloadUrl={content.url} />
+			<FileContentPreview
+				{file}
+				source={file.content}
+				downloadUrl={content.url}
+				{isMobile}
+				{resolveWorkspaceAsset}
+				{onOpenFile}
+				{onOpenUrl}
+			/>
 		{/if}
 	</div>
 </div>
@@ -136,8 +157,10 @@ $effect(() => {
 	}
 
 	.file-content {
+		display: flex;
 		min-height: 0;
 		flex: 1;
+		flex-direction: column;
 	}
 
 	@media (min-width: 640px) {

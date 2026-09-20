@@ -317,7 +317,7 @@ $effect(() => {
 	.presence-backdrop {
 		position: fixed;
 		inset: 0;
-		z-index: 85;
+		z-index: var(--z-workspace-popover);
 		background: transparent;
 	}
 
@@ -493,7 +493,7 @@ $effect(() => {
 		.presence-backdrop {
 			position: fixed;
 			inset: 0;
-			z-index: 70;
+			z-index: var(--z-workspace-popover-open);
 			display: block;
 			background: var(--overlay-scrim);
 		}

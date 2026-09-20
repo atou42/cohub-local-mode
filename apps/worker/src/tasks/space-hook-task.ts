@@ -20,11 +20,13 @@ import {
   type SpaceHookDefinition,
   type SpaceHookRunResult,
 } from "@cohub/core/hooks";
+import { buildAppActionCommand } from "@cohub/core/apps";
 import { SPACE_HOOK_TASK_TYPE, type SpaceHookEventEnvelope } from "@cohub/protocol";
+import { APP_ACTION_EXECUTION_SOURCE } from "@cohub/protocol/task";
 import type { TaskPayload } from "@cohub/protocol/task";
 import type { Job } from "bullmq";
-import { eq } from "drizzle-orm";
-import { spaceSessions, taskRuns } from "@cohub/db";
+import { and, eq } from "drizzle-orm";
+import { apps, spaces, spaceSessions, taskRuns, userProfiles } from "@cohub/db";
 import { assignLabelsToSession, assignSessionSourceSystemLabel } from "@cohub/core/labels";
 import { createLogger } from "@cohub/infra/logging";
 import { config } from "../config.js";
@@ -212,38 +214,91 @@ async function runPromptHook(input: {
   }
 }
 
+type ResolvedUsesCommand = {
+  command: string;
+  appId: string;
+  appVersionId: string;
+  action: string;
+};
+
+/** Resolve `uses` to the published App version it should run. */
+async function resolveUsesCommand(hook: SpaceHookDefinition): Promise<ResolvedUsesCommand | { error: string }> {
+  const uses = hook.uses;
+  if (!uses) return { error: "uses action is missing app reference" };
+  const [row] = await db
+    .select({
+      id: apps.id,
+      status: apps.status,
+      targetType: apps.targetType,
+      currentVersionId: apps.currentVersionId,
+    })
+    .from(userProfiles)
+    .innerJoin(spaces, and(eq(spaces.userUuid, userProfiles.userUuid), eq(spaces.slug, uses.spaceSlug)))
+    .innerJoin(apps, and(eq(apps.spaceId, spaces.id), eq(apps.slug, uses.appSlug)))
+    .where(eq(userProfiles.username, uses.username))
+    .limit(1);
+  const ref = `${uses.username}/${uses.spaceSlug}/${uses.appSlug}`;
+  if (!row) return { error: `app not found: ${ref}` };
+  if (row.status !== "published" || !row.currentVersionId) return { error: `app is not published: ${ref}` };
+  if (row.targetType !== "directory") return { error: `app actions require a directory app: ${ref}` };
+  return {
+    command: buildAppActionCommand({
+      appId: row.id,
+      appVersionId: row.currentVersionId,
+      action: uses.action,
+      actionInput: hook.with ?? null,
+    }),
+    appId: row.id,
+    appVersionId: row.currentVersionId,
+    action: uses.action,
+  };
+}
+
 async function runCommandHook(input: {
   spaceId: string;
   userId: string;
   taskRunId: string;
+  /** Parent BullMQ job id (`space-hook-*`); child run_command ids derive from this. */
+  parentJobId: string;
   hook: SpaceHookDefinition;
   event: SpaceHookEventEnvelope;
   hookEnv: Record<string, string>;
 }): Promise<SpaceHookRunResult> {
-  if (input.hook.action !== "run" || !input.hook.run) {
-    return {
-      path: input.hook.path,
-      action: "run",
-      status: "failed",
-      error: "run action is missing run command",
-    };
+  const action = input.hook.action === "uses" ? "uses" : "run";
+  const startedAt = Date.now();
+  const resolved = action === "uses"
+    ? await resolveUsesCommand(input.hook)
+    : input.hook.run
+      ? { command: buildHookRunCommand(input.hook.run) }
+      : { error: "run action is missing run command" };
+  if ("error" in resolved) {
+    return { path: input.hook.path, action, status: "failed", durationMs: Date.now() - startedAt, error: resolved.error };
   }
 
-  const startedAt = Date.now();
-  const command = buildHookRunCommand(input.hook.run);
   const timeout = input.hook.timeoutSecs ?? DEFAULT_TIMEOUT_SECS;
-  // BullMQ custom jobIds reject ":"; keep a stable, path-derived suffix instead.
-  const childTaskRunId = `${input.taskRunId}__${input.hook.path.replace(/[^a-zA-Z0-9._-]+/g, "_")}`;
+  // Derive from the parent job id (`space-hook-*`), not the DB UUID, so
+  // isReentrantSpaceHookEvent can recognize hook-spawned run_command children.
+  const childTaskRunId = `${input.parentJobId}__${input.hook.path.replace(/[^a-zA-Z0-9._-]+/g, "_")}`;
+  const uses = "appId" in resolved ? resolved : null;
 
   try {
     const agentJob = await enqueueAgentRunCommandJob(agentQueue, {
       spaceId: input.spaceId,
       sessionId: input.event.sessionId ?? null,
       taskRunId: childTaskRunId,
-      command,
+      command: resolved.command,
       cwd: "/workspace",
       timeout,
       userId: input.userId,
+      ...(uses
+        ? {
+            source: APP_ACTION_EXECUTION_SOURCE,
+            appId: uses.appId,
+            appVersionId: uses.appVersionId,
+            action: uses.action,
+            viewerUserId: input.userId,
+          }
+        : {}),
       env: mergeSpaceHookExecutionEnv({
         userEnv: input.hook.env,
         hookEnv: input.hookEnv,
@@ -261,7 +316,7 @@ async function runCommandHook(input: {
       || result.termination?.reason === "aborted";
     return {
       path: input.hook.path,
-      action: "run",
+      action,
       status: failed ? "failed" : "completed",
       exitCode: result.exitCode,
       durationMs: result.durationMs ?? Date.now() - startedAt,
@@ -280,7 +335,7 @@ async function runCommandHook(input: {
   } catch (error) {
     return {
       path: input.hook.path,
-      action: "run",
+      action,
       status: "failed",
       durationMs: Date.now() - startedAt,
       taskRunId: childTaskRunId,
@@ -443,6 +498,7 @@ registerTask(SPACE_HOOK_TASK_TYPE, async (job, context) => {
             spaceId,
             userId: ownerUserId,
             taskRunId,
+            parentJobId: jobId,
             hook: definition,
             event,
             hookEnv,

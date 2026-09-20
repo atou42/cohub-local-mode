@@ -1,5 +1,178 @@
 [
 	{
+		"version": "2.52",
+		"date": "2026-09-17",
+		"tags": ["v2.52.0"],
+		"highlights": [
+			"**App management for builders**: Apps are governed by a single `app.manage` permission granted to `host` and `builder`, so Space builders can create Apps, publish versions, change config, and read stats without host-only Space settings. App detail responses now report the real `publisher`, which the Cohub bar and authorize dialog credit instead of always showing the Space owner, and deletion is scoped to hosts (any App) or the App's own publisher.",
+			"**Event-driven Runtime recovery**: The per-minute recovery sweep and the message delivery outbox are replaced by Session-scoped reconciliation. The local Runtime reports pending executions in bounded `runtime.recovery` batches after connecting, Gateway peer disconnects and uncertain transports enqueue recovery for that Session, and stop confirmation moves into the affected Chat — more than 64 pending Sessions can no longer break a connection.",
+			"**Completion model registry**: Model resolution is extracted into `CompletionModelRegistry`, which keeps hidden models resolvable by explicit id while excluding them from implicit defaults and provider fallbacks, fixing hidden models that had become unreachable at runtime. The model picker also reveals a hidden model when it is the current selection.",
+			"**Runtime status probe policy**: Space runtime status now sits behind a freshness/backoff policy — a missing route is retried rarely, denials and transient errors back off, and focus/mount bursts collapse into a single request — removing needless polling without delaying the first screen.",
+			"**App authoring contract**: `client.auth.authorize({ target, scopes })` with explicit account, Space, or Space-picker targets is now the documented consent path and reports the authoritative target, `client.desktop.reportResult()` replaces the deprecated `client.ui` alias, and the deprecated `context.space` vocabulary plus unused `work.json` manifests are gone."
+		],
+		"fixes": [
+			"Published HTML assets were cached as immutable, so redeploys served stale pages; HTML now revalidates with a three-day cache while other work assets stay immutable.",
+			"The `0065` `harness_index` migration was not idempotent and could fail on re-run; it is now safe to apply repeatedly.",
+			"Deprecated `context.space` and `client.ui` leftovers were swept from example Apps, the SDK README, and the runtime guide, whose init recipe guarded on `ctx.space.id` (empty in broker mode) and now checks `ctx.app.id`."
+		]
+	},
+	{
+		"version": "2.51",
+		"date": "2026-09-17",
+		"tags": ["v2.51.0"],
+		"highlights": [
+			"**Local Runtime**: `cohub runtime up|status` connects a local workspace to a Space and runs turns on local Pi or Codex harnesses chosen per turn — sessions, turns, streaming and resumption stay on the existing Cohub pipeline, with disconnect reconciliation that never replays model or tool work. It replaces the removed `cohub sandbox up|status` commands (requires Node.js 24+).",
+			"**Structured App authorization**: `client.auth.authorize()` returns explicit targets, viewer-controlled fallback, resolution and the authoritative grant, backed by host capability negotiation, incremental consent (`scopeMode: \"extend\"`) and login recovery resolved before loading Spaces. Legacy `auth.request`/`requestSpace`/`requestCreateSpace` keep their original return shapes with no database migration, and the CLI gains `apps authorize --extend`.",
+			"**Unified preview surfaces**: file, board, port and app previews now render through one shared `PreviewHeader` (dock, mobile and float variants from a single action model), and a single `FileContentPreview` renderer serves both workspace files and published file Apps; PDF controls reveal on reader activity instead of permanently covering the document.",
+			"**Bounded runtime batches and prompt purity**: queued follow-ups merge into one ordered batch owned by the final turn (its harness, model and authorization; any read-only input makes the whole batch read-only), batch size is bounded at claim and protocol level, and platform content is no longer injected into prompt text — blocks without a native form are dropped while the durable copy stays in the platform.",
+			"**Durable archive pipeline**: Cloud sessions stop snapshotting native files and rebuild from durable DB history and compaction boundaries, local native sessions stream as content-addressed segments uploaded and restored directly against object storage via presigned URLs, and a durable outbox retries background recovery with segment-cache reuse and quarantine for receipts that can never succeed."
+		],
+		"fixes": [
+			"A confirmed stop now overrides a completed local result, retiring the native projection instead of continuing down the lost-acknowledgement resume path.",
+			"Preview overflow and control popovers render on a real surface, and the resource label picker anchors to the stable menu trigger instead of an unmounting item that left it invisible.",
+			"Floated preview nodes stay out of document flow from creation, so an unmeasurable anchor can no longer grow the page and introduce a scrollbar.",
+			"Byte formatting converges on the shared `$lib/format-bytes` helper, fixing the NaN and `500.0 B` divergences between file surfaces.",
+			"The shared PDF branch is gated on having a source, restoring the neutral fallback for URL-missing files."
+		]
+	},
+	{
+		"version": "2.50",
+		"date": "2026-09-15",
+		"tags": ["v2.50.0", "v2.50.1", "v2.50.2"],
+		"highlights": [
+			"**Generation SDK 0.1.30**: Upgraded `@neta-art/generation` across API, worker, infra, protocol, and CLI. Suno Chirp Fenix music prompts now map to `gpt_description_prompt`, so natural-language requests use Suno's automatic songwriting; pass explicit lyrics through the new `meta.lyrics` field.",
+			"**Generation SDK 0.1.29**: Upgraded `@neta-art/generation` across API, worker, infra, protocol, and CLI. Seedance catalog prices now show BytePlus list USD per 1M tokens (`seedance-2-0` $2.40–$7.70, `seedance-2-0-fast` $3.30–$5.60, `seedance-2-5` $6.40–$11.70), and `seedance-2-5` is added at 480p–1080p with no 4K.",
+			"**App version history & provenance**: Published apps now expose their immutable version history — the public Cohub bar gains a version switcher (`?cohub_v=<n>`, `getBySlug(…, { version })`, `listPublicVersions()`), and every version deep-links to the session and turn that produced it. Provenance is validated against the app's own space and session identity is gated on `session.view`, so a private session never leaks; the raw publish-time `meta.source` is no longer emitted, and viewer-scoped responses are never shared-cached.",
+			"**Source-label session filtering**: `GET /api/me/sessions?source=…` now filters by each session's source **system label** instead of the raw `space_sessions.source` string, so channel sessions are attributed by the same provider-aware labels a space sidebar shows. The per-origin `sourceCounts` aggregate was removed, dropping a full account-wide scan from every page fetch; the inbox picker lists the full source vocabulary statically.",
+			"**Unified `@` mention search**: Composer Space mentions reuse the command palette's search and ranking (fuzzy text weighted against viewer tier and recency) instead of maintaining a second scorer, so mentions and the palette can no longer disagree about ordering — and the removed duplicate logic eliminates the per-keystroke scan over cached session lists.",
+			"**Docked public App bar**: The public App page is now a full-height flex column with the Cohub bar (wordmark, space/app identity, views, publisher, version switcher) rendered above the App rather than floating over it, so the embedded App's viewport is exactly what the viewer sees. Version history is fetched after hydration, keeping the SSR critical path to a single request.",
+			"**Live generation vs. queued turns**: Generation state is now resumed only from `running` / `abort_requested` turns, since a session's newest unfinished turn can be a queued follow-up waiting behind a running one. Queued turns stay in the follow-up queue, and empty pending snapshots are no longer persisted or restored."
+		],
+		"fixes": [
+			"Fixed `?source=` filters dropping Feishu/WeChat/Discord/QQ channel sessions and mislabeling them as `other`, caused by matching the raw source column instead of the assigned labels.",
+			"Fixed the public app version switcher not actually switching: selection is driven by local state, rewrites `?cohub_v`, refetches the version, and restores the previous version in the URL on failure.",
+			"Fixed the model picker omitting availability dots for generation (image/video/audio) models — the status feed now marks them in both the collapsed row and the expanded list.",
+			"Fixed generation sessions created by direct generation missing their source system label, which previously excluded them from source-based filtering."
+		]
+	},
+	{
+		"version": "2.49",
+		"date": "2026-09-14",
+		"tags": ["v2.49.0"],
+		"highlights": [
+			"**Chats inbox source filter**: The cross-space inbox now filters by any session source instead of only Web App — a \"From\" picker built from server-provided `sourceCounts` (so it only offers origins the account actually has), multi-select with a filtered-empty state and one-click reset, keeping Web App as the default. `GET /api/me/sessions?source=web,feishu` takes a comma-separated list of kinds — `web` also matches legacy null sources, `other` catches unlabelled rows, and unknown kinds return `400` with the offending keys — and the SDK types them as `UserSessionSourceKey` (`user.listSessions({ source: [\"web\"] })`, SDK 8.16.0). The source vocabulary also drops Telegram and Slack, which no gateway produces.",
+			"**Seedance 2 reference audio**: `@neta-art/generation` moves to 0.1.28, and the Seedance 2 / 2.0 Fast declarations accept public-URL `reference_audio` (alongside an explicit `reference_video` block) — `cohub generate --audio reference_audio=<url>` can lip-sync a portrait to a spoken take. Audio is additive to an image or video input: audio-only is rejected and first/last frame roles cannot mix with reference roles. Stale `aspect_ratio`/`fps`/`watermark` parameters are replaced by `ratio`."
+		]
+	},
+	{
+		"version": "2.48",
+		"date": "2026-09-14",
+		"tags": ["v2.48.0"],
+		"highlights": [
+			"**Unified image viewer**: A new shared gesture engine (`image-gesture`) and `ImageViewer` component give every image surface — media lightbox, inline file panel, and app previews — consistent pinch, pan, wheel zoom, and double-click reset, with proper touch handling on mobile.",
+			"**Session inbox source filter**: `GET /api/me/sessions` now accepts `source=web` to isolate human web chats; `user.listSessions({ source: \"web\" })` exposes it in the SDK, and the cross-space inbox defaults to Web App chats with a one-click All toggle, so scheduled prompts and channel bots no longer bury real conversations.",
+			"**App view counts**: App detail responses (`by-slug`, `:id/public`, `:id`) now expose `totalViews`, surfaced in the public Cohub bar. The all-time rollup SUM is cached for 60s and computed best-effort, so a slow count never fails an app detail response.",
+			"**Public file CDN references**: Root-relative `/p/{spaceId}/{path}` links and assets in markdown are parsed and rewritten to absolute CDN URLs with per-segment decoding and path-traversal rejection, configurable via the new `PUBLIC_FILES_ORIGIN`.",
+			"**Workspace assets in chat and previews**: Chat timelines and app file previews now resolve workspace-relative images and media through an injected resolver, rendering a quiet placeholder instead of a broken asset when files are unavailable or the viewer has no workspace access."
+		],
+		"fixes": [
+			"Workspace file links such as `tel:...`, `mailto:...`, and `cohub://` are no longer misread as line references; scheme detection now runs after line-position extraction, so `file.ts:12` still resolves correctly.",
+			"Cached app view totals reject corrupted entries (negatives, floats, unsafe integers) instead of coercing them to zero.",
+			"Video generation preflight now requires a $1.01 minimum balance, up from $0.60.",
+			"Removed the redundant \"Showing X of Y / Show more\" row from the app authorization Space picker, leaving scroll to reveal more."
+		]
+	},
+	{
+		"version": "2.47",
+		"date": "2026-09-12",
+		"tags": ["v2.47.0"],
+		"highlights": [
+			"**Viewer-controlled app authorization**: Space-bound consent now resolves to a Space the viewer controls (invocation/embedding Space, last-picked, then first accessible) instead of the app author's home Space, keeping misconfiguration off the viewer's screen. Failed grants return structured error codes (`space_inaccessible`, `scope_not_held`, `consent_required`, …), developer diagnostics are forwarded to the app author, and a shared `@neta-art/cohub/space-picker` model is exported so every host renders the same chooser.",
+			"**Builder session sharing**: A new `session.access.manage` permission lets builders and hosts share/unshare sessions, decoupled from the host-only `member.manage`. Space-level access and member management stay host-only, and the permission is not granted to Apps.",
+			"**Model pricing in the CLI**: `cohub models ls` and `cohub models show` now print per-million-token costs and compact multimodal unit prices (e.g. `$0.04 / image`), expose the raw `pricing` object in `--json`, and hide hidden models and providers left with no visible models.",
+			"**Overlay performance**: The host coalesces pointermove hit-testing into a single pass per frame (flushed on release, cancelled on unmount), while companions skip redundant stage-transform writes, derive hit-region rects without a layout read, and redraw sprites only when the pose changes.",
+			"**Paged app-authorization Space picker**: Each filter tab now windows its full match set on a shared `INITIAL + n * PAGE` curve with a rAF gate, making Spaces beyond the first few reachable; the dialog body scrolls on short viewports and the tabs use `aria-pressed` with per-tab empty-state copy."
+		],
+		"fixes": [
+			"Overlay rect input regions are released as soon as the pointer leaves them, fixing a resting overlay that kept the whole window unclickable; ownership stays frozen while any button is held, including a drag that began on the page underneath.",
+			"Completed session turns no longer regress to pending on tab resume: a stale `activeTurn` from the session-list cache can no longer downgrade a locally terminal generation or hide its persisted answer."
+		]
+	},
+	{
+		"version": "2.46",
+		"date": "2026-09-11",
+		"tags": ["v2.46.0", "v2.46.1"],
+		"highlights": [
+			"**Space webhooks**: Space Hooks can now be triggered over HTTP — a `.cohub/hooks/<name>.yml` declaring `on.event: webhook` is addressed at `POST /api/spaces/:id/webhooks/:name`, with an optional `on.secret` credential, a 64 KB JSON body, and per-space rate limiting. Also available via the SDK (`space.webhooks`), the CLI (`cohub spaces webhooks ls|url|trigger`), and a Settings listing.",
+			"**App Action hooks (`uses`)**: Hooks can run a published App Action with `uses: user/space/app/action`, passing a JSON payload via `with`, executing as the Space owner over the existing run_command chain instead of shell or prompt steps.",
+			"**Unified App surface resolution**: Workspace opens — the Open button, installed Apps, chat links, and App-to-App navigation — now honor the App's published `meta.presentation.surface`, matching `cohub desktop open`. An explicit surface still wins, and reaching the overlay cap surfaces a notice rather than silently falling back to a window.",
+			"**App preview keep-alive**: Recently used App tabs (default 3) stay mounted in the background across tab switches instead of destroying and rebuilding a single shared iframe, preserving their state; the active App is always retained so the stage never goes empty.",
+			"**Shell context for background Apps**: New chat background Apps now receive `ctx.shell`, letting them read the current location the same way workspace windows and overlays do.",
+			"**Command palette overview warming**: The Recent tab's overview is warmed in the background instead of revalidated on open — viewer activity (send, pin) schedules a debounced, coalesced refresh, the snapshot and its two-minute throttle are shared across tabs over the cache broadcast channel, visiting a Space no longer invalidates the snapshot, and most opens hit no network at all.",
+			"**Generation SDK 0.1.27**: Upgraded `@neta-art/generation` across API, worker, infra, protocol, and CLI, bringing gpt-image-2 output controls — `background` (auto / opaque / transparent) and `output_format` (png / jpeg / webp) — with transparent-background examples in the generation docs.",
+			"**Milk Frog desktop-surface example**: The `hud` and `mascot` overlay demos are consolidated into a single `milk-frog` companion App that follows the current chat, reads the live generation stream, and replies in its curator voice, demonstrating roam/dock input regions and CDN-hosted sprites."
+		],
+		"fixes": [
+			"Fixed space hooks dropping every event for up to 5 minutes: a stale empty hook cache written before the workspace was ready is no longer treated as authoritative — `space.workspace.ready` refreshes the cache, negative caching is skipped while the workspace is missing, and the short empty-cache TTL is restored.",
+			"Fixed the App detail view rendering \"app not found\" when navigating from a higher-version App to a lower-version one, by treating an incoming snapshot from a different App as newer instead of comparing version numbers alone.",
+			"**Session detail active turn**: `spaces sessions get` and rename responses now include `activeTurn` like the session list, so clients can tell whether a turn is still running from the single-session response."
+		]
+	},
+	{
+		"version": "2.45",
+		"date": "2026-09-09",
+		"tags": ["v2.45.0", "v2.45.1", "v2.45.2"],
+		"highlights": [
+			"**Board edit-history replay**: A read-only transaction log API (`GET /spaces/:id/boards/:boardId/transactions`, snapshot-consistent newest-first pages with server-computed inverses) plus the SDK's `createBoardReplayPlayer()` and the CLI's `cohub boards transactions` (alias `history`) make any Board's edit history rewindable and playable. The web workspace adds a private read-only replay stage with a scrubber, play/pause, 1–4× speed, step, camera follow, and live tail appends.",
+			"**Desktop overlay surfaces**: Apps can run as a transparent, chrome-free overlay above the Space workspace instead of a preview tab — requested with `cohub desktop open <app> --as overlay` or declared at publish time via `<meta name=\"cohub:surface\" content=\"overlay\">`. Overlays cover the whole window and set their geometry and pointer-event regions through `cohub.app.requestConfigure()` — regions are hit-tested, so everything an overlay paints stays visible outside its interactive area and fixed panels shrink to their own size. Overlays expose `context.invocation.surface`, and keep the full App runtime (context, auth, Space APIs, realtime, `--call`, composer chips, commerce), with up to eight mounted at once.",
+			"**Board rendering**: Entrance motion is now an optional `effects.deal` preset (Board-wide default or per-node `on-enter`) rather than always-on, with reduced-motion preserved. Image textures are shared through an application-level reference-counted pool over Pixi's global `Assets` cache so multiple Board windows reuse one GPU texture, and the unused Board theme registry was removed in favor of `createBoardBackground`/`updateBoardBackground`.",
+			"**Generation model pricing**: Model declarations can carry a display `pricing` block (`unit` plus `amount` or a `min`/`max` range), surfaced through `models.listMultimodal()` and rendered beside each model in the web model picker. The schema now lives upstream in `@neta-art/generation` 0.1.26 — `@cohub/protocol` re-exports the type, the infra declaration loader delegates validation to the SDK parser, and the duplicated local schema and its tests are gone.",
+			"**`space.create` permission**: Space creation is now authorized by a user-level permission instead of the caller's principal type — execution tokens work again (`cohub spaces create` inside a Sandbox), app sessions need an explicit viewer grant, preview sessions are denied, and account sessions are unchanged.",
+			"**Mobile viewport guard**: A fixed-height shell (`height: 100%` with `interactive-widget=resizes-content`) plus a new offset guard snaps the document back after the soft keyboard closes, so the shell no longer shifts up and exposes the root canvas; the chat list also re-pins to the tail when the viewport shrinks.",
+			"**Gateway resilience**: QQ reconnects connect through the well-known WebSocket URL and cache `/gateway/bot` with its `session_start_limit`, backing off on frequency limits instead of hammering `GET /gateway` and misclassifying the limit as a config error, with channels reporting a `rate_limit` health reason. The gateway verifies the user access token locally before calling the API, and the sandbox relay exits with an actionable message when a token is rejected instead of retrying forever."
+		],
+		"fixes": [
+			"**App republish**: page-derived metadata (title, description, icon, image, lang, theme color, surface) is now updated or cleared only when the current value is the one extraction last wrote, so hand-set publisher values are preserved.",
+			"**Overlay paint and input**: input regions only gate pointer events, so decorative parts such as bubbles, tooltips and effects render outside the interactive area; rect regions activate on hover while `\"all\"` works on touch. Overlay iframes stay hidden until they paint, and identical `requestConfigure` payloads are compared structurally and skipped so Apps re-sending geometry every render no longer churn the overlay list.",
+			"**App consent**: identical in-flight `auth.request()` calls merge into one consent dialog and share its answer, instead of replacing it with a spurious denial.",
+			"**Board file cards**: dropped the redundant `TYPE · size` meta line; the title, excerpt and category stripe already identify the file.",
+			"**Search**: query responses now report `truncated` correctly when the result limit is reached.",
+			"**Consistent browser chrome**: the PWA manifest, inline FOUC script and theme registry now share each theme's exact `--bg-primary` color, kept in lockstep by a dedicated test."
+		]
+	},
+	{
+		"version": "2.44",
+		"date": "2026-09-08",
+		"tags": ["v2.44.0"],
+		"highlights": [
+			"**App embedding**: Apps can now host other Apps by rendering their public pages in iframes through `cohub.app.embed.attach(frame, { appId, shell, onCloseRequest })`; the embedded App sees `shell.surface: \"embed\"` and a verified `invocation.embedder`, and any App can call `cohub.app.requestClose()` to ask its host to close the surface it runs in.",
+			"**Viewer-owned Spaces via App consent**: `client.auth.requestCreateSpace()` lets an App create a Space owned by the viewer in a single consent — the host creates it with the viewer's account token, then grants the requested scopes. The create API now rejects delegated principals, so Apps, previews, and executions can never mint Spaces.",
+			"**Richer board file cards**: titles now come from frontmatter or the first H1 (extension stripped), more cover keys are accepted (including nested `image.src`), and excerpts follow the file category, backed by a new pure, renderer-agnostic `file-snapshot` module split out of `file-preview`. Cards show a `TYPE · size` meta line, a category-coloured stripe, and a large type mark when there is no cover or excerpt.",
+			"**Board entrance motion**: nodes added locally or arriving via `board.changed` drop onto the board with an id-hashed deal (lift, swing, tilt, easeOutBack) followed by a short landing stroke; bursts over 12 items are treated as rehydration and skipped, and reduced motion falls back to a plain fade.",
+			"**WebSocket and CLI resilience**: WebSocket clients retry stalled handshakes with a configurable `connectTimeoutMs` and ignore callbacks from stale sockets; CLI uploads now honor `HTTP(S)_PROXY`, send `Content-Length`, and retry transient PUT failures, while nested `--help` resolves the correct command path."
+		],
+		"fixes": [
+			"Space creation no longer 409s or hangs when provisioning fails: the API returns the already-created Space so callers can close with `{ granted: false, space }`, and environment/sandbox setup failures no longer abort the committed Space.",
+			"CLI nested `--help` on unknown prefixes now reports an error instead of dumping top-level help.",
+			"WebSocket reconnect no longer processes callbacks from superseded sockets, which could corrupt connection state or drop a reconnection."
+		]
+	},
+	{
+		"version": "2.43",
+		"date": "2026-09-08",
+		"tags": ["v2.43.0"],
+		"highlights": [
+			"**Optional workspace search index**: A standalone `cohub-search` (Rust/Tantivy) and sandbox `fs.search` RPC land as optional infrastructure — when a binary is present, the Go sandbox supervises the indexer, forwards filewatch deltas, and stores a trigram candidate index on the system PVC for exact `rg` verification. This release publishes linux/amd64 binaries but does not bake them into the sandbox image, so search stays off until explicitly enabled.",
+			"**Live session activity**: Session records now carry `activeTurn` (turn id, queued/running/abort-requested status, provider, model) end-to-end — API list responses, realtime events, and the IndexedDB session-list cache. The sidebar and per-session generation state stay current as turns progress, and recover correctly across reloads and background refreshes.",
+			"**Home space default**: CLI commands now resolve the target space as `-s`, then `COHUB_SPACE_ID`, then the user's Home space via `GET /api/spaces/default`. The lookup is memoized per process and cached per login identity (24 h TTL, `0600` file mode), so plain `cohub prompt` / `cohub run` work right after login without flags.",
+			"**Runtime-aware publishing**: `cohub apps publish` now infers `--source` from the runtime — workspace inside a sandbox, local otherwise — instead of defaulting to workspace. `getCohubContext()` treats a `COHUB_SPACE_ID` alone as a local runtime; only an execution token marks a sandbox, fixing misclassified local runs."
+		],
+		"fixes": [
+			"Sidebar session activity could go stale after background list refreshes and pending-generation indicators could stick across reloads; activity and generation state are now authoritatively reconciled from server-side active-turn data.",
+			"Search indexing is kept optional and isolated from sandbox provisioning: reconcile no longer creates index directories or falls back the system root to space storage, and directory deletes are applied as snapshot prefix removals."
+		]
+	},
+	{
 		"version": "2.42",
 		"date": "2026-09-07",
 		"tags": ["v2.42.0"],

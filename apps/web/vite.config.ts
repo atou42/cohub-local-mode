@@ -91,8 +91,8 @@ export default defineConfig(({ mode }) => {
 					description: "AI-powered space collaboration",
 					// Stable light fallback for install/cold-start chrome. Runtime theme
 					// synchronization handles the active shell and custom space themes.
-					theme_color: "#F8F8FA",
-					background_color: "#F8F8FA",
+					theme_color: "#FFFFFF",
+					background_color: "#FFFFFF",
 					display: "standalone",
 					icons: [
 						{

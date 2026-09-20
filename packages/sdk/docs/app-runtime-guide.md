@@ -1,8 +1,9 @@
 # Cohub App Runtime Guide
 
-This guide explains how to use the Cohub SDK **inside a published App** — the
-only environment where runtime APIs (`context()`, `auth.request`,
-`app.commerce.*`, `app.realtime.*`) function. Read this before building any
+This guide explains the Cohub SDK in a published App iframe or an explicitly
+configured standalone broker. New Apps should use `auth.authorize()`; see the
+[authorization contract](../../../docs/app-authorization.md). Legacy APIs below
+retain their original return types. Read this before building any
 App that calls Cohub capabilities from browser-side JavaScript.
 
 It is written to be self-contained: an agent or developer who reads only this
@@ -56,25 +57,24 @@ requiring the viewer to paste an API key.
 │  │                                   │  │
 │  │  createCohubClient() ──► token ──►│──┼──► Cohub API
 │  │  client.context()    ◄── identity │  │
-│  │  client.auth.request() ──► consent│  │
+│  │  client.auth.authorize() ► consent│  │
 │  └───────────────────────────────────┘  │
 └─────────────────────────────────────────┘
 ```
 
-Five runtime-only APIs form the foundation; everything else is standard SDK:
+These runtime-only APIs form the foundation; everything else is standard SDK:
 
 | API | What it does | Returns |
 |---|---|---|
-| `client.context()` | Asks the host for the App's identity | `{ app, space, viewer?, invocation?, permissions }` or `null` |
-| `client.auth.request({ scopes, reason, spaceId?, alwaysAsk? })` | Ensures the app holds these scopes; silent when a grant already covers them, consent dialog otherwise | `true` / `false` |
-| `client.auth.requestSpace({ scopes, reason, alwaysAsk? })` | One consent: the viewer picks a Space and grants the scopes on it | `{ granted, space }` |
+| `client.context()` | Asks the host for the App's identity | `{ app, space, viewer?, invocation?, shell?, permissions, capabilities?, mode? }` or `null` |
+| `client.auth.authorize({ target, scopes, reason?, alwaysAsk?, fallback? })` | Requests consent for an account, a Space, or a viewer-picked Space; silent when a grant already covers the scopes | `{ status: "granted", requestedTarget, target, resolution, grant }` \| `{ status: "cancelled" }` \| `{ status: "denied", code }` |
+| `client.auth.request()` / `requestSpace()` / `requestCreateSpace()` | Legacy entry points, kept for older Apps | original shapes (`boolean`, `{ granted, space }`) |
 | `client.context().permissions.viewerGrants` | Render the viewer's current per-space grants | `{ spaceId, scopes }[]` |
 | `client.app.commerce.*` / `client.app.realtime.*` | Commerce and realtime, bound to the app's runtime identity | (see below) |
 
-> **Runtime-only constraint.** These APIs only work inside a **published**
-> App. Outside that context (a static asset URL, a local `file://` preview,
-> a plain Node script) `context()` returns `null` and the other runtime APIs
-> fail. Always develop against a published App.
+> **Runtime requirement.** Use a published App iframe or explicitly configure
+> a broker. A standalone page without broker configuration has no runtime.
+> Initialize `context()` before using APIs to discover Host capabilities.
 
 `client.app.onContextChanged(listener)` pushes a fresh context whenever the
 host's state changes (sign-in, invocation, grants), so an App can render its
@@ -99,7 +99,7 @@ and context. This is the normal case when a viewer opens an App through Cohub.
   snapshot with the originating `spaceId`, `sessionId`, `turnId`, and
   `toolCallId` when available. The invocation Space may differ from the App's
   own `space.id`.
-- `client.auth.request()` triggers an in-shell consent flow (no popup window).
+- `client.auth.authorize()` triggers an in-shell consent flow (no popup window).
 
 ```js
 const ctx = await client.context();
@@ -117,9 +117,11 @@ The App is accessed as a standalone page (`window.parent === window`), e.g.
 a direct static-asset URL not wrapped in the Cohub iframe. The SDK opens a
 **popup window** to a Cohub auth-broker page to obtain tokens.
 
-- `client.context()` is **answered locally** by the SDK: `space.id` is an
-  **empty string `""`**, and viewer grants are unavailable (empty).
-- `client.auth.request()` opens a popup to
+- `client.context()` is **answered locally** by the SDK: it reports
+  `mode: "broker"`, `space.id` is an **empty string `""`**, and viewer grants
+  are unavailable (empty). Broker tokens stay in memory and are never restored
+  from or written to `localStorage`.
+- `client.auth.authorize()` opens a popup to
   `${brokerOrigin}/app-auth?app=${appId}`.
 
 > **Broker mode requires configuration.** You must pass `app: { brokerOrigin,
@@ -133,42 +135,43 @@ a direct static-asset URL not wrapped in the Cohub iframe. The SDK opens a
 
 ```js
 const ctx = await client.context();
-const isBroker = !ctx?.space?.id; // bridge has a real id; broker is ""
+const isBroker = ctx?.mode === "broker";
 ```
 
 In broker mode you cannot get a spaceId from `context()`. Resolve it via the
 public by-slug App API (anonymous, no token needed):
 
 ```js
-const isBroker = !ctx?.space?.id;
+const isBroker = ctx?.mode === "broker";
 let spaceId;
 if (isBroker) {
   const detail = await client.apps.getBySlug(ownerUsername, spaceSlug, appSlug);
   spaceId = detail.app.spaceId;
 } else {
-  spaceId = ctx.space.id;
+  // Prefer where the App is running; fall back to the Space that owns it.
+  spaceId = ctx.shell?.space?.id ?? ctx.invocation?.spaceId ?? ctx.app.homeSpace?.id;
 }
 ```
 
 ### Broker mode: user-activation ordering gotcha
 
 `HttpTransport` calls `getAccessToken()` on **every** request — including
-public ones like `apps.getBySlug()`. In broker mode, an uncached token request
-opens a popup, which **consumes the browser's user-activation budget**. If a
-second popup (`auth.request`) follows in the same click, the browser blocks it.
+public ones like `apps.getBySlug()`. In broker mode, a token exchange opens a
+popup, which **consumes the browser's user-activation budget**. If a second
+popup (the consent dialog) follows in the same click, the browser blocks it.
 
-**Fix:** call `auth.request()` **before** any other API call that triggers
-`getAccessToken()`. After `auth.request` succeeds, the token is cached in
-`localStorage` and subsequent `getAccessToken()` calls hit the cache — no
-popup.
+**Fix:** call `auth.authorize()` **before** any other API call that triggers
+`getAccessToken()`. The token returned by that exchange is cached in memory for
+the lifetime of the client, so later `getAccessToken()` calls reuse it without
+a popup.
 
 ```js
-// WRONG: getBySlug() opens a popup, consumes activation, auth.request popup blocked
+// WRONG: getBySlug() opens a popup, consumes activation, consent popup blocked
 const detail = await client.apps.getBySlug(owner, spaceSlug, appSlug);
-await client.auth.request({ scopes, reason });
+await client.auth.authorize({ target: { kind: "pick-space" }, scopes });
 
-// RIGHT: auth.request opens the only popup, then getBySlug() hits token cache
-await client.auth.request({ scopes, reason });
+// RIGHT: authorize() opens the only popup, then getBySlug() hits the token cache
+await client.auth.authorize({ target: { kind: "pick-space" }, scopes });
 const detail = await client.apps.getBySlug(owner, spaceSlug, appSlug);
 ```
 
@@ -206,7 +209,7 @@ command.execute          — run sandbox shell commands
 ### Viewer grants (consent-required, any permission, per Space)
 
 A viewer grants these through a consent dialog triggered by
-`client.auth.request()` / `client.auth.requestSpace()`. A viewer may grant
+`client.auth.authorize()`. A viewer may grant
 **any** permission they currently hold on the target Space — including scopes
 outside the eight app scopes, such as `generation.create` or the account-level
 `user.*` scopes. Two hard rules are enforced by the server:
@@ -239,31 +242,77 @@ requested Space.
 
 ### Requesting viewer grants
 
-Both helpers must be called **from a user gesture** (button click). They are
+Consent must be requested **from a user gesture** (a button click). It is
 silent when an existing grant already covers the scopes — the dialog only
 opens when something new is needed:
 
 ```js
-// Target a known Space (omit spaceId for the App's own Space).
-const ok = await client.auth.request({
+// 1. Target a known Space. The result names the Space that was actually
+//    granted, which may differ from the request when the viewer cannot use it.
+const result = await client.auth.authorize({
+  target: { kind: "space", spaceId: invocationSpaceId },
   scopes: ["taskrun.view"],
-  spaceId: invocationSpaceId,
   reason: "This app reads generation tasks in the Space you opened it from.",
 });
+if (result.status === "granted" && result.target.kind === "space") {
+  const space = client.space(result.target.spaceId);
+}
 
-// One consent: the viewer picks the Space. The host loads the space list —
-// the app only learns the pick. Returning viewers silently reuse their last pick.
-const { granted, space } = await client.auth.requestSpace({
+// 2. One consent: the viewer picks the Space. The host loads the space list —
+//    the app only learns the Space the viewer chose.
+const picked = await client.auth.authorize({
+  target: { kind: "pick-space" },
   scopes: ["file.view", "session.view"],
   reason: "This app reads the Space you pick.",
 });
-if (granted && space) {
-  const picked = client.space(space.id);
+if (picked.status === "granted" && picked.target.kind === "space") {
+  const space = client.space(picked.target.spaceId);
 }
+
+// 3. Account-level data needs an account target, not a Space.
+const account = await client.auth.authorize({
+  target: { kind: "account" },
+  scopes: ["user.space.list"],
+});
+
+// 4. Strict target: never resolve to another Space.
+const strict = await client.auth.authorize({
+  target: { kind: "space", spaceId: projectSpaceId },
+  scopes: ["file.edit"],
+  fallback: "none",
+});
 ```
 
-Pass `alwaysAsk: true` to skip silent reuse and force a fresh dialog — for
-re-confirming a grant or letting the viewer switch to another Space.
+The result tells the App exactly what happened:
+
+| Field | Meaning |
+|---|---|
+| `status` | `granted`, `cancelled`, or `denied` |
+| `requestedTarget` | What the App asked for |
+| `target` | What was actually granted (`account`, or a Space with `spaceId`/`name`) |
+| `resolution` | `requested`, `selected`, or `fallback` |
+| `grant` | `{ id, spaceId, scopes, expiresAt }` from the server |
+
+Rules worth internalizing:
+
+- **Act on `target`, never on the request.** API calls are never redirected to
+  another Space on your behalf; if you asked for Space A and got B, use B.
+- **Unavailable Spaces fall back by default.** The dialog shows the
+  viewer-controlled Space that will be used. Pass `fallback: "none"` when the
+  operation only makes sense in the Space you named.
+- **Cancellation is not an error.** `{ status: "cancelled" }` means the viewer
+  closed the dialog; keep their input and offer the action again.
+- **Incremental growth.** New consent keeps scopes from a still-valid grant and
+  adds the new ones; it never revives an expired or revoked scope.
+- Pass `alwaysAsk: true` to skip silent reuse — for re-confirming a grant or
+  letting the viewer switch to another Space.
+
+Creating a viewer-owned Space stays on `client.auth.requestCreateSpace({ space, scopes })`
+(never silent, each confirm mints a new Space). `{ granted: false }` **may still
+carry a `space`**: the Space was created but bootstrap or authorization did not
+finish. Keep the id, resume against it, and never create a second Space or
+delete it automatically. An App can also create a viewer-owned Space directly
+with `client.spaces.create()` once it holds a `space.create` viewer grant.
 
 ### Checking grant state at runtime
 
@@ -279,7 +328,7 @@ ctx.permissions.viewerScopes // flat viewer scopes (legacy compatibility)
 ```
 
 Apps never cache or manage grants themselves — the host does. Checking state
-is for **rendering**; acting is `auth.request`'s job.
+is for **rendering**; acting is `auth.authorize()`'s job.
 
 ### Managing grants
 
@@ -318,6 +367,9 @@ dialog can.
 | Read task run detail | `client.tasks.get(taskRunId)` | `taskrun.view` | app or viewer |
 | List tasks in a Space | `client.tasks.list({ spaceId })` | `taskrun.view` on that Space | app or viewer |
 | List all owned task runs | `client.tasks.list()` | `user.taskrun.list` | **viewer only** |
+| Create a Space for the viewer | `client.auth.requestCreateSpace({ space, scopes })` | requested scopes on the new Space | **viewer consent** |
+| Request any consent | `client.auth.authorize({ target, scopes })` | the requested scopes on the resolved target | **viewer consent** |
+| Create a viewer-owned Space directly | `client.spaces.create(input)` | `space.create` | **viewer only** |
 | List viewer's spaces | `client.spaces.list()` | `user.space.list` | **viewer only** |
 | List viewer's sessions | `client.user.listSessions()` | `user.session.list` | **viewer only** |
 | Read viewer's activity | `client.user.getActivity()` | `user.usage.read` | **viewer only** |
@@ -344,7 +396,7 @@ App's own Space; any other Space needs a viewer grant on that Space.
 
 **Cross-space app** (acts on Spaces the viewer picks):
 - `appScopes: []` (or its own-Space needs)
-- viewer grants via `auth.requestSpace` at runtime
+- viewer grants via `auth.authorize({ target: { kind: "pick-space" } })` at runtime
 
 ---
 
@@ -435,28 +487,36 @@ the Cohub iframe both are ignored (bridge mode).
 // 1. Create client (env is mandatory in the browser)
 const client = createCohubClient({ env: isDevApp ? "dev" : "prod" });
 
-// 2. Get runtime context (and keep it fresh)
+// 2. Get runtime context (and keep it fresh). `app` is present in bridge and
+//    broker mode; a Space id is only reported by the bridge.
 const ctx = await client.context();
-if (!ctx?.space?.id) {
-  // Not in an app runtime (or broker mode — see §2)
+if (!ctx?.app?.id) {
   throw new Error("Not running inside a published app.");
 }
 const stopContextWatch = client.app.onContextChanged((next) => renderGrants(next));
 
-// 3. Obtain the space client for API calls
-const space = client.space(ctx.space.id);
-
-// 4. Request viewer grants (from a user gesture, e.g. button click)
-const ok = await client.auth.request({
+// 3. Request viewer grants from a user gesture (e.g. button click). Target
+//    where the App is running, or `{ kind: "pick-space" }` when it has no
+//    location of its own.
+const consent = await client.auth.authorize({
+  target: {
+    kind: "space",
+    spaceId: ctx.shell?.space?.id ?? ctx.invocation?.spaceId ?? ctx.app.homeSpace?.id,
+  },
   scopes: ["session.prompt.fullaccess", "generation.create"],
   reason: "This app sends prompts and generates images.",
 });
+if (consent.status !== "granted" || consent.target.kind !== "space") {
+  throw new Error("Consent was not granted.");
+}
 
-// 5. Call capabilities
-const result = await space.prompt({ content: [{ type: "text", text: "Hello" }] });
+// 4. Call capabilities on the Space that was actually granted — never on the
+//    one you asked for.
+const activeSpace = client.space(consent.target.spaceId);
+const result = await activeSpace.prompt({ content: [{ type: "text", text: "Hello" }] });
 ```
 
-> **`auth.request` must be called from a user gesture** (click handler).
+> **`auth.authorize()` must be called from a user gesture** (click handler).
 > Browsers block popups (broker mode) and some consent flows (bridge mode)
 > when triggered programmatically without user activation. Do not call it on
 > page load. It is safe to call repeatedly: covered scopes renew silently.
@@ -558,7 +618,8 @@ send must match — the backend picks the permission check based on
 
 ```js
 // 1. Ensure the read-only scope is granted (silent when already covered)
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "space", spaceId: space.id },
   scopes: ["session.prompt.readonly"],
   reason: "Generate a one-off character reply (read-only).",
 });
@@ -685,21 +746,24 @@ not the App's own space. Each requires a separate viewer grant.
 
 ```js
 // List the viewer's spaces — needs user.space.list
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "account" },
   scopes: ["user.space.list"],
   reason: "Show your space list.",
 });
 const spaces = await client.spaces.list();
 
 // List sessions across all the viewer's spaces — needs user.session.list
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "account" },
   scopes: ["user.session.list"],
   reason: "List your recent sessions.",
 });
 const { sessions } = await client.user.listSessions({ limit: 20 });
 
 // Read activity — needs user.usage.read
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "account" },
   scopes: ["user.usage.read"],
   reason: "Show your activity.",
 });
@@ -984,19 +1048,21 @@ function log(el, msg) {
 // --- Runtime initialization ---
 async function ensureRuntime(outEl) {
   const ctx = await client.context();
-  if (!ctx?.space?.id) {
+  if (!ctx?.app?.id) {
     throw new Error("Not running inside a published app runtime.");
   }
-  spaceId = ctx.space.id;
+  // Prefer the current Cohub location, then the Space that owns the App.
+  spaceId = ctx.shell?.space?.id ?? ctx.invocation?.spaceId ?? ctx.app.homeSpace?.id;
+  if (!spaceId) throw new Error("No Space to act on — request one with auth.authorize().");
   space = client.space(spaceId);
   return ctx;
 }
 
 // --- Viewer grant helpers ---
-// Render state from context; act through auth.request (silent when covered).
+// Render state from context; act through auth.authorize (silent when covered).
 function hasViewerGrant(ctx, scope, spaceId) {
   return (ctx?.permissions?.viewerGrants ?? []).some(
-    (g) => g.spaceId === (spaceId ?? ctx?.space?.id) && g.scopes.includes(scope),
+    (g) => g.spaceId === (spaceId ?? ctx?.app?.homeSpace?.id) && g.scopes.includes(scope),
   );
 }
 
@@ -1009,9 +1075,17 @@ async function ensureViewerScopes(scopes, reason, outEl) {
     return true;
   }
   log(outEl, `Requesting: [${missing.join(", ")}]...`);
-  const ok = await client.auth.request({ scopes, reason });
-  log(outEl, ok ? "Authorized." : "Authorization denied.");
-  return ok;
+  const result = await client.auth.authorize({
+    target: { kind: "space", spaceId: ctx?.shell?.space?.id ?? ctx?.invocation?.spaceId },
+    scopes,
+    reason,
+  });
+  if (result.status === "granted") {
+    log(outEl, `Authorized on ${result.target.kind === "space" ? result.target.spaceId : "account"}.`);
+  } else {
+    log(outEl, result.status === "cancelled" ? "Consent cancelled." : `Consent denied (${result.code}).`);
+  }
+  return result.status === "granted";
 }
 
 // --- LLM chat (space.prompt + subscribeGeneration) ---
@@ -1098,7 +1172,7 @@ async function generateImage(prompt, outEl) {
   return image?.source?.url ?? null;
 }
 
-// --- Event handlers (auth.request must be in a user gesture) ---
+// --- Event handlers (auth.authorize must be in a user gesture) ---
 $("btn-context").addEventListener("click", async () => {
   const out = $("output-context");
   out.textContent = "";
@@ -1169,7 +1243,8 @@ $("btn-img").addEventListener("click", async () => {
     if (ctx) {
       setOutput($("output-context"), {
         "app.id": ctx.app?.id,
-        "space.id": ctx.space?.id,
+        "app.homeSpace.id": ctx.app?.homeSpace?.id,
+        mode: ctx.mode,
         permissions: ctx.permissions,
       });
     }
@@ -1200,16 +1275,19 @@ Before publishing your App, verify each item:
   `session.view`.
 - [ ] **`generation.create` does NOT include `taskrun.view`** — creating a
   generation task succeeds but polling the result 403s without `taskrun.view`.
-- [ ] **`auth.request()` is called from a user gesture** (button click), not
+- [ ] **`auth.authorize()` is called from a user gesture** (button click), not
   on page load. It is safe to call repeatedly — covered scopes renew silently.
 - [ ] **Cross-Space access targets the right Space** — viewer grants are per
-  Space. Pass `spaceId` when requesting, or use `auth.requestSpace` to let the
-  viewer pick.
+  Space. Pass `target: { kind: "space", spaceId }` to name one, or
+  `target: { kind: "pick-space" }` to let the viewer choose. Act on the
+  returned `target`, which may differ from the request. Use
+  `auth.requestCreateSpace` to mint a new viewer-owned Space in one consent, or
+  `spaces.create()` directly once the app holds a `space.create` viewer grant.
 - [ ] **`subscribeGeneration` errors are not silently swallowed** — if the
   stream fails, surface it; a silent fallback to polling will also 403 if
   `session.view` is missing.
 - [ ] **Broker mode**: if the App may be accessed standalone, pass
-  `app: { brokerOrigin, appId }` and call `auth.request()` before any other
+  `app: { brokerOrigin, appId }` and call `auth.authorize()` before any other
   API call (to avoid user-activation exhaustion).
 - [ ] **Space has a slug and owner has a username** before publishing — the
   API rejects Apps when either is missing.

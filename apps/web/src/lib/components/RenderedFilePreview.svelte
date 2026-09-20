@@ -3,7 +3,6 @@ import type { AppRecord } from "@neta-art/cohub";
 import { onDestroy, untrack } from "svelte";
 import * as publicEnv from "$env/static/public";
 import { readAppCheckoutState } from "$lib/components/app/app-checkout-state";
-import MarkdownView from "$lib/components/MarkdownView.svelte";
 import AppAuthorizeDialog from "$lib/features/app/AppAuthorizeDialog.svelte";
 import { createAppBridgeHost } from "$lib/features/app/bridge-host.svelte";
 import type { PreviewCaptureTarget } from "$lib/features/preview-mark";
@@ -13,22 +12,18 @@ import {
 	createSpacePreviewSessionController,
 	type SpacePreviewTarget,
 } from "$lib/space-preview-session.svelte";
-import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 
 let {
 	name,
 	source,
-	type,
 	path = null,
 	spaceId = null,
 	readonly = false,
 	app = null,
 	markTarget = $bindable(null),
-	onOpenFile,
 }: {
 	name: string;
 	source: string;
-	type: "markdown" | "html";
 	path?: string | null;
 	spaceId?: string | null;
 	readonly?: boolean;
@@ -36,7 +31,6 @@ let {
 	app?: AppRecord | null;
 	/** Outbound mark capture target for parent chrome. */
 	markTarget?: PreviewCaptureTarget | null;
-	onOpenFile?: (target: WorkspaceFileLinkTarget) => void | Promise<void>;
 } = $props();
 
 const locale = $derived(getLocale());
@@ -48,11 +42,9 @@ let lastSrcdocFrame: HTMLIFrameElement | null = null;
 let lastSrcdoc = "";
 
 const canUsePreviewOrigin = $derived(
-	Boolean(type === "html" && !readonly && previewOrigin && spaceId && path),
+	Boolean(!readonly && previewOrigin && spaceId && path),
 );
-const previewKey = $derived(
-	`${type}:${previewOrigin}:${spaceId ?? ""}:${path ?? ""}`,
-);
+const previewKey = $derived(`${previewOrigin}:${spaceId ?? ""}:${path ?? ""}`);
 const previewSession = createSpacePreviewSessionController({
 	getTarget: (): SpacePreviewTarget | null =>
 		canUsePreviewOrigin && spaceId && path
@@ -63,7 +55,7 @@ const previewSession = createSpacePreviewSessionController({
 
 // Auto-enable the app bridge when this HTML file is a published app.
 const host = $derived.by(() => {
-	if (!app || type !== "html" || !canUsePreviewOrigin) return null;
+	if (!app || !canUsePreviewOrigin) return null;
 	return createAppBridgeHost({
 		app,
 		reply: (requestId, payload) => {
@@ -88,7 +80,7 @@ function handleFrameMessage(event: MessageEvent) {
 
 // Publish mark context to parent chrome (button lives in the file header).
 $effect(() => {
-	if (type !== "html" || !frame || !path) {
+	if (!frame || !path) {
 		markTarget = null;
 		return;
 	}
@@ -101,7 +93,6 @@ $effect(() => {
 
 $effect(() => {
 	previewKey;
-	if (type !== "html") return;
 	void untrack(() => previewSession.reset());
 	return previewSession.stop;
 });
@@ -109,7 +100,7 @@ $effect(() => {
 // Fallback srcdoc path: only rewrite when source or iframe node actually
 // changes so panel resizes never reassign iframe.srcdoc and reload the page.
 $effect(() => {
-	if (type !== "html" || canUsePreviewOrigin) return;
+	if (canUsePreviewOrigin) return;
 	const nextSource = source;
 	const el = frame;
 	if (!el) return;
@@ -130,9 +121,7 @@ onDestroy(() => {
 });
 </script>
 
-{#if type === "markdown"}
-	<MarkdownView {source} variant="document" baseFilePath={path} {onOpenFile} />
-{:else if canUsePreviewOrigin}
+{#if canUsePreviewOrigin}
 	<div class="relative flex h-full min-h-0 flex-col bg-white">
 		{#if previewSession.error}
 			<div class="flex flex-1 items-center justify-center p-4 text-xs text-error-soft">{previewSession.error}</div>
@@ -156,6 +145,9 @@ onDestroy(() => {
 			saving={host.authSaving}
 			appName={app?.slug ?? "Preview"}
 			authorName="Cohub"
+			selectedSpaceId={host.selectedSpaceId}
+			canChangeSpace={host.canChangeSpace}
+			onSelectSpace={host.setSelectedSpace}
 			onConfirm={(spaceId) => void host.confirmAuth(spaceId)}
 			onCancel={host.cancelAuth}
 		/>

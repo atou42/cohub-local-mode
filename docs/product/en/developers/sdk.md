@@ -97,7 +97,8 @@ const client = createCohubClient(); // token comes from the App runtime
 const context = await client.context();
 // App identity, Space identity, viewer state
 
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "space", spaceId },
   scopes: ["session.prompt.readonly"],
   reason: "Continue the demo chat",
 });
@@ -150,7 +151,7 @@ client.app.surface.handle("image.open", async (input, { commandId }) => {
   openImageStudio(input, commandId);
 });
 
-await client.ui.reportResult(commandId, {
+await client.desktop.reportResult(commandId, {
   status: "applied",
   result: selectedImage,
   error: null,
@@ -159,7 +160,7 @@ await client.ui.reportResult(commandId, {
 
 Only registered methods are reachable. There is no DOM access or script
 execution. A Surface response only acknowledges delivery; the App reports the
-final result through the same UI command with `client.ui.reportResult()`.
+final result through the same UI command with `client.desktop.reportResult()`.
 
 Calls are delivered at-least-once, so prefer methods that are safe to repeat.
 
@@ -215,7 +216,7 @@ The client groups product APIs intentionally:
 | Channels | `client.channels` |
 | Billing / commerce | `client.billing`, `client.appCommerce` |
 | App runtime | `client.context()`, `client.auth`, `client.app` |
-| Cohub UI commands | `client.ui` |
+| Cohub UI commands | `client.desktop` |
 
 Use only the surfaces you need. Start with Spaces, sessions, and Apps.
 

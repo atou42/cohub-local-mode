@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	fileCategoryAccent,
+	fileMetaLine,
+} from "../../src/board/core/file-preview.js";
+import {
 	containCoverRect,
 	ellipsizeWrappedLines,
 	fitLineWithEllipsis,
@@ -64,6 +68,25 @@ test("ellipsize handles empty and zero-line budgets", () => {
 test("fitLineWithEllipsis keeps a line that already fits with the mark", () => {
 	const measure = (value: string) => value.length;
 	assert.equal(fitLineWithEllipsis("hello", 10, measure), "hello…");
+});
+
+test("category accent maps onto existing palette tokens", () => {
+	const palette = {
+		text: 1,
+		rare: 2,
+		epic: 3,
+		legendary: 4,
+		muted: 5,
+	};
+	assert.equal(fileCategoryAccent("doc", palette), 1);
+	assert.equal(fileCategoryAccent("code", palette), 2);
+	assert.equal(fileCategoryAccent("data", palette), 3);
+	assert.equal(fileCategoryAccent("media", palette), 4);
+	assert.equal(fileCategoryAccent("other", palette), 5);
+});
+
+test("meta line is empty without a type or size", () => {
+	assert.equal(fileMetaLine("docs/notes.md", 2048), "MD · 2.0 KB");
 });
 
 test("fitLineWithEllipsis binary-searches a long line without walking char-by-char", () => {

@@ -13,5 +13,10 @@ export function patchBoardAppearance(
     ...patch,
     background: patch.background ?? current.background,
     grid: patch.grid ?? current.grid,
+    ...(Object.hasOwn(patch, "motion")
+      ? { motion: patch.motion }
+      : current.motion
+        ? { motion: current.motion }
+        : {}),
   });
 }

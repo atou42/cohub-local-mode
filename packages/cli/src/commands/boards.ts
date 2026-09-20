@@ -203,7 +203,7 @@ function registerExportCommand(boards: Command): void {
         const out = options.out;
         if (!out) throw new Error("--out is required");
         const result = await runBoardExport({
-          spaceId: resolveSpace(boards),
+          spaceId: await resolveSpace(boards),
           target: board,
           region: parseExportRegion(options),
           scale: parseNumber(options.scale ?? "2", "scale", { min: 0.01, max: 16 }),
@@ -247,7 +247,7 @@ export function registerBoards(program: Command): Command {
   const boards = program
     .command("boards")
     .description("Inspect and update Boards by ID or .board path")
-    .hook("preAction", () => { resolveSpace(boards); });
+    .hook("preAction", async () => { await resolveSpace(boards); });
 
   withJson(boards.command("create <path>")
     .description("Create a Board")
@@ -275,7 +275,7 @@ Generate an editable seed:
             (typeof content.mutationId === "string" ? content.mutationId : randomUUID()),
           ...(options.title ? { title: options.title } : {}),
         } as BoardCreateInput;
-        const result = await createClient().space(resolveSpace(boards)).boards.create(input);
+        const result = await createClient().space(await resolveSpace(boards)).boards.create(input);
         if (jsonRequested(options)) return outJson({ ...result, path });
         ok(`Board created: ${path}`);
         showCreated(result, path);
@@ -297,7 +297,7 @@ Apply multiple changes atomically:
   cohub boards batch <board> --input changes.json --dry-run`))
     .action(async (target: string, options: JsonOptions) => {
       try {
-        const spaceId = resolveSpace(boards);
+        const spaceId = await resolveSpace(boards);
         const boardId = await resolveBoardId(spaceId, target);
         const result = await createClient().space(spaceId).board(boardId).summary();
         if (jsonRequested(options)) return outJson(result);
@@ -317,7 +317,7 @@ Coordinates:
 Use boards examples for editable starter JSON.`))
     .action(async (target: string, options: JsonOptions) => {
       try {
-        const spaceId = resolveSpace(boards);
+        const spaceId = await resolveSpace(boards);
         const boardId = await resolveBoardId(spaceId, target);
         const result = await createClient().space(spaceId).board(boardId).capabilities();
         if (jsonRequested(options)) return outJson(result);
@@ -365,7 +365,7 @@ Use boards examples for editable starter JSON.`))
     .option("--command-id <id>", "Idempotency command ID"))
     .action(async (target: string, compositionId: string, options: PlaybackOptions & { position?: string; timeScale?: string; seed?: string }) => {
       try {
-        const spaceId = resolveSpace(boards);
+        const spaceId = await resolveSpace(boards);
         const boardId = await resolveBoardId(spaceId, target);
         const result = await createClient().space(spaceId).board(boardId).play({
           commandId: commandId(options),
@@ -389,7 +389,7 @@ Use boards examples for editable starter JSON.`))
     options: PlaybackOptions,
   ) => {
     try {
-      const spaceId = resolveSpace(boards);
+      const spaceId = await resolveSpace(boards);
       const boardId = await resolveBoardId(spaceId, target);
       const board = createClient().space(spaceId).board(boardId);
       const id = commandId(options);
@@ -413,7 +413,7 @@ Use boards examples for editable starter JSON.`))
     .option("--command-id <id>", "Idempotency command ID"))
     .action(async (target: string, playbackId: string, position: string, options: PlaybackOptions) => {
       try {
-        const spaceId = resolveSpace(boards);
+        const spaceId = await resolveSpace(boards);
         const boardId = await resolveBoardId(spaceId, target);
         const result = await createClient().space(spaceId).board(boardId).seek({
           commandId: commandId(options),
@@ -437,7 +437,7 @@ Use boards examples for editable starter JSON.`))
     .description("Stream Board events"))
     .action(async (target: string, options: JsonOptions) => {
       try {
-        const spaceId = resolveSpace(boards);
+        const spaceId = await resolveSpace(boards);
         const boardId = await resolveBoardId(spaceId, target);
         const client = createRealtimeClient();
         const board = client.space(spaceId).board(boardId);

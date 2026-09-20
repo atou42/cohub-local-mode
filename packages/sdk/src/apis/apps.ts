@@ -1,7 +1,7 @@
 import type { HttpTransport } from "../transport.js";
 import type { RequestSource } from "@cohub/protocol/provenance";
-import type { AppArtifactDescriptor, AppContentKind, AppPromotionEventKey } from "@cohub/protocol";
-import type { Permission, SpacePublicProfile } from "../types.js";
+import type { AppArtifactDescriptor, AppContentKind, AppPromotionEventKey, AppVersionSource } from "@cohub/protocol";
+import type { Permission, PublicUserProfile, SpacePublicProfile } from "../types.js";
 
 export type AppTargetType = "file" | "directory" | "port";
 export type AppStatus = "published" | "disabled";
@@ -9,6 +9,8 @@ export type AppVisibility = "public" | "space";
 
 export type AppPresentationMeta = {
   hideCohubBar?: boolean;
+  /** How the desktop presents the App when opened without an explicit surface. */
+  surface?: "window" | "overlay";
 };
 
 /** Snapshot of fields extracted from the published page head. */
@@ -19,6 +21,7 @@ export type AppExtractedPageMeta = {
   image?: string | null;
   lang?: string | null;
   themeColor?: string | null;
+  surface?: "window" | "overlay" | null;
   sourcePath?: string | null;
   extractedAt?: string | null;
 };
@@ -58,6 +61,7 @@ export type AppRecord = {
   latestVersion: number;
   publishedAt: string | null;
   appScopes: Permission[];
+  /** @deprecated Viewer grants are not restricted by publisher configuration. */
   allowedViewerScopes: Permission[];
   meta: AppMeta | null;
   createdAt: string | null;
@@ -73,6 +77,7 @@ export type AppCreateInput = {
   targetRef: string;
   assetKey?: string | null;
   appScopes?: Permission[];
+  /** @deprecated Viewer grants are not restricted by publisher configuration. */
   allowedViewerScopes?: Permission[];
   meta?: AppMeta | null;
 };
@@ -84,6 +89,7 @@ export type AppUpdateInput = Partial<{
   targetType: AppTargetType;
   targetRef: string;
   appScopes: Permission[];
+  /** @deprecated Viewer grants are not restricted by publisher configuration. */
   allowedViewerScopes: Permission[];
   meta: AppMeta | null;
 }>;
@@ -98,6 +104,17 @@ export type AppVersionRecord = {
   contentKind: AppContentKind;
   artifact: AppArtifactDescriptor | null;
   meta: AppMeta | null;
+  /** Version provenance; the session is present only when the caller may view it. */
+  source?: AppVersionSource | null;
+  createdAt: string | null;
+};
+
+/** Read-only version summary served on the public app page. */
+export type PublicAppVersionSummary = {
+  id: string;
+  version: number;
+  contentKind: AppContentKind;
+  source: AppVersionSource | null;
   createdAt: string | null;
 };
 
@@ -150,9 +167,16 @@ export type AppPublicOwnerRecord = {
 export type AppDetailResponse = {
   app: AppRecord;
   space: AppPublicSpaceRecord;
+  /** Space owner: the public URL and share metadata use this identity. */
   owner: AppPublicOwnerRecord;
+  /** Member who published this App, which may differ from the Space owner. */
+  publisher: PublicUserProfile;
   publicUrl: string | null;
   content: AppContent | null;
+  /** Version whose content is served; the current version when omitted. */
+  version?: PublicAppVersionSummary | null;
+  /** All-time view count; `null` when the rollup total is unavailable. */
+  totalViews?: number | null;
 };
 
 export type AppGetResponse = AppDetailResponse;
@@ -293,10 +317,25 @@ export class AppsApi {
     username: string,
     spaceSlug: string,
     appSlug: string,
+    options?: { signal?: AbortSignal; version?: number },
+  ) {
+    const query =
+      options?.version !== undefined ? `?cohub_v=${options.version}` : "";
+    return this.transport.request<AppResolveResponse>(
+      `/api/apps/by-slug/${encodeURIComponent(username)}/${encodeURIComponent(spaceSlug)}/${encodeURIComponent(appSlug)}${query}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  }
+
+  /** Version history for the public app page; empty for disabled apps. */
+  listPublicVersions(
+    username: string,
+    spaceSlug: string,
+    appSlug: string,
     options?: { signal?: AbortSignal },
   ) {
-    return this.transport.request<AppResolveResponse>(
-      `/api/apps/by-slug/${encodeURIComponent(username)}/${encodeURIComponent(spaceSlug)}/${encodeURIComponent(appSlug)}`,
+    return this.transport.request<{ versions: PublicAppVersionSummary[] }>(
+      `/api/apps/by-slug/${encodeURIComponent(username)}/${encodeURIComponent(spaceSlug)}/${encodeURIComponent(appSlug)}/versions`,
       options?.signal ? { signal: options.signal } : undefined,
     );
   }
@@ -415,7 +454,7 @@ export class AppsApi {
    * existing live grant — the server rejects it instead of creating or
    * reviving one, so revoked grants stay revoked.
    */
-  authorize(appId: string, input: { scopes: Permission[]; spaceId?: string; reason?: string; silent?: boolean }) {
+  authorize(appId: string, input: { scopes: Permission[]; spaceId?: string; reason?: string; silent?: boolean; scopeMode?: "extend" }) {
     return this.transport.request<AppAuthorizeResponse>(`/api/apps/${appId}/authorize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

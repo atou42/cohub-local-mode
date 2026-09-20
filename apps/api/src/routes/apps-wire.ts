@@ -1,4 +1,5 @@
 import type { apps, appVersions, appPromotions } from "@cohub/db";
+import type { AppVersionSource } from "@cohub/protocol";
 import type {
   RealtimeAppRecord,
   RealtimeAppVersionRecord,
@@ -30,6 +31,18 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+
+/**
+ * Version provenance is served through the permission-gated `source` field, so
+ * the raw `meta.source` stamped at publish time must never be re-emitted — it
+ * would hand out a private session id to anyone who can read the version.
+ */
+function versionMetaForWire(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value);
+  if (!record || !("source" in record)) return record;
+  const { source: _source, ...rest } = record;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
 
 export function serializeAppRecord(app: typeof apps.$inferSelect, wire: "canonical"): RealtimeAppRecord;
 export function serializeAppRecord(app: typeof apps.$inferSelect, wire: "legacy"): LegacyWorkRecord;
@@ -65,18 +78,22 @@ export function serializeAppRecord(
 export function serializeAppVersionRecord(
   version: typeof appVersions.$inferSelect,
   wire: "canonical",
+  source?: AppVersionSource | null,
 ): RealtimeAppVersionRecord;
 export function serializeAppVersionRecord(
   version: typeof appVersions.$inferSelect,
   wire: "legacy",
+  source?: AppVersionSource | null,
 ): LegacyWorkVersionRecord;
 export function serializeAppVersionRecord(
   version: typeof appVersions.$inferSelect,
   wire: AppWire,
+  source?: AppVersionSource | null,
 ): AppWireVersionRecord;
 export function serializeAppVersionRecord(
   version: typeof appVersions.$inferSelect,
   wire: AppWire,
+  source: AppVersionSource | null = null,
 ): AppWireVersionRecord {
   const record = {
     id: version.id,
@@ -86,7 +103,8 @@ export function serializeAppVersionRecord(
     assetKey: version.assetKey,
     contentKind: version.contentKind as RealtimeAppVersionRecord["contentKind"],
     artifact: asRecord(version.artifact) as RealtimeAppVersionRecord["artifact"],
-    meta: asRecord(version.meta) as RealtimeAppVersionRecord["meta"],
+    meta: versionMetaForWire(version.meta) as RealtimeAppVersionRecord["meta"],
+    source,
     createdAt: version.createdAt?.toISOString() ?? null,
   };
   return wire === "legacy"

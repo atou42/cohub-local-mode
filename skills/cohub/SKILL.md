@@ -344,7 +344,7 @@ cohub references -h
 cohub me -h
 cohub channels -h
 cohub auth -h
-cohub sandbox -h
+cohub runtime -h
 ```
 
 ## Safety

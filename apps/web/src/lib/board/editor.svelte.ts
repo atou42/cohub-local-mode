@@ -347,6 +347,8 @@ export function createBoardEditor(options: BoardEditorOptions) {
 	let hoverPointerType = $state("mouse");
 	let editingId = $state<string | null>(null);
 	let saveError = $state<string | null>(null);
+	/** In-flight commits, so the UI can show a saving state without polling. */
+	let pendingCommits = $state(0);
 	let surfaceSize = $state<{ width: number; height: number }>({
 		width: 0,
 		height: 0,
@@ -365,6 +367,15 @@ export function createBoardEditor(options: BoardEditorOptions) {
 	/** Bumped on geometry changes (nudge, align, drag commit). Stage cull cache
 	 * keys on this so moved items re-enter/leave the viewport correctly. */
 	let geometryVersion = $state(0);
+	/** Local-only signal for the runtime; it is not persisted in the Board. */
+	const recentlyAdded = new Set<string>();
+
+	function markAdded(ids: readonly string[]) {
+		if (ids.length === 0) return;
+		// The runtime decides whether the burst is suitable for an entrance.
+		recentlyAdded.clear();
+		for (const id of ids) recentlyAdded.add(id);
+	}
 
 	// Creation styles are local UI preferences, never synced into the document.
 	// Each tool keeps its own values so switching tools does not leak a drawing
@@ -687,21 +698,27 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		const snapshot = document;
 		const rev = localRev;
 		const gen = syncGeneration;
-		void queue.commit(snapshot).then((outcome) => {
-			// A genuine external load happened since; this result is stale.
-			if (gen !== syncGeneration) return;
-			if (outcome.ok) {
-				committedRev = Math.max(committedRev, rev);
-				// The server now has this snapshot; it is the new rebase baseline.
-				externalBaseline = snapshot;
-				saveError = null;
-			} else {
-				saveError =
-					outcome.error instanceof Error
-						? outcome.error.message
-						: "Failed to sync board";
-			}
-		});
+		pendingCommits += 1;
+		void queue
+			.commit(snapshot)
+			.then((outcome) => {
+				// A genuine external load happened since; this result is stale.
+				if (gen !== syncGeneration) return;
+				if (outcome.ok) {
+					committedRev = Math.max(committedRev, rev);
+					// The server now has this snapshot; it is the new rebase baseline.
+					externalBaseline = snapshot;
+					saveError = null;
+				} else {
+					saveError =
+						outcome.error instanceof Error
+							? outcome.error.message
+							: "Failed to sync board";
+				}
+			})
+			.finally(() => {
+				pendingCommits -= 1;
+			});
 	}
 
 	function retrySave() {
@@ -904,6 +921,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 
 	function addItemAt(item: BoardItem, opts?: { select?: boolean }) {
 		setItems([...synced.items, item]);
+		markAdded([item.id]);
 		// Consecutive strokes stay unobstructed; one-shot tools surface their result.
 		const shouldSelect = opts?.select ?? !isContinuousBoardTool(tool);
 		selection = shouldSelect ? [item.id] : [];
@@ -1001,6 +1019,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			[...synced.items, item],
 			[...synced.connections, ...connections],
 		);
+		markAdded([item.id]);
 		selection = [item.id];
 		commitAction();
 		return item.id;
@@ -1261,6 +1280,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			[...synced.items, ...copies.items],
 			[...synced.connections, ...copies.connections],
 		);
+		markAdded(copies.items.map((copy) => copy.id));
 		selection = copies.items.map((copy) => copy.id);
 		commitAction();
 	}
@@ -1365,6 +1385,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			[...synced.items, ...pasted.items],
 			[...synced.connections, ...pasted.connections],
 		);
+		markAdded(pasted.items.map((item) => item.id));
 		selection = pasted.items.map((item) => item.id);
 		commitAction();
 	}
@@ -2893,6 +2914,9 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		currentKey = key;
 		// A fresh external document supersedes any deferred refresh.
 		pendingRemote = null;
+		const previousIds = sameDocument
+			? new Set(synced.items.map((item) => item.id))
+			: null;
 		const { merged, hadLocalChanges } = reconcileExternal(
 			externalBaseline,
 			document,
@@ -2900,6 +2924,13 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			sameDocument,
 		);
 		synced = toContent(merged);
+		if (previousIds) {
+			markAdded(
+				merged.items
+					.filter((item) => !previousIds.has(item.id))
+					.map((item) => item.id),
+			);
+		}
 		mediaIdsByPath = null;
 		bumpSpatial();
 		bumpStructure();
@@ -3101,6 +3132,9 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		get saveError() {
 			return saveError;
 		},
+		get saving() {
+			return pendingCommits > 0;
+		},
 		get canUndo() {
 			return undoStack.length > 0;
 		},
@@ -3118,6 +3152,11 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		},
 		get geometryVersion() {
 			return geometryVersion;
+		},
+		consumeRecentlyAdded(): string[] {
+			const ids = [...recentlyAdded];
+			recentlyAdded.clear();
+			return ids;
 		},
 		/**
 		 * True while a pointer gesture is mutating the document. Renderers use this

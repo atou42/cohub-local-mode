@@ -4,8 +4,15 @@ import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { spaces, apps, appPromotions, appPromotionStatsHourly, appVersions, appViewerGrants, appViewStatsHourly, userProfiles } from "@cohub/db";
 import { createAppAssetPublicUrl, deleteAppAssetsByObjectKey, isConfiguredAppAssetPublicUrl } from "../app-asset-storage.js";
 import { publishAppAssetInWorker, type AppPublishAssetJobResult } from "../app-publish-asset-queue.js";
+import { resolveAppGrantScopes } from "../app-grant-scopes.js";
 import { ALL_PERMISSIONS, APP_PUBLISHER_SCOPES, isUserLevelPermission, normalizePermissionScopes, scopeListHasPermission, type Permission } from "@cohub/core/permissions";
-import { materializeHtmlPageMeta, mergeAppPageMeta } from "@cohub/core/apps";
+import {
+  APP_ACTION_INPUT_MAX_BYTES,
+  buildAppActionCommand,
+  isAppActionKey,
+  materializeHtmlPageMeta,
+  mergeAppPageMeta,
+} from "@cohub/core/apps";
 import { db } from "../db/index.js";
 import { isPostgresUniqueViolation } from "../db/postgres-error.js";
 import {
@@ -22,7 +29,7 @@ import {
 import { hasPermission, resolveUserSpacePermissions } from "../permissions.js";
 import { createAppSessionToken, APP_SESSION_TTL_SECONDS, APP_VIEWER_GRANT_TTL_SECONDS } from "../app-sessions.js";
 import { getSandboxPublicEndpoints } from "../sandbox-public-network.js";
-import type { AppArtifactDescriptor } from "@cohub/protocol";
+import type { AppArtifactDescriptor, AppVersionSource } from "@cohub/protocol";
 import { APP_ACTION_EXECUTION_SOURCE } from "@cohub/protocol/task";
 import { SANDBOX_PUBLIC_PORTS } from "@cohub/protocol/ports";
 import { config, isHostAllowedBySuffix } from "../config.js";
@@ -42,8 +49,10 @@ import { featureGateResponse } from "../lib/feature-gate.js";
 import { createAppPublicUrl } from "../lib/app-public-url.js";
 import { applyRequestSourceToMeta, getRequestSource } from "../lib/request-source.js";
 import { dispatchAppVersionPublished } from "../app-events.js";
-import { ensureUserProfileByUuid } from "../user-profiles.js";
+import { resolveAppVersionSources } from "../app-version-source.js";
+import { ensureUserProfileByUuid, fallbackPublicUserProfile, type PublicUserProfile } from "../user-profiles.js";
 import {
+  getAppTotalViews,
   getAppViewStats,
   recordAppViewStatsHourly,
   resolveAppViewSource,
@@ -57,11 +66,6 @@ import {
 } from "../app-realtime-rooms.js";
 import { enqueueTask } from "../tasks.js";
 import { RUN_COMMAND_TASK_TYPE } from "@cohub/core/commands";
-import {
-  APP_ACTION_INPUT_MAX_BYTES,
-  buildAppActionCommand,
-  isAppActionKey,
-} from "../lib/app-action-command.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 /**
@@ -128,6 +132,10 @@ async function canHideCohubBar(userId: string) {
 }
 
 async function ensureAppPresentationAllowed(c: Context, input: { userId: string; meta: AppMeta | null | undefined }) {
+  const presentation = isRecord(input.meta?.presentation) ? input.meta.presentation : null;
+  if (presentation?.surface !== undefined && presentation.surface !== "window" && presentation.surface !== "overlay") {
+    return c.json({ message: "meta.presentation.surface must be one of: window, overlay" }, 400);
+  }
   if (!getHideCohubBar(input.meta)) return null;
   if (await canHideCohubBar(input.userId)) return null;
   return appHideCohubBarRequiredResponse(c);
@@ -178,6 +186,25 @@ async function ensureAppPublicIdentity(c: Context, spaceId: string, actor: AuthU
   return c.json({ message: "apps require a space slug" }, 400);
 }
 
+/**
+ * Public identity of the member who published an App. The public URL and share
+ * metadata keep the Space owner's identity, so attribution to the actual
+ * publisher is reported separately.
+ */
+async function resolveAppPublisher(userUuid: string): Promise<PublicUserProfile> {
+  const [profile] = await db
+    .select({
+      userUuid: userProfiles.userUuid,
+      username: userProfiles.username,
+      displayName: userProfiles.displayName,
+      avatarUrl: userProfiles.avatarUrl,
+    })
+    .from(userProfiles)
+    .where(eq(userProfiles.userUuid, userUuid))
+    .limit(1);
+  return profile ?? fallbackPublicUserProfile(userUuid);
+}
+
 const ensureUniqueAppSlug = async (input: { spaceId: string; slug: string; excludeId?: string }) => {
   const conditions = [eq(apps.spaceId, input.spaceId), eq(apps.slug, input.slug)];
   if (input.excludeId) conditions.push(ne(apps.id, input.excludeId));
@@ -209,8 +236,10 @@ const isAllowedAppContentUrl = (url: string, kind: "asset" | "port") => {
 
 const serializeApp = (app: typeof apps.$inferSelect): AppWireRecord =>
   serializeAppRecord(app, wire);
-const serializeAppVersion = (version: typeof appVersions.$inferSelect): AppWireVersionRecord =>
-  serializeAppVersionRecord(version, wire);
+const serializeAppVersion = (
+  version: typeof appVersions.$inferSelect,
+  source: AppVersionSource | null = null,
+): AppWireVersionRecord => serializeAppVersionRecord(version, wire, source);
 
 async function getAppById(id: string) {
   const [app] = await db.select().from(apps).where(eq(apps.id, id)).limit(1);
@@ -262,6 +291,7 @@ async function upsertViewerGrant(input: {
   viewerUserUuid: string;
   scopes: Permission[];
   expiresAt: Date;
+  scopeMode?: "extend";
 }): Promise<typeof appViewerGrants.$inferSelect | null | "migration_pending"> {
   return db.transaction(async (tx) => {
     const key = and(
@@ -269,16 +299,16 @@ async function upsertViewerGrant(input: {
       eq(appViewerGrants.viewerUserUuid, input.viewerUserUuid),
       eq(appViewerGrants.spaceId, input.spaceId),
     );
-    const write = (id: string) =>
+    const write = (existing: typeof appViewerGrants.$inferSelect) =>
       tx.update(appViewerGrants).set({
-        scopes: input.scopes,
+        scopes: resolveAppGrantScopes({ requested: input.scopes, mode: input.scopeMode, existing }),
         expiresAt: input.expiresAt,
         revokedAt: null,
         updatedAt: new Date(),
-      }).where(eq(appViewerGrants.id, id)).returning();
+      }).where(eq(appViewerGrants.id, existing.id)).returning();
 
     const [existing] = await tx.select().from(appViewerGrants).where(key).limit(1).for("update");
-    if (existing) return (await write(existing.id))[0] ?? null;
+    if (existing) return (await write(existing))[0] ?? null;
 
     const inserted = await tx.insert(appViewerGrants).values({
       appId: input.appId,
@@ -293,7 +323,7 @@ async function upsertViewerGrant(input: {
     // still in place. Distinguish by re-reading the three-column key.
     const [raced] = await tx.select().from(appViewerGrants).where(key).limit(1).for("update");
     if (!raced) return "migration_pending";
-    return (await write(raced.id))[0] ?? null;
+    return (await write(raced))[0] ?? null;
   });
 }
 
@@ -362,8 +392,9 @@ async function writeAppAsset(input: {
           description: result.extracted.description,
           icon: result.extracted.icon,
           image: result.extracted.image,
-          lang: result.extracted.lang ?? null,
+              lang: result.extracted.lang ?? null,
           themeColor: result.extracted.themeColor ?? null,
+          surface: result.extracted.surface ?? null,
           sourcePath: result.extracted.sourcePath,
         },
         result.assetKey,
@@ -465,10 +496,11 @@ const getAppContent = (input: {
   };
 };
 
-async function getPublishedAppContent(app: typeof apps.$inferSelect) {
-  if (app.status !== "published" || !app.currentVersionId) return null;
-  const [version] = await db.select().from(appVersions).where(eq(appVersions.id, app.currentVersionId)).limit(1);
-  if (!version) return null;
+async function getAppVersionContent(
+  app: typeof apps.$inferSelect,
+  version: typeof appVersions.$inferSelect | null,
+) {
+  if (app.status !== "published" || !version) return null;
   return getAppContent({
     spaceId: app.spaceId,
     targetType: version.targetType,
@@ -478,6 +510,45 @@ async function getPublishedAppContent(app: typeof apps.$inferSelect) {
     artifact: version.artifact,
   });
 }
+
+async function getAppCurrentVersion(app: typeof apps.$inferSelect) {
+  if (!app.currentVersionId) return null;
+  const [version] = await db.select().from(appVersions).where(eq(appVersions.id, app.currentVersionId)).limit(1);
+  return version ?? null;
+}
+
+async function getAppVersionByNumber(appId: string, version: number) {
+  const [row] = await db
+    .select()
+    .from(appVersions)
+    .where(and(eq(appVersions.appId, appId), eq(appVersions.version, version)))
+    .limit(1);
+  return row ?? null;
+}
+
+async function getPublishedAppContent(app: typeof apps.$inferSelect) {
+  return getAppVersionContent(app, await getAppCurrentVersion(app));
+}
+
+/** Read `?cohub_v=` as a positive integer version number. */
+function readRequestedVersion(c: Context): { version: number | null; invalid: boolean } {
+  const raw = c.req.query("cohub_v");
+  if (raw === undefined || raw === "") return { version: null, invalid: false };
+  if (!/^\d{1,9}$/.test(raw)) return { version: null, invalid: true };
+  const version = Number(raw);
+  return version >= 1 ? { version, invalid: false } : { version: null, invalid: true };
+}
+
+const publicVersionSummary = (
+  version: Pick<typeof appVersions.$inferSelect, "id" | "version" | "contentKind" | "meta" | "createdAt">,
+  source: AppVersionSource | null,
+) => ({
+  id: version.id,
+  version: version.version,
+  contentKind: version.contentKind,
+  source,
+  createdAt: version.createdAt?.toISOString() ?? null,
+});
 
 router.get("/by-slug/:username/:spaceSlug/:appSlug", async (c) => {
   const user = getOptionalAuth(c);
@@ -501,10 +572,23 @@ router.get("/by-slug/:username/:spaceSlug/:appSlug", async (c) => {
   if (!row.owner.username || !row.space.slug) return c.json({ message: "app public identity is incomplete" }, 409);
   if (requiresSpaceAppAccess(row.app) && !(await hasPermission(user, "space.view", { spaceId: row.space.id }))) return authzDenied(c);
 
-  recordResolvedAppView(c, row.app, "web");
-  const content = await getPublishedAppContent(row.app);
+  const requested = readRequestedVersion(c);
+  if (requested.invalid) return c.json({ message: "app version not found" }, 404);
+  const version = requested.version === null
+    ? await getAppCurrentVersion(row.app)
+    : await getAppVersionByNumber(row.app.id, requested.version);
+  // An explicit version must exist; the implicit current version may legitimately be absent.
+  if (requested.version !== null && !version) return c.json({ message: "app version not found" }, 404);
 
-  // Public apps are anonymous-readable; space apps depend on the caller.
+  recordResolvedAppView(c, row.app, "web");
+  const [content, totalViews] = await Promise.all([
+    getAppVersionContent(row.app, version),
+    getAppTotalViews(row.app.id),
+  ]);
+
+  // Public apps are anonymous-readable; space apps depend on the caller. The
+  // version provenance is served separately by `/versions`, so this stays
+  // cacheable and off the session-resolution hot path.
   c.header(
     "Cache-Control",
     requiresSpaceAppAccess(row.app) ? PRIVATE_APP_HTTP_CACHE : PUBLIC_APP_HTTP_CACHE,
@@ -513,8 +597,54 @@ router.get("/by-slug/:username/:spaceSlug/:appSlug", async (c) => {
     ...wrapAppRecord(wire, serializeApp(row.app)),
     space: { id: row.space.id, slug: row.space.slug, name: row.space.name, userUuid: row.space.userUuid, publicProfile: getSpacePublicProfile(row.space) },
     owner: { ...row.owner, username: row.owner.username },
+    publisher: await resolveAppPublisher(row.app.userUuid),
     publicUrl: createAppPublicUrl({ ownerUsername: row.owner.username, spaceSlug: row.space.slug, appSlug: row.app.slug, status: row.app.status }),
     content,
+    version: version ? publicVersionSummary(version, null) : null,
+    totalViews,
+  });
+});
+
+/** Public version history for the Cohub bar version switcher. */
+router.get("/by-slug/:username/:spaceSlug/:appSlug/versions", async (c) => {
+  const user = getOptionalAuth(c);
+  const username = c.req.param("username");
+  const spaceSlug = c.req.param("spaceSlug");
+  const appSlug = c.req.param("appSlug");
+  if (!username || !SLUG_RE.test(spaceSlug) || !SLUG_RE.test(appSlug)) return c.json({ message: "app not found" }, 404);
+
+  const [row] = await db
+    .select({ spaceId: spaces.id, app: apps })
+    .from(userProfiles)
+    .innerJoin(spaces, and(eq(spaces.userUuid, userProfiles.userUuid), eq(spaces.slug, spaceSlug)))
+    .innerJoin(apps, and(eq(apps.spaceId, spaces.id), eq(apps.slug, appSlug), eq(apps.status, "published")))
+    .where(eq(userProfiles.username, username))
+    .limit(1);
+  if (!row) return c.json({ message: "app not found" }, 404);
+  if (requiresSpaceAppAccess(row.app) && !(await hasPermission(user, "space.view", { spaceId: row.spaceId }))) return authzDenied(c);
+
+  const versions = await db
+    .select({
+      id: appVersions.id,
+      version: appVersions.version,
+      contentKind: appVersions.contentKind,
+      meta: appVersions.meta,
+      createdAt: appVersions.createdAt,
+    })
+    .from(appVersions)
+    .where(eq(appVersions.appId, row.app.id))
+    .orderBy(desc(appVersions.version));
+  const sources = await resolveAppVersionSources({ versions, spaceId: row.spaceId, user });
+  const hasViewerScopedSource = versions.some((version) => sources.get(version.id)?.session);
+
+  c.header(
+    "Cache-Control",
+    requiresSpaceAppAccess(row.app) || hasViewerScopedSource
+      ? PRIVATE_APP_HTTP_CACHE
+      : PUBLIC_APP_HTTP_CACHE,
+  );
+  return c.json({
+    versions: versions.map((version) => publicVersionSummary(version, sources.get(version.id) ?? null)),
   });
 });
 
@@ -554,12 +684,17 @@ router.get("/:id/public", async (c) => {
   const space = { id: row.space.id, slug: row.space.slug, name: row.space.name, userUuid: row.space.userUuid, publicProfile: getSpacePublicProfile(row.space) };
   // Content matches what the by-slug page already serves for the same access
   // model, so an in-workspace preview can render a Work reached by public url.
-  const content = await getPublishedAppContent(app);
+  const [content, totalViews] = await Promise.all([
+    getPublishedAppContent(app),
+    getAppTotalViews(app.id),
+  ]);
   return c.json({
     ...wrapAppRecord(wire, serializeApp(app)),
     space,
     owner: { ...row.owner, username: row.owner.username },
+    publisher: await resolveAppPublisher(app.userUuid),
     content,
+    totalViews,
   });
 });
 
@@ -570,7 +705,7 @@ router.get("/:id/stats", async (c) => {
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
   const app = await getAppById(id);
   if (!app) return c.json({ message: "app not found" }, 404);
-  if (!(await hasPermission(user, "space.edit", { spaceId: app.spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "app.manage", { spaceId: app.spaceId }))) return authzDenied(c);
   return c.json(await getAppViewStats(app.id));
 });
 
@@ -597,13 +732,18 @@ router.get("/:id", async (c) => {
   const shouldRecordCliView = getRequestSource(c)?.via === "cli"
     && getExecutionPrincipal(c)?.source !== APP_ACTION_EXECUTION_SOURCE;
   if (shouldRecordCliView) recordResolvedAppView(c, app, "cli");
-  const content = await getPublishedAppContent(app);
+  const [content, totalViews] = await Promise.all([
+    getPublishedAppContent(app),
+    getAppTotalViews(app.id),
+  ]);
   return c.json({
     ...wrapAppRecord(wire, serializeApp(app)),
     space,
     owner: { ...row.owner, username: row.owner.username },
+    publisher: await resolveAppPublisher(app.userUuid),
     publicUrl: createAppPublicUrl({ ownerUsername: row.owner.username, spaceSlug: row.space.slug, appSlug: app.slug, status: app.status }),
     content,
+    totalViews,
   });
 });
 
@@ -613,7 +753,7 @@ router.post("/", async (c) => {
   const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
   const spaceId = typeof body?.spaceId === "string" ? body.spaceId : "";
   if (!requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
-  if (!(await hasPermission(user, "space.edit", { spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "app.manage", { spaceId }))) return authzDenied(c);
 
   const slug = typeof body?.slug === "string" ? body.slug.trim().toLowerCase() : "";
   if (!SLUG_RE.test(slug)) return c.json({ message: "slug must use lowercase letters, numbers, hyphens, or underscores" }, 400);
@@ -699,9 +839,12 @@ router.post("/", async (c) => {
       return c.json({ message: "slug already exists" }, 409);
     }
     if (result.version) {
+      const source = (
+        await resolveAppVersionSources({ versions: [result.version], spaceId, user })
+      ).get(result.version.id) ?? null;
       await dispatchAppVersionPublished({
         app: serializeAppRecord(result.app, "canonical"),
-        version: serializeAppVersionRecord(result.version, "canonical"),
+        version: serializeAppVersionRecord(result.version, "canonical", source),
         previousVersionId: null,
         actorUserId: user.uuid,
         source: getRequestSource(c),
@@ -865,9 +1008,12 @@ async function publishAppVersion(
       if (!app) throw new Error("failed to publish app version");
       return { app, version, previousVersionId: versionedApp.previousVersionId };
     });
+    const source = (
+      await resolveAppVersionSources({ versions: [result.version], spaceId: current.spaceId, user: options.actor })
+    ).get(result.version.id) ?? null;
     await dispatchAppVersionPublished({
       app: serializeAppRecord(result.app, "canonical"),
-      version: serializeAppVersionRecord(result.version, "canonical"),
+      version: serializeAppVersionRecord(result.version, "canonical", source),
       previousVersionId: result.previousVersionId,
       actorUserId: options.actor.uuid,
       source: getRequestSource(c),
@@ -880,7 +1026,7 @@ async function publishAppVersion(
     });
     return c.json({
       ...wrapAppRecord(wire, serializeApp(result.app)),
-      version: serializeAppVersion(result.version),
+      version: serializeAppVersion(result.version, source),
     });
   } catch (error) {
     try {
@@ -899,7 +1045,7 @@ router.patch("/:id", async (c) => {
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
   const current = await getAppById(id);
   if (!current) return c.json({ message: "app not found" }, 404);
-  if (!(await hasPermission(user, "space.edit", { spaceId: current.spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "app.manage", { spaceId: current.spaceId }))) return authzDenied(c);
 
   const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
   return updateApp(c, current, body, user);
@@ -914,7 +1060,8 @@ router.get("/:id/versions", async (c) => {
   if (!app) return c.json({ message: "app not found" }, 404);
   if (!(await hasPermission(user, "space.view", { spaceId: app.spaceId }))) return authzDenied(c);
   const rows = await db.select().from(appVersions).where(eq(appVersions.appId, id)).orderBy(desc(appVersions.version));
-  return c.json({ versions: rows.map(serializeAppVersion) });
+  const sources = await resolveAppVersionSources({ versions: rows, spaceId: app.spaceId, user });
+  return c.json({ versions: rows.map((row) => serializeAppVersion(row, sources.get(row.id) ?? null)) });
 });
 
 router.post("/:id/versions", async (c) => {
@@ -924,7 +1071,7 @@ router.post("/:id/versions", async (c) => {
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
   const app = await getAppById(id);
   if (!app) return c.json({ message: "app not found" }, 404);
-  if (!(await hasPermission(user, "space.edit", { spaceId: app.spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "app.manage", { spaceId: app.spaceId }))) return authzDenied(c);
   const meta = applyRequestSourceToMeta(c, null);
   return publishAppVersion(c, app, { actor: user, meta });
 });
@@ -936,7 +1083,10 @@ router.delete("/:id", async (c) => {
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
   const app = await getAppById(id);
   if (!app) return c.json({ message: "app not found" }, 404);
-  if (!(await hasPermission(user, "space.edit", { spaceId: app.spaceId }))) return authzDenied(c);
+  // Hosts delete any App; builders only the Apps they published themselves.
+  const canDelete = (await hasPermission(user, "space.edit", { spaceId: app.spaceId }))
+    || (app.userUuid === user.uuid && (await hasPermission(user, "app.manage", { spaceId: app.spaceId })));
+  if (!canDelete) return authzDenied(c);
   await db.transaction(async (tx) => {
     const promotions = await tx
       .select({ id: appPromotions.id })
@@ -1110,18 +1260,22 @@ router.post("/:id/authorize", async (c) => {
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
   const app = await getAppById(id);
   if (app?.status !== "published") return c.json({ message: "app not found" }, 404);
-  if (requiresSpaceAppAccess(app) && !(await hasPermission(user, "space.view", { spaceId: app.spaceId }))) return authzDenied(c);
-  const body = await c.req.json().catch(() => null) as { scopes?: unknown; spaceId?: unknown; silent?: unknown } | null;
+  if (requiresSpaceAppAccess(app) && !(await hasPermission(user, "space.view", { spaceId: app.spaceId }))) {
+    return c.json({ message: "app is not accessible in this space", code: "app_not_accessible" }, 403);
+  }
+  const body = await c.req.json().catch(() => null) as { scopes?: unknown; spaceId?: unknown; silent?: unknown; scopeMode?: unknown } | null;
+  if (body?.scopeMode !== undefined && body.scopeMode !== "extend") return c.json({ code: "invalid_request", message: "invalid scope mode" }, 400);
+  if (body?.scopeMode === "extend" && (!Array.isArray(body.scopes) || body.scopes.some((scope) => typeof scope !== "string" || !ALLOWED_VIEWER_SCOPES.has(scope as Permission)))) return c.json({ code: "invalid_scope", message: "unknown permission scope" }, 400);
   const requested = normalizeScopes(body?.scopes, ALLOWED_VIEWER_SCOPES);
   if (requested.length === 0) return c.json({ message: "no valid scopes requested" }, 400);
   const targetSpaceId = typeof body?.spaceId === "string" && body.spaceId.trim() ? body.spaceId.trim() : app.spaceId;
-  if (!requireValidId(targetSpaceId)) return c.json({ message: "space not found" }, 404);
+  if (!requireValidId(targetSpaceId)) return c.json({ message: "space not found", code: "space_not_found" }, 404);
   // A caller-supplied target must exist — the per-scope permission gate skips
   // account scopes, so without this an arbitrary UUID could become a grant's
   // space id and leave orphan rows behind.
   if (targetSpaceId !== app.spaceId) {
     const [space] = await db.select({ id: spaces.id }).from(spaces).where(eq(spaces.id, targetSpaceId)).limit(1);
-    if (!space) return c.json({ message: "space not found" }, 404);
+    if (!space) return c.json({ message: "space not found", code: "space_not_found" }, 404);
   }
 
   // A silent refresh (host-side reuse of a previous consent) may only renew a
@@ -1140,7 +1294,7 @@ router.post("/:id/authorize", async (c) => {
         eq(appViewerGrants.spaceId, targetSpaceId),
       ))
       .limit(1);
-    if (existing?.revokedAt) return c.json({ message: "grant was revoked; viewer consent is required again" }, 403);
+    if (existing?.revokedAt) return c.json({ message: "grant was revoked; viewer consent is required again", code: "consent_required" }, 403);
     const renewed = await renewViewerGrant({ existing, requested });
     if (renewed) {
       const renewedScopes = normalizePermissionScopes(renewed.scopes as string[]);
@@ -1157,7 +1311,7 @@ router.post("/:id/authorize", async (c) => {
       });
     }
     if (user.uuid !== app.userUuid) {
-      return c.json({ message: "grant is no longer active; viewer consent is required again" }, 403);
+      return c.json({ message: "grant is no longer active; viewer consent is required again", code: "consent_required" }, 403);
     }
   }
 
@@ -1165,7 +1319,14 @@ router.post("/:id/authorize", async (c) => {
   // the target space themselves. Account scopes need no space.
   const ungrantable = await findUngrantableScopes(user, requested, targetSpaceId);
   if (ungrantable.length > 0) {
-    return c.json({ message: `you cannot grant these permissions for this space: ${ungrantable.join(", ")}` }, 403);
+    // Distinguish "the viewer can't see this Space" from "the viewer can see it
+    // but can't grant these scopes" so hosts can fall back instead of showing
+    // the viewer a technical error.
+    const canView = await hasPermission(user, "space.view", { spaceId: targetSpaceId });
+    return c.json({
+      message: `you cannot grant these permissions for this space: ${ungrantable.join(", ")}`,
+      code: canView ? "scope_not_held" : "space_inaccessible",
+    }, 403);
   }
 
   const expiresAt = new Date(Date.now() + APP_VIEWER_GRANT_TTL_SECONDS * 1000);
@@ -1175,9 +1336,10 @@ router.post("/:id/authorize", async (c) => {
     viewerUserUuid: user.uuid,
     scopes: requested,
     expiresAt,
+    ...(body?.scopeMode === "extend" ? { scopeMode: "extend" as const } : {}),
   });
   if (grant === "migration_pending") {
-    return c.json({ message: "space-scoped grants are not enabled yet; run the pending database migration" }, 409);
+    return c.json({ message: "space-scoped grants are not enabled yet; run the pending database migration", code: "migration_pending" }, 409);
   }
   if (!grant) return c.json({ message: "failed to create grant" }, 500);
 
@@ -1186,12 +1348,12 @@ router.post("/:id/authorize", async (c) => {
     appId: app.id,
     spaceId: app.spaceId,
     appScopes: app.appScopes as Permission[],
-    viewerScopes: requested,
+    viewerScopes: normalizePermissionScopes(grant.scopes),
   });
   return c.json({
     token,
     expiresIn: APP_SESSION_TTL_SECONDS,
-    grant: { id: grant.id, spaceId: targetSpaceId, scopes: requested, expiresAt: expiresAt.toISOString() },
+    grant: { id: grant.id, spaceId: targetSpaceId, scopes: normalizePermissionScopes(grant.scopes), expiresAt: expiresAt.toISOString() },
   });
 });
 

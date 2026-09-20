@@ -26,6 +26,8 @@ export type AppConfig = {
   checkpointCachePvc: string;
   checkpointCacheRoot: string;
   spaceSystemRoot: string;
+  spaceSystemPvc: string;
+  spaceSystemSubpath: string;
   spaceStorageSubpath: string;
   checkpointCacheSubpath: string;
   configsSubpath: string;
@@ -226,17 +228,12 @@ export const config: AppConfig = {
     process.env.SPACE_STORAGE_PVC ??
     "cohub-spaces-pvc",
   checkpointCacheRoot: process.env.CHECKPOINT_CACHE_ROOT ?? "/checkpoint-cache",
-  spaceSystemRoot:
-    process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
-  spaceStorageSubpath:
-    process.env.SPACE_STORAGE_SUBPATH ??
-    (env === "prod" ? "cohub-prod" : "cohub-dev"),
-  checkpointCacheSubpath:
-    process.env.CHECKPOINT_CACHE_SUBPATH ??
-    `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
-  configsSubpath:
-    process.env.CONFIGS_SUBPATH ??
-    (env === "prod" ? "configs/prod" : "configs/dev"),
+  spaceSystemRoot: process.env.SPACE_SYSTEM_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
+  spaceSystemPvc: process.env.SPACE_SYSTEM_PVC ?? "cohub-system-pvc",
+  spaceSystemSubpath: process.env.SPACE_SYSTEM_SUBPATH ?? (env === "prod" ? "prod" : "dev"),
+  spaceStorageSubpath: process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev"),
+  checkpointCacheSubpath: process.env.CHECKPOINT_CACHE_SUBPATH ?? `${process.env.SPACE_STORAGE_SUBPATH ?? (env === "prod" ? "cohub-prod" : "cohub-dev")}/checkpoints`,
+  configsSubpath: process.env.CONFIGS_SUBPATH ?? (env === "prod" ? "configs/prod" : "configs/dev"),
   platformConfigRoot: process.env.PLATFORM_CONFIG_ROOT ?? "/configs",
   turnObjectS3Endpoint:
     process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",

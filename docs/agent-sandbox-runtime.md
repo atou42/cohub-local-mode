@@ -1,97 +1,102 @@
-# Agent / Sandbox 运行说明
+# Agent / Sandbox Runtime
 
-本文档描述当前长期方案下的运行方式、环境变量，以及本地联调方式。
+This document covers the workspace bridge, environment variables and local development.
+Harness execution and resume use the [Local Runtime](local-runtime.md) pipeline.
 
-## 当前架构
+## Current Architecture
 
 - `apps/agent`
-  - 控制面
-  - 运行 `pi-coding-agent`
-  - 管理 session / Redis / persistence
-  - 作为 WebSocket 客户端主动连接 sandbox
-  - 将 tools 调用通过 WebSocket RPC 转发给 sandbox
+  - Control plane
+  - Runs Cohub Harness and dispatches local Pi / Codex Harness
+  - Manages session / Redis / persistence
+  - Connects to sandbox as an outbound WebSocket client
+  - Forwards tool calls to sandbox over WebSocket RPC
 - `apps/sandbox`
-  - 执行面
-  - 提供 WebSocket server 等待 agent 连接
-  - 执行通用 sandbox filesystem / process primitive
+  - Execution plane
+  - Exposes a WebSocket server and waits for agent connections
+  - Executes generic sandbox filesystem / process primitives
 
-## Local sandbox (dial-out) 模式
+## Local sandbox (dial-out) mode
 
-除云端 listen 模式外，sandbox 二进制支持 `--local` 拨出模式，让用户本机文件夹成为某个 space 的 sandbox：
+Besides the cloud listen mode, the sandbox binary supports a `--local` dial-out mode that
+turns a user's local folder into the sandbox of a Space:
 
 - `apps/sandbox --local --space <id> --root <dir> --relay wss://gateway/sandbox/relay`
-  - 复用同一套 dispatcher / process / filewatch / ws session 代码
-  - **路径围栏**：fs RPC（read/write/stat/ls/find/grep）与 process cwd 强制限制在 `--root` 内（realpath + symlink 防逃逸）
-  - **进程执行不做 OS 级隔离**：`bash` / argv 以当前用户身份运行，可访问 `--root` 之外的宿主机资源。这与"在本机运行 AI coding agent"的信任模型一致，属刻意设计；`sandbox up` 启动前有显式知情同意提示。若需强隔离，请在容器 / VM 内运行 runner
-  - relay data channel 目前仅以一次性随机 channelId（经已鉴权的 control 通道下发、15s 过期、单次配对）绑定；后续可加 per-channel HMAC
-  - 通过 `COHUB_RELAY_TOKEN`（用户 access token）向 gateway 鉴权
-- `apps/gateway` 提供 relay：
-  - `/sandbox/relay`（control，本机 runner 接入，鉴权 `sandbox.manage`）
-  - `/sandbox/relay/data?channel=<id>`（本机按需回拨的数据通道）
-  - `/internal/sandbox-relay/:spaceId`（集群内 agent/worker 接入，`x-worker-secret` 鉴权）
-  - control 建立后由 gateway 作为唯一状态上报方：ready + `wsEndpoint`；断开 → stopped(disconnected)
-  - 数据通道逐帧透明 pipe，gateway 不解析 RPC
-- `space_sandboxes.provider = "local"` 时，controller 短路 provision / idle-destroy / recover
-- CLI：`cohub sandbox up <dir>` 建/绑 space、拉起 runner、输出 web 链接
+  - Reuses the same dispatcher / process / filewatch / ws session code
+  - **Path fence**: fs RPC (read/write/stat/ls/find/grep) and process cwd are confined to `--root` (realpath + symlink escape prevention)
+  - **No OS-level isolation for process execution**: `bash` / argv run as the current user and can reach host resources outside `--root`. This matches the "run an AI coding agent on your own machine" trust model and is intentional; `runtime up` shows an explicit informed-consent prompt before starting. For strong isolation, run the runner inside a container / VM
+  - The relay data channel is currently bound only through a one-time random channelId (issued over the authenticated control channel, 15s expiry, single pairing); per-channel HMAC can be added later
+  - Authenticates to the gateway with `COHUB_RELAY_TOKEN` (user access token)
+- `apps/gateway` provides the relay:
+  - `/sandbox/relay` (control, local runner connects, authorized by `sandbox.manage`)
+  - `/sandbox/relay/data?channel=<id>` (data channel dialed back on demand by the local machine)
+  - `/internal/sandbox-relay/:spaceId` (in-cluster agent/worker access, authorized by `x-worker-secret`)
+  - Once control is established, the gateway is the single status reporter: ready + `wsEndpoint`; disconnect -> stopped(disconnected)
+  - The data channel pipes frames transparently; the gateway does not parse RPC
+- When `space_sandboxes.provider = "local"`, the controller short-circuits provision / idle-destroy / recover
+- CLI: `cohub runtime up <dir>` creates and remembers the directory's Space on first use, then reuses it on later starts, while supervising the Workspace bridge and local Harness
 
-### 二进制分发
+### Binary distribution
 
-`cohub-sandboxd` 与云端 sandbox 是同一份代码，仅以 `--local` 拨出运行。CI（`.github/workflows/sandbox-binaries-build.yml`）在打 `v*` tag 时交叉编译常见平台：
+`cohub-sandboxd` is the same code as the cloud sandbox, run only as a `--local` dial-out.
+CI (`.github/workflows/sandbox-binaries-build.yml`) cross-compiles common platforms when a `v*` tag is pushed:
 
-- `linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`
-- 每平台产出 `cohub-sandboxd_<version>_<os>_<arch>.tar.gz` + `.sha256`，附带聚合 `SHA256SUMS.txt`
-- 版本经 `-ldflags -X main.buildVersion=<tag>` 注入；容器内以 `COHUB_SANDBOX_VERSION` 环境变量优先，并兼容旧 `IMAGE_VERSION`
-- Windows 暂不支持（进程组管理依赖 Unix syscall，待后续补平台适配）
-- 产物同时：附加到 GitHub Release（私有 repo，仅内部可下）、上传公共 CDN `https://public.cohub.run/sandboxd/<version>/`（CLI 下载源）
+- `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`
+- Each platform produces `cohub-sandboxd_<version>_<os>_<arch>.tar.gz` + `.sha256`, plus an aggregated `SHA256SUMS.txt`
+- The version is injected via `-ldflags -X main.buildVersion=<tag>`; inside containers the `COHUB_SANDBOX_VERSION` env var takes precedence and the legacy `IMAGE_VERSION` is accepted
+- Windows is not supported yet (process group management depends on Unix syscalls; platform support to follow)
+- Artifacts are attached to the GitHub Release (private repo, internal downloads only) and uploaded to the public CDN `https://public.cohub.live/sandboxd/<version>/` (the CLI download source)
 
-### 托管下载（CLI）
+### Managed download (CLI)
 
-CLI 首次 `cohub sandbox up` 时按当前 `os/arch` 从公共 CDN 拉取对应单个平台二进制，校验 `.sha256` 后缓存到 `~/.cache/cohub/sandboxd/<version>/`，后续命中缓存：
+On the first `cohub runtime up`, the CLI pulls the matching single-platform binary from the
+public CDN for the current `os/arch`, verifies `.sha256`, and caches it under
+`~/.cache/cohub/sandboxd/<version>/`; later runs hit the cache:
 
-- 版本由 CLI 内 `SANDBOXD_VERSION` 常量锁定（独立于 CLI 包版本；协议版本 `"1"` 保证向后兼容），随 runner 演进手动 bump
-- `COHUB_SANDBOXD_BIN` 覆盖二进制路径（本地 `go build` / 离线 / 自建）
-- `COHUB_SANDBOXD_CDN_BASE_URL` 覆盖下载源（staging / 自托管）
-- 并发 `up` 用 mkdir 原子锁避免重复下载；checksum 不匹配直接拒绝
+- The version is pinned by the `SANDBOXD_VERSION` constant in the CLI (independent of the CLI package version; protocol version `"1"` guarantees backward compatibility) and bumped manually as the runner evolves
+- `COHUB_SANDBOXD_BIN` overrides the binary path (local `go build` / offline / self-built)
+- `COHUB_SANDBOXD_CDN_BASE_URL` overrides the download source (staging / self-hosted)
+- Concurrent `up` runs use an atomic mkdir lock to avoid duplicate downloads; a checksum mismatch is rejected outright
 
-## 当前 transport 模式
+## Current transport mode
 
-当前系统只保留一种模式：
+The system keeps a single mode:
 
-- `apps/sandbox` 提供 WebSocket server（默认监听 `0.0.0.0:8788`）
-- `apps/agent` 作为客户端主动连接 sandbox
-- sandbox 建连后立即发送首帧 `sandbox.heartbeat`，携带 capabilities / filesystem / metadata 快照
-- 所有 tools 都通过 WebSocket RPC 转发给 sandbox
+- `apps/sandbox` exposes a WebSocket server (listens on `0.0.0.0:8788` by default)
+- `apps/agent` connects to the sandbox as a client
+- On connect, the sandbox immediately sends a first `sandbox.heartbeat` frame with capabilities / filesystem / metadata snapshots
+- All tools are forwarded to the sandbox over WebSocket RPC
 
-## 当前 sandbox filesystem 语义
+## Current sandbox filesystem semantics
 
 - `/workspace`
-  - 项目工作目录
-  - 可读写
-  - 默认 `cwd`
+  - Project working directory
+  - Read/write
+  - Default `cwd`
 - `/configs/platform/.agents`
-  - 平台技能与引用资源目录
-  - 只读
-- 其他 sandbox 本地路径
-  - 如 `/tmp`
-  - 可按真实机器语义访问
-- 首帧 heartbeat 中返回的 `filesystem.roots`
-  - 仅用于说明已知挂载与推荐目录
-  - 不是访问白名单
+  - Platform skills and referenced assets directory
+  - Read-only
+- Other sandbox-local paths
+  - Such as `/tmp`
+  - Accessible with real-machine semantics
+- `filesystem.roots` returned in the first heartbeat
+  - Describes known mounts and recommended directories only
+  - Not an access allowlist
 
-RPC 中的 `path` / `cwd` 语义与 pi tools 保持一致：
+`path` / `cwd` semantics in RPC stay consistent with pi tools:
 
-- 支持相对路径与绝对路径
-- 相对路径相对当前 `cwd` 解析
-- 未显式提供 `cwd` 时，默认使用 `/workspace`
-- sandbox 不做白名单 roots 限制，按真实机器语义处理路径
-- 仅对 `/configs/platform/.agents` 施加只读保护
+- Absolute and relative paths are supported
+- Relative paths resolve against the current `cwd`
+- When `cwd` is not provided explicitly, `/workspace` is the default
+- The sandbox applies no allowlist roots; paths follow real-machine semantics
+- Only `/configs/platform/.agents` is protected read-only
 
-## 关键环境变量
+## Key environment variables
 
 ### Agent
 
-- `LOCAL_SANDBOX_SPACE_ID` — 本地调试时指定 sandbox 的 space ID
-- `LOCAL_SANDBOX_WS_URL` — 本地调试时 sandbox 的 WebSocket 地址（如 `ws://127.0.0.1:8788/sandbox`）
+- `LOCAL_SANDBOX_SPACE_ID` — Space ID of the sandbox during local debugging
+- `LOCAL_SANDBOX_WS_URL` — WebSocket address of the sandbox during local debugging (e.g. `ws://127.0.0.1:8788/sandbox`)
 - `SPACE_ID`
 - `REDIS_URL`
 - `SPACE_DIR`
@@ -108,11 +113,11 @@ RPC 中的 `path` / `cwd` 语义与 pi tools 保持一致：
 - `WORKSPACE_DIR`
 - `PLATFORM_AGENTS_DIR=/configs/platform/.agents`
 - `HEARTBEAT_INTERVAL_SECS`
-- `COHUB_SANDBOX_VERSION`（兼容旧 `IMAGE_VERSION`）
+- `COHUB_SANDBOX_VERSION` (accepts legacy `IMAGE_VERSION`)
 
-## 本地联调
+## Local development
 
-### 启动 sandbox（服务端）
+### Start the sandbox (server)
 
 ```bash
 cd apps/sandbox
@@ -125,9 +130,9 @@ PLATFORM_AGENTS_DIR=/configs/platform/.agents \
 go run .
 ```
 
-默认监听：`ws://0.0.0.0:8788/sandbox`
+Default listen address: `ws://0.0.0.0:8788/sandbox`
 
-### 启动 agent（客户端）
+### Start the agent (client)
 
 ```bash
 cd apps/agent
@@ -136,40 +141,47 @@ LOCAL_SANDBOX_WS_URL=ws://127.0.0.1:8788/sandbox \
 pnpm dev
 ```
 
-## 当前 remote tools 覆盖面
+## Current remote tools coverage
 
 - `read` -> `fs.read`
 - `write` -> `fs.write`
-- `edit` -> agent 侧 diff + remote read/write
+- `edit` -> agent-side diff + remote read/write
 - `bash` -> `process.start` / `process.abort`
 - `ls` -> `fs.stat` + `fs.ls`
 - `find` -> `fs.stat` + `fs.find`
 - `grep` -> `fs.grep`
 
-## Web/API 文件系统（local sandbox，M4）
+## Web/API filesystem (local sandbox, M4)
 
-cloud space 的 fs tree/read/write 直接读写共享 PVC（不变）。local space 经 relay 走 sandbox RPC 动态读写用户本机目录，`apps/api/src/space-fs-backend.ts` 按 `space_sandboxes.provider` 分叉：
+Cloud-space fs tree/read/write reads and writes the shared PVC directly (unchanged).
+Local spaces go through the relay to sandbox RPC to read and write the user's local
+directory dynamically; `apps/api/src/space-fs-backend.ts` forks on `space_sandboxes.provider`:
 
-- fs tree -> `fs.tree`（结构化递归、gitignore-aware、depth/limit）
-- 读文件/批量读 -> `fs.stat`（大小护栏）+ `fs.read`（binary base64）
-- 下载 -> RPC 读入内存直出（≤10MB，local 不走 CDN）
-- 写/新建文件、上传 -> `fs.write`（支持 base64 编码）
-- 建目录/删除/移动 -> `process.start` argv（`mkdir -p` / `rm`·`rmdir` / `mv`），操作前 `fs.stat` 预检
-- 本机离线 -> API 返回 `503 sandbox_offline`，web 展示离线态
+- fs tree -> `fs.tree` (structured recursion, gitignore-aware, depth/limit)
+- Read file/batch read -> `fs.stat` (size guard) + `fs.read` (binary base64)
+- Download -> RPC reads into memory and streams directly (≤10MB; local does not use the CDN)
+- Write/create file, upload -> `fs.write` (supports base64 encoding)
+- Create directory/delete/move -> `process.start` argv (`mkdir -p` / `rm`·`rmdir` / `mv`), with an `fs.stat` precheck before the operation
+- Local machine offline -> the API returns `503 sandbox_offline`; web shows the offline state
 
-协议新增：`fs.tree` 方法（capability `fsTree`），`fs.read`/`fs.stat` 结果补 `size`/`mtimeMs`，`fs.write` 参数补 `encoding`。云端沙箱同步实现，两端能力恒等。
+Protocol additions: the `fs.tree` method (capability `fsTree`), `size`/`mtimeMs` added to
+`fs.read`/`fs.stat` results, and `encoding` added to `fs.write` parameters. Cloud sandboxes
+implement them in sync, so both sides expose identical capabilities.
 
-local 模式下 `fs.changed` / `ports.changed` 只经 control 通道上报（不发 data session，避免与 agent 转发重复），gateway 收到后 republish 到 space 订阅者，因此 web 文件树在无 agent 连接时也保持实时。
+In local mode, `fs.changed` / `ports.changed` are reported only over the control channel
+(not through a data session, avoiding duplication with agent forwarding). The gateway
+republishes them to Space subscribers, so the web file tree stays realtime even without
+an agent connection.
 
-## 当前状态语义
+## Current state semantics
 
-1. API 先上报 `provisioning`
-2. 创建 sandbox Pod，sandbox 启动 WS server
-3. agent 作为客户端主动连接 sandbox
-4. sandbox 发送首帧 `sandbox.heartbeat`，同时携带能力与文件系统快照
-5. 后续 heartbeat 持续上报 sandbox runtime 状态；workspace 内容初始化由 worker 独立完成
-6. sandbox ready 与 workspace bootstrap ready 分别建模，不再耦合
+1. The API reports `provisioning` first
+2. A sandbox Pod is created and the sandbox starts a WS server
+3. The agent connects to the sandbox as a client
+4. The sandbox sends the first `sandbox.heartbeat` frame with capabilities and a filesystem snapshot
+5. Later heartbeats keep reporting sandbox runtime state; workspace content initialization is handled independently by the worker
+6. Sandbox ready and workspace bootstrap ready are modeled separately and are no longer coupled
 
-## 当前限制
+## Current limitations
 
-- 目前 active sandbox connection 还是单连接模型
+- The active sandbox connection is still a single-connection model

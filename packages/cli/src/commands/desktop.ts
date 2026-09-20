@@ -4,16 +4,19 @@ import {
   type CohubHttpClient,
   type DesktopCommandRecord,
   type DesktopCall,
-} from "@neta-art/cohub";
-import {
+  type DesktopSurface,
   parseAppRef,
+  resolveOpenSurface,
   DESKTOP_COMMAND_DEFAULT_TIMEOUT_MS,
   DESKTOP_COMMAND_MAX_TIMEOUT_MS,
 } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok } from "../output.js";
+import { resolveBoundSpace } from "../space.js";
 import { getAppByRef } from "../app-ref.js";
+
+export { resolveOpenSurface };
 
 const FILE_SCHEME = "file://";
 const APP_SCHEME = "app://";
@@ -21,16 +24,33 @@ const LEGACY_WORK_SCHEME = "work://";
 
 type OpenTarget =
   | { kind: "file"; path: string }
-  | { kind: "app"; appId: string; label: string; launch: { search?: string; hash?: string } };
+  | {
+      kind: "app";
+      appId: string;
+      label: string;
+      launch: { search?: string; hash?: string };
+      /** Surface the App asked for at publish time, when it declared one. */
+      surface?: DesktopSurface;
+    };
 
-function optionalSpaceId(command: Command): string | undefined {
+/**
+ * Optional disambiguation for file:// vs app://. Unlike ordinary
+ * Space-scoped commands, an unbound directory must not fall back to Home:
+ * the plain target should remain eligible for App resolution.
+ */
+export async function resolveOptionalSpaceId(
+  command: Command,
+  options: { cwd?: string; bindingsPath?: string } = {},
+): Promise<string | undefined> {
   let current: Command | null = command;
   while (current) {
     const opts = current.opts() as Record<string, unknown>;
     if (typeof opts.space === "string" && opts.space.trim()) return opts.space.trim();
     current = current.parent ?? null;
   }
-  return process.env.COHUB_SPACE_ID?.trim() || undefined;
+  const fromEnvironment = process.env.COHUB_SPACE_ID?.trim();
+  if (fromEnvironment) return fromEnvironment;
+  return (await resolveBoundSpace(options)) ?? undefined;
 }
 
 function parseFilePath(value: string): string {
@@ -65,6 +85,8 @@ type OpenOptions = {
   timeoutMs?: string;
   noWait?: boolean;
   json?: boolean;
+  /** Surface role for app targets (`window` | `overlay`). */
+  as?: string;
 };
 
 function readCallInput(opts: OpenOptions): unknown {
@@ -103,6 +125,7 @@ async function resolveAppTarget(client: CohubHttpClient, ref: string): Promise<O
   const normalized = hasAppScheme(ref) ? ref.replace(/^[a-zA-Z]+:\/\//, "") : ref;
   const parsed = parseAppRef(normalized);
   const detail = await getAppByRef(client, normalized);
+  const declared = detail.app.meta?.presentation?.surface;
   return {
     kind: "app",
     appId: detail.app.id,
@@ -111,6 +134,7 @@ async function resolveAppTarget(client: CohubHttpClient, ref: string): Promise<O
       ...(parsed.search ? { search: parsed.search } : {}),
       ...(parsed.hash ? { hash: parsed.hash } : {}),
     },
+    ...(declared === "overlay" || declared === "window" ? { surface: declared } : {}),
   };
 }
 
@@ -122,7 +146,7 @@ async function resolveOpenTarget(
   if (hasFileScheme(value)) return { kind: "file", path: parseFilePath(value) };
   if (hasAppScheme(value)) return resolveAppTarget(client, value);
 
-  const spaceId = optionalSpaceId(command);
+  const spaceId = await resolveOptionalSpaceId(command);
   if (spaceId) {
     try {
       await client.space(spaceId).files.read(value);
@@ -164,12 +188,18 @@ async function openWindow(target: string, opts: OpenOptions, command: Command): 
   if (opts.noWait && opts.timeoutMs !== undefined) {
     return error("Conflicting wait options", "Use either --no-wait or --timeout-ms, not both.");
   }
+  if (opts.as !== undefined && opts.as !== "window" && opts.as !== "overlay") {
+    return error("Invalid surface", "--as must be one of: window, overlay.");
+  }
   const timeoutMs = parseTimeout(opts.timeoutMs);
   const client = createClient();
   try {
     const resolved = await resolveOpenTarget(client, command, target);
     if (resolved.kind === "file" && opts.call) {
       return error("Unsupported option", "--call only applies to app targets.");
+    }
+    if (resolved.kind === "file" && opts.as) {
+      return error("Unsupported option", "--as only applies to app targets.");
     }
     const call: DesktopCall | undefined = opts.call
       ? { method: opts.call, ...(callInput === undefined ? {} : { input: callInput }) }
@@ -186,6 +216,7 @@ async function openWindow(target: string, opts: OpenOptions, command: Command): 
                 appId: resolved.appId,
                 label: resolved.label,
                 ...(resolved.launch.search || resolved.launch.hash ? { launch: resolved.launch } : {}),
+                ...(resolveOpenSurface(opts.as, resolved.surface) ? { surface: "overlay" as const } : {}),
               },
         ...(call ? { call } : {}),
       },
@@ -215,6 +246,7 @@ Examples:
   cohub desktop open app://alice/studio/launch
   cohub desktop open alice/studio/launch
   cohub desktop open https://cohub.live/alice/studio/w/launch?view=timeline
+  cohub desktop open <app-id> --as overlay
   cohub desktop open <app-id> --call selection.get
   cohub desktop open <app-id> --call board.focus --data '{"nodeId":"n1"}'
 `;
@@ -223,8 +255,11 @@ const OPEN_NOTES = `
 Notes:
   - Use file:// and app:// to make the target explicit; the legacy work://
     scheme is still accepted.
-  - A plain target checks the current Space for a file before resolving an app.
+  - A plain target checks the explicit Space or current directory Runtime binding for a file before resolving an app; it does not fall back to Home.
   - Opening a window is idempotent; repeating it re-activates the same tab.
+  - --as picks the surface: window (a preview tab) or overlay (a transparent
+    layer above the workspace). Without it, an App published with
+    <meta name="cohub:surface" content="overlay"> opens as an overlay.
   - --call waits for the app to announce readiness, then invokes the method.
   - Which methods exist is up to the app author.
 `;
@@ -239,6 +274,7 @@ function registerOpen(parent: Command, deprecated: boolean): void {
     .option("--client <clientId>", "Target a specific desktop instance of your account")
     .option("--command-id <id>", "Stable id so retries never dispatch twice")
     .option("--no-wait", "Dispatch the command and exit without waiting for a result")
+    .option("--as <surface>", "Surface role for app targets: window (default) or overlay")
     .option(
       "--timeout-ms <ms>",
       `How long to wait for the desktop (default: ${DESKTOP_COMMAND_DEFAULT_TIMEOUT_MS}; max: ${DESKTOP_COMMAND_MAX_TIMEOUT_MS})`,

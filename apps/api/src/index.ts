@@ -2,6 +2,7 @@ import "dotenv/config";
 import "./tracing.js";
 import { configureBillingRuntime } from "@cohub/billing";
 import { createLogger } from "@cohub/infra/logging";
+import { SPACE_HOOK_WEBHOOK_SECRET_HEADER } from "@cohub/protocol";
 import { COHUB_SOURCE_HEADER_NAMES } from "@cohub/protocol/provenance";
 
 import { serve } from "@hono/node-server";
@@ -68,6 +69,7 @@ app.use(
       "Authorization",
       "X-Git-Token",
       "X-Request-Id",
+      SPACE_HOOK_WEBHOOK_SECRET_HEADER,
       // Derived, so a new provenance header cannot be added without being allowed
       // here — a missing one fails every cross-origin browser request.
       ...COHUB_SOURCE_HEADER_NAMES,

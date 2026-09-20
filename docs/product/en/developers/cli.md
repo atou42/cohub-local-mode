@@ -42,7 +42,8 @@ ENV=dev cohub spaces ls
 | `--json` | Machine-readable output |
 | `-h, --help` | Command help |
 
-Many workflows need a Space:
+Many workflows need a Space. Without an explicit target, the CLI uses the Space
+remembered for the current directory before falling back to Home:
 
 ```bash
 cohub -s <spaceId> spaces get
@@ -130,6 +131,7 @@ started from, and call methods the App exposes.
 cohub desktop open <appId|url|app://...|username/space/app|file://path>
 cohub desktop open file://src/main.ts
 cohub desktop open app://alice/studio/launch
+cohub desktop open app://alice/studio/milk-frog --as overlay
 cohub desktop open <app-or-file> --call selection.get
 cohub desktop open <app> --call board.focus --data '{"nodeId":"n1"}'
 ```
@@ -143,14 +145,24 @@ Commands only ever reach the frontend instance that originated the current work,
 resolved from request provenance. They cannot target another user, and there is
 no DOM access or script evaluation.
 
-### Local Sandbox
+### Local Runtime
 
-Expose a local folder as the Space Sandbox:
+Expose a local folder as the Space Runtime:
 
 ```bash
-cohub sandbox up ./my-project
-cohub sandbox status
+cd ./my-project
+
+# The first run creates and remembers the directory's Space.
+cohub runtime up
+
+# Later runs reuse it instead of creating another Space.
+cohub runtime up
+cohub runtime status
 ```
+
+Bindings are scoped by local directory, account, and environment, and stored in
+`~/.config/cohub/runtime-spaces.json`. Omitting `--space` reads the binding;
+an explicit `--space` or `COHUB_SPACE_ID` overrides and updates it.
 
 ### Boards
 
@@ -187,6 +199,8 @@ cohub models ls
 cohub models ls --model-type multimodal
 cohub generate "A calm lake at sunrise" --model <model> --output lake.png
 ```
+
+`models ls` shows each LLM's per-million-token cost (for example `$3 /M input · $15 /M output`) and hides models marked `hidden`. `models ls --model-type multimodal` shows each model's unit price (for example `$0.04 / image` or `$0.10–$0.50 / second`); `--json` returns the raw `pricing` object (`unit`, `amount` or `min`/`max`, optional `note`).
 
 ## Output discipline
 

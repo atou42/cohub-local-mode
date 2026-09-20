@@ -30,6 +30,16 @@ assert.equal(meta.icon, "/apple-touch-icon.png");
 assert.equal(meta.lang, "zh-CN");
 assert.equal(meta.themeColor, "#c76b3a");
 assert.equal(htmlLangToOgLocale(meta.lang), "zh_CN");
+assert.equal(meta.surface, null);
+
+assert.equal(
+  extractHtmlPageMeta('<head><meta name="cohub:surface" content="Overlay"></head>').surface,
+  "overlay",
+);
+assert.equal(
+  extractHtmlPageMeta('<head><meta name="cohub:surface" content="popup"></head>').surface,
+  null,
+);
 
 const filled = fillIconFromSiteFiles(
   { ...emptyHtmlPageMeta() },

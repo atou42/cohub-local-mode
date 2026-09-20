@@ -317,7 +317,7 @@ function handleMessage(raw) {
       socket?.close(1002, "relay event schema mismatch");
       return;
     }
-    console.log(`[relay-node] connected as ${message.nodeId}`);
+    console.log(`[relay-node] ${new Date().toISOString()} connected as ${message.nodeId}`);
     writeStatus("connected");
     if (pendingOutcome) sendOutcome(pendingOutcome);
     watcher.flushPending();
@@ -418,17 +418,35 @@ function connect() {
     handshakeTimeout: 15_000,
   });
   socket = next;
+  let awaitingPong = false;
+  let healthTimer = null;
   next.on("open", () => {
     reconnectAttempt = 0;
+    // Protocol pings work while idle and do not wake Cloudflare Durable Objects.
+    healthTimer = setInterval(() => {
+      if (next.readyState !== WebSocket.OPEN) return;
+      if (awaitingPong) {
+        console.error(`[relay-node] ${new Date().toISOString()} pong timeout; reconnecting`);
+        next.terminate();
+        return;
+      }
+      awaitingPong = true;
+      next.ping();
+    }, 30_000);
+  });
+  next.on("pong", () => {
+    awaitingPong = false;
   });
   next.on("message", handleMessage);
   next.on("error", (error) => {
-    console.error(`[relay-node] connection error: ${error.message}`);
+    console.error(`[relay-node] ${new Date().toISOString()} connection error: ${error.message}`);
+    next.terminate();
   });
   next.on("close", (code, reason) => {
+    if (healthTimer) clearInterval(healthTimer);
     if (socket === next) socket = null;
     console.error(
-      `[relay-node] disconnected (${code}${reason.length ? `: ${reason.toString()}` : ""})`,
+      `[relay-node] ${new Date().toISOString()} disconnected (${code}${reason.length ? `: ${reason.toString()}` : ""})`,
     );
     writeStatus("disconnected", { closeCode: code });
     scheduleReconnect();

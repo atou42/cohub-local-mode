@@ -900,3 +900,76 @@ test("buildTurnTimelineItems uses total duration and cost for direct generation"
 		{ cost: { total: 0.012 } },
 	);
 });
+
+test("buildTurnTimelineItems never renders a queued follow-up as the streaming turn", () => {
+	const items = buildTurnTimelineItems({
+		sessionId: "s1",
+		// The live turn record is not loaded yet; only a queued follow-up is.
+		turns: [
+			{
+				id: "turn-queued",
+				sessionId: "s1",
+				userUuid: null,
+				sequence: 2,
+				status: "queued",
+				intent: "followup",
+				userContent: [{ type: "text", text: "queued follow-up" }],
+				userText: "queued follow-up",
+				assistantContent: null,
+				assistantText: null,
+				provider: null,
+				model: null,
+				stopReason: null,
+				errorMessage: null,
+				finalUsage: null,
+				totalUsage: null,
+				summary: null,
+				intermediateIndex: null,
+				intermediateSummary: null,
+				meta: null,
+				startedAt: null,
+				durationMs: null,
+				completedAt: null,
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			},
+		],
+		streaming: {
+			sessionId: "s1",
+			turnId: "turn-running",
+			contentBlocks: [],
+			intermediateMessages: [
+				{
+					id: "m1",
+					sessionId: "s1",
+					role: "assistant",
+					content: [{ type: "text", text: "working" }],
+					text: "working",
+					provider: null,
+					model: null,
+					stopReason: null,
+					errorMessage: null,
+					usage: null,
+					durationMs: null,
+					toolCallsObjectKey: null,
+					meta: null,
+					createdAt: "2026-01-01T00:00:00.000Z",
+				},
+			],
+			status: "streaming",
+		},
+	});
+
+	// The queued follow-up is owned by the queue UI, not the timeline.
+	assert.equal(
+		items.some((item) => "turn" in item && item.turn.id === "turn-queued"),
+		false,
+	);
+	// The live process still renders, anchored to the real streaming turn.
+	const process = items.find((item) => item.kind === "process");
+	assert.equal(process?.kind, "process");
+	assert.equal(
+		process?.kind === "process" ? process.turn.id : null,
+		"turn-running",
+	);
+});

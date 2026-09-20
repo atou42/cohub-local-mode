@@ -16,8 +16,8 @@ import {
 	computeDrawBounds,
 	DEFAULT_BOARD_TOOL_STYLES,
 	featuredTaskArtifact,
-	fileBaseName,
 	filePreviewKind,
+	fileStem,
 	measureBoardText,
 	TEXT_FONT_SIZE,
 	unknownRealType,
@@ -188,7 +188,7 @@ export function createFileBoardItem(
 		ref: { kind: "space-file", path },
 		snapshot: {
 			...snapshot,
-			title: snapshot?.title ?? fileBaseName(path),
+			title: snapshot?.title ?? fileStem(path),
 		},
 		frame: createFrame(x - size.width / 2, y - size.height / 2, size),
 	};
@@ -493,7 +493,7 @@ export function titleForBoardItem(item: BoardItem): string {
 		case "audio":
 			return item.snapshot?.title ?? getResourceTitle(item.ref.path);
 		case "file":
-			return item.snapshot?.title ?? fileBaseName(item.ref.path);
+			return item.snapshot?.title ?? fileStem(item.ref.path);
 		case "task":
 			return item.snapshot.title;
 		default:

@@ -308,6 +308,9 @@ export async function hasPermission(
   if (isUserLevelPermission(permission)) {
     const appSession = getUserAppSession(user);
     if (appSession) return hasActiveViewerGrantPermission(appSession, permission);
+    // Preview sessions are space-scoped file-preview tokens; they never hold
+    // account-level permissions.
+    if (getUserPreviewSession(user)) return false;
     return Boolean(user?.uuid);
   }
 

@@ -42,7 +42,7 @@ ENV=dev cohub spaces ls
 | `--json` | 机器可读输出 |
 | `-h, --help` | 命令帮助 |
 
-很多工作流需要 Space：
+很多工作流需要 Space。未显式指定时，CLI 会先使用当前目录已记住的 Space，再回退到 Home Space：
 
 ```bash
 cohub -s <spaceId> spaces get
@@ -128,6 +128,7 @@ App 自己暴露的方法。
 cohub desktop open <appId|url|app://...|username/space/app|file://path>
 cohub desktop open file://src/main.ts
 cohub desktop open app://alice/studio/launch
+cohub desktop open app://alice/studio/milk-frog --as overlay
 cohub desktop open <app-or-file> --call selection.get
 cohub desktop open <app> --call board.focus --data '{"nodeId":"n1"}'
 ```
@@ -139,14 +140,23 @@ cohub desktop open <app> --call board.focus --data '{"nodeId":"n1"}'
 命令只会到达发起当前工作的那个前端实例，目标从请求 provenance 推导得出。它无法作用于
 其他用户，也不提供 DOM 访问或脚本执行能力。
 
-### 本地 Sandbox
+### 本地 Runtime
 
-把本地目录暴露为 Space Sandbox：
+把本地目录暴露为 Space Runtime：
 
 ```bash
-cohub sandbox up ./my-project
-cohub sandbox status
+cd ./my-project
+
+# 第一次会创建并记住该目录的 Space
+cohub runtime up
+
+# 再次运行会自动复用，不会重复创建
+cohub runtime up
+cohub runtime status
 ```
+
+绑定按本地目录、账号和环境隔离，保存在 `~/.config/cohub/runtime-spaces.json`。
+省略 `--space` 时会自动读取；显式传入 `--space` 或设置 `COHUB_SPACE_ID` 会覆盖并更新当前目录绑定。
 
 ### Boards
 
@@ -183,6 +193,8 @@ cohub models ls
 cohub models ls --model-type multimodal
 cohub generate "A calm lake at sunrise" --model <model> --output lake.png
 ```
+
+`models ls` 会展示每个 LLM 的百万 token 成本（如 `$3 /M input · $15 /M output`），并隐藏标记为 `hidden` 的模型。`models ls --model-type multimodal` 会展示每个生成模型的单位价格（如 `$0.04 / image`、`$0.10–$0.50 / second`）；`--json` 返回原始 `pricing` 对象（`unit`、`amount` 或 `min`/`max`、可选 `note`）。
 
 ## 输出约定
 

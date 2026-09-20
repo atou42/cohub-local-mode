@@ -4,7 +4,7 @@ import {
 	BOARD_BUILTIN_CAPABILITIES,
 	DEFAULT_BOARD_RENDER_LIMITS,
 } from "@cohub/protocol";
-import { createBoardExtensionRegistry } from "../src/board/animation.js";
+import { compileComposition, createBoardExtensionRegistry } from "../src/board/animation.js";
 import { patchBoardAppearance } from "../src/board/mutation.js";
 import { createBattleFixture } from "./fixtures/battle.js";
 
@@ -62,12 +62,33 @@ test("SDK render limits stay aligned with the protocol", async () => {
 	assert.deepEqual(DEFAULT_BOARD_LIMITS, DEFAULT_BOARD_RENDER_LIMITS);
 });
 
+test("resident effects add to the render budget instead of sharing one slot", () => {
+	const effect = (id: string) => ({
+		id,
+		target: { type: "item" as const, itemId: id },
+		kind: "effects.deal",
+		kindVersion: 1,
+		enabled: true,
+		lifecycle: "on-enter" as const,
+		timeOrigin: "activation" as const,
+		layer: "front" as const,
+		seed: id,
+		params: {},
+		assetRefs: [],
+		metadata: {},
+	});
+	const result = createBoardExtensionRegistry().validate({
+		composition: compileComposition({ id: "empty", name: "Empty", duration: 1 }),
+		effects: [effect("a"), effect("b"), effect("c")],
+	});
+	assert.equal(result.peakCost.drawCalls, 3);
+	assert.equal(result.valid, true);
+});
+
 test("Board appearance patches preserve nested settings", () => {
 	const appearance = patchBoardAppearance({
-		theme: "clean",
 		background: { kind: "solid" },
 		grid: { visible: true, size: 32, opacity: 0.2 },
-		mood: "natural",
 	}, { background: { kind: "solid", color: "#123456" } });
 	assert.equal(appearance.grid.visible, true);
 	assert.equal(appearance.background.color, "#123456");
@@ -91,4 +112,27 @@ test("registry reports invalid particle bounds without dropping the clip", () =>
 	});
 	assert.equal(validation.valid, false);
 	assert.equal(validation.diagnostics[0]?.code, "PARTICLE_BOUNDS_REQUIRED");
+});
+
+test("an unshipped built-in effect version is reported, not silently accepted", () => {
+	const result = createBoardExtensionRegistry().validate({
+		composition: compileComposition({ id: "empty", name: "Empty", duration: 1 }),
+		effects: [{
+			id: "deal-v2",
+			target: { type: "item", itemId: "hero" },
+			kind: "effects.deal",
+			kindVersion: 2,
+			enabled: true,
+			lifecycle: "on-enter",
+			timeOrigin: "activation",
+			layer: "front",
+			seed: "deal-v2",
+			params: {},
+			assetRefs: [],
+			metadata: {},
+		}],
+	});
+	assert.ok(result.diagnostics.some((d) => d.code === "UNKNOWN_EFFECT" && d.path === "effects.deal-v2"));
+	// No renderer means no render cost either.
+	assert.equal(result.peakCost.drawCalls, 0);
 });

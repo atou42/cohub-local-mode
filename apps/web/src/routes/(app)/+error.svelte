@@ -27,6 +27,6 @@ const accessState = $derived.by<AccessState>(() => {
 });
 </script>
 
-<main class="flex min-h-[100dvh] flex-col bg-bg-primary text-text-primary">
+<main class="flex min-h-full flex-col bg-bg-primary text-text-primary">
 	<AccessStateView state={accessState} />
 </main>

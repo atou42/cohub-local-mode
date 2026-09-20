@@ -104,15 +104,18 @@ Use diffs to:
 
 Saving freezes the current milestone. See [Saves](/docs/workspace/saves).
 
-## Local folder as Sandbox
+## Local folder as Runtime
 
-For advanced flows, the CLI can attach a local directory as the Space Sandbox:
+For advanced flows, the CLI can attach a local directory as the Space Runtime:
 
 ```bash
-cohub sandbox up ./my-project
+# The first run creates and remembers the directory's Space; later runs reuse it.
+cohub runtime up ./my-project
 ```
 
-This is useful when you want Cohub Agents against a local working tree. See [CLI](/docs/developers/cli).
+Bindings are scoped by directory, account, and environment, and stored in
+`~/.config/cohub/runtime-spaces.json`. This is useful when you want Cohub Agents
+against a local working tree. See [CLI](/docs/developers/cli).
 
 ## Practical tips
 

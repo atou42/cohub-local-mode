@@ -910,7 +910,9 @@ export function createBoardWindowController(
 		);
 
 		const nextRuntime =
-			event.changed.effects.length || event.changed.compositions.length
+			event.changed.board ||
+			event.changed.effects.length ||
+			event.changed.compositions.length
 				? boardRuntimeDataFromAuthoring({
 						...snapshot,
 						effects: mergeChangedRecords(

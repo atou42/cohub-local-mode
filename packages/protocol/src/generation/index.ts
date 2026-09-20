@@ -11,6 +11,7 @@ export type {
   GenerationContentBlockMeta,
   GenerationContentSpec,
   GenerationModelDeclaration,
+  GenerationModelPricing,
   GenerationParameterSpec,
   GenerationResult,
   GenerationSource,

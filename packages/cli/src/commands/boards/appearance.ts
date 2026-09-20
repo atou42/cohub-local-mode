@@ -83,6 +83,37 @@ Examples:
       }
     });
 
+  withJson(boards.command("motion <board>")
+    .description("Configure the default Board motion for newly added nodes")
+    .option("--preset <preset>", "Enter motion preset (deal)")
+    .option("--clear", "Disable the default enter motion")
+    .addHelpText("after", `
+Examples:
+  cohub boards motion plan.board --preset deal
+  cohub boards motion plan.board --clear`))
+    .action(async (target: string, options: JsonOptions & { preset?: string; clear?: boolean }) => {
+      try {
+        if (Boolean(options.clear) === Boolean(options.preset))
+          throw new Error("Use --preset or --clear");
+        if (options.preset && options.preset !== "deal")
+          throw new Error("--preset must be deal");
+        const board = await resolvedBoard(boards, target);
+        const current = await board.summary();
+        const appearance = appearanceFrom(current.board.metadata);
+        const next = patchBoardAppearance(appearance, {
+          motion: options.clear
+            ? undefined
+            : { enter: { kind: "effects.deal", kindVersion: 1, params: {} } },
+        });
+        showUpdated(await mutateSemantic(board, [{
+          type: "board.patch",
+          patch: { metadataPatch: { appearance: next } },
+        }], { baseVersion: current.board.version }), options);
+      } catch (cause) {
+        handleHttp(cause);
+      }
+    });
+
   withJson(boards.command("playback-policy <board>")
     .description("Configure automatic Board playback")
     .option("--composition <id>", "Composition to play")

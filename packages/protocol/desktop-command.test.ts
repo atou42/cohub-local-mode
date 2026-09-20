@@ -6,6 +6,7 @@ import {
   measureDesktopCommandPayload,
   parseDesktopCommand,
   parseDesktopCommandError,
+  resolveOpenSurface,
   DESKTOP_COMMAND_DEFAULT_TIMEOUT_MS,
   DESKTOP_COMMAND_ERROR_CODE_MAX_LENGTH,
   DESKTOP_COMMAND_ERROR_MESSAGE_MAX_LENGTH,
@@ -173,5 +174,61 @@ describe("desktop command helpers", () => {
     assert.equal(isDesktopCallMethod("board:focus-node"), true);
     assert.equal(isDesktopCallMethod("1bad"), false);
     assert.equal(isDesktopCallMethod("has space"), false);
+  });
+});
+
+describe("DesktopSurface field", () => {
+  const APP_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+  it("parses overlay surface", () => {
+    const { command } = parseDesktopCommand({
+      type: "desktop.open",
+      target: { kind: "app", appId: APP_ID, surface: "overlay" },
+    });
+    assert.equal(command?.target.kind === "app" && command.target.surface, "overlay");
+  });
+
+  it("omits surface when absent", () => {
+    const { command } = parseDesktopCommand({
+      type: "desktop.open",
+      target: { kind: "app", appId: APP_ID },
+    });
+    assert.ok(command !== null);
+    assert.equal(command.target.kind === "app" && command.target.surface, undefined);
+  });
+
+  it("ignores unrecognised surface values", () => {
+    const { command } = parseDesktopCommand({
+      type: "desktop.open",
+      target: { kind: "app", appId: APP_ID, surface: "popup" },
+    });
+    assert.ok(command !== null);
+    assert.equal(command.target.kind === "app" && command.target.surface, undefined);
+  });
+
+  it("accepts window as explicit value", () => {
+    const { command } = parseDesktopCommand({
+      type: "desktop.open",
+      target: { kind: "app", appId: APP_ID, surface: "window" },
+    });
+    assert.ok(command !== null);
+    // "window" is the default, stored as undefined to keep the payload compact.
+    assert.equal(command.target.kind === "app" && command.target.surface, undefined);
+  });
+});
+
+describe("resolveOpenSurface", () => {
+  it("uses --as, then the App's published declaration", () => {
+    // Declared overlay opens as an overlay without any flag.
+    assert.equal(resolveOpenSurface(undefined, "overlay"), "overlay");
+    // An explicit request always wins over the declaration, in both directions.
+    assert.equal(resolveOpenSurface("window", "overlay"), undefined);
+    assert.equal(resolveOpenSurface("overlay", "window"), "overlay");
+    assert.equal(resolveOpenSurface("overlay", undefined), "overlay");
+    // `window` is the implicit default and stays off the wire.
+    assert.equal(resolveOpenSurface(undefined, "window"), undefined);
+    assert.equal(resolveOpenSurface(undefined, undefined), undefined);
+    // Anything unknown from an older or newer App record is ignored.
+    assert.equal(resolveOpenSurface(undefined, "popup"), undefined);
   });
 });

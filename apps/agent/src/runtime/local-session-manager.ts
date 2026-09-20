@@ -320,6 +320,11 @@ export class SessionManager {
     return [...this.entries];
   }
 
+  serializeSnapshot(): string {
+    if (!this.header) throw new Error("Session has not been initialized");
+    return `${[this.header, ...this.entries].map(serializeJsonlEntry).join("\n")}\n`;
+  }
+
   getMessageMetaValues(key: string, role?: string): Set<string> {
     const values = new Set<string>();
     for (const entry of this.getBranch()) {

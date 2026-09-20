@@ -199,6 +199,7 @@ const toTurnRecord = (row: typeof sessionTurns.$inferSelect): SessionTurnRecord 
   summary: row.summary ?? null,
   intermediateIndex: row.intermediateIndex ?? null,
   intermediateSummary: row.intermediateSummary ?? null,
+  harnessIndex: row.harnessIndex ?? null,
   meta: normalizeRecord(row.meta),
   thinkingLevel: extractThinkingLevel(row.meta),
   startedAt: row.startedAt ? toIso(row.startedAt) : null,

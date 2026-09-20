@@ -11,7 +11,7 @@ Space Hooks let a Space declare asynchronous automation with files under:
 ## Declaration
 
 One file is one hook. The file path is the identity.
-Exactly one of `run` or `prompt` is required.
+Exactly one of `run`, `prompt` or `uses` is required.
 
 ```yaml
 schema: cohub.space-hook.v1
@@ -91,9 +91,25 @@ prompt:
   text: review the last turn
 ```
 
-Top-level `env` is shared by both `run` and `prompt`.
+Top-level `env` is shared by `run`, `prompt` and `uses`.
 Legacy `prompt.env` is still accepted as a fallback.
 User env cannot override system keys (`COHUB_*`, etc.).
+
+### App Action (`uses`)
+
+Runs a published App Action in this Space, as the Space owner.
+`uses` is `username/spaceSlug/appSlug/action`. `with` is JSON on stdin.
+
+```yaml
+schema: cohub.space-hook.v1
+
+on:
+  event: webhook
+
+uses: alice/tools/mail-inbox/deliver
+with:
+  dir: inbox/mail
+```
 
 Supported events:
 
@@ -101,8 +117,35 @@ Supported events:
 - `space.workspace.ready`
 - `session.turn.finalized` — optional `sessionIds` / `ignoreSessionIds` / `sources` / `labels` filters
 - `checkpoint.created`
-- `work.version.published`
+- `app.version.published`
 - `task.updated` — fires on task run state transitions (`pending`→`running`→`completed`/`failed`); payload carries the task record and `changed` fields. `space_hook` tasks and the `run_command` children they spawn are filtered out to prevent re-entrant loops.
+- `webhook` — an inbound HTTP trigger addressed by file name, see below.
+
+## Webhook triggers
+
+A hook with `on.event: webhook` is addressed by file name, not broadcast:
+`.cohub/hooks/mail.yml` → `POST /api/spaces/:spaceId/webhooks/mail`.
+
+```yaml
+schema: cohub.space-hook.v1
+
+on:
+  event: webhook
+  secret: wh_a1b2c3
+
+uses: alice/tools/mail-inbox/deliver
+```
+
+```bash
+curl -X POST https://<api>/api/spaces/<spaceId>/webhooks/mail \
+  -H 'content-type: application/json' \
+  -H 'x-cohub-webhook-secret: wh_a1b2c3' \
+  -d '{"messageId":"...","from":"..."}'
+```
+
+`on.secret` is optional. Pass it as `x-cohub-webhook-secret` or `?secret=`.
+The JSON body is `COHUB_HOOK_WEBHOOK_BODY` (64 KB max). The response is
+`{ taskRunId, hook, eventId }`.
 
 ## Trigger
 
@@ -134,6 +177,7 @@ space_hook task
   → match .cohub/hooks/*
   → run    → existing run_command chain
   → prompt → existing session prompt chain
+  → uses   → published App Action, run_command chain in this Space
 ```
 
 Execution and billing use the Space owner:
@@ -152,6 +196,10 @@ Worker loads hooks from the Space workspace PVC:
 $SPACE_STORAGE_ROOT/<spaceId>/workspace/.cohub/hooks
 ```
 
+The API loads them through the provider-aware space fs facade (cloud PVC or local
+sandbox relay) and refills the same cache, so webhook triggers work for local
+spaces too.
+
 Parsed definitions are cached in Redis:
 
 ```text
@@ -162,8 +210,13 @@ ttl: 5 minutes when definitions are non-empty
 
 Empty results are still cached to avoid readdir on every event for spaces without hooks.
 The short negative TTL limits how long a transient PVC miss can hide newly written hook files.
+A missing workspace directory is **not** cached as empty — the next event reloads from disk.
 
-If an `space.fs.changed` event touches `.cohub/hooks/**`, the cache is invalidated before the next match.
+The cache is invalidated, and the empty-cache publisher gate is bypassed, when:
+
+- `space.workspace.ready` fires (checkpoint restore / bootstrap finished)
+- an `space.fs.changed` event touches `.cohub/hooks/**`
+
 Matching still ignores `.cohub/**` so hook files themselves do not re-trigger `run` / `prompt` actions.
 
 ## Hook context env
@@ -186,9 +239,9 @@ COHUB_HOOK_ACTOR_USER_ID      # "" when unknown
 COHUB_HOOK_SESSION_ID         # "" when unbound
 COHUB_HOOK_TURN_ID            # "" unless session.turn.finalized
 COHUB_HOOK_CHECKPOINT_ID      # "" unless checkpoint.created
-COHUB_HOOK_WORK_ID             # "" unless work.version.published
-COHUB_HOOK_WORK_VERSION_ID     # "" unless work.version.published
-COHUB_HOOK_WORK_VERSION        # "" unless work.version.published
+COHUB_HOOK_APP_ID             # "" unless app.version.published
+COHUB_HOOK_APP_VERSION_ID     # "" unless app.version.published
+COHUB_HOOK_APP_VERSION        # "" unless app.version.published
 COHUB_HOOK_TASK_ID             # "" unless task.updated
 COHUB_HOOK_TASK_TYPE           # "" unless task.updated
 COHUB_HOOK_TASK_STATUS         # "" unless task.updated
@@ -204,9 +257,16 @@ COHUB_HOOK_FS_PATHS          # newline-separated, hard-capped at 100
 COHUB_HOOK_FS_KINDS          # comma-separated
 ```
 
+`webhook` extras (always present for that event):
+
+```text
+COHUB_HOOK_WEBHOOK_NAME      # hook file stem, e.g. "mail"
+COHUB_HOOK_WEBHOOK_BODY      # raw JSON body as sent by the caller
+```
+
 How it is delivered:
 
-- `run`: process env on the `run_command` job (user `env` + system hook env; no temp event file)
+- `run` / `uses`: process env on the `run_command` job (user `env` + system hook env; no temp event file)
 - `prompt`: user `env` on the turn; system hook keys on `meta.context.env` for tool execution, plus a short prompt appendix mirrored from system fields
 
 Merge order for process/tool env:

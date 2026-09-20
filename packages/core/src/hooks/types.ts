@@ -18,6 +18,16 @@ export type SpaceHookLabelFilter = {
   none?: string[];
 };
 
+export type SpaceHookAction = "run" | "prompt" | "uses";
+
+/** Published App Action reference: `username/spaceSlug/appSlug/action`. */
+export type SpaceHookUsesDefinition = {
+  username: string;
+  spaceSlug: string;
+  appSlug: string;
+  action: string;
+};
+
 export type SpaceHookDefinition = {
   schema: "cohub.space-hook.v1";
   path: string;
@@ -35,9 +45,14 @@ export type SpaceHookDefinition = {
   sources?: string[];
   /** Session label ref filters for `session.turn.finalized`. */
   labels?: SpaceHookLabelFilter;
-  action: "run" | "prompt";
+  /** Optional shared secret for `webhook`; omit to accept any caller. */
+  secret?: string;
+  action: SpaceHookAction;
   run?: string;
   prompt?: SpaceHookPromptDefinition;
+  uses?: SpaceHookUsesDefinition;
+  /** JSON input passed on stdin to the `uses` App Action. */
+  with?: unknown;
   /** User-declared env for both run and prompt. Cannot override system COHUB_* keys. */
   env?: Record<string, string> | null;
   timeoutSecs?: number;
@@ -46,7 +61,7 @@ export type SpaceHookDefinition = {
 export type SpaceHookRunResult = {
   path: string;
   status: "completed" | "failed" | "skipped";
-  action?: "run" | "prompt";
+  action?: SpaceHookAction;
   exitCode?: number | null;
   durationMs?: number;
   output?: string;

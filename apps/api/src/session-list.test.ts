@@ -4,7 +4,9 @@ import {
   decodeSessionListCursor,
   encodeSessionListCursor,
   InvalidSessionListCursorError,
+  InvalidSessionSourceFilterError,
   mergeUserSessionListBranches,
+  parseSessionSourceKeys,
   pickSessionsPreservingOrder,
 } from "./session-list.js";
 
@@ -155,3 +157,30 @@ describe("decodeSessionListCursor", () => {
     }
   });
 });
+
+describe("parseSessionSourceKeys", () => {
+  it("returns null when the filter is absent", () => {
+    assert.equal(parseSessionSourceKeys(null), null);
+    assert.equal(parseSessionSourceKeys(undefined), null);
+    assert.equal(parseSessionSourceKeys(""), null);
+    assert.equal(parseSessionSourceKeys("   "), null);
+  });
+
+  it("parses, trims and dedupes comma-separated kinds", () => {
+    assert.deepEqual(parseSessionSourceKeys("web"), { keys: ["web"] });
+    assert.deepEqual(parseSessionSourceKeys(" WEB , feishu "), {
+      keys: ["web", "feishu"],
+    });
+    assert.deepEqual(parseSessionSourceKeys("web,web"), { keys: ["web"] });
+  });
+
+  it("rejects unknown kinds instead of silently returning everything", () => {
+    assert.throws(
+      () => parseSessionSourceKeys("nope"),
+      (error: unknown) =>
+        error instanceof InvalidSessionSourceFilterError &&
+        error.unknownKeys[0] === "nope",
+    );
+  });
+});
+

@@ -38,3 +38,18 @@ export function collectValidationNodeIds(operations: readonly BoardOperation[]):
   }
   return [...ids];
 }
+
+/**
+ * Item ids that receive an on-enter effect in this transaction. Every node
+ * carries at most one on-enter effect, so validation must see the ones already
+ * bound to these items — not only the effect ids the transaction names.
+ */
+export function collectEnterMotionItemIds(operations: readonly BoardOperation[]): string[] {
+  const ids = new Set<string>();
+  for (const operation of operations) {
+    if (operation.type !== "effect.upsert") continue;
+    const { effect } = operation.payload;
+    if (effect.lifecycle === "on-enter" && effect.target.type === "item") ids.add(effect.target.itemId);
+  }
+  return [...ids];
+}

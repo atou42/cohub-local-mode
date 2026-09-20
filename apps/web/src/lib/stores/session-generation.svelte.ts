@@ -7,6 +7,7 @@ import {
 	removeGenerationStatesForSpace,
 	resolveGenerationProgressResiduals,
 	resolveGenerationStreamResiduals,
+	shouldResumePendingGeneration,
 } from "$lib/stores/session-generation-state";
 
 export type SessionGenerationStatus =
@@ -165,6 +166,37 @@ function isPersistable(state: SessionGenerationState) {
 	return !TERMINAL_STATUSES.has(state.status);
 }
 
+/**
+ * A pending state with no streamed output carries no information worth
+ * restoring: on reload the live turn is re-derived from turn data, so keeping
+ * it only risks pinning a stale (e.g. queued) turn id as the active generation.
+ */
+function hasSnapshotOutput(input: {
+	status: string;
+	contentBlockCount: number;
+	intermediateMessageCount: number;
+	finalizedPreview: boolean;
+}) {
+	return !(
+		input.status === "pending" &&
+		input.contentBlockCount === 0 &&
+		input.intermediateMessageCount === 0 &&
+		!input.finalizedPreview
+	);
+}
+
+function shouldPersistSnapshot(state: SessionGenerationState) {
+	return (
+		isPersistable(state) &&
+		hasSnapshotOutput({
+			status: state.status,
+			contentBlockCount: state.contentBlocks.length,
+			intermediateMessageCount: state.intermediateMessages.length,
+			finalizedPreview: state.finalizedPreview,
+		})
+	);
+}
+
 function isTerminalStatus(status: string | null | undefined) {
 	return Boolean(status && TERMINAL_STATUSES.has(status));
 }
@@ -200,6 +232,17 @@ function parseSnapshotState(
 				)
 		: null;
 	if (!contentBlocks || !intermediateMessages) return null;
+	// Legacy snapshots written before empty pending states were rejected.
+	if (
+		!hasSnapshotOutput({
+			status: record.status,
+			contentBlockCount: contentBlocks.length,
+			intermediateMessageCount: intermediateMessages.length,
+			finalizedPreview: record.finalizedPreview,
+		})
+	) {
+		return null;
+	}
 	return {
 		spaceId: record.spaceId,
 		sessionId: record.sessionId,
@@ -319,7 +362,7 @@ class SessionGenerationStore {
 	}
 
 	private schedulePersist(state: SessionGenerationState) {
-		if (!isPersistable(state) || !state.spaceId) {
+		if (!shouldPersistSnapshot(state) || !state.spaceId) {
 			this.clearPersisted(state.sessionId, state.spaceId);
 			return;
 		}
@@ -334,7 +377,7 @@ class SessionGenerationStore {
 			this.persistTimers.delete(sessionId);
 			const latest = this.bySessionId[sessionId];
 			if (!latest) return;
-			if (!isPersistable(latest) || !latest.spaceId) {
+			if (!shouldPersistSnapshot(latest) || !latest.spaceId) {
 				this.clearPersisted(sessionId, latest.spaceId);
 				return;
 			}
@@ -424,6 +467,8 @@ class SessionGenerationStore {
 		const current = this.get(sessionId) ?? createIdleState(sessionId);
 		if (current.status === "streaming") return;
 		if (isPersistable(current)) return;
+		// A stale active-turn hint must not downgrade a locally finished turn.
+		if (!shouldResumePendingGeneration(current, input?.turnId)) return;
 		// Resume from a terminal generation state (e.g. previous turn completed
 		// and a queued follow-up became running). Always drop residual
 		// preview/process data so the handoff intermediate from the previous

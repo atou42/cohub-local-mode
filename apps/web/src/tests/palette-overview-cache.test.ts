@@ -7,6 +7,7 @@ import {
 import {
 	isOverviewSnapshotExpired,
 	isOverviewSnapshotStale,
+	shouldRevalidateOverview,
 } from "../lib/command-palette/palette-overview-staleness";
 
 const NOW = 1_800_000_000_000;
@@ -117,5 +118,36 @@ test("hard expiry drops the snapshot entirely", () => {
 	assert.equal(
 		isOverviewSnapshotExpired({ cachedAt: NOW - 60_000, now: NOW }),
 		false,
+	);
+});
+
+test("revalidation is throttled to the minimum interval", () => {
+	// A refresh that just started must not be repeated immediately.
+	assert.equal(
+		shouldRevalidateOverview({ lastRefreshStartedAt: NOW - 1_000, now: NOW }),
+		false,
+	);
+	// The default floor is two minutes.
+	assert.equal(
+		shouldRevalidateOverview({
+			lastRefreshStartedAt: NOW - 119_000,
+			now: NOW,
+		}),
+		false,
+	);
+	// Past the floor, a (still-stale) snapshot may be revalidated again.
+	assert.equal(
+		shouldRevalidateOverview({
+			lastRefreshStartedAt: NOW - 121_000,
+			now: NOW,
+		}),
+		true,
+	);
+});
+
+test("a never-refreshed snapshot is always eligible", () => {
+	assert.equal(
+		shouldRevalidateOverview({ lastRefreshStartedAt: 0, now: NOW }),
+		true,
 	);
 });

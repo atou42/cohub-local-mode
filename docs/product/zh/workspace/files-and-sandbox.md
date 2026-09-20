@@ -104,14 +104,16 @@ Cohub 的强模式是分屏协作：
 
 Save 会冻结当前里程碑。详见 [Saves](/zh/docs/workspace/saves)。
 
-## 本地目录作为 Sandbox
+## 本地目录作为 Runtime
 
-进阶场景下，CLI 可把本地目录挂为 Space Sandbox：
+进阶场景下，CLI 可把本地目录挂为 Space Runtime：
 
 ```bash
-cohub sandbox up ./my-project
+# 第一次创建并记住该目录的 Space，之后自动复用
+cohub runtime up ./my-project
 ```
 
+绑定按目录、账号和环境隔离，保存在 `~/.config/cohub/runtime-spaces.json`。
 这适合让 Cohub Agents 直接面对本地工作树。详见 [CLI](/zh/docs/developers/cli)。
 
 ## 实用建议

@@ -2,9 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert";
 import {
   buildAgentSandboxFsMutationJobId,
+  enqueueRuntimeRecovery,
   sandboxFsMutationJobRetention,
   type AgentSandboxFsMutationOperation,
 } from "./index.js";
+
+test("Runtime recovery jobs are scoped to one Session execution", async () => {
+  const calls: unknown[][] = [];
+  const queue = { add: async (...args: unknown[]) => { calls.push(args); } };
+  const data = {
+    spaceId: "space",
+    sessionId: "session",
+    expectedTurnId: "turn",
+    expectedHarness: "pi" as const,
+    expectedOwnerUserId: "owner",
+  };
+  await enqueueRuntimeRecovery(queue as unknown as Parameters<typeof enqueueRuntimeRecovery>[0], data);
+  const call = calls[0];
+  assert(call);
+  assert.equal(call[0], "runtime_recovery");
+  assert.equal((call[2] as { jobId?: string }).jobId, "runtime-session-recover-turn");
+});
 
 const writeA: AgentSandboxFsMutationOperation = { operation: "write", path: "a.txt", content: "hello" };
 const writeB: AgentSandboxFsMutationOperation = { operation: "write", path: "a.txt", content: "world" };

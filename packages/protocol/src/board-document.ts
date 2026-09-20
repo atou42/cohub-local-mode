@@ -7,6 +7,7 @@ import {
   BOARD_TEXT_MIN_FONT_SIZE,
 } from "./board-constants.js";
 import { BoardConnectionSchema } from "./board-connection.js";
+import { BoardMotionSchema } from "./board-animation.js";
 import { BOARD_DOCUMENT_KIND, BOARD_EXTENSION } from "./board.js";
 import { BoardRemoteUrlSchema } from "./board-url.js";
 
@@ -39,7 +40,12 @@ export const BoardViewportSchema = z.object({
 });
 
 export const BoardAppearanceSchema = z.object({
-	theme: z.string().min(1).default("clean"),
+	/** Legacy field retained when reading older Board documents; not used for rendering. */
+	theme: z.string().min(1).optional(),
+	/** Board-wide motion policies. Omitted policies mean no motion. */
+	motion: BoardMotionSchema.optional(),
+	/** Legacy field retained when reading older Board documents; not used for rendering. */
+	mood: z.enum(["clean", "playful", "arcane", "cyber", "natural"]).optional(),
 	background: z
 		.object({
 			kind: z
@@ -59,9 +65,6 @@ export const BoardAppearanceSchema = z.object({
 			opacity: z.number().finite().min(0).max(1).default(0.12),
 		})
 		.default({ visible: false, size: 24, opacity: 0.12 }),
-	mood: z
-		.enum(["clean", "playful", "arcane", "cyber", "natural"])
-		.default("clean"),
 });
 
 /** Optional visual chrome still carried by a few older shapes. */
@@ -443,10 +446,8 @@ export const BoardDocumentSchema = z.object({
 	kind: z.literal(BOARD_DOCUMENT_KIND),
 	version: z.literal(1),
 	appearance: BoardAppearanceSchema.default({
-		theme: "clean",
 		background: { kind: "solid" },
 		grid: { visible: false, size: 24, opacity: 0.12 },
-		mood: "clean",
 	}),
 	viewport: BoardViewportSchema,
 	items: z.array(BoardItemSchema),

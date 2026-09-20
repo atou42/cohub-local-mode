@@ -60,6 +60,9 @@ export function isNewerAppSnapshot(
 	next: AppRecord,
 ) {
 	if (!current) return true;
+	// A snapshot of a different app is never an older version of the current
+	// one, so route changes that reuse this guard must always win.
+	if (next.id !== current.id) return true;
 	if (next.latestVersion !== current.latestVersion) {
 		return next.latestVersion > current.latestVersion;
 	}

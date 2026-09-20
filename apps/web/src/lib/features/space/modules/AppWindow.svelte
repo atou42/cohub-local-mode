@@ -9,19 +9,19 @@ import type { AppSurfaceHost } from "$lib/features/app/surface-host";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import type { InlineAppPreview } from "./app-window-controller.svelte";
-import MobileWindowTabsChrome from "./MobileWindowTabsChrome.svelte";
-import WindowFloatChrome from "./WindowFloatChrome.svelte";
+import PreviewHeader from "./PreviewHeader.svelte";
+import type { PreviewChrome, PreviewHeaderAction } from "./preview-header";
+import { previewHeaderVariant } from "./preview-header";
 import type { Window } from "./windows";
 
 type Props = {
 	preview: InlineAppPreview;
 	shell: AppRuntimeShellContext;
 	windows: Window[];
-	immersive: boolean;
+	chrome: PreviewChrome;
 	isMobile: boolean;
-	treeVisible?: boolean;
-	onToggleTree?: () => void;
-	onToggleImmersive: () => void | Promise<void>;
+	/** Whether this App is the visible tab. Background tabs mount no chrome. */
+	active?: boolean;
 	onActivateWindow: (kind: Window["kind"], key: string) => void;
 	onCloseWindow: (kind: Window["kind"], key: string) => void;
 	onRetry: (appId: string) => void;
@@ -40,11 +40,9 @@ const {
 	preview,
 	shell,
 	windows,
-	immersive,
+	chrome,
 	isMobile,
-	treeVisible = true,
-	onToggleTree,
-	onToggleImmersive,
+	active = true,
 	onActivateWindow,
 	onCloseWindow,
 	onRetry,
@@ -57,6 +55,7 @@ const locale = $derived(getLocale());
 
 const detail = $derived(preview.detail);
 const publicUrl = $derived(detail?.publicUrl ?? null);
+const immersive = $derived(chrome.immersive);
 
 /**
  * The app id of the surface that last registered.
@@ -85,50 +84,42 @@ const launchState = $derived({
 	hash: preview.launch?.hash ?? "",
 });
 const isDisabled = $derived(detail?.app.status === "disabled");
+
+const headerActions = $derived.by((): PreviewHeaderAction[] => {
+	const actions: PreviewHeaderAction[] = [
+		{
+			id: "reload",
+			label: m.window_reload_app({}, { locale }),
+			icon: RefreshCw,
+			primary: true,
+			run: () => onRetry(preview.appId),
+		},
+	];
+	if (publicUrl) {
+		actions.push({
+			id: "open-external",
+			label: m.window_open_in_new_tab({}, { locale }),
+			icon: ExternalLink,
+			primary: true,
+			run: () => {
+				window.open(publicUrl, "_blank", "noopener");
+			},
+		});
+	}
+	return actions;
+});
 </script>
 
-{#snippet WorkActions()}
-	<button
-		type="button"
-		class="preview-icon-btn"
-		title={m.window_reload_app({}, { locale })}
-		aria-label={m.window_reload_app({}, { locale })}
-		onclick={() => onRetry(preview.appId)}
-	>
-		<RefreshCw class="h-4 w-4" />
-	</button>
-	{#if publicUrl}
-		<a
-			class="preview-icon-btn"
-			href={publicUrl}
-			target="_blank"
-			rel="noopener"
-			title={m.window_open_in_new_tab({}, { locale })}
-			aria-label={m.window_open_in_new_tab({}, { locale })}
-		>
-			<ExternalLink class="h-4 w-4" />
-		</a>
-	{/if}
-{/snippet}
-
-<div class="flex h-full min-w-0 flex-col bg-bg-content" class:preview-stage--immersive={immersive}>
-	{#if isMobile}
-		<MobileWindowTabsChrome
-			tabs={windows}
+<div class="flex h-full min-w-0 flex-col bg-bg-content">
+	{#if active}
+		<PreviewHeader
+			{windows}
+			variant={previewHeaderVariant({ isMobile, immersive })}
+			actions={headerActions}
+			{chrome}
 			onActivate={onActivateWindow}
 			onClose={onCloseWindow}
 		/>
-	{:else if immersive}
-		<WindowFloatChrome
-			tabs={windows}
-			filesVisible={treeVisible}
-			onActivate={onActivateWindow}
-			onClose={onCloseWindow}
-			onToggleFiles={onToggleTree}
-			onExit={onToggleImmersive}
-		>
-			{#snippet context()}{@render WorkActions()}{/snippet}
-		</WindowFloatChrome>
 	{/if}
 
 	<div class="relative min-h-0 flex-1" data-drawer-swipe-ignore>
@@ -168,6 +159,7 @@ const isDisabled = $derived(detail?.app.status === "disabled");
 					onSurfaceHost={handleSurfaceHost}
 					onComposerChip={handleComposerChip}
 					onNavigationOpen={onNavigationOpen}
+					onCloseRequest={() => onCloseWindow("app", preview.appId)}
 				/>
 			{/key}
 		{/if}
@@ -191,25 +183,3 @@ const isDisabled = $derived(detail?.app.status === "disabled");
 		{/if}
 	</div>
 </div>
-
-<style>
-	.preview-icon-btn {
-		display: inline-flex;
-		height: 32px;
-		width: 32px;
-		flex-shrink: 0;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--text-tertiary);
-		text-decoration: none;
-		transition: background-color 120ms ease, color 120ms ease;
-	}
-
-	.preview-icon-btn:hover {
-		background: var(--bg-hover);
-		color: var(--text-secondary);
-	}
-</style>

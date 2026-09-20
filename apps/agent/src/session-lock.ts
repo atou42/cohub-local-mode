@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { redis } from "./redis.js";
 import { env } from "./env.js";
+import { monitorSessionLease } from "./session-lease.js";
 import { createLogger } from "@cohub/infra/logging";
 
 
@@ -24,6 +26,7 @@ return 0
 export type SessionLock = {
   sessionId: string;
   token: string;
+  signal: AbortSignal;
   stop: () => void;
   release: () => Promise<void>;
 };
@@ -31,29 +34,25 @@ export type SessionLock = {
 export async function acquireSessionLock(sessionId: string): Promise<SessionLock | null> {
   const token = `${process.env.HOSTNAME ?? process.pid}:${randomUUID()}`;
   const key = lockKey(sessionId);
+  const acquiredAt = performance.now();
   const acquired = await redis.set(key, token, "PX", env.AGENT_SESSION_LOCK_TTL_MS, "NX");
   if (acquired !== "OK") return null;
 
-  let closed = false;
-  const timer = setInterval(() => {
-    if (closed) return;
-    void redis
-      .eval(RENEW_SCRIPT, 1, key, token, String(env.AGENT_SESSION_LOCK_TTL_MS))
-      .catch((error) => logger.error(`[AgentLock] renew failed sessionId=${sessionId}:`, error));
-  }, env.AGENT_SESSION_LOCK_RENEW_INTERVAL_MS);
-
-  const stop = () => {
-    if (closed) return;
-    closed = true;
-    clearInterval(timer);
-  };
+  const lease = monitorSessionLease({
+    acquiredAt,
+    ttlMs: env.AGENT_SESSION_LOCK_TTL_MS,
+    intervalMs: env.AGENT_SESSION_LOCK_RENEW_INTERVAL_MS,
+    renew: () => redis.eval(RENEW_SCRIPT, 1, key, token, String(env.AGENT_SESSION_LOCK_TTL_MS)),
+    onError: (error) => logger.warn(`[AgentLock] renew failed sessionId=${sessionId}:`, error),
+  });
 
   return {
     sessionId,
     token,
-    stop,
+    signal: lease.signal,
+    stop: lease.stop,
     release: async () => {
-      stop();
+      lease.stop();
       await redis.eval(RELEASE_SCRIPT, 1, key, token).catch((error) => {
         logger.warn(`[AgentLock] release failed sessionId=${sessionId}:`, error);
       });

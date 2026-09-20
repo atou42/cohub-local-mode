@@ -1,10 +1,11 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   SPACE_HOOKS_CACHE_TTL_SEC,
   SPACE_HOOKS_EMPTY_CACHE_TTL_SEC,
   SPACE_HOOKS_DIR,
   getSpaceHooksRedisKey,
+  isSpaceHooksConfigPath,
 } from "@cohub/protocol";
 import {
   isSpaceHookFileName,
@@ -29,6 +30,11 @@ type RedisLike = {
 
 export type SpaceHooksCacheReader = Pick<RedisLike, "get">;
 export type SpaceHooksCacheWriter = Pick<RedisLike, "del">;
+
+type ListedSpaceHookDefinitions = {
+  definitions: SpaceHookDefinition[];
+  listed: boolean;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -59,11 +65,26 @@ export function parseCachedSpaceHooksConfig(raw: string): CachedSpaceHooksConfig
   }
 }
 
-export async function loadSpaceHookDefinitionsFromDir(dir: string): Promise<SpaceHookDefinition[]> {
-  const entries = await readdir(dir).catch((error: NodeJS.ErrnoException) => {
-    if (error?.code === "ENOENT") return [] as string[];
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    const st = await stat(path);
+    return st.isDirectory();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
     throw error;
-  });
+  }
+}
+
+async function readSpaceHookDefinitionsFromDir(dir: string): Promise<ListedSpaceHookDefinitions> {
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { definitions: [], listed: false };
+    }
+    throw error;
+  }
 
   const definitions: SpaceHookDefinition[] = [];
   for (const entry of entries.sort()) {
@@ -79,7 +100,11 @@ export async function loadSpaceHookDefinitionsFromDir(dir: string): Promise<Spac
       console.warn(`[SpaceHooks] skipping invalid hook file ${relativePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return definitions;
+  return { definitions, listed: true };
+}
+
+export async function loadSpaceHookDefinitionsFromDir(dir: string): Promise<SpaceHookDefinition[]> {
+  return (await readSpaceHookDefinitionsFromDir(dir)).definitions;
 }
 
 export function resolveSpaceHooksCacheTtlSec(definitionsCount: number): number {
@@ -101,6 +126,14 @@ export async function peekSpaceHookDefinitions(input: {
   return { status: "hit", definitions: parsed.definitions };
 }
 
+async function shouldWriteSpaceHooksCache(
+  workspaceDir: string,
+  loaded: ListedSpaceHookDefinitions,
+): Promise<boolean> {
+  if (loaded.listed) return true;
+  return directoryExists(workspaceDir);
+}
+
 export async function loadSpaceHookDefinitions(input: {
   spaceId: string;
   workspaceDir: string;
@@ -118,17 +151,17 @@ export async function loadSpaceHookDefinitions(input: {
     }
   }
 
-  const definitions = await loadSpaceHookDefinitionsFromDir(join(input.workspaceDir, SPACE_HOOKS_DIR));
-  if (input.redis) {
+  const loaded = await readSpaceHookDefinitionsFromDir(join(input.workspaceDir, SPACE_HOOKS_DIR));
+  if (input.redis && await shouldWriteSpaceHooksCache(input.workspaceDir, loaded)) {
     const payload = createCachedSpaceHooksConfig({
       spaceId: input.spaceId,
-      definitions,
+      definitions: loaded.definitions,
     });
     await input.redis
-      .set(redisKey, JSON.stringify(payload), "EX", resolveSpaceHooksCacheTtlSec(definitions.length))
+      .set(redisKey, JSON.stringify(payload), "EX", resolveSpaceHooksCacheTtlSec(loaded.definitions.length))
       .catch(() => undefined);
   }
-  return { definitions, cache: "miss" };
+  return { definitions: loaded.definitions, cache: "miss" };
 }
 
 export async function invalidateSpaceHooksCache(input: {
@@ -142,10 +175,7 @@ export async function invalidateSpaceHooksCache(input: {
 }
 
 export function shouldInvalidateSpaceHooksCache(paths: string[]): boolean {
-  return paths.some((path) => {
-    const normalized = path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
-    return normalized === SPACE_HOOKS_DIR || normalized.startsWith(`${SPACE_HOOKS_DIR}/`);
-  });
+  return paths.some(isSpaceHooksConfigPath);
 }
 
 /** Wrap a hook run script. Trigger context is injected via process env, not files. */

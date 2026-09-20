@@ -31,6 +31,12 @@ if (!ctx?.app?.id) throw new Error("Not inside a published app");
 浏览器中 `env` 很重要：dev 域名上的 App 必须显式传 `env: "dev"`，否则会静默
 调用生产环境。
 
+## 授权
+
+新 App 使用 `client.auth.authorize({ target, scopes })`：`target` 可为账户、指定 Space 或选取 Space。成功结果包含实际目标、回退方式及服务端 grant；后续操作使用返回的 Space ID。默认保留不可访问 Space 的友好回退，`fallback: "none"` 可禁止回退。
+
+未登录时先进入登录流程，再展示授权；整页跳转后需重新初始化 context。旧 `auth.request()` / `requestSpace()` 继续兼容，但无法告知实际授权目标；创建 Space 仍用 `requestCreateSpace()`。完整约定见 [授权规范](https://github.com/talesofai/cohub/blob/main/docs/app-authorization.md)。
+
 ## Context
 
 ```ts
@@ -50,7 +56,9 @@ ctx.permissions;                   // appScopes + viewerGrants，用于渲染状
 
 `ctx.shell` 描述当前壳中的 `space`、`session` 和 `turn`。其中 `turn` 是当前
 正在查看的 Turn，不一定是正在生成的 Turn。它们可能与 `app.homeSpace` 和
-`invocation` 不同；没有对应位置时返回 `null`。
+`invocation` 不同；没有对应位置时返回 `null`。workspace App 的
+`shell.surface` 为 `"workspace"`；新对话背景为 `"background"`，
+`shell.space` 是当前宿主 Space。
 
 `client.app.onContextChanged(cb)` 会在壳位置、登录或授权变化时推送新 context。
 高频读取时请在 App 内缓存最近一次 context，不要轮询 `client.context()`。
@@ -58,9 +66,10 @@ context 仅用于提供信息，不能作为授权依据。
 
 ## 能力场景
 
-以下场景假设 `client` 已初始化、`spaceId` 已知（`ctx.app.homeSpace.id` 或
-`ctx.invocation.spaceId`）。权限行给出最小授权；app scopes 只覆盖 App 自己的
-Space，其他 Space 需通过 `client.auth.request()` 获取 viewer grant。
+以下场景假设 `client` 已初始化、`spaceId` 已知（`ctx.shell.space.id`、
+`ctx.app.homeSpace.id` 或 `ctx.invocation.spaceId`）。权限行给出最小授权；
+app scopes 只覆盖 App 自己的 Space，其他 Space 需通过 `client.auth.authorize()`
+获取 viewer grant。
 
 ### Agent 对话
 
@@ -126,7 +135,8 @@ const imageUrl = result.output?.find((b) => b.type === "image")?.source?.url;
 - `generation.create` 只能来自 **viewer grant**，必须在用户手势中请求：
 
   ```ts
-  await client.auth.request({
+  await client.auth.authorize({
+    target: { kind: "space", spaceId },
     scopes: ["generation.create"],
     reason: "Generate images in this app",
   });
@@ -199,7 +209,7 @@ await room.publish("shared.state.updated", { value: 42 });
 ```ts
 client.app.surface.handle("image.open", async (input, { commandId }) => {
   const result = await openImageStudio(input);
-  await client.ui.reportResult(commandId, {
+  await client.desktop.reportResult(commandId, {
     status: "applied",
     result,
     error: null,
@@ -211,7 +221,7 @@ client.app.surface.handle("image.open", async (input, { commandId }) => {
 
 - 只有注册过的方法可达。不提供 DOM 访问，也不执行脚本。
 - 调用语义是 at-least-once，处理函数应可安全重复执行。
-- Surface 响应只确认送达；最终结果通过 `client.ui.reportResult()` 上报。
+- Surface 响应只确认送达；最终结果通过 `client.desktop.reportResult()` 上报。
 
 ### Composer 上下文
 
@@ -273,21 +283,125 @@ const models = await client.models.list();
 const multimodal = await client.models.listMultimodal();
 ```
 
+### 运行 App Actions
+
+Directory App 可以在 `.cohub/actions/` 下暴露服务端入口。前端按文件 stem 调用，
+宿主会下载该 App 的不可变版本并在 App 所属 Space 的 Sandbox 中执行 —— App
+owner 承担平台成本，而积分与权益按当前登录访客计算。
+
+```ts
+const task = await cohub.app.actions.run({
+  action: "summarize",
+  input: { text: "Long document..." },
+});
+const result = await cohub.tasks.get(task.taskRunId);
+```
+
+- `.ts` / `.js` 入口使用 Sandbox 的 Node.js 运行时与原生类型擦除（不支持
+  enum、namespace、parameter properties）。其他文件按可执行位、shebang 或
+  二进制格式运行。
+- 输入以 JSON 从 stdin 传入，并随 Task Run 保存，App owner 与可查看该 Task 的
+  Space 成员都能看到 —— 不要把它当作保密通道。
+- Action key 为 `[a-z0-9-_]+`，每个 key 只能有一个入口，且 Action 内不能再调用
+  `cohub.app.actions.run()`。
+
+### Overlay surface
+
+除预览标签外，App 还可以 **overlay** 形式打开：一层透明、无边框的浮层，始终
+位于 Cohub 自身 UI 之下。可以在发布时声明，也可以按次指定：
+
+```html
+<meta name="cohub:surface" content="overlay" />
+```
+
+```bash
+cohub desktop open <app> --as overlay
+cohub desktop open <app> --as window   # 单次覆盖
+```
+
+Overlay 初始完全穿透点击。App 声明需要交互的区域，并可选出自身几何位置：
+
+```ts
+cohub.app.requestConfigure({
+  inputRegion: [{ x: rect.left, y: rect.top, width: rect.width, height: rect.height }],
+});
+```
+
+`inputRegion` 为 `"none"`（默认）、`"all"` 或矩形列表，只影响指针事件路由，
+不会裁剪绘制内容。`geometry`（`anchor`、`x`、`y`、`width`、`height`）用于缩小
+浮层，宿主会夹到屏幕内；省略的轴填满窗口，任一轴非法则整个形状被忽略。App
+需自行绘制透明背景（`html, body { background: transparent }`），并设置
+`<meta name="color-scheme" content="light dark">`，否则 Chromium 会绘制不透明
+底衬。App 用 `cohub.app.requestClose()` 自我关闭，访客也可以随时按 `Escape`。
+
+### 内嵌其他 App
+
+已发布 App 可以用 iframe 承载其他 App。被嵌 App 的 runtime 仍由它的公开页
+拥有 —— bridge、授权对话框、commerce 与 Cohub bar 与独立打开时完全一致，
+内嵌方看不到它的 token。
+
+```html
+<iframe src="https://cohub.live/alice/studio/w/notes"
+  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals"
+  allow="clipboard-read; clipboard-write; fullscreen; web-share"></iframe>
+```
+
+```ts
+const embed = cohub.app.embed.attach(frame, {
+  appId: context.app.id,
+  shell: context.shell ?? null,
+  onCloseRequest: () => frame.remove(),
+});
+cohub.app.onContextChanged((next) => embed.setShell(next.shell ?? null));
+embed.dispose();
+```
+
+被嵌 App 会看到 `context.shell` 中 `surface: "embed"` 的位置信息，并从
+`context.invocation.embedder` 获知宿主。这些 id 只是导航提示，不是授权依据 ——
+读取数据仍需被嵌 App 自己的授权。
+
 ### 账户级数据
 
 超出 App 自己 Space 的范围时，viewer grant 可以解锁 viewer 的账户数据。
 
 ```ts
 // user.space.list
-await client.auth.request({ scopes: ["user.space.list"], reason: "Show your spaces" });
+await client.auth.authorize({ target: { kind: "account" }, scopes: ["user.space.list"], reason: "Show your spaces" });
 const { spaces } = await client.spaces.list();
 
 // user.session.list
+await client.auth.authorize({ target: { kind: "account" }, scopes: ["user.session.list"], reason: "List your sessions" });
 const { sessions } = await client.user.listSessions({ limit: 20 });
 
 // user.usage.read
+await client.auth.authorize({ target: { kind: "account" }, scopes: ["user.usage.read"], reason: "Show your activity" });
 const activity = await client.user.getActivity({ days: 30 });
 ```
+
+### 为访客创建 Space
+
+一次同意会以访客身份新建 Space，并在这个新 Space 上授予所请求的 scopes。
+`space` 与 `client.spaces.create()` 的 `CreateSpaceInput` 相同。不会静默复用
+——每次确认都新建。宿主用访客的账号 token 调用创建接口。持有 `space.create`
+viewer grant 的 App 也可以直接调用 `client.spaces.create()`。
+
+```ts
+const { granted, space } = await client.auth.requestCreateSpace({
+  scopes: ["file.view", "session.view", "session.prompt.fullaccess"],
+  space: {
+    name: "Whale Shrine",
+    bootstrapSource: { type: "checkpoint", checkpointId },
+  },
+  reason: "Create a workspace from this template.",
+});
+if (granted && space) {
+  const created = client.space(space.id);
+}
+// `granted: false` 且带 `space`：Space 已创建，但初始化或授权未完成。
+// 保留该 id 并继续，不要重复创建，也不要自动删除。
+```
+
+从 checkpoint 创建仍走源 Space 的 `checkpoint.view`。模板 Space 对登录用户开放 guest 即可被克隆。
 
 ## 权限一页纸
 
@@ -305,14 +419,15 @@ App 的授权是两个来源的并集 — 任一满足即可：
 写操作、其他 Space、generation、账户数据 → viewer grants
 ```
 
-在用户手势（按钮点击）中调用 `auth.request`，写清楚 reason；已授权时静默
-复用 — 只有需要新权限时才会弹窗。
+在用户手势（按钮点击）中调用 `auth.authorize()`，写清楚 reason；已授权时静默
+复用 — 只有需要新权限时才会弹窗。后续操作一律使用返回的 `target`，它可能
+解析为与请求不同的 Space。
 
 ## 发布与验证
 
 发布目标、版本与管理细节见 [Apps](/zh/docs/create/apps)。
 
-开发期只有一条关键规则：runtime API（`context()`、`auth.request`、realtime、
+开发期只有一条关键规则：runtime API（`context()`、`auth.authorize`、realtime、
 commerce）只在**已发布**的 App 中可用。本地 `file://` 页面和裸静态 URL 无法
 验证它们 — 发布后在真实 runtime 中测试，改动后通过
 `cohub apps publish-version` 发布新版本。
@@ -320,7 +435,7 @@ commerce）只在**已发布**的 App 中可用。本地 `file://` 页面和裸�
 ## Best practices
 
 - 最小权限：只申请能工作的最小 scope 集合
-- 在用户手势中调用 `auth.request`，并写清理由
+- 在用户手势中调用 `auth.authorize`，并写清理由
 - 把 invocation 当作路由信息，而不是授权
 - 服务端数据是权威；realtime 只是传输层，重连后重新同步
 - Surface 处理函数与积分消耗保持幂等

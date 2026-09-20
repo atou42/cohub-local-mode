@@ -188,7 +188,7 @@ export function registerSandbox(program: Command): void {
     .option("-s, --space <id>", "Target space ID")
     .option("--json", "Output as JSON")
     .action(async (opts: { space?: string; json?: boolean }) => {
-      const spaceId = opts.space?.trim() || resolveSpace(program);
+      const spaceId = opts.space?.trim() || await resolveSpace(program);
       const client = createClient();
       const result = await client.space(spaceId).sandbox.get().catch(() => null);
       const sandbox = result?.sandbox ?? null;

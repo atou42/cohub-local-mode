@@ -183,7 +183,7 @@ onMount(() => {
 <style>
 	.toast {
 		position: fixed;
-		z-index: 60;
+		z-index: var(--z-workspace-popover);
 		inset-inline: 12px;
 		top: 12px;
 		display: flex;

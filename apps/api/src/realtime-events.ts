@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeMessageRecord, RealtimeSessionRecord, RealtimeTaskRecord, RealtimeTurnRecord, SpacePresenceSnapshot } from "@cohub/protocol/realtime";
-import type { MessageRecord, SessionRecord, SessionTurnRecord } from "@cohub/protocol/model";
+import type { MessageRecord, SessionActiveTurn, SessionRecord, SessionTurnRecord } from "@cohub/protocol/model";
 import type { TaskRunStatus } from "@cohub/protocol/task";
 import { dispatchRealtimeEvent } from "./channels.js";
 import { buildResourceLabelSnapshot, type LabelResourceType } from "@cohub/core/labels/resource-events";
@@ -50,6 +50,7 @@ export const toRealtimeSessionRecord = (session: SessionRecord | {
   lastMessageId: string | null;
   createdAt: Date | string | null;
   updatedAt: Date | string | null;
+  activeTurn?: SessionActiveTurn | null;
 }): RealtimeSessionRecord => ({
   id: session.id,
   spaceId: session.spaceId,
@@ -57,6 +58,9 @@ export const toRealtimeSessionRecord = (session: SessionRecord | {
   title: session.title,
   source: session.source,
   status: session.status,
+  ...(session.activeTurn !== undefined
+    ? { activeTurn: session.activeTurn }
+    : {}),
   externalSessionId: session.externalSessionId,
   agentHarness: session.agentHarness,
   latestMessageText: session.latestMessageText ?? null,
@@ -107,6 +111,7 @@ export const toRealtimeTurnRecord = (turn: SessionTurnRecord): RealtimeTurnRecor
   summary: turn.summary,
   intermediateIndex: turn.intermediateIndex,
   intermediateSummary: turn.intermediateSummary,
+  harnessIndex: turn.harnessIndex ?? null,
   meta: turn.meta,
   thinkingLevel: turn.thinkingLevel ?? null,
   startedAt: turn.startedAt,

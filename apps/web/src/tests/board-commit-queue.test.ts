@@ -8,10 +8,8 @@ function makeDoc(items: BoardItem[]): BoardDocument {
 		kind: "cohub.board",
 		version: 1,
 		appearance: {
-			theme: "clean",
 			background: { kind: "grid" },
 			grid: { visible: true, size: 32, opacity: 0.22 },
-			mood: "clean",
 		},
 		viewport: { x: 0, y: 0, zoom: 1 },
 		items,

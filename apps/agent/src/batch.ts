@@ -1,8 +1,11 @@
-import { sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { sessionTurns } from "@cohub/db";
 import type { ContentBlock } from "@cohub/protocol/core";
 import { db } from "./db.js";
 import { env } from "./env.js";
 import type { AgentTurnJobData } from "./queue.js";
+import { resolveHarness } from "@cohub/protocol";
+import { limitBatchSize } from "./runtime/batch-limit.js";
 
 type TurnRow = {
   id: string;
@@ -164,7 +167,7 @@ export async function claimNextTurnBatch(input: Pick<AgentTurnJobData, "sessionI
     `);
     const active = activeRows[0] ? normalizeTurn(activeRows[0] as Record<string, unknown>) : null;
     if (active) {
-      if (isStaleActiveTurn(active)) {
+      if (resolveHarness(active.meta) === "cohub" && isStaleActiveTurn(active)) {
         await markStaleTurnInterrupted(tx, active);
       } else {
         return { kind: "busy" as const, activeTurnId: active.id, activeUpdatedAt: active.updatedAt, activeStatus: active.status };
@@ -207,9 +210,33 @@ export async function claimNextTurnBatch(input: Pick<AgentTurnJobData, "sessionI
     const followups = followupRows.map((row) => normalizeTurn(row as Record<string, unknown>));
     if (followups.length === 0) return { kind: "noop" as const };
 
-    const batch = await claimQueuedTurns(tx, followups);
+    const batch = await claimQueuedTurns(tx, limitBatchSize(followups, (turn) => Buffer.byteLength(JSON.stringify(turn.userContent ?? []), "utf8")));
     return batch ? { kind: "claimed" as const, batch } : { kind: "noop" as const };
   });
+}
+
+/** Recover the original claim, never collect newer queued follow-ups into a replay. */
+export async function loadClaimedTurnBatch(owner: TurnRow): Promise<ClaimedTurnBatch> {
+  const recorded = asRecord(asRecord(owner.meta).executionBatch);
+  const ids = recorded.turnIds;
+  let turns = [owner];
+  if (ids !== undefined) {
+    if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string")
+      || new Set(ids).size !== ids.length || ids.at(-1) !== owner.id || recorded.ownerTurnId !== owner.id) {
+      throw new Error("Invalid execution batch / 执行批次无效");
+    }
+    if (ids.length > 1) {
+      const rows = await db.select().from(sessionTurns)
+        .where(and(eq(sessionTurns.sessionId, owner.sessionId), inArray(sessionTurns.id, ids)))
+        .orderBy(asc(sessionTurns.sequence));
+      if (rows.length !== ids.length || rows.some((row, index) => row.id !== ids[index])
+        || rows.slice(0, -1).some((row) => row.status !== "merged" || asRecord(row.meta).mergedIntoTurnId !== owner.id)) {
+        throw new Error("Execution batch history mismatch / 执行批次历史不匹配");
+      }
+      turns = [...rows.slice(0, -1).map((row) => ({ ...row, intent: row.intent ?? "followup" })), owner];
+    }
+  }
+  return { ownerTurn: owner, turns, mergedTurns: turns.slice(0, -1), executionBatch: createExecutionBatch(turns) };
 }
 
 export async function enqueueNextRunnableTurn(input: { spaceId: string; sessionId: string; enqueue: (data: AgentTurnJobData) => Promise<unknown> }) {
@@ -226,6 +253,10 @@ export async function enqueueNextRunnableTurn(input: { spaceId: string; sessionI
   if (!turnId) return null;
   await input.enqueue({ spaceId: input.spaceId, sessionId: input.sessionId, reason: "drain" });
   return turnId;
+}
+
+export function resolveBatchAccessMode(batch: { turns: Array<{ meta: unknown }> }): "read_only" | "full_access" {
+  return batch.turns.some((turn) => asRecord(turn.meta).accessMode === "read_only") ? "read_only" : "full_access";
 }
 
 export function buildUserMessagesForBatch(batch: ClaimedTurnBatch) {

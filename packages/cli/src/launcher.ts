@@ -9,9 +9,13 @@ export function exitCodeForChild(code: number | null, signal: NodeJS.Signals | n
   return 128 + (constants.signals[signal] ?? 1);
 }
 
-export function relaunchCli(entrypoint: string, argv: string[]): Promise<number> {
+export function relaunchCli(
+  entrypoint: string,
+  argv: string[],
+  options?: { execArgv?: readonly string[] },
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entrypoint, ...argv], {
+    const child = spawn(process.execPath, [...(options?.execArgv ?? []), entrypoint, ...argv], {
       env: process.env,
       stdio: "inherit",
     });

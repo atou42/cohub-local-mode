@@ -12,7 +12,7 @@ export function reconcileSpaceFsSequence(
 	if (payload.source === "sandbox-watch-started" && payload.resync) {
 		return { payload, lastSeq: payload.seq ?? null };
 	}
-	if (payload.source !== "sandbox-inotify" || payload.seq == null) {
+	if (payload.source !== "sandbox-watch" || payload.seq == null) {
 		return { payload, lastSeq };
 	}
 	if (lastSeq != null && payload.seq <= lastSeq) {

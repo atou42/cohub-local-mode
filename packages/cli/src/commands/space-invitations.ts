@@ -136,7 +136,7 @@ export function registerSpaceInvitations(
     .option("--max-uses <count>", "Usage limit, or 0 for unlimited", "0")
     .option("--json", "Output as JSON")
     .action(async (options: SpaceInvitationCreateCliOptions) => {
-      const spaceId = resolveSpace(spacesCommand);
+      const spaceId = await resolveSpace(spacesCommand);
       let input: ReturnType<typeof parseSpaceInvitationCreateOptions>;
       try {
         input = parseSpaceInvitationCreateOptions(options);
@@ -174,7 +174,7 @@ export function registerSpaceInvitations(
     .description("List invite links")
     .option("--json", "Output as JSON")
     .action(async (options: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCommand);
+      const spaceId = await resolveSpace(spacesCommand);
       try {
         const result = await dependencies
           .createClient()
@@ -212,7 +212,7 @@ export function registerSpaceInvitations(
     .option("--json", "Output as JSON")
     .action(async (code: string, options: { yes?: boolean; json?: boolean }) => {
       await confirmRevoke(options);
-      const spaceId = resolveSpace(spacesCommand);
+      const spaceId = await resolveSpace(spacesCommand);
       try {
         const result = await dependencies
           .createClient()

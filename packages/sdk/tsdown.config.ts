@@ -27,6 +27,7 @@ export default defineConfig([
       websocket: "src/websocket.ts",
       "voice-input": "src/voice-input.ts",
       debugger: "src/debugger.ts",
+      "space-picker": "src/space-picker.ts",
     },
     clean: true,
     outputOptions: {

@@ -15,7 +15,7 @@ let { port, url, onPreview, onClose }: Props = $props();
 const locale = $derived(getLocale());
 </script>
 
-<div class="pointer-events-none fixed bottom-4 right-4 z-40 max-w-[calc(100vw-2rem)] sm:bottom-5 sm:right-5">
+<div class="pointer-events-none fixed bottom-4 right-4 z-[var(--z-workspace-toast)] max-w-[calc(100vw-2rem)] sm:bottom-5 sm:right-5">
 	<div class="port-ready-toast pointer-events-auto">
 		<div class="min-w-0 flex-1">
 			<div class="text-[12px] font-medium text-text-primary">Port :{port} is ready</div>

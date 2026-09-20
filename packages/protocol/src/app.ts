@@ -2,6 +2,21 @@ import type { BoardSnapshot } from "./board.js";
 
 export type AppContentKind = "web" | "file" | "board";
 
+/**
+ * Provenance summary for a published app version. The session/turn identity is
+ * included only when the caller may view the source session, so a viewer who
+ * cannot read a session still learns nothing about it.
+ */
+export type AppVersionSource = {
+  via?: string;
+  sessionId?: string;
+  turnId?: string;
+  /** Turn sequence within `sessionId`, for deep links into a session. */
+  turnSequence?: number;
+  /** Present only when the caller holds `session.view` for the source session. */
+  session?: { id: string; title: string | null } | null;
+};
+
 export type AppArtifactDownloadDescriptor = {
   artifactRootKey: string;
   manifestKey: string;

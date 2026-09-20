@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { resolveCohubEnvironment } from "@neta-art/cohub";
@@ -13,12 +12,14 @@ import type {
 import type { Command } from "commander";
 import { uploadAvatarAsset, uploadChatImageAsset } from "../avatar.js";
 import { createClient } from "../client.js";
+import { putLocalFile } from "../http-put.js";
 import { table, json as outJson, jsonRequested, ok, error, handleHttp, formatEpochMs } from "../output.js";
 import { resolveSpace } from "../space.js";
 import { registerSpaceCommerce } from "./space-commerce.js";
 import { registerSpaceActivity } from "./space-activity.js";
 import { registerSpaceInvitations } from "./space-invitations.js";
 import { registerSpaceTurns } from "./space-turns.js";
+import { registerSpaceWebhooks } from "./space-webhooks.js";
 
 type ModOptions = {
   json?: boolean;
@@ -48,6 +49,7 @@ type PromptOptions = {
   title?: string;
   model?: string;
   provider?: string;
+  harness?: "cohub" | "pi" | "codex";
   thinkingLevel?: string;
   readOnly?: boolean;
   steer?: boolean;
@@ -227,20 +229,17 @@ export async function collectUploadFiles(paths: string[]): Promise<UploadFile[]>
 }
 
 async function putUploadEntry(entry: UploadFile, uploadUrl: string, headers?: Record<string, string>): Promise<void> {
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
+  await putLocalFile({
+    url: uploadUrl,
+    filePath: entry.localPath,
+    size: entry.size,
     headers,
-    body: createReadStream(entry.localPath) as never,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`Failed to upload ${entry.relativePath}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
-  }
+    label: entry.relativePath,
+  });
 }
 
 async function uploadFiles(command: Command, paths: string[], opts: UploadOptions): Promise<void> {
-  const spaceId = resolveSpace(command);
+  const spaceId = await resolveSpace(command);
   const client = createClient();
   try {
     const files = await collectUploadFiles(paths);
@@ -310,7 +309,7 @@ async function sendPrompt(command: Command, words: string[], opts: PromptOptions
     return error("Invalid thinking level", "Use off|minimal|low|medium|high|xhigh|max|ultra");
   }
 
-  const spaceId = resolveSpace(command);
+  const spaceId = await resolveSpace(command);
   const client = createClient();
   try {
     const schedule = opts.delayMs
@@ -354,6 +353,7 @@ async function sendPrompt(command: Command, words: string[], opts: PromptOptions
       content: promptContent,
       model: opts.model,
       provider: opts.provider,
+      harness: opts.harness,
       thinkingLevel: thinkingLevel as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
       accessMode: opts.readOnly ? "read_only" : "full_access",
       intent: opts.steer ? "steer" : undefined,
@@ -372,7 +372,7 @@ async function sendPrompt(command: Command, words: string[], opts: PromptOptions
 
 
 async function runCompletionCommand(command: Command, words: string[], opts: CompletionOptions) {
-  const spaceId = resolveSpace(command);
+  const spaceId = await resolveSpace(command);
   const content = words.join(" ").trim();
   if (!content && process.stdin.isTTY) {
     return error("Message required", "Pass content args or pipe via stdin");
@@ -458,6 +458,7 @@ export function registerPrompt(program: Command): void {
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
     .option("-p, --provider <provider>", "Provider name")
+    .option("--harness <harness>", "Harness: cohub, pi, or codex", "cohub")
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max|ultra")
     .option("--read-only", "Use read-only tools")
     .option("--steer", "Interrupt the current turn and run immediately")
@@ -560,7 +561,7 @@ export function registerSpaces(program: Command): void {
     .description("Show space details")
     .option("--json", "Output as JSON")
     .action(async (id: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = id?.trim() || resolveSpace(spacesCmd);
+      const spaceId = id?.trim() || await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const space = await client.spaces.get(spaceId);
@@ -632,7 +633,7 @@ export function registerSpaces(program: Command): void {
     .description("Upload the space avatar")
     .option("--json", "Output as JSON")
     .action(async (path: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const asset = await uploadAvatarAsset({ client, purpose: "space_avatar", spaceId, path });
@@ -684,6 +685,7 @@ export function registerSpaces(program: Command): void {
     .command("prompt [content...]", { hidden: true })
     .alias("send")
     .description("Send or schedule a prompt in the target space")
+    .option("--harness <harness>", "Harness: cohub, pi, or codex", "cohub")
     .option("--session <id>", "Target session ID")
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
@@ -739,6 +741,9 @@ export function registerSpaces(program: Command): void {
   // ── spaces labels ──
   registerLabels(spacesCmd);
 
+  // ── spaces webhooks ──
+  registerSpaceWebhooks(spacesCmd);
+
   // ── spaces pin / unpin (user-scope label convenience) ──
   spacesCmd
     .command("pin <id>")
@@ -778,7 +783,7 @@ export function registerSpaces(program: Command): void {
     .description("Space usage statistics (default: 30 days)")
     .option("--json", "Output as JSON")
     .action(async (days: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const usage = await client.space(spaceId).usage.get(parseInteger(days ?? "30", "days", { min: 1 }));
@@ -817,7 +822,7 @@ function registerLabels(spacesCmd: Command): void {
   const labelsCmd = spacesCmd
     .command("labels")
     .description("Manage labels")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   labelsCmd
     .command("ls")
@@ -825,7 +830,7 @@ function registerLabels(spacesCmd: Command): void {
     .description("List labels")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.list();
@@ -844,7 +849,7 @@ function registerLabels(spacesCmd: Command): void {
     .description("Create a label")
     .option("--json", "Output as JSON")
     .action(async (labelRef: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.create(labelRef);
@@ -863,7 +868,7 @@ function registerLabels(spacesCmd: Command): void {
     .option("--rank <n>", "Sort rank")
     .option("--json", "Output as JSON")
     .action(async (labelRef: string, opts: { name?: string; parent?: string; rank?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.update(labelRef, {
@@ -883,7 +888,7 @@ function registerLabels(spacesCmd: Command): void {
     .alias("delete")
     .description("Delete a label")
     .action(async (labelRef: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).labels.delete(labelRef);
@@ -898,7 +903,7 @@ function registerLabels(spacesCmd: Command): void {
     .description("Reorder labels")
     .option("--json", "Output as JSON")
     .action(async (labelRefs: string[], opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.reorder(labelRefs);
@@ -916,7 +921,7 @@ function registerLabels(spacesCmd: Command): void {
     .option("--cursor <cursor>", "Page cursor")
     .option("--json", "Output as JSON")
     .action(async (labelRef: string, opts: { limit?: string; cursor?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.listItems(labelRef, {
@@ -940,7 +945,7 @@ function registerLabels(spacesCmd: Command): void {
     .description("Attach a label")
     .option("--json", "Output as JSON")
     .action(async (labelRef: string, resourceType: string, resourceRef: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.attach(labelRef, { resourceType: parseLabelResourceType(resourceType), resourceRef });
@@ -955,7 +960,7 @@ function registerLabels(spacesCmd: Command): void {
     .command("detach <labelRef> <resourceType> <resourceRef>")
     .description("Detach a label")
     .action(async (labelRef: string, resourceType: string, resourceRef: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).labels.detach(labelRef, { resourceType: parseLabelResourceType(resourceType), resourceRef });
@@ -972,7 +977,7 @@ function registerLabels(spacesCmd: Command): void {
     .option("--remove <refs>", "Comma-separated label refs to remove")
     .option("--json", "Output as JSON")
     .action(async (resourceType: string, resourceRef: string, opts: { add?: string; remove?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).labels.patchResourceLabels(parseLabelResourceType(resourceType), resourceRef, {
@@ -992,7 +997,7 @@ function registerLabels(spacesCmd: Command): void {
     .option("--labels <refs>", "Comma-separated label refs")
     .option("--json", "Output as JSON")
     .action(async (resourceType: string, resourceRef: string, labelRefs: string[], opts: { labels?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const refs = [...parseLabelRefs(opts.labels), ...labelRefs];
@@ -1009,7 +1014,7 @@ function registerMods(spacesCmd: Command): void {
   const modsCmd = spacesCmd
     .command("mods")
     .description("Manage space mods")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   modsCmd
     .command("ls")
@@ -1017,7 +1022,7 @@ function registerMods(spacesCmd: Command): void {
     .description("List mods")
     .option("--json", "Output as JSON")
     .action(async (opts: ModOptions) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).mods.list();
@@ -1042,7 +1047,7 @@ function registerMods(spacesCmd: Command): void {
     .option("--json", "Output as JSON")
     .action(async (modSpaceId: string, opts: ModOptions) => {
       await confirmRestart(opts);
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).mods.create({ modSpaceId, name: opts.name, mountSlug: opts.slug });
@@ -1060,7 +1065,7 @@ function registerMods(spacesCmd: Command): void {
     .option("--json", "Output as JSON")
     .action(async (modId: string, opts: ModOptions) => {
       await confirmRestart(opts);
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).mods.update(modId, { enabled: true });
@@ -1078,7 +1083,7 @@ function registerMods(spacesCmd: Command): void {
     .option("--json", "Output as JSON")
     .action(async (modId: string, opts: ModOptions) => {
       await confirmRestart(opts);
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).mods.update(modId, { enabled: false });
@@ -1097,7 +1102,7 @@ function registerMods(spacesCmd: Command): void {
     .option("--json", "Output as JSON")
     .action(async (modId: string, opts: ModOptions) => {
       await confirmRestart(opts);
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).mods.remove(modId);
@@ -1212,7 +1217,7 @@ function registerFiles(spacesCmd: Command): void {
   const filesCmd = spacesCmd
     .command("files")
     .description("File operations")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   filesCmd
     .command("ls [path]")
@@ -1220,7 +1225,7 @@ function registerFiles(spacesCmd: Command): void {
     .description("List directory tree")
     .option("--json", "Output as JSON")
     .action(async (path: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const tree = await client.space(spaceId).files.list(path ?? "");
@@ -1244,7 +1249,7 @@ function registerFiles(spacesCmd: Command): void {
     .command("cat <path>")
     .description("Read file content")
     .action(async (path: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const file = await client.space(spaceId).files.read(path);
@@ -1272,7 +1277,7 @@ function registerFiles(spacesCmd: Command): void {
       }
       if (!content) return error("No content provided", "Use -c or pipe via stdin");
 
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).files.write({
@@ -1297,7 +1302,7 @@ function registerFiles(spacesCmd: Command): void {
     .command("mkdir <path>")
     .description("Create a directory")
     .action(async (path: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).files.createDir(path);
@@ -1312,7 +1317,7 @@ function registerFiles(spacesCmd: Command): void {
     .description("Delete a file or directory")
     .option("-r, --recursive", "Delete recursively")
     .action(async (path: string, opts: { recursive?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).files.delete(path, opts.recursive ?? false);
@@ -1326,7 +1331,7 @@ function registerFiles(spacesCmd: Command): void {
     .command("mv <from> <to>")
     .description("Move or rename")
     .action(async (from: string, to: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).files.move({ fromPath: from, toPath: to });
@@ -1341,7 +1346,7 @@ function registerFiles(spacesCmd: Command): void {
     .description("Show pending workspace changes vs last checkpoint")
     .option("--json", "Output as JSON")
     .action(async (path: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         if (path) {
@@ -1378,7 +1383,7 @@ function registerSessions(spacesCmd: Command): void {
   const sessionsCmd = spacesCmd
     .command("sessions")
     .description("Browse sessions and turns")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   sessionsCmd
     .command("ls")
@@ -1386,7 +1391,7 @@ function registerSessions(spacesCmd: Command): void {
     .description("List sessions")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).sessions.list();
@@ -1412,7 +1417,7 @@ function registerSessions(spacesCmd: Command): void {
     .option("--label <ref>", "Attach a label, e.g. Bug or Area/Frontend", collectOption, [])
     .option("--json", "Output as JSON")
     .action(async (title: string | undefined, opts: SessionCreateOptions) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).sessions.create({
@@ -1435,7 +1440,7 @@ function registerSessions(spacesCmd: Command): void {
     .description("Session details")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(id).get();
@@ -1456,7 +1461,7 @@ function registerSessions(spacesCmd: Command): void {
     .command("rename <id> <name>")
     .description("Rename a session")
     .action(async (id: string, name: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).session(id).rename(name);
@@ -1472,7 +1477,7 @@ function registerSessions(spacesCmd: Command): void {
     .description("Stream realtime session events")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       const session = client.space(spaceId).session(id);
 
@@ -1534,7 +1539,7 @@ function registerTurns(sessionsCmd: Command): void {
     .option("--limit <n>", "Page size", "30")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, opts: { cursor?: string; direction?: string; limit?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(sessionId).turns.listPaginated({
@@ -1563,7 +1568,7 @@ function registerTurns(sessionsCmd: Command): void {
     .description("Show turn details")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, turnId: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(sessionId).turns.get(turnId);
@@ -1589,7 +1594,7 @@ function registerTurns(sessionsCmd: Command): void {
     .description("Run a queued follow-up now")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, turnId: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(sessionId).steerTurn(turnId);
@@ -1605,7 +1610,7 @@ function registerTurns(sessionsCmd: Command): void {
     .description("Cancel a queued follow-up")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, turnId: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(sessionId).cancelTurn(turnId);
@@ -1623,7 +1628,7 @@ function registerTurns(sessionsCmd: Command): void {
     .option("--limit <n>", "Page size", "100")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, opts: { cursor?: string; limit?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).session(sessionId).turns.index({
@@ -1654,7 +1659,7 @@ function registerTurns(sessionsCmd: Command): void {
     .option("--after <n>", "Turns after anchor", "20")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, opts: { sequence?: string; turn?: string; before?: string; after?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(sessionsCmd);
+      const spaceId = await resolveSpace(sessionsCmd);
       if (!opts.sequence && !opts.turn) return error("Missing anchor", "Use --sequence <n> or --turn <id>");
       const client = createClient();
       try {
@@ -1745,7 +1750,7 @@ function registerMembers(spacesCmd: Command): void {
   const memCmd = spacesCmd
     .command("members")
     .description("Member management")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   memCmd
     .command("ls")
@@ -1753,7 +1758,7 @@ function registerMembers(spacesCmd: Command): void {
     .description("List space members")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).members.list();
@@ -1776,7 +1781,7 @@ function registerMembers(spacesCmd: Command): void {
     .command("update <userId> <role>")
     .description("Change member role (host | builder | guest)")
     .action(async (userId: string, role: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).members.update(userId, parseChoice(role, "role", SPACE_ROLES));
@@ -1790,7 +1795,7 @@ function registerMembers(spacesCmd: Command): void {
     .command("remove <userId>")
     .description("Remove a member")
     .action(async (userId: string) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         await client.space(spaceId).members.remove(userId);
@@ -1807,14 +1812,14 @@ function registerAccess(spacesCmd: Command): void {
   const accCmd = spacesCmd
     .command("access")
     .description("Access control")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   accCmd
     .command("get")
     .description("Get access policy")
     .option("--json", "Output as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const policy = await client.space(spaceId).access.get();
@@ -1835,7 +1840,7 @@ function registerAccess(spacesCmd: Command): void {
     .option("--anonymous <role>", "Role for anonymous users (host|builder|guest|null)")
     .option("--json", "Output as JSON")
     .action(async (opts: { signedIn?: string; anonymous?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const policy = await client.space(spaceId).access.set({
@@ -1860,7 +1865,7 @@ function registerCheckpoints(spacesCmd: Command): void {
   const cpCmd = spacesCmd
     .command("checkpoints")
     .description("Checkpoint management")
-    .hook("preAction", () => { resolveSpace(spacesCmd); });
+    .hook("preAction", async () => { await resolveSpace(spacesCmd); });
 
   cpCmd
     .command("ls")
@@ -1870,7 +1875,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .option("--cursor <cursor>", "Pagination cursor")
     .option("--json", "Output as JSON")
     .action(async (opts: { limit?: number; cursor?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).checkpoints.list({
@@ -1898,7 +1903,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .description("Checkpoint details")
     .option("--json", "Output as JSON")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).checkpoints.get(id);
@@ -1920,7 +1925,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .description("Create a checkpoint")
     .option("--json", "Output as JSON")
     .action(async (description: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const result = await client.space(spaceId).checkpoints.create(description ?? null);
@@ -1936,7 +1941,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .description("List checkpoint tree")
     .option("--json", "Output as JSON")
     .action(async (checkpointId: string, path: string | undefined, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const tree = await client.space(spaceId).checkpoints(checkpointId).files.list(path ?? "");
@@ -1962,7 +1967,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .description("Show checkpoint file content")
     .option("--json", "Output as JSON")
     .action(async (checkpointId: string, path: string, opts: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         const file = await client.space(spaceId).checkpoints(checkpointId).files.read(path);
@@ -1983,7 +1988,7 @@ function registerCheckpoints(spacesCmd: Command): void {
     .option("--base <checkpointId>", "Compare against another checkpoint")
     .option("--json", "Output as JSON")
     .action(async (checkpointId: string, path: string | undefined, opts: { base?: string; json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = createClient();
       try {
         if (path) {

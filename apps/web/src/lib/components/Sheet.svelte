@@ -47,7 +47,7 @@ function onKeydown(event: KeyboardEvent) {
 {#if open}
 	<div
 		use:portal
-		class="fixed inset-0 z-[100] flex items-end justify-center lg:items-center lg:p-4"
+		class="fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center lg:items-center lg:p-4"
 		in:fade={FADE_IN}
 		out:fade={FADE_OUT}
 		role="dialog"

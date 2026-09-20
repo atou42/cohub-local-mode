@@ -97,7 +97,8 @@ const client = createCohubClient(); // token 来自 App runtime
 const context = await client.context();
 // App 身份、Space 身份、viewer 状态
 
-await client.auth.request({
+await client.auth.authorize({
+  target: { kind: "space", spaceId },
   scopes: ["session.prompt.readonly"],
   reason: "Continue the demo chat",
 });
@@ -149,7 +150,7 @@ client.app.surface.handle("image.open", async (input, { commandId }) => {
   openImageStudio(input, commandId);
 });
 
-await client.ui.reportResult(commandId, {
+await client.desktop.reportResult(commandId, {
   status: "applied",
   result: selectedImage,
   error: null,
@@ -157,7 +158,7 @@ await client.ui.reportResult(commandId, {
 ```
 
 只有注册过的方法可以被调用。不提供 DOM 访问，也不提供脚本执行。Surface 响应只确认指令已送达；
-App 通过同一个 UI command 调用 `client.ui.reportResult()` 上报最终结果。
+App 通过同一个 UI command 调用 `client.desktop.reportResult()` 上报最终结果。
 
 调用语义是 at-least-once，因此建议让可调用方法可重复执行。
 
@@ -185,7 +186,7 @@ Client 按产品区域分组：
 | Channels | `client.channels` |
 | Billing / commerce | `client.billing`、`client.appCommerce` |
 | App runtime | `client.context()`、`client.auth`、`client.app` |
-| Cohub 界面命令 | `client.ui` |
+| Cohub 界面命令 | `client.desktop` |
 
 只使用你需要的表面。从 Spaces、sessions 和 Apps 开始。
 

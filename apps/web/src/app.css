@@ -14,9 +14,17 @@
 /* ============================================================
    Global Styles
    ============================================================ */
+/*
+ The root chain is sized with `height: 100%` rather than `100dvh`: the shell
+ must equal the layout viewport exactly, and Chrome's dvh estimate in a
+ standalone PWA can lag behind the real viewport (browser-UI heuristics that
+ do not apply without a URL bar), leaving a canvas strip below the shell.
+ Document-flow pages (landing, docs) still scroll normally — a fixed root
+ height only bounds the boxes, not their overflow.
+*/
 html,
 body {
-	min-height: 100%;
+	height: 100%;
 	scrollbar-width: thin;
 	scrollbar-color: var(--scrollbar-thumb) transparent;
 	background-color: var(--bg-primary);
@@ -29,10 +37,6 @@ body {
 		color 0.2s ease;
 }
 
-body {
-	min-height: 100dvh;
-}
-
 /* Motion tokens — keep numeric values aligned with $lib/motion.svelte.ts */
 :root {
 	--motion-panel-duration: 280ms;
@@ -40,6 +44,47 @@ body {
 	--motion-panel-fade-collapse-duration: 120ms;
 	--motion-panel-ease: cubic-bezier(0.16, 1, 0.3, 1);
 	--motion-panel-collapse-ease: cubic-bezier(0.4, 0, 0.6, 1);
+
+	/* ============================================================
+	   Z-index scale
+	   Each layer represents a conceptual stacking context.
+	   Intra-component z-indices (e.g. board tool UIs, scroll rails)
+	   use small local values and are NOT listed here.
+	   ============================================================ */
+
+	/* Inside the preview/workspace panels — elements that float above
+	   the document flow but still belong to a panel. */
+	--z-panel-float: 10;
+
+	/* Sidebar columns, immersive chat panel. */
+	--z-workspace-chrome: 20;
+
+	/* Workspace decorations: danmaku, overlay App surfaces. */
+	--z-workspace-overlay: 30;
+
+	/* Floating presence stack backdrop + checkout return. */
+	--z-workspace-popover: 60;
+
+	/* Presence stack open state (above its own backdrop). */
+	--z-workspace-popover-open: 70;
+
+	/* In-workspace toasts and banners (port ready etc.). */
+	--z-workspace-toast: 75;
+
+	/* Full-screen capture / command palette / checkout overlay. */
+	--z-fullscreen: 80;
+
+	/* Preview-mark / annotation overlay. */
+	--z-mark: 100;
+
+	/* Modal dialogs and sheets. */
+	--z-dialog: 100;
+
+	/* Drag ghost — must float above everything except lightboxes. */
+	--z-drag: 150;
+
+	/* Media lightbox. */
+	--z-lightbox: 9999;
 	--cohub-safe-area-top: env(safe-area-inset-top, 0px);
 	--cohub-safe-area-right: env(safe-area-inset-right, 0px);
 	--cohub-safe-area-left: env(safe-area-inset-left, 0px);
@@ -734,16 +779,32 @@ body.pointer-dragging {
 	cursor: progress;
 }
 
-.markdown-content [data-workspace-asset-state="error"] {
-	border-color: color-mix(in srgb, var(--error-soft) 45%, var(--border-subtle));
-	background: var(--error-bg);
-	opacity: 0.72;
+.markdown-content .markdown-asset-fallback {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	max-width: 100%;
+	margin: 0.15em 0;
+	padding: 0.28rem 0.6rem;
+	border: 1px solid var(--border-subtle);
+	border-radius: 0.5rem;
+	background: color-mix(in srgb, var(--bg-surface) 65%, transparent);
+	color: var(--text-tertiary);
+	font-size: 0.82em;
+	line-height: 1.25;
+	vertical-align: middle;
 }
 
-.markdown-content img[data-workspace-asset-state="error"] {
-	min-height: 4.5rem;
-	padding: 0.75rem;
-	cursor: default;
+.markdown-content .markdown-asset-fallback svg {
+	flex: none;
+	opacity: 0.7;
+}
+
+.markdown-content .markdown-asset-fallback-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .markdown-content audio {

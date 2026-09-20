@@ -5,9 +5,9 @@ A reference [Cohub App](https://cohub.live) for browsing multimodal generation t
 ## What It Demonstrates
 
 - Loading App identity and invocation context with `cohub.context()`
-- Per-space viewer grants with `cohub.auth.request({ scopes, spaceId })`
+- Per-space viewer grants with `cohub.auth.authorize({ target: { kind: "space", spaceId }, scopes })`
 - Account-level task listing via the `user.taskrun.list` viewer scope
-- Opening another Space through `cohub.auth.requestSpace()` and switching into its task view
+- Opening another Space through `cohub.auth.authorize({ target: { kind: "pick-space" } })` and switching into its task view
 - Listing generation Tasks with the public Cohub SDK
 - Resolving scope from invocation context in `Session > Space > Mine` order
 - Rendering every image, video, audio, and text output as an independent item
@@ -109,7 +109,6 @@ src/scope.ts            Session > Space > Mine scope resolution
 src/access.ts           Per-scope viewer authorization requests
 src/task-output.ts      Task Run to multimodal gallery projection
 src/media.ts            Deferred media detail resolution
-work.json               Publish metadata and app scopes
 ```
 
 ## License

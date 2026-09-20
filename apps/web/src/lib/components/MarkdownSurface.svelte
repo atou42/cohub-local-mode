@@ -6,10 +6,13 @@ import {
 	unmount as unmountComponent,
 } from "svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { getLocale } from "$lib/i18n/locale.svelte";
+import { m } from "$lib/paraglide/messages.js";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
 import {
 	createWorkspaceAssetLoader,
 	type ResolveWorkspaceAsset,
+	WorkspaceAssetAccessError,
 } from "$lib/workspace-assets";
 import {
 	normalizeWorkspaceFileLinkTarget,
@@ -55,6 +58,39 @@ const COPY_ICON =
 
 const CHECK_ICON =
 	'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+
+const ASSET_FALLBACK_ICON =
+	'<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="2" x2="22" y1="2" y2="22"/><path d="M10.41 10.41a2 2 0 1 1-2.83-2.83"/><line x1="13.5" x2="6" y1="13.5" y2="21"/><line x1="18" x2="21" y1="12" y2="15"/><path d="M3.59 3.59A2 2 0 0 0 3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 1.41-.59"/><path d="M21 15V5a2 2 0 0 0-2-2H9"/></svg>';
+
+function assetFallbackLabel(element: HTMLElement, path: string) {
+	const name = element.getAttribute("alt")?.trim() || path.split("/").pop();
+	return name?.trim() || path;
+}
+
+/**
+ * Replaces an unresolvable workspace asset with a compact, quiet placeholder.
+ * Aligns with the surrounding text instead of showing a broken image box.
+ */
+function renderAssetFallback(
+	element: HTMLElement,
+	stateElement: HTMLElement,
+	input: { path: string; reason: string },
+) {
+	if (stateElement.dataset.workspaceAssetFallback === "true") return;
+	stateElement.dataset.workspaceAssetFallback = "true";
+	stateElement.hidden = true;
+
+	const label = assetFallbackLabel(element, input.path);
+	const fallback = document.createElement("span");
+	fallback.className = "markdown-asset-fallback";
+	fallback.title = input.reason;
+	fallback.setAttribute("role", "img");
+	fallback.setAttribute("aria-label", `${label} — ${input.reason}`);
+	fallback.innerHTML = `${ASSET_FALLBACK_ICON}<span class="markdown-asset-fallback-label"></span>`;
+	const labelEl = fallback.querySelector(".markdown-asset-fallback-label");
+	if (labelEl) labelEl.textContent = label;
+	stateElement.parentNode?.insertBefore(fallback, stateElement.nextSibling);
+}
 
 $effect(() => {
 	const _stableHtml = stableHtml;
@@ -114,25 +150,39 @@ $effect(() => {
 	});
 	const loadAsset = createWorkspaceAssetLoader(resolve, controller.signal);
 	const remaining = new Map<HTMLElement, number>();
-	const failed = new Set<HTMLElement>();
-	for (const { stateElement } of targets) {
+	const failed = new Map<HTMLElement, unknown>();
+	const primaryTarget = new Map<
+		HTMLElement,
+		{ element: HTMLElement; path: string }
+	>();
+	for (const { element, stateElement, attribute, path } of targets) {
 		remaining.set(stateElement, (remaining.get(stateElement) ?? 0) + 1);
+		if (attribute === "src") {
+			primaryTarget.set(stateElement, { element, path });
+		}
 	}
 
-	function settle(element: HTMLElement, error?: unknown) {
+	const locale = getLocale();
+
+	function settle(element: HTMLElement, error: unknown, primary: boolean) {
 		if (controller.signal.aborted || run !== workspaceAssetRun) return;
-		if (error) {
-			failed.add(element);
-			element.title =
-				error instanceof Error ? error.message : "Asset failed to load";
-		}
+		if (error && primary) failed.set(element, error);
 		const next = (remaining.get(element) ?? 1) - 1;
 		remaining.set(element, next);
 		if (next > 0) return;
-		element.dataset.workspaceAssetState = failed.has(element)
-			? "error"
-			: "loaded";
+		const failure = failed.get(element);
+		element.dataset.workspaceAssetState = failure ? "error" : "loaded";
 		element.removeAttribute("aria-busy");
+		if (!failure) return;
+		const target = primaryTarget.get(element);
+		if (!target) return;
+		renderAssetFallback(target.element, element, {
+			path: target.path,
+			reason:
+				failure instanceof WorkspaceAssetAccessError
+					? m.markdown_asset_no_access({}, { locale })
+					: m.markdown_asset_unavailable({}, { locale }),
+		});
 	}
 
 	function observeLoad(
@@ -140,6 +190,7 @@ $effect(() => {
 		event: string,
 		stateElement: HTMLElement,
 		errorMessage: string,
+		primary: boolean,
 		onLoad?: () => void,
 	) {
 		const options = { once: true, signal: controller.signal };
@@ -147,18 +198,19 @@ $effect(() => {
 			event,
 			() => {
 				onLoad?.();
-				settle(stateElement);
+				settle(stateElement, null, primary);
 			},
 			options,
 		);
 		target.addEventListener(
 			"error",
-			() => settle(stateElement, new Error(errorMessage)),
+			() => settle(stateElement, new Error(errorMessage), primary),
 			options,
 		);
 	}
 
 	for (const { element, stateElement, attribute, path } of targets) {
+		const primary = attribute === "src";
 		void loadAsset(path)
 			.then(({ src }) => {
 				if (controller.signal.aborted || run !== workspaceAssetRun) return;
@@ -169,6 +221,7 @@ $effect(() => {
 						"load",
 						stateElement,
 						"Poster failed to load",
+						false,
 						() => element.setAttribute(attribute, src),
 					);
 					poster.src = src;
@@ -176,7 +229,13 @@ $effect(() => {
 				}
 
 				if (element instanceof HTMLImageElement) {
-					observeLoad(element, "load", stateElement, "Image failed to load");
+					observeLoad(
+						element,
+						"load",
+						stateElement,
+						"Image failed to load",
+						true,
+					);
 					element.src = src;
 					return;
 				}
@@ -189,7 +248,7 @@ $effect(() => {
 							: null;
 				if (!media) {
 					element.setAttribute(attribute, src);
-					settle(stateElement);
+					settle(stateElement, null, primary);
 					return;
 				}
 
@@ -198,13 +257,14 @@ $effect(() => {
 					"loadedmetadata",
 					stateElement,
 					"Media failed to load",
+					true,
 					media instanceof HTMLAudioElement ? enhanceAudioPlayers : undefined,
 				);
 				media.preload = "metadata";
 				element.setAttribute(attribute, src);
 				if (element.tagName === "SOURCE") media.load();
 			})
-			.catch((error) => settle(stateElement, error));
+			.catch((error) => settle(stateElement, error, primary));
 	}
 
 	return () => controller.abort();

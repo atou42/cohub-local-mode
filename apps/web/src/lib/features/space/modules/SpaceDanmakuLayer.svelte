@@ -79,7 +79,7 @@ onMount(() => {
 	.danmaku-layer {
 		position: absolute;
 		inset: 0;
-		z-index: 30;
+		z-index: var(--z-workspace-overlay);
 		pointer-events: none;
 		overflow: hidden;
 		--lane-height: 42px;

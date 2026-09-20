@@ -20,6 +20,7 @@ import (
 	"github.com/cohub/apps/sandbox/relay"
 	"github.com/cohub/apps/sandbox/report"
 	"github.com/cohub/apps/sandbox/rpc"
+	"github.com/cohub/apps/sandbox/search"
 	"github.com/cohub/apps/sandbox/workspace"
 	"github.com/cohub/apps/sandbox/ws"
 )
@@ -112,7 +113,11 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	var handler slog.Handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	if *localMode || strings.EqualFold(strings.TrimSpace(os.Getenv("COHUB_LOG_FORMAT")), "json") {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+	logger := slog.New(handler)
 
 	if *localMode {
 		runLocal(logger, *localSpace, *localRoot, *localRelay)
@@ -143,10 +148,14 @@ func buildRuntime(
 	hostname string,
 	fsSink func(protocol.FSChangedPayload),
 	portsSink func(protocol.PortsChangedPayload),
-) (*ws.Server, func(), func()) {
+) (*ws.Server, func(), func(), *search.Manager, func() filewatch.Status) {
 	processManager := process.NewManager(logger)
+	searchManager := search.NewManager(cfg, logger)
+	searchManager.Start()
 	dispatcher := rpc.NewDispatcher(cfg, processManager, logger)
+	dispatcher.SetSearchManager(searchManager)
 	server := ws.NewServer(cfg, dispatcher, processManager, reporter, state, hostname, logger)
+	server.SetSearchEnabled(searchManager.Enabled())
 
 	if fsSink == nil {
 		fsSink = server.BroadcastFSChanged
@@ -157,7 +166,11 @@ func buildRuntime(
 
 	var closers []func()
 	requestFSResync := func() {}
+	watchStatus := func() filewatch.Status {
+		return filewatch.Status{Backend: "none", State: "unavailable", Reason: "start_failed"}
+	}
 	if watcher, err := filewatch.Start(cfg.WorkspaceDir, logger, func(batch filewatch.Batch) {
+		searchManager.Apply(batch)
 		fsSink(protocol.FSChangedPayload{
 			Seq:     batch.Seq,
 			Resync:  batch.Resync,
@@ -167,6 +180,7 @@ func buildRuntime(
 		logger.Warn("file watcher disabled", slog.String("error", err.Error()))
 	} else {
 		requestFSResync = watcher.RequestResync
+		watchStatus = watcher.Status
 		closers = append(closers, func() { watcher.Close() })
 		logger.Info("file watcher started", slog.String("workspaceDir", cfg.WorkspaceDir))
 	}
@@ -184,11 +198,12 @@ func buildRuntime(
 		logger.Info("port watcher started", slog.Any("ports", cfg.PublicPorts))
 	}
 
+	closers = append(closers, searchManager.Close)
 	return server, func() {
 		for _, close := range closers {
 			close()
 		}
-	}, requestFSResync
+	}, requestFSResync, searchManager, watchStatus
 }
 
 func runCloud(logger *slog.Logger, cfg env.Config) {
@@ -197,7 +212,7 @@ func runCloud(logger *slog.Logger, cfg env.Config) {
 	hostname, _ := os.Hostname()
 	reporter := report.NewClient(cfg, hostname)
 
-	server, closeWatchers, _ := buildRuntime(logger, cfg, state, reporter, hostname, nil, nil)
+	server, closeWatchers, _, searchManager, _ := buildRuntime(logger, cfg, state, reporter, hostname, nil, nil)
 	defer closeWatchers()
 	server.SetFSResyncOnAttach(true)
 
@@ -252,6 +267,7 @@ func runCloud(logger *slog.Logger, cfg env.Config) {
 				}
 			}
 
+			searchManager.Activate()
 			logger.Info("workspace mount ready",
 				slog.String("workspaceDir", summary.WorkspaceDir),
 				slog.String("platformAgentsDir", summary.PlatformAgentsDir),
@@ -305,6 +321,15 @@ func runLocal(logger *slog.Logger, spaceID, root, relayURL string) {
 		os.Exit(1)
 	}
 
+	runtimeID := strings.TrimSpace(os.Getenv("COHUB_RUNTIME_ID"))
+	if runtimeID != "" {
+		logger = logger.With(
+			slog.String("component", "sandboxd"),
+			slog.String("runtimeId", runtimeID),
+			slog.String("spaceId", cfg.SpaceID),
+		)
+	}
+
 	state := &prepareState{status: "ready"}
 	hostname, _ := os.Hostname()
 
@@ -316,6 +341,7 @@ func runLocal(logger *slog.Logger, spaceID, root, relayURL string) {
 		RelayURL:     cfg.RelayURL,
 		Token:        cfg.RelayToken,
 		SpaceID:      cfg.SpaceID,
+		RuntimeID:    runtimeID,
 		OnRegistered: func() { requestFSResync() },
 		Logger:       logger,
 	})
@@ -327,10 +353,11 @@ func runLocal(logger *slog.Logger, spaceID, root, relayURL string) {
 		client.PublishEvent("ports.changed", payload)
 	}
 
-	server, closeWatchers, watcherResync := buildRuntime(logger, cfg, state, nil, hostname, fsSink, portsSink)
+	server, closeWatchers, watcherResync, _, watchStatus := buildRuntime(logger, cfg, state, nil, hostname, fsSink, portsSink)
 	defer closeWatchers()
 	requestFSResync = watcherResync
 	client.SetServer(server)
+	client.SetWatcherStatus(watchStatus)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -341,6 +368,9 @@ func runLocal(logger *slog.Logger, spaceID, root, relayURL string) {
 		slog.String("relay", cfg.RelayURL),
 	)
 
-	client.Run(ctx)
+	if err := client.Run(ctx); err != nil {
+		logger.Error("local sandbox stopped", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 	logger.Info("local sandbox stopped")
 }

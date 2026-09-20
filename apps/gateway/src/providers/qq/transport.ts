@@ -2,7 +2,7 @@ import { createLogger } from "@cohub/infra/logging";
 import WebSocket from "ws";
 import { ROOT_CONTEXT } from "@opentelemetry/api";
 import { getTracer, runInActiveSpan } from "@cohub/infra/tracing/propagator";
-import { QQApiError, type QQApiClient } from "./api.js";
+import { isQQRateLimitError, QQApiError, type QQApiClient } from "./api.js";
 import {
   clearQQSessionState,
   getQQSessionState,
@@ -31,6 +31,8 @@ export const QQ_GATEWAY_INTENTS = INTENT_GROUP_AND_C2C | INTENT_PUBLIC_GUILD_MES
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_CONFIG_ERROR_MS = 5 * 60_000;
+const RATE_LIMIT_BASE_MS = 60_000;
+const RATE_LIMIT_MAX_MS = 5 * 60_000;
 
 export class QQGatewayCloseError extends Error {
   constructor(
@@ -43,7 +45,11 @@ export class QQGatewayCloseError extends Error {
 }
 
 export function resolveQQReconnectDelay(error: unknown, reconnectAttempts: number, random = Math.random): number {
-  const exponentialDelay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
+  if (isQQRateLimitError(error)) {
+    if (error.retryAfterMs != null) return Math.max(RECONNECT_BASE_MS, Math.min(RATE_LIMIT_MAX_MS, error.retryAfterMs));
+    const delay = Math.min(RATE_LIMIT_MAX_MS, RATE_LIMIT_BASE_MS * 2 ** reconnectAttempts);
+    return Math.floor(delay / 2 + random() * (delay / 2));
+  }
   if (error instanceof QQApiError && error.retryAfterMs != null) {
     return Math.max(RECONNECT_BASE_MS, error.retryAfterMs);
   }
@@ -53,6 +59,7 @@ export function resolveQQReconnectDelay(error: unknown, reconnectAttempts: numbe
   ) {
     return RECONNECT_CONFIG_ERROR_MS;
   }
+  const exponentialDelay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
   return Math.floor(random() * exponentialDelay);
 }
 const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15_000;
@@ -73,6 +80,7 @@ export class QQWebSocketTransport {
   private reconnectAttempts = 0;
   private sessionId: string | null = null;
   private lastSeq: number | null = null;
+  private receivedHello = false;
 
   constructor(private readonly options: QQWebSocketTransportOptions) {}
 
@@ -103,31 +111,37 @@ export class QQWebSocketTransport {
         attributes: { "gateway.channel_id": this.options.channelId, "gateway.provider": "qq" },
       }, ROOT_CONTEXT, () => this.openWebSocket(forceRefreshToken));
     } catch (error) {
-      logger.error(`[QQ:${this.options.channelId}] failed to connect`, error);
-      void markChannelError(this.options.channelId, error).catch(() => undefined);
+      this.noteConnectFailure(error);
       this.scheduleReconnect(error);
     }
   }
 
   private async openWebSocket(forceRefreshToken: boolean) {
-    const gatewayUrl = await this.options.api.getGatewayUrl();
-    const ws = new WebSocket(gatewayUrl, {
+    if (!(this.sessionId && this.lastSeq != null)) {
+      await this.options.api.prepareSessionStart();
+    }
+    this.receivedHello = false;
+    const ws = new WebSocket(this.options.api.websocketUrl(), {
       headers: { "User-Agent": "CohubGateway/1.0 QQBotProvider" },
       handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
     });
     this.ws = ws;
 
     ws.on("open", () => {
+      if (this.ws !== ws) return;
       logger.info(`[QQ:${this.options.channelId}] WebSocket connected`);
     });
 
     ws.on("message", (data) => {
-      void this.handleMessage(String(data)).catch((error) => logger.error(`[QQ:${this.options.channelId}] message handling failed`, error));
+      if (this.ws !== ws) return;
+      void this.handleMessage(ws, String(data)).catch((error) => logger.error(`[QQ:${this.options.channelId}] message handling failed`, error));
     });
 
     ws.on("close", (code, reason) => {
+      if (this.ws !== ws) return;
       const closeError = new QQGatewayCloseError(code, reason.toString().trim());
       logger.warn(`[QQ:${this.options.channelId}] WebSocket closed`, { code, reason: closeError.reason });
+      if (!this.receivedHello) this.options.api.invalidateGateway();
       if (!this.destroyed) {
         void markChannelDegraded(this.options.channelId, closeError).catch(() => undefined);
         this.scheduleReconnect(closeError);
@@ -135,6 +149,7 @@ export class QQWebSocketTransport {
     });
 
     ws.on("error", (error) => {
+      if (this.ws !== ws) return;
       logger.error(`[QQ:${this.options.channelId}] WebSocket error`, error);
       void markChannelDegraded(this.options.channelId, error).catch(() => undefined);
     });
@@ -142,7 +157,8 @@ export class QQWebSocketTransport {
     if (forceRefreshToken) await this.options.api.getAccessToken(true);
   }
 
-  private async handleMessage(raw: string) {
+  private async handleMessage(ws: WebSocket, raw: string) {
+    if (this.ws !== ws) return;
     const payload = JSON.parse(raw) as QQWSPayload;
     const { op, d, s, t } = payload;
     if (typeof s === "number") {
@@ -155,17 +171,19 @@ export class QQWebSocketTransport {
     }
 
     if (op === OP_HELLO) {
+      this.receivedHello = true;
       const interval = typeof (d as { heartbeat_interval?: unknown } | undefined)?.heartbeat_interval === "number"
         ? (d as { heartbeat_interval: number }).heartbeat_interval
         : 45_000;
       try {
         await this.identifyOrResume();
+        if (this.ws !== ws) return;
         this.startHeartbeat(interval);
       } catch (error) {
-        logger.error(`[QQ:${this.options.channelId}] identify/resume failed`, error);
-        void markChannelError(this.options.channelId, error).catch(() => undefined);
-        this.ws?.close();
+        if (this.ws !== ws) return;
+        this.noteConnectFailure(error);
         this.scheduleReconnect(error);
+        ws.close();
       }
       return;
     }
@@ -258,6 +276,16 @@ export class QQWebSocketTransport {
   private markReady() {
     this.reconnectAttempts = 0;
     this.options.onReady?.();
+  }
+
+  private noteConnectFailure(error: unknown) {
+    if (isQQRateLimitError(error)) {
+      logger.warn(`[QQ:${this.options.channelId}] rate limited`, error);
+      void markChannelDegraded(this.options.channelId, error).catch(() => undefined);
+      return;
+    }
+    logger.error(`[QQ:${this.options.channelId}] failed to connect`, error);
+    void markChannelError(this.options.channelId, error).catch(() => undefined);
   }
 
   private scheduleReconnect(error?: unknown) {

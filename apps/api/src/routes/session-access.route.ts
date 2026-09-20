@@ -10,6 +10,9 @@ const router = new Hono();
 const SIGNED_IN_VALID_ROLES = new Set<AccessPolicyRole>(["builder", "guest", null]);
 const ANONYMOUS_VALID_ROLES = new Set<AccessPolicyRole>(["guest", null]);
 
+// Session-level access (share/unshare) is gated on `session.access.manage`, held
+// by builders and hosts. Space-level access and member management stay host-only.
+
 router.get("/:id/access", async (c) => {
   const user = useAuth(c);
   if (user instanceof Response) return user;
@@ -40,7 +43,7 @@ router.patch("/:id/access", async (c) => {
 
   const [session] = await db.select({ spaceId: spaceSessions.spaceId }).from(spaceSessions).where(eq(spaceSessions.id, sessionId)).limit(1);
   if (!session) return c.json({ message: "session not found" }, 404);
-  if (!(await hasPermission(user, "member.manage", { spaceId: session.spaceId, sessionId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "session.access.manage", { spaceId: session.spaceId, sessionId }))) return authzDenied(c);
 
   const body = await c.req.json<{ signed_in_user?: AccessPolicyRole; anonymous_user?: AccessPolicyRole }>().catch(() => null);
   if (!body || (body.signed_in_user === undefined && body.anonymous_user === undefined)) {
@@ -90,7 +93,7 @@ router.delete("/:id/access", async (c) => {
 
   const [session] = await db.select({ spaceId: spaceSessions.spaceId }).from(spaceSessions).where(eq(spaceSessions.id, sessionId)).limit(1);
   if (!session) return c.json({ message: "session not found" }, 404);
-  if (!(await hasPermission(user, "member.manage", { spaceId: session.spaceId, sessionId }))) return authzDenied(c);
+  if (!(await hasPermission(user, "session.access.manage", { spaceId: session.spaceId, sessionId }))) return authzDenied(c);
 
   await db.delete(accessPolicies).where(and(eq(accessPolicies.resourceType, "session"), eq(accessPolicies.resourceId, sessionId)));
   return c.json({ ok: true });

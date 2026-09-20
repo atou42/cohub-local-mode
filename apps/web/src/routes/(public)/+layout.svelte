@@ -24,6 +24,18 @@ onMount(() => {
 	{/if}
 </svelte:head>
 
-<div class="min-h-screen overflow-x-clip bg-bg-primary text-text-primary">
-	{@render children?.()}
-</div>
+{#if isPublicAppPath}
+	<!--
+		An App page owns the whole viewport: its chrome and the App share one
+		column, so the page itself never scrolls. Height comes from the documented
+		`html, body { height: 100% }` chain — never `dvh`, which lags in a
+		standalone PWA. `overflow-x-clip` on document pages is dropped here.
+	-->
+	<div class="h-full overflow-hidden bg-bg-primary text-text-primary">
+		{@render children?.()}
+	</div>
+{:else}
+	<div class="min-h-screen overflow-x-clip bg-bg-primary text-text-primary">
+		{@render children?.()}
+	</div>
+{/if}

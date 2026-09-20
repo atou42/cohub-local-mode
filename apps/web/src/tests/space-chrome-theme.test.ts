@@ -95,13 +95,13 @@ test("syncSpaceChromeTheme applies Space color without leaving full-bleed mode",
 			supportsColor: () => true,
 		}),
 		{
-			color: "#F8F8FA",
+			color: "#FFFFFF",
 			colorSource: "theme",
 			style: "dark",
 			styleSource: "theme",
 		},
 	);
-	assert.equal(metaColor, "#F8F8FA");
+	assert.equal(metaColor, "#FFFFFF");
 	assert.equal(appleStatusBarStyle, "black-translucent");
 	assert.equal(attributes.has("data-cohub-status-bar-color-source"), false);
 	assert.equal(attributes.get("data-cohub-status-bar-style"), "dark");
@@ -124,7 +124,7 @@ test("syncSpaceChromeTheme still resolves state when optional meta tags are abse
 			supportsColor: () => false,
 		}),
 		{
-			color: "#1F2026",
+			color: "#101213",
 			colorSource: "theme",
 			style: "light",
 			styleSource: "theme",

@@ -7,6 +7,8 @@ const env = process.env.ENV === "prod" ? "prod" : "dev";
 export const gatewayConfig = {
   apiBaseUrl: normalizeBaseUrl(process.env.API_BASE_URL ?? "http://localhost:8787"),
   workerSecret: process.env.WORKER_SECRET ?? "",
+  nodeOrigin: process.env.COHUB_NODE_ORIGIN ?? "cloud",
+  localSandboxRelayToken: process.env.LOCAL_SANDBOX_RELAY_TOKEN?.trim() ?? "",
   logtoEndpoint: resolveLogtoEndpoint({ endpoint: process.env.LOGTO_ENDPOINT, env }),
   port: Number(process.env.PORT ?? 8788),
   host: process.env.HOST ?? "0.0.0.0",

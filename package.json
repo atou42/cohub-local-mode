@@ -58,7 +58,7 @@
     "local:upstream:watch:uninstall": "node scripts/local-mode/upstream-watch-service.mjs uninstall"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3",
+    "@biomejs/biome": "2.5.11",
     "@changesets/cli": "^3.0.1",
     "@napi-rs/canvas": "1.0.8",
     "husky": "^9.1.7",

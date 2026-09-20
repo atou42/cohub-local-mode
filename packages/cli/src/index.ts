@@ -16,11 +16,13 @@ import { registerSearch } from "./commands/search.js";
 import { registerReferences } from "./commands/references.js";
 import { registerReferrals } from "./commands/referrals.js";
 import { registerPrompt, registerSpaces } from "./commands/spaces.js";
-import { maybeHandleRunCommand } from "./commands/run.js";
+import { maybeHandleRunCommand, printRunHelp } from "./commands/run.js";
+import { registerRuntime } from "./commands/runtime.js";
 import { registerSandbox } from "./commands/sandbox.js";
 import { registerTasks } from "./commands/tasks.js";
 import { registerDesktop, registerLegacyUi } from "./commands/desktop.js";
 import { registerApps } from "./commands/apps.js";
+import { formatUnknownCommandError, resolveHelpPath } from "./help-path.js";
 
 const VERSION = (() => {
   try {
@@ -43,14 +45,19 @@ program
   .helpOption("-h, --help", "Show help")
   .addHelpText("after", `
 
+Help:
+  cohub apps publish --help
+  cohub help apps publish
+
 Common commands:
   cohub auth login
   cohub profile avatar ./avatar.png
   cohub spaces ls
-  cohub -s <space-id> prompt "Fix the failing tests"
-  cohub -s <space-id> completion "Summarize AGENTS.md" --system-prompt AGENTS.md --stream
-  cohub -s <space-id> run -- git status
-  cohub sandbox up ./my-project
+  cohub prompt "Fix the failing tests"
+  cohub completion "Summarize AGENTS.md" --system-prompt AGENTS.md --stream
+  cohub run -- git status
+  cohub runtime up ./my-project
+  cohub runtime logs --follow
   cohub search "release notes"
   cohub -s <space-id> boards inspect <board-id>
   cohub -s <space-id> spaces turns ls --author others
@@ -64,9 +71,15 @@ Common commands:
   cohub models ls --model-type multimodal
   cohub generate "A calm lake at sunrise" --model <model> --output lake.png
 
+Target space:
+  -s <space-id>, then COHUB_SPACE_ID, then the current directory Runtime binding, then Home
+
 Environment:
+  COHUB_SPACE_ID         Target Space ID when -s is omitted
   COHUB_EXECUTION_TOKEN  Use this token instead of the stored Logto session
   ENV=dev                Use the development Cohub environment
+  HTTPS_PROXY            Honored for API and uploads (also HTTP_PROXY, NO_PROXY)
+  Runtime logs            ~/.local/state/cohub/runtime/<space-id>/diagnostics
 `);
 
 registerAuth(program);
@@ -75,6 +88,7 @@ registerProfile(program);
 registerMe(program);
 registerPrompt(program);
 registerSpaces(program);
+registerRuntime(program);
 registerSandbox(program);
 registerChannels(program);
 registerGenerations(program);
@@ -92,8 +106,16 @@ registerDesktop(program);
 registerLegacyUi(program);
 
 const argv = process.argv.slice(2);
-if (await maybeHandleRunCommand(argv)) {
+const help = resolveHelpPath(program, argv);
+if (help.kind === "help") {
+  help.command.outputHelp();
+} else if (help.kind === "run-help") {
+  printRunHelp();
+} else if (help.kind === "unknown") {
+  process.stderr.write(formatUnknownCommandError(help));
+  process.exit(1);
+} else if (await maybeHandleRunCommand(argv)) {
   process.exit();
+} else {
+  program.parse();
 }
-
-program.parse();

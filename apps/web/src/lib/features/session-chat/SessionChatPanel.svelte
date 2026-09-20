@@ -23,11 +23,13 @@ import {
 } from "$lib/drag/chat-draft-drop";
 import SessionModelSelectorDialog from "$lib/features/space/modules/SessionModelSelectorDialog.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { provideMarkdownWorkspaceAsset } from "$lib/markdown-asset-context";
 import { m } from "$lib/paraglide/messages.js";
 import type { NewChatBackgroundConfig } from "$lib/space-config";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
 import { modelsStatusStore } from "$lib/stores/models-status.svelte";
 import { entriesFromDataTransfer } from "$lib/upload-entries";
+import SessionRuntimeRecovery from "./SessionRuntimeRecovery.svelte";
 import type { SessionChatHost } from "./session-chat-host.controller.svelte";
 
 let {
@@ -68,6 +70,10 @@ let {
 
 const locale = $derived(getLocale());
 
+// Chat markdown resolves workspace-relative images and media to workspace
+// files. Provide it once here instead of threading it through the timeline.
+provideMarkdownWorkspaceAsset(untrack(() => host.resolveWorkspaceAsset));
+
 const access = $derived(host.access);
 const activeSessionState = $derived(host.activeSessionState);
 const activeSessionId = $derived(host.activeSessionId);
@@ -75,6 +81,19 @@ const isNewSessionRoute = $derived(host.isNewSessionRoute);
 const timeline = $derived(host.timeline);
 const followupQueue = $derived(host.followupQueue);
 const activeTurnRailItems = $derived(host.activeTurnRailItems);
+const runtimeRecoveryTurn = $derived.by(
+	() =>
+		[...(activeSessionState?.turns ?? [])].reverse().find((turn) => {
+			if (!["running", "abort_requested"].includes(turn.status)) return false;
+			const recovery = turn.meta?.runtimeRecovery;
+			return (
+				recovery &&
+				typeof recovery === "object" &&
+				!Array.isArray(recovery) &&
+				(recovery as { state?: unknown }).state === "attention"
+			);
+		}) ?? null,
+);
 
 // Local DOM / UI binds synced into host (cannot bind directly to host getters).
 let listEl = $state<HTMLDivElement | null>(null);
@@ -395,6 +414,9 @@ async function handleDraftDrop(event: DragEvent) {
 					</div>
 				</div>
 			{/if}
+			{#if activeSessionId && runtimeRecoveryTurn}
+				<SessionRuntimeRecovery spaceId={host.spaceId} sessionId={activeSessionId} turnId={runtimeRecoveryTurn.id} />
+			{/if}
 			{#if host.queuedRelayCancels.length > 0}
 				<div
 					class="mx-auto w-full max-w-4xl px-4 pb-1 sm:px-6"
@@ -437,6 +459,15 @@ async function handleDraftDrop(event: DragEvent) {
 					onmodechange={host.setComposerMode}
 					viewportContexts={host.viewportContexts}
 					currentModel={host.composerMode === "create" ? host.activeGenerationModel : host.activeSessionModel}
+					harness={host.composerHarness}
+					onharnesschange={host.setComposerHarness}
+					harnesses={host.runtimeCatalog?.kind === "local" ? ["cohub", ...(host.runtimeCatalog.capabilities?.harnesses ?? [])] : ["cohub"]}
+					runtimeOnline={host.runtimeCatalog?.online ?? false}
+					onharnessopen={host.loadRuntimeCatalog}
+					localRuntime={host.runtimeCatalog?.kind === "local"}
+					localModels={host.runtimeCatalog?.capabilities?.models.filter((model) => model.harness === host.composerHarness) ?? []}
+					localModel={host.localModel}
+					onlocalmodelchange={host.setLocalModel}
 					showAgentHarness={host.showAgentHarnessSelector}
 					agentHarness={host.activeAgentHarness}
 					agentHarnessLocked={host.agentHarnessLocked}
@@ -465,7 +496,7 @@ async function handleDraftDrop(event: DragEvent) {
 					onremoveviewport={host.handleRemoveViewportContext}
 					onsubmit={host.handleSend}
 					onabort={host.handleAbort}
-					onModelSelect={() => {
+					onModelSelect={host.composerMode === "create" || host.composerHarness === "cohub" ? () => {
 						if (host.composerMode === "create") {
 							void host.loadGenerationModelsCatalog();
 							showCreateModelSelector = true;
@@ -475,7 +506,7 @@ async function handleDraftDrop(event: DragEvent) {
 						void host.loadGenerationModelsCatalog();
 						void modelsStatusStore.load();
 						showModelSelector = true;
-					}}
+					} : undefined}
 				/>
 			</div>
 		</div>

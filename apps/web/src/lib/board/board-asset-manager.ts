@@ -5,13 +5,19 @@ import {
 	imageAssetKey,
 	taskArtifactPreviewUrl,
 } from "@neta-art/cohub/board";
-import { Assets, Texture } from "pixi.js";
+import type { Texture } from "pixi.js";
 import {
 	DEFAULT_LRU_BUDGET,
 	type LruBudget,
 	type LruEntry,
 	selectLruEvictions,
 } from "$lib/board/board-asset-lru";
+import {
+	type BoardImageTexturePool,
+	boardImageTexturePool,
+	loadBoardImageTexture,
+	unloadBoardImageTexture,
+} from "$lib/board/board-image-texture-pool";
 import {
 	loadVideoThumbnailTexture,
 	videoTextureNaturalSize,
@@ -122,43 +128,6 @@ export type BoardAssetManager = {
 
 const MAX_RETRY_DELAY = 30_000;
 
-/** Load an image in the page's CORS context when Pixi's worker path fails. */
-function loadImageElementTexture(url: string): Promise<Texture> {
-	return new Promise((resolve, reject) => {
-		const image = new Image();
-		image.crossOrigin = "anonymous";
-		image.onload = () => {
-			try {
-				resolve(Texture.from(image));
-			} catch (error) {
-				reject(error);
-			}
-		};
-		image.onerror = () =>
-			reject(new Error(`Failed to load board image: ${url}`));
-		image.src = url;
-	});
-}
-
-/**
- * Keep Pixi's worker/ImageBitmap fast path, but recover through an anonymous
- * image element when that browser context rejects a cross-origin cover.
- */
-async function loadImageTexture(url: string): Promise<Texture> {
-	try {
-		return await Assets.load<Texture>(url);
-	} catch (workerError) {
-		try {
-			return await loadImageElementTexture(url);
-		} catch (imageError) {
-			throw new AggregateError(
-				[workerError, imageError],
-				`Failed to load board image: ${url}`,
-			);
-		}
-	}
-}
-
 /** Approximate GPU footprint of a texture (RGBA8). Unknown sizes count as 0. */
 function footprintOf(texture: Texture | null): number {
 	if (!texture) return 0;
@@ -190,7 +159,12 @@ export type BoardAssetManagerOptions = {
 	loadVideoPreviews?: boolean;
 	/** Cooling-pool ceiling for unreferenced textures kept on the GPU. */
 	lruBudget?: LruBudget;
-	/** Injectable preview loader. Images use Pixi with an HTML image fallback; videos decode one frame. */
+	/**
+	 * Shared pool for the default image loader. Custom load/unload functions
+	 * bypass the pool, keeping specialized ownership explicit.
+	 */
+	imageTexturePool?: BoardImageTexturePool;
+	/** Injectable preview loader. Images use the shared Pixi pool; videos decode one frame. */
 	loadTexture?: (
 		url: string,
 		media: BoardAssetMedia,
@@ -199,8 +173,8 @@ export type BoardAssetManagerOptions = {
 	 * Frees a texture. Must resolve once the texture is truly gone, so a pending
 	 * unload of a URL can be awaited before that URL is loaded again (otherwise a
 	 * quick pan-back could re-acquire a texture that is still being unloaded and
-	 * is about to be destroyed). Defaults to clearing Pixi's cache and disposing
-	 * any fallback texture owned by the Board.
+	 * is about to be destroyed). Defaults to releasing the shared image pool or
+	 * disposing the generated video texture.
 	 */
 	unloadTexture?: (
 		url: string,
@@ -242,10 +216,9 @@ export type BoardAssetManagerOptions = {
  * - On failure with live references a timer re-enqueues the load after the
  *   backoff elapses, so a failed preview recovers even on a static board.
  *
- * Ownership scope: Pixi owns fast-path images in its `Assets` cache; fallback
- * images and generated video previews are owned directly by this manager. All are
- * reference-counted per mounted board. If multiple stages ever share URLs, image
- * ownership must move to an app-level reference count.
+ * Ownership scope: Board references are local to this manager, while default
+ * images are leased from the application-level image pool. Generated video
+ * previews remain owned directly by this manager.
  */
 export function createBoardAssetManager(
 	options: BoardAssetManagerOptions,
@@ -257,12 +230,16 @@ export function createBoardAssetManager(
 	);
 	const budget = options.lruBudget ?? DEFAULT_LRU_BUDGET;
 	const now = options.now ?? (() => Date.now());
+	const imagePool = options.imageTexturePool ?? boardImageTexturePool;
+	const useSharedImagePool = !options.loadTexture && !options.unloadTexture;
 	const loadTexture =
 		options.loadTexture ??
 		((url, media) =>
 			media === "video"
 				? loadVideoThumbnailTexture(url)
-				: loadImageTexture(url));
+				: useSharedImagePool
+					? imagePool.acquire(url)
+					: loadBoardImageTexture(url));
 	// In-flight unloads keyed by URL. A load of the same URL awaits any pending
 	// unload first, closing the race where a re-requested texture is created while
 	// the previous texture for the same URL is still being destroyed.
@@ -274,8 +251,11 @@ export function createBoardAssetManager(
 				texture?.destroy(true);
 				return;
 			}
-			await Assets.unload(url).catch(() => {});
-			if (!texture?.destroyed) texture?.destroy(true);
+			if (useSharedImagePool) {
+				await imagePool.release(url);
+				return;
+			}
+			await unloadBoardImageTexture(url, texture);
 		});
 	/** Release a texture and serialize a reload against its asynchronous unload. */
 	function releaseTexture(key: string, url: string, texture: Texture | null) {

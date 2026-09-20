@@ -181,6 +181,6 @@ test("an incomplete read keeps the cached facts", () => {
 
 test("a card with no facts at all is still a usable blank card", () => {
 	const snapshot = buildFileSnapshot({ path: "data/unknown.bin" });
-	assert.equal(snapshot.title, "unknown.bin");
+	assert.equal(snapshot.title, "unknown");
 	assert.equal(filePreviewKind(snapshot), "blank");
 });

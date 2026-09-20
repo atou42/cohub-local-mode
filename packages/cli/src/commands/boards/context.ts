@@ -35,7 +35,7 @@ export function readOptions(command: Command, label = "Comma-separated resource 
 }
 
 export async function resolvedBoard(boards: Command, target: string) {
-  const spaceId = resolveSpace(boards);
+  const spaceId = await resolveSpace(boards);
   const boardId = await resolveBoardId(spaceId, target);
   return createClient().space(spaceId).board(boardId);
 }

@@ -175,7 +175,7 @@ jobs:
             name: api-migrate-${{ github.run_id }}
             namespace: cohub-dev
           spec:
-            activeDeadlineSeconds: 180
+            activeDeadlineSeconds: 600
             ttlSecondsAfterFinished: 300
             backoffLimit: 0
             template:
@@ -195,7 +195,7 @@ jobs:
           EOF
 
           if kubectl wait --for=condition=complete job/api-migrate-${{ github.run_id }} \
-            -n cohub-dev --timeout=300s; then
+            -n cohub-dev --timeout=660s; then
             echo "Migration completed successfully"
           else
             echo "Migration job failed or timed out, showing diagnostics:"
@@ -265,7 +265,7 @@ jobs:
             name: api-migrate-${{ github.run_id }}
             namespace: cohub
           spec:
-            activeDeadlineSeconds: 180
+            activeDeadlineSeconds: 600
             ttlSecondsAfterFinished: 300
             backoffLimit: 0
             template:
@@ -285,7 +285,7 @@ jobs:
           EOF
           
           if kubectl wait --for=condition=complete job/api-migrate-${{ github.run_id }} \
-            -n cohub --timeout=300s; then
+            -n cohub --timeout=660s; then
             echo "Migration completed successfully"
           else
             echo "Migration job failed or timed out, showing diagnostics:"
@@ -351,7 +351,7 @@ jobs:
             name: api-migrate-${{ github.run_id }}
             namespace: cohub-dev
           spec:
-            activeDeadlineSeconds: 180
+            activeDeadlineSeconds: 600
             ttlSecondsAfterFinished: 300
             backoffLimit: 0
             template:
@@ -371,7 +371,7 @@ jobs:
           EOF
 
           if kubectl wait --for=condition=complete job/api-migrate-${{ github.run_id }} \
-            -n cohub-dev --timeout=300s; then
+            -n cohub-dev --timeout=660s; then
             echo "Migration completed successfully"
           else
             echo "Migration job failed or timed out, showing diagnostics:"
@@ -415,7 +415,7 @@ jobs:
             name: api-migrate-${{ github.run_id }}
             namespace: cohub
           spec:
-            activeDeadlineSeconds: 180
+            activeDeadlineSeconds: 600
             ttlSecondsAfterFinished: 300
             backoffLimit: 0
             template:
@@ -435,7 +435,7 @@ jobs:
           EOF
 
           if kubectl wait --for=condition=complete job/api-migrate-${{ github.run_id }} \
-            -n cohub --timeout=300s; then
+            -n cohub --timeout=660s; then
             echo "Migration completed successfully"
           else
             echo "Migration job failed or timed out, showing diagnostics:"

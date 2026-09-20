@@ -158,6 +158,19 @@ export const buildPatchOpsForContentDelta = (event: SessionStreamEvent): Realtim
     ops.push({ o: "merge", p: "/message/metadata", v: metadata });
   }
 
+  if (event.replaceContent) {
+    const prefix = `${patchCursorKey(event)}:`;
+    const retained = new Set((event.snapshotContent ?? event.content).map((block, index) => getStreamIndex(block, index)));
+    const removed = new Set<number>();
+    for (const [key, snapshot] of streamBlockSnapshots) {
+      if (!key.startsWith(prefix)) continue;
+      const index = getStreamIndex(snapshot.block, Number(key.slice(prefix.length).split(":")[0]));
+      if (!retained.has(index)) { removed.add(index); streamBlockSnapshots.delete(key); }
+    }
+    for (const index of [...removed].sort((a, b) => b - a)) ops.push({ o: "remove", p: `/message/content/blocks/${index}` });
+    appendPatchCursors.delete(patchCursorKey(event));
+  }
+
   event.content.forEach((deltaBlock, index) => {
     const path = blockPatchPath(deltaBlock, index);
     const streamIndex = getStreamIndex(deltaBlock, index);

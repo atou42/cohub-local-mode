@@ -25,6 +25,7 @@ import { ensureRealtimeConnected } from "./realtime.js";
 import { createWebsocketClient, type WebsocketEventPayload } from "./websocket.js";
 import { VoiceApi } from "./voice-input.js";
 import { AppSurfaceApi } from "./app-surface.js";
+import { attachAppEmbed } from "./app-embed.js";
 import type { AppComposerChip } from "@cohub/protocol/app-surface";
 import {
   resolveApiBaseUrl,
@@ -39,8 +40,10 @@ import {
   type AppIdResolver,
   type AppContextChangedListener,
   type AppRuntimeApi,
+  type AppAuthorizationRequest,
+  type AppRuntimeConfigureRequest,
 } from "./app-runtime.js";
-import type { Permission } from "./types.js";
+import type { CreateSpaceInput, Permission } from "./types.js";
 import type { AppCommerceCheckoutStatus } from "./apis/app-commerce.js";
 
 export class CohubClient {
@@ -179,11 +182,25 @@ export class CohubClient {
     return this.appRuntime.context();
   }
 
+  /** Releases listeners this client registered. Safe to call more than once. */
+  dispose() {
+    this.appRuntime.dispose();
+  }
+
   readonly auth = {
-    /** Ensure the app holds these scopes. Silent when a grant already covers them; `alwaysAsk` forces the dialog. */
+    authorize: (input: AppAuthorizationRequest) => this.appRuntime.authorize(input),
+    /**
+     * @deprecated Use authorize() for the actual target and structured result.
+     * Ensure the app holds these scopes. Without an accessible `spaceId` the
+     * host targets a viewer-controlled Space (never the app author's home
+     * Space) — use `requestSpace` when the app needs to know which Space.
+     * Silent when a grant already covers them; `alwaysAsk` forces the dialog.
+     */
     request: (input: { scopes: Permission[]; reason?: string; spaceId?: string; alwaysAsk?: boolean }) => this.appRuntime.requestAuthorization(input),
-    /** One consent: the viewer picks a Space and grants the scopes on it. `alwaysAsk` re-opens the picker. */
+    /** @deprecated Use authorize({ target: { kind: "pick-space" }, scopes }). */
     requestSpace: (input: { scopes: Permission[]; reason?: string; alwaysAsk?: boolean }) => this.appRuntime.requestSpaceAuthorization(input),
+    /** One consent: create a viewer-owned Space and grant the scopes on it. `space` is `CreateSpaceInput`. */
+    requestCreateSpace: (input: { scopes: Permission[]; space: CreateSpaceInput; reason?: string }) => this.appRuntime.requestCreateSpaceAuthorization(input),
   };
 
   readonly app = {
@@ -191,6 +208,18 @@ export class CohubClient {
     /** Expose callable methods from inside a published app. */
     surface: new AppSurfaceApi(),
     onContextChanged: (listener: AppContextChangedListener) => this.appRuntime.onContextChanged(listener),
+    /** Ask the host to close this App's surface. */
+    requestClose: () => this.appRuntime.requestClose(),
+    /**
+     * Request that the host update this overlay's geometry or pointer hit
+     * regions.  Only meaningful for `overlay` surfaces; ignored otherwise.
+     */
+    requestConfigure: (input: Omit<AppRuntimeConfigureRequest, "protocol" | "version" | "type">) =>
+      this.appRuntime.requestConfigure(input),
+    embed: {
+      /** Host another App's public page in an iframe and forward the shell location to it. */
+      attach: attachAppEmbed,
+    },
     composer: {
       /** Attach or update context from this app in the Cohub composer. */
       setChip: (chip: AppComposerChip) => this.app.surface.setComposerChip(chip),

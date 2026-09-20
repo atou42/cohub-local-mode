@@ -1,6 +1,8 @@
 import type { ContentBlock } from "../core/content.js";
 import type { Usage } from "../core/usage.js";
 import type { ModelThinkingLevel } from "./completion.js";
+import type { HarnessArchiveIndex } from "../runtime/index.js";
+export type { HarnessArchiveIndex } from "../runtime/index.js";
 
 export type SessionTurnStatus =
   | "queued"
@@ -225,6 +227,7 @@ export type SessionTurnRecord = {
   summary: SessionTurnSummary | null;
   intermediateIndex: SessionTurnIntermediateIndex | null;
   intermediateSummary: SessionTurnIntermediateSummary | null;
+  harnessIndex?: HarnessArchiveIndex | null;
   meta: Record<string, unknown> | null;
   /** Effective thinking level used for this turn (derived from meta.effectiveThinkingLevel). */
   thinkingLevel?: ModelThinkingLevel | null;

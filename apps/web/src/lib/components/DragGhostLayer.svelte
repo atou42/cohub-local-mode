@@ -68,7 +68,7 @@ const ghostStyle = $derived.by(() => {
 	.drag-ghost-layer {
 		position: fixed;
 		inset: 0;
-		z-index: 200;
+		z-index: var(--z-drag);
 		pointer-events: none;
 	}
 

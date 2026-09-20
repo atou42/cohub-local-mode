@@ -26,19 +26,27 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            runner: ubuntu-latest
+            cgo: '0'
           - goos: linux
             goarch: arm64
+            runner: ubuntu-latest
+            cgo: '0'
           - goos: darwin
             goarch: amd64
+            runner: macos-15-intel
+            cgo: '1'
           - goos: darwin
             goarch: arm64
+            runner: macos-15
+            cgo: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,12 +67,21 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Test native watcher
+        if: matrix.goos == 'darwin' || matrix.goarch == 'amd64'
+        working-directory: apps/sandbox
+        run: |
+          test -z "$(gofmt -l filewatch)"
+          go vet ./...
+          go test -race ./filewatch ./relay
+          go test ./...
+
       - name: Build
         working-directory: apps/sandbox
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
+          CGO_ENABLED: ${{ matrix.cgo }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
@@ -88,7 +105,7 @@ jobs:
           cp LICENSE NOTICE "dist/${BINARY_NAME}_${GOOS}_${GOARCH}/"
           cd dist
           tar -czf "${BASE}.tar.gz" -C "${BINARY_NAME}_${GOOS}_${GOARCH}" "${BINARY_NAME}" LICENSE NOTICE
-          sha256sum "${BASE}.tar.gz" > "${BASE}.tar.gz.sha256"
+          shasum -a 256 "${BASE}.tar.gz" > "${BASE}.tar.gz.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -189,5 +206,5 @@ jobs:
             --endpoint-url "${OSS_ENDPOINT}" \
             --recursive \
             --cache-control "public, max-age=31536000, immutable"
-          echo "Published sandboxd ${VERSION} to https://public.cohub.run/sandboxd/${VERSION}/"
+          echo "Published sandboxd ${VERSION} to https://public.cohub.live/sandboxd/${VERSION}/"
 

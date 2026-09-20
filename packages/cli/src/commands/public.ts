@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { basename, extname, relative, resolve } from "node:path";
 import type {
@@ -9,6 +8,7 @@ import type {
 } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient } from "../client.js";
+import { HttpPutError, putLocalFile } from "../http-put.js";
 import { error, handleHttp, json as outJson, jsonRequested } from "../output.js";
 import { resolveSpace } from "../space.js";
 
@@ -187,18 +187,21 @@ async function putPublicFile(
   plan: PublicFileUploadPlanEntry,
   fetchImpl: typeof fetch,
 ) {
-  const response = await fetchImpl(plan.uploadUrl, {
-    method: "PUT",
-    headers: plan.headers,
-    body: createReadStream(file.localPath) as never,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-  if (response.ok) return;
-  const detail = await response.text().catch(() => "");
-  if (response.status === 409 || response.status === 412) {
-    throw new Error(`${file.publicPath} already exists. Use --overwrite.`);
+  try {
+    await putLocalFile({
+      url: plan.uploadUrl,
+      filePath: file.localPath,
+      size: file.size,
+      headers: plan.headers,
+      label: file.publicPath,
+      fetch: fetchImpl,
+    });
+  } catch (error) {
+    if (error instanceof HttpPutError && (error.status === 409 || error.status === 412)) {
+      throw new Error(`${file.publicPath} already exists. Use --overwrite.`);
+    }
+    throw error;
   }
-  throw new Error(`Failed to upload ${file.publicPath}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
 }
 
 function uploadFailure(errors: Error[]) {
@@ -227,7 +230,7 @@ async function uploadPublic(
   deps: PublicCommandDeps,
 ) {
   const client = deps.createClient?.() ?? createClient();
-  const spaceId = resolveSpace(command);
+  const spaceId = await resolveSpace(command);
   try {
     const upload = await collectPublicUpload(source, destination);
     const plan = await client.space(spaceId).publicFiles.createUpload({
@@ -298,7 +301,7 @@ async function listPublic(
 ) {
   const client = deps.createClient?.() ?? createClient();
   try {
-    const publicFiles = client.space(resolveSpace(command)).publicFiles;
+    const publicFiles = client.space(await resolveSpace(command)).publicFiles;
     const entries: PublicFileListEntry[] = [];
     let cursor: string | undefined;
     do {
@@ -322,7 +325,7 @@ async function listPublic(
 async function printPublicUrl(command: Command, path: string, deps: PublicCommandDeps) {
   const client = deps.createClient?.() ?? createClient();
   try {
-    const result = await client.space(resolveSpace(command)).publicFiles.url(path);
+    const result = await client.space(await resolveSpace(command)).publicFiles.url(path);
     console.log(result.url);
   } catch (exception) {
     handleHttp(exception);

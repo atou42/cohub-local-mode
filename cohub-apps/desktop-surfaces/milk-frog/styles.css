@@ -1,0 +1,307 @@
+/*
+ * Milk Frog — overlay companion.
+ *
+ * Two invariants keep the overlay transparent and cheap:
+ *   1. `html, body` stay transparent and the host color-scheme is followed, so
+ *      Chromium never paints an opaque backdrop behind the frame.
+ *   2. No `backdrop-filter` anywhere: an overlay floats over content that
+ *      changes every frame while the agent streams, so a blur would never stop
+ *      re-rendering.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --box: 128px;
+  --ctrl-h: 22px;
+  --stage-w: 128px;
+  --stage-h: 150px;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
+
+  --bubble-bg: rgba(255, 253, 246, 0.97);
+  --bubble-border: #e8dcc2;
+  --bubble-text: #3b3222;
+
+  --chip-bg: rgba(255, 250, 238, 0.96);
+  --chip-border: #e0d3b8;
+  --chip-text: #5a4f38;
+  --accent: #c99a3f;
+  --err: #c06a58;
+
+  --shadow: 0 6px 22px rgba(60, 46, 20, 0.16), 0 1px 2px rgba(60, 46, 20, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bubble-bg: rgba(43, 39, 33, 0.97);
+    --bubble-border: #4a4234;
+    --bubble-text: #f2ead9;
+
+    --chip-bg: rgba(50, 45, 37, 0.96);
+    --chip-border: #4a4234;
+    --chip-text: #e6dcc6;
+    --accent: #e0b25a;
+    --err: #e08a76;
+
+    --shadow: 0 6px 22px rgba(0, 0, 0, 0.42), 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Stage: one tight, movable box around the frog and its controls ───────── */
+#stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--stage-w);
+  height: var(--stage-h);
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  pointer-events: none;
+}
+
+/* ── Frog ─────────────────────────────────────────────────────────────────── */
+#frog {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: var(--box);
+  height: var(--box);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 42%;
+  outline: none;
+}
+
+#frog:focus-visible {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+#sprite {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Control strip: revealed on hover, kept inside the hit region ─────────── */
+#controls {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  display: flex;
+  gap: 3px;
+  padding: 1px;
+  transform: translateX(-50%) translateY(3px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+#stage:hover #controls,
+#stage:focus-within #controls,
+#stage.nudge #controls {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--chip-border);
+  border-radius: 50%;
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+#controls button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#controls button[aria-pressed="false"] {
+  opacity: 0.5;
+}
+
+/* ── Pondering dots: shown while the frog reads or waits on the model ─────── */
+#thought {
+  position: absolute;
+  top: -14px;
+  right: -4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 7px;
+  border: 1px solid var(--bubble-border);
+  border-radius: 12px;
+  background: var(--bubble-bg);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(3px) scale(0.9);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+#thought.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+#thought .d {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pondering 1.15s ease-in-out infinite;
+}
+
+#thought[data-kind="thinking"] .d {
+  background: var(--bubble-text);
+}
+
+#thought .d:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+#thought .d:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pondering {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ── Speech bubble ────────────────────────────────────────────────────────── */
+#above {
+  position: absolute;
+  bottom: 100%;
+  left: calc(50% + var(--shift, 0px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  max-width: min(280px, 80vw);
+  padding-bottom: 2px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+#bubble {
+  position: relative;
+  max-width: min(240px, 78vw);
+  padding: 8px 11px;
+  border: 1px solid var(--bubble-border);
+  border-radius: 14px;
+  background: var(--bubble-bg);
+  color: var(--bubble-text);
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  transform-origin: bottom center;
+  transition: opacity 180ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#bubble.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+#bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  left: calc(50% + var(--tail, 0px));
+  width: 10px;
+  height: 10px;
+  border-right: 1px solid var(--bubble-border);
+  border-bottom: 1px solid var(--bubble-border);
+  background: var(--bubble-bg);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* ── Poke burst ───────────────────────────────────────────────────────────── */
+.burst {
+  position: absolute;
+  font-size: 15px;
+  line-height: 1;
+  pointer-events: none;
+  animation: burst-fly 900ms ease-out forwards;
+}
+
+.burst.fail {
+  color: var(--err);
+}
+
+@keyframes burst-fly {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(0.8);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-48px) scale(1.35);
+  }
+}
+
+/* ── Dock mode: the host shrinks the frame, so loosen the bubble a touch ─── */
+body.dock #above {
+  max-width: min(330px, 92vw);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #bubble,
+  #controls,
+  #thought {
+    transition: none;
+  }
+  #thought .d {
+    animation: none;
+  }
+  .burst {
+    animation-duration: 1ms;
+  }
+}

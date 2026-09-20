@@ -7,6 +7,7 @@ import {
   BoardAuthoringReadInputSchema,
   BoardCreateInputSchema,
   BoardPlaybackCommandSchema,
+  BoardTransactionsReadInputSchema,
   isBoardPath,
   serializeBoardManifest,
   type BoardOperation,
@@ -31,6 +32,7 @@ import {
   inspectBoardAuthoring,
 } from "../../board-authoring-service.js";
 import { boardAuthoringItemToNode } from "@cohub/core/board";
+import { listBoardTransactions } from "../../board-transactions-service.js";
 import {
   boardErrorBody as errorBody,
   boardErrorResponse as errorResponse,
@@ -339,7 +341,35 @@ router.get("/:boardId/capabilities", async (c) => {
   }
 });
 
-
+/** Read-only transaction log, newest first. Powers edit-history replay. */
+router.get("/:boardId/transactions", async (c) => {
+  const user = getOptionalAuth(c);
+  const spaceId = c.req.param("id");
+  const boardId = c.req.param("boardId");
+  if (!spaceId || !boardId || !requireValidId(spaceId) || !requireValidId(boardId)) return c.json(boardNotFound, 404);
+  if (!(await hasPermission(user, "file.view", { spaceId }))) return authzDenied(c);
+  const before = c.req.query("before");
+  const limit = c.req.query("limit");
+  const snapshot = c.req.query("snapshot");
+  // Query strings are decoded here; the schema itself is typed for SDK callers.
+  const parsed = BoardTransactionsReadInputSchema.safeParse({
+    ...(before !== undefined ? { before: Number(before) } : {}),
+    ...(limit !== undefined ? { limit: Number(limit) } : {}),
+    // Only the two literals decode; anything else reaches the schema as-is and fails there.
+    ...(snapshot !== undefined ? { snapshot: snapshot === "true" ? true : snapshot === "false" ? false : snapshot } : {}),
+  });
+  if (!parsed.success) return c.json({
+    code: "INVALID_BOARD_INPUT",
+    message: "Board transactions query is invalid.",
+    diagnostics: zodDiagnostics(parsed.error, "query"),
+  }, 400);
+  try {
+    return c.json(await listBoardTransactions(spaceId, boardId, parsed.data));
+  } catch (error) {
+    const response = errorResponse(error);
+    return c.json(errorBody(response), response.status as never);
+  }
+});
 
 router.post("/:boardId/playback", async (c) => {
   const user = useAuth(c);

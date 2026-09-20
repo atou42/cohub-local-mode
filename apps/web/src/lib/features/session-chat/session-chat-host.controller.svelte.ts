@@ -45,6 +45,10 @@ import {
 } from "$lib/features/space/modules/prompt-template-controller.svelte";
 import { createKeyedRouteRequestGuard } from "$lib/features/space/modules/route-request-guard";
 import { createSkillController } from "$lib/features/space/modules/skill-controller.svelte";
+import {
+	cachedRuntimeStatus,
+	refreshRuntimeStatus,
+} from "$lib/features/space/runtime-status.svelte";
 import { asRecord } from "$lib/features/space/space-utils";
 import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
@@ -80,6 +84,7 @@ import {
 	getRequestedThinkingLevel,
 	type ModelThinkingLevel,
 } from "$lib/model-catalog";
+import { m } from "$lib/paraglide/messages.js";
 import {
 	uploadChatAttachmentFile,
 	uploadChatAttachmentImage,
@@ -133,6 +138,8 @@ import {
 	resetGeneration,
 	startGenerationRequest,
 } from "$lib/stores/session-generation-controller";
+import { reconcileGenerationStateFromSessionList } from "$lib/stores/session-generation-list-reconcile";
+import { isLiveTurnStatus } from "$lib/stores/session-generation-state";
 import {
 	fetchSessionListWithCache,
 	getCachedSessionListSnapshot,
@@ -191,6 +198,7 @@ import {
 	resolveAgentPromptThinkingLevel,
 	resolveComposerSelectionFromTurn,
 	resolveLastAgentTurnModel,
+	resolveTurnHarness,
 	type SessionComposerSelection,
 	shouldClearComposerDraftAfterSend,
 } from "./session-utils";
@@ -401,6 +409,57 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	let composerSelection = $state<SessionComposerSelection>({
 		mode: "agent",
 		model: null,
+	});
+	let harnessBySession = $state<Record<string, "cohub" | "pi" | "codex">>({});
+	let localModelsBySession = $state<Record<string, SelectedModel | null>>({});
+	const harnessSelectionKey = $derived(
+		`${spaceId}:${activeSessionId ?? "draft"}`,
+	);
+	const composerAgentTurns = $derived.by(() =>
+		mergeComposerTurnSources(
+			activeSessionState?.turns ?? [],
+			activeTurnIndex,
+		).filter((turn) => turn.executionKind !== "direct_generation"),
+	);
+	// Federated nodes select the execution agent per Session, not per Runtime turn.
+	const composerHarness = $derived(
+		options.isLocalSpace?.()
+			? "cohub"
+			: (harnessBySession[harnessSelectionKey] ??
+				resolveTurnHarness(composerAgentTurns.at(-1))),
+	);
+	const localModel = $derived.by(() => {
+		const key = `${harnessSelectionKey}:${composerHarness}`;
+		if (Object.hasOwn(localModelsBySession, key))
+			return localModelsBySession[key] ?? null;
+		const previous = [...composerAgentTurns]
+			.reverse()
+			.find(
+				(turn) => resolveTurnHarness(turn) === composerHarness && turn.model,
+			);
+		return previous?.model && composerHarness !== "cohub"
+			? { id: previous.model, provider: previous.provider ?? composerHarness }
+			: null;
+	});
+	const runtimeCatalog = $derived(cachedRuntimeStatus(spaceId));
+	async function loadRuntimeCatalog() {
+		const targetSpaceId = spaceId;
+		if (!targetSpaceId) return;
+		try {
+			await refreshRuntimeStatus(targetSpaceId);
+		} catch {
+			/* Local capabilities are optional; Cloud remains available. */
+		}
+	}
+	$effect(() => {
+		const target = spaceId;
+		if (!target) return;
+		void loadRuntimeCatalog();
+		const refresh = () => {
+			if (document.visibilityState === "visible") void loadRuntimeCatalog();
+		};
+		window.addEventListener("focus", refresh);
+		return () => window.removeEventListener("focus", refresh);
 	});
 	const composerMode = $derived(composerSelection.mode);
 	const showAgentHarnessSelector = $derived(
@@ -1386,26 +1445,33 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		});
 	});
 
-	// Keep pinned to bottom when content grows (markdown/images) while following.
+	// Keep pinned to bottom while following when content grows (markdown/images)
+	// or the viewport shrinks (soft keyboard under `interactive-widget=
+	// resizes-content`, split screen) — either one pushes the tail out of view.
 	$effect(() => {
 		const el = listEl;
 		const ownerSessionId = el?.dataset.sessionId;
 		if (!el || !ownerSessionId) return;
 		let prevHeight = el.scrollHeight;
+		let prevClientHeight = el.clientHeight;
 		const ro = new ResizeObserver(() => {
 			if (listEl !== el || activeSessionId !== ownerSessionId) return;
 			const currentHeight = el.scrollHeight;
+			const currentClientHeight = el.clientHeight;
+			const tailPushedOut =
+				currentHeight > prevHeight || currentClientHeight < prevClientHeight;
 			const restoringBottom = restoringBottomSessionId === ownerSessionId;
 			const restoringPosition = isRestoringSessionScroll(ownerSessionId);
 			if (restoringPosition) maybeCompleteAnchorRestore();
 			if (
-				currentHeight > prevHeight &&
+				tailPushedOut &&
 				!restoringPosition &&
 				(shouldAutoFollow || restoringBottom)
 			) {
 				requestBottomFollow({ immediate: restoringBottom });
 			}
 			prevHeight = currentHeight;
+			prevClientHeight = currentClientHeight;
 			updateTimelineScrollMetrics();
 			scroll.scheduleTurnMarkerMeasureThrottled();
 		});
@@ -2031,6 +2097,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		options?: { cache?: boolean },
 	) {
 		const nextSessions = workspace.upsertSessionRecord(session);
+		reconcileGenerationStateFromSessionList([session]);
 		if (options?.cache !== false) {
 			void patchCachedSessionList(spaceId, () => nextSessions).catch(
 				() => undefined,
@@ -2042,12 +2109,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		upsertSessionRecord(session);
 	}
 
-	function applySessionsSnapshot(sessions: SessionRecord[]) {
+	function applySessionsSnapshot(
+		sessions: SessionRecord[],
+		options?: { authoritative?: boolean; requestStartedAt?: number },
+	) {
 		workspace.applySessionsSnapshot(sessions);
+		reconcileGenerationStateFromSessionList(sessions, options);
 	}
 
 	function seedSessions(sessions: SessionRecord[]) {
 		workspace.seedSessions(sessions);
+		reconcileGenerationStateFromSessionList(sessions);
 	}
 
 	async function syncForkResponseToSessionListCache(
@@ -2080,12 +2152,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			refreshSessionsListQueuedForce ||= force;
 			return refreshSessionsListInFlight;
 		}
+		// Pin the request identity: a space switch mid-flight must never fetch,
+		// cache, or apply another space's sessions.
+		const requestSpaceId = spaceId;
 		const run = (async () => {
 			try {
+				const requestStartedAt = Date.now();
+				let backgroundRefreshApplied = false;
 				const sessions = await fetchSessionListWithCache(
-					spaceId,
+					requestSpaceId,
 					async () => {
-						const result = await sdk.space(spaceId).sessions.list({
+						const result = await sdk.space(requestSpaceId).sessions.list({
 							includeForks: true,
 						});
 						return {
@@ -2094,9 +2171,27 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 							pageInfo: result.pageInfo,
 						};
 					},
-					{ force },
+					{
+						force,
+						onBackgroundRefresh: force
+							? undefined
+							: (freshSessions) => {
+									if (spaceId !== requestSpaceId) return;
+									backgroundRefreshApplied = true;
+									applySessionsSnapshot(freshSessions, {
+										authoritative: true,
+										requestStartedAt,
+									});
+								},
+					},
 				);
-				applySessionsSnapshot(sessions);
+				if (spaceId !== requestSpaceId) return;
+				if (force || !backgroundRefreshApplied) {
+					applySessionsSnapshot(sessions, {
+						authoritative: force,
+						requestStartedAt,
+					});
+				}
 			} catch (error) {
 				console.warn("[space] Failed to refresh sessions:", error);
 			}
@@ -2891,6 +2986,57 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		completeGeneration(sessionId);
 	}
 
+	function syncSidebarGenerationFromTurn(
+		sessionId: string,
+		turn: Partial<SessionTurnRecord> | undefined,
+	) {
+		if (sessionId === activeSessionId || !turn?.id) return;
+		if (isLiveTurnStatus(turn.status)) {
+			const userMessageId =
+				turn.meta && typeof turn.meta.userMessageId === "string"
+					? turn.meta.userMessageId
+					: null;
+			sessionGenerationStore.resumePending(sessionId, {
+				spaceId,
+				turnId: turn.id,
+				anchorUserMessageId: userMessageId,
+			});
+			return;
+		}
+		if (
+			turn.status === "completed" ||
+			turn.status === "failed" ||
+			turn.status === "interrupted" ||
+			turn.status === "merged" ||
+			turn.status === "cancelled"
+		) {
+			completeGenerationForTurn(sessionId, turn.id);
+		}
+	}
+
+	function syncSidebarGenerationFromLifecycle(
+		sessionId: string,
+		payload: Record<string, unknown>,
+	) {
+		if (sessionId === activeSessionId || payload.phase !== "llm_call_started")
+			return;
+		const turnId = typeof payload.turnId === "string" ? payload.turnId : null;
+		const anchorUserMessageId =
+			typeof payload.anchorUserMessageId === "string"
+				? payload.anchorUserMessageId
+				: null;
+		sessionGenerationStore.markRuntimePhase(sessionId, {
+			phase: "llm_call_started",
+			at: typeof payload.at === "string" ? payload.at : null,
+			llmRound: typeof payload.llmRound === "number" ? payload.llmRound : null,
+			provider: typeof payload.provider === "string" ? payload.provider : null,
+			model: typeof payload.model === "string" ? payload.model : null,
+			spaceId,
+			turnId,
+			anchorUserMessageId,
+		});
+	}
+
 	function waitForRelayRetry(signal: AbortSignal) {
 		return new Promise<void>((resolve) => {
 			const finish = () => {
@@ -3291,7 +3437,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			cancellingRelayCommandIds = next;
 		}
 	}
-
 	async function handleForkTurn(turn: SessionTurnRecord) {
 		if (!activeSessionId || forkingTurnId) return;
 		const opSpaceId = spaceId;
@@ -3711,6 +3856,20 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		}
 	}
 
+	function setComposerHarness(harness: "cohub" | "pi" | "codex") {
+		if (sending || composerMode === "create") return;
+		harnessBySession = { ...harnessBySession, [harnessSelectionKey]: harness };
+		clearComposerError();
+	}
+
+	function canUseHarness(harness: "cohub" | "pi" | "codex") {
+		if (harness === "cohub") return true;
+		return Boolean(
+			runtimeCatalog?.online &&
+				runtimeCatalog.capabilities?.harnesses.includes(harness),
+		);
+	}
+
 	function setComposerMode(mode: "agent" | "create") {
 		if (sending || composerMode === mode) return;
 		composerSelection =
@@ -3762,11 +3921,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			!(options.hasSpace?.() ?? Boolean(spaceId))
 		)
 			return;
+		const harness = composerHarness;
+		// Fail closed: a disconnected Runtime must never dispatch a local turn.
+		if (!canUseHarness(harness)) {
+			setComposerError(m.runtime_harness_unavailable());
+			return;
+		}
+		const model = harness === "cohub" ? activeSessionModel : localModel;
 		const agentHarness = activeAgentHarness;
-		const model = activeSessionModel;
-		const promptThinkingLevel = activeSessionPromptThinkingLevel;
-		const promptServiceTier = activeSessionServiceTier;
-		if (agentHarness !== "pi" && (!model || !promptThinkingLevel)) {
+		const promptThinkingLevel = harness === "cohub" ? activeSessionPromptThinkingLevel : null;
+		const promptServiceTier = harness === "cohub" ? activeSessionServiceTier : undefined;
+		if (harness === "cohub" && agentHarness !== "pi" && (!model || !promptThinkingLevel)) {
 			composer.setError(
 				modelsCatalogStore.error || "Model options are not ready yet.",
 			);
@@ -4012,6 +4177,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					intermediateSummary: null,
 					meta: {
 						optimistic: true,
+						harness,
 						userId: currentUser.uuid,
 						clientMessageId,
 						...(promptThinkingLevel
@@ -4059,12 +4225,15 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				content,
 				model: model?.id,
 				provider: model?.provider,
+				harness,
 				...(promptThinkingLevel ? { thinkingLevel: promptThinkingLevel } : {}),
 				...(promptServiceTier !== undefined
 					? { serviceTier: promptServiceTier }
 					: {}),
 				clientMessageId,
-				generationPolicy: buildTurnGenerationPolicy(),
+				...(harness === "cohub"
+					? { generationPolicy: buildTurnGenerationPolicy() }
+					: {}),
 				...(localFederatedPromptEnv ? { env: localFederatedPromptEnv } : {}),
 				accessMode: "full_access",
 				intent: "followup",
@@ -4866,6 +5035,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				payload.type === "session.turn.finalized"
 			) {
 				const turn = payload.payload.turn as SessionTurnRecord | undefined;
+				syncSidebarGenerationFromTurn(targetSessionId, turn);
 				if (turn?.id && Array.isArray(turn.userContent)) {
 					void sessionTurnsRepo
 						.mergeTurns(spaceId, targetSessionId, [turn], {
@@ -4879,6 +5049,8 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 							),
 						);
 				}
+			} else if (payload.type === "session.turn.lifecycle") {
+				syncSidebarGenerationFromLifecycle(targetSessionId, payload.payload);
 			}
 			if (payload.type === "session.request.accepted") {
 				clearPostSendRecovery(targetSessionId);
@@ -5477,6 +5649,23 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		get composerMode() {
 			return composerMode;
 		},
+		get composerHarness() {
+			return composerHarness;
+		},
+		setComposerHarness,
+		loadRuntimeCatalog,
+		get runtimeCatalog() {
+			return runtimeCatalog;
+		},
+		get localModel() {
+			return localModel;
+		},
+		setLocalModel(model: SelectedModel | null) {
+			localModelsBySession = {
+				...localModelsBySession,
+				[`${harnessSelectionKey}:${composerHarness}`]: model,
+			};
+		},
 		get showAgentHarnessSelector() {
 			return showAgentHarnessSelector;
 		},
@@ -5733,6 +5922,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		openShareModal: (sessionId: string) => share.openFor(sessionId),
 		openPath: (target: string | WorkspaceFileLinkTarget) =>
 			options.openPath(target),
+		resolveWorkspaceAsset: options.resolveWorkspaceAsset,
 		captureCurrentScrollAnchor,
 	};
 }

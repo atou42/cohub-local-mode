@@ -28,6 +28,7 @@ export type SessionTurnSegmentRecord = {
 };
 
 export type {
+  HarnessArchiveIndex,
   ContextCompactionMeta,
   ContextCompactionScope,
   ContextCompactionTriggerReason,
@@ -63,6 +64,8 @@ export type SessionPromptInput = {
     model?: string;
     provider?: string;
     thinkingLevel?: string;
+    harness?: "cohub" | "pi" | "codex";
+    runtime?: "cloud" | "local";
     turnId?: string;
   } | null;
 };
@@ -141,6 +144,15 @@ export type SessionUserProfile = {
   avatarUrl: string | null;
 };
 
+export type SessionActiveTurn = {
+  id: string;
+  status: "queued" | "running" | "abort_requested";
+  provider: string | null;
+  model: string | null;
+  startedAt: string | null;
+  anchorUserMessageId: string | null;
+};
+
 export type SessionRecord = {
   id: string;
   spaceId: string;
@@ -151,6 +163,7 @@ export type SessionRecord = {
   title: string | null;
   source: string | null;
   status: string | null;
+  activeTurn?: SessionActiveTurn | null;
   externalSessionId: string | null;
   agentHarness: AgentHarness;
   meta: Record<string, unknown> | null;

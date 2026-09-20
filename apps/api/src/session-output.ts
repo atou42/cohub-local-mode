@@ -19,6 +19,10 @@ import { toRealtimeMessageRecord, toRealtimeTurnRecord } from "./realtime-events
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
+
+const messageTurnId = (message: MessageRecord) =>
+  typeof message.meta?.turnId === "string" && message.meta.turnId ? message.meta.turnId : null;
+
 export const buildSessionOutputsForPersistedMessage = async (input: {
   spaceId: string;
   sessionId: string;
@@ -36,6 +40,7 @@ export const buildSessionOutputsForPersistedMessage = async (input: {
       type: "session.turn.error",
       spaceId: input.spaceId,
       sessionId: input.sessionId,
+      turnId: messageTurnId(input.message),
       anchorUserMessageId: typeof input.message.meta?.anchorUserMessageId === "string"
         ? (input.message.meta.anchorUserMessageId as string)
         : null,
@@ -53,7 +58,7 @@ const shouldClearStreamSnapshotForMessage = (message: MessageRecord) => {
 
 const dispatchSessionOutputToRealtime = async (output: GatewaySessionOutput) => {
   if (output.type === "session.turn.error") {
-    await clearSessionStreamSnapshot({ spaceId: output.spaceId, sessionId: output.sessionId });
+    await clearSessionStreamSnapshot({ spaceId: output.spaceId, sessionId: output.sessionId, turnId: output.turnId ?? null });
     await dispatchRealtimeEvent({
       id: randomUUID(),
       timestamp: Date.now(),
@@ -71,7 +76,7 @@ const dispatchSessionOutputToRealtime = async (output: GatewaySessionOutput) => 
 
   if (output.type !== "session.message.persisted") return;
   if (shouldClearStreamSnapshotForMessage(output.message)) {
-    await clearSessionStreamSnapshot({ spaceId: output.spaceId, sessionId: output.sessionId });
+    await clearSessionStreamSnapshot({ spaceId: output.spaceId, sessionId: output.sessionId, turnId: messageTurnId(output.message) });
   }
   await dispatchRealtimeEvent({
     id: randomUUID(),
@@ -165,7 +170,7 @@ const truncateTurnPreview = (text: string | null | undefined) => {
 };
 
 export const dispatchTurnFinalized = async (input: { spaceId: string; sessionId: string; turn: SessionTurnRecord }) => {
-  await clearSessionStreamSnapshot({ spaceId: input.spaceId, sessionId: input.sessionId });
+  await clearSessionStreamSnapshot({ spaceId: input.spaceId, sessionId: input.sessionId, turnId: input.turn.id });
   const sessionLabelRefs = await listResourceLabelRefs({
     db,
     spaceId: input.spaceId,

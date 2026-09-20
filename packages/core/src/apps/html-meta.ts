@@ -8,9 +8,15 @@ export type HtmlPageMeta = {
   image: string | null;
   /** BCP 47 language tag from <html lang> or og:locale. */
   lang: string | null;
-  /** CSS color from meta theme-color. */
+    /** CSS color from meta theme-color. */
   themeColor: string | null;
+  /** Preferred desktop surface from `<meta name="cohub:surface">`. */
+  surface: AppSurfaceRole | null;
 };
+
+export type AppSurfaceRole = "window" | "overlay";
+
+const SURFACE_ROLES: readonly AppSurfaceRole[] = ["window", "overlay"];
 
 const MAX_HTML_SCAN = 200_000;
 const MAX_FIELD = 500;
@@ -148,8 +154,13 @@ const themeColorValue = (head: string): string | null => {
   return content;
 };
 
+const surfaceValue = (head: string): AppSurfaceRole | null => {
+  const content = metaContent(head, ["cohub:surface"])?.toLowerCase();
+  return SURFACE_ROLES.includes(content as AppSurfaceRole) ? (content as AppSurfaceRole) : null;
+};
+
 /**
- * Extract title / description / icon / image / lang / theme-color from HTML without executing it.
+ * Extract title / description / icon / image / lang / theme-color / surface from HTML without executing it.
  * Prefers document title and standard meta / link tags.
  */
 export function extractHtmlPageMeta(html: string): HtmlPageMeta {
@@ -168,6 +179,7 @@ export function extractHtmlPageMeta(html: string): HtmlPageMeta {
     image: metaContent(head, ["og:image", "twitter:image", "og:image:url"]),
     lang,
     themeColor: themeColorValue(head),
+    surface: surfaceValue(head),
   };
 }
 
@@ -233,7 +245,8 @@ export function emptyHtmlPageMeta(): HtmlPageMeta {
     description: null,
     icon: null,
     image: null,
-    lang: null,
+       lang: null,
     themeColor: null,
+    surface: null,
   };
 }

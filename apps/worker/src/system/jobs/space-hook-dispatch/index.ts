@@ -5,14 +5,17 @@ import {
   invalidateSpaceHooksCache,
   loadSpaceHookDefinitions,
   partitionSpaceHooksForEvent,
-  shouldInvalidateSpaceHooksCache,
   type SpaceHookDispatchResult,
 } from "@cohub/core/hooks";
 import {
   buildSpaceHookExecutePayload,
   buildSpaceHookTaskId,
 } from "@cohub/infra/space-hooks";
-import { SPACE_HOOK_DISPATCH_JOB, type SpaceHookEventEnvelope } from "@cohub/protocol";
+import {
+  SPACE_HOOK_DISPATCH_JOB,
+  shouldRefreshSpaceHooksCache,
+  type SpaceHookEventEnvelope,
+} from "@cohub/protocol";
 import { spaces } from "@cohub/db";
 import { createLogger } from "@cohub/infra/logging";
 import { db } from "../../../db.js";
@@ -81,9 +84,11 @@ registerSystemJob(SPACE_HOOK_DISPATCH_JOB, async (job: Job): Promise<SpaceHookDi
   const { event, eventActorUserId } = parseDispatchEvent(job.data);
   const spaceId = event.spaceId;
 
-  const hookDefinitionsChanged = event.type === "space.fs.changed"
-    && shouldInvalidateSpaceHooksCache(collectChangedPaths(event.payload));
-  if (hookDefinitionsChanged) {
+  const refreshCache = shouldRefreshSpaceHooksCache({
+    type: event.type,
+    paths: collectChangedPaths(event.payload),
+  });
+  if (refreshCache) {
     const invalidated = await invalidateSpaceHooksCache({ spaceId, redis: redisCommandClient });
     if (!invalidated) {
       logger.warn("[SpaceHooks] failed to invalidate definitions cache; forcing disk load", {
@@ -110,7 +115,7 @@ registerSystemJob(SPACE_HOOK_DISPATCH_JOB, async (job: Job): Promise<SpaceHookDi
     spaceId,
     workspaceDir: getSpaceWorkspaceDir(spaceId),
     redis: redisCommandClient,
-    allowCache: !hookDefinitionsChanged,
+    allowCache: !refreshCache,
   });
 
   if (loaded.definitions.length === 0) {

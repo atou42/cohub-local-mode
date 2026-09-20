@@ -37,6 +37,8 @@ export {
   getRealtimeRoomMetaKey,
   getRealtimeRoomRateKey,
   getRealtimeRoomSequenceKey,
+  getSessionStreamSnapshotKey,
+  SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA,
   getSessionTurnPatchStreamKey,
   isRealtimeDomain,
   normalizeRealtimeRooms,

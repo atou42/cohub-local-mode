@@ -20,6 +20,7 @@ import {
 import { onMount } from "svelte";
 import AgentHarnessLogo from "$lib/components/AgentHarnessLogo.svelte";
 import ComposerModelTrigger from "$lib/components/composer/ComposerModelTrigger.svelte";
+import ComposerSelect from "$lib/components/composer/ComposerSelect.svelte";
 import ComposerSubmitButton from "$lib/components/composer/ComposerSubmitButton.svelte";
 import ComposerSurface from "$lib/components/composer/ComposerSurface.svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
@@ -73,6 +74,7 @@ import {
 } from "$lib/mentions/space-trigger";
 import { m } from "$lib/paraglide/messages.js";
 import { sdk } from "$lib/sdk";
+import { authStore } from "$lib/stores/auth.svelte";
 import { registerSpaceOrigin } from "$lib/space-origin";
 import { billingConversion } from "$lib/stores/billing-conversion.svelte";
 import { entriesFromFiles, type LocalUploadEntry } from "$lib/upload-entries";
@@ -81,6 +83,13 @@ type SelectedModel = {
 	provider: string;
 	id: string;
 	name?: string;
+};
+
+type Harness = "cohub" | "pi" | "codex";
+const harnessLabels: Record<Harness, string> = {
+	cohub: "Cohub",
+	pi: "Pi",
+	codex: "Codex",
 };
 
 type Props = {
@@ -97,6 +106,16 @@ type Props = {
 	attachments?: ComposerAttachment[];
 	viewportContexts?: ViewportContext[];
 	currentModel?: SelectedModel | null;
+	harness?: Harness;
+	onharnesschange?: (harness: Harness) => void;
+	harnesses?: Harness[];
+	localRuntime?: boolean;
+	/** Whether the Space's local Runtime is connected; local harnesses are unavailable when false. */
+	runtimeOnline?: boolean;
+	onharnessopen?: () => void;
+	localModels?: SelectedModel[];
+	localModel?: SelectedModel | null;
+	onlocalmodelchange?: (model: SelectedModel | null) => void;
 	/** Compact thinking level suffix; null/empty hides. */
 	thinkingLevelLabel?: string | null;
 	/** Compact service-tier suffix; null/empty hides Standard. */
@@ -143,6 +162,15 @@ let {
 	attachments = [],
 	viewportContexts = [],
 	currentModel = null,
+	harness = "cohub",
+	onharnesschange,
+	harnesses = ["cohub"],
+	localRuntime = false,
+	runtimeOnline = true,
+	onharnessopen,
+	localModels = [],
+	localModel = null,
+	onlocalmodelchange,
 	thinkingLevelLabel = null,
 	serviceTierLabel = null,
 	generationPolicyLabel = null,
@@ -173,6 +201,42 @@ const locale = $derived(getLocale());
 const composerPlaceholder = $derived(
 	placeholder || m.composer_placeholder({}, { locale }),
 );
+
+const harnessOptions = $derived(
+	[...new Set([...harnesses, harness])].map((item) => ({
+		value: item,
+		label: harnessLabels[item],
+		disabled: !harnesses.includes(item),
+	})),
+);
+const harnessTitle = $derived(
+	harness === "cohub"
+		? m.runtime_cloud({}, { locale })
+		: localRuntime && !runtimeOnline
+			? m.runtime_offline({}, { locale })
+			: m.runtime_local({}, { locale }),
+);
+const localModelValue = $derived(
+	localModel ? JSON.stringify([localModel.provider, localModel.id]) : "",
+);
+const localModelOptions = $derived([
+	{ value: "", label: m.runtime_default_model({}, { locale }) },
+	...localModels.map((model) => ({
+		value: JSON.stringify([model.provider, model.id]),
+		label: model.name ?? model.id,
+	})),
+]);
+const localModelTitle = $derived(
+	localModel?.name ?? localModel?.id ?? m.runtime_default_model({}, { locale }),
+);
+
+function selectLocalModel(raw: string) {
+	onlocalmodelchange?.(
+		localModels.find(
+			(model) => JSON.stringify([model.provider, model.id]) === raw,
+		) ?? null,
+	);
+}
 
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let mentionMirrorEl = $state<HTMLDivElement | null>(null);
@@ -426,8 +490,9 @@ const spaceMentionItems = $derived(
 	mergeSpaceMentionSuggestions({
 		local: localSpaceMentionItems,
 		remote: remoteSpaceMentionItems,
+		query: spaceMentionTrigger?.query ?? "",
 		currentSpaceId,
-		limit: 30,
+		limit: 50,
 	}),
 );
 const spaceMentionLoading = $derived(
@@ -929,6 +994,7 @@ function scheduleSpaceMentionSearch(
 	void searchLocalSpaceMentions(q, {
 		signal: spaceMentionLocalController.signal,
 		currentSpaceId,
+		viewerUserUuid: authStore.userUuid,
 	})
 		.then((items) => {
 			if (token !== spaceMentionSearchToken) return;
@@ -948,6 +1014,7 @@ function scheduleSpaceMentionSearch(
 				const items = await searchLocalSpaceMentions(q, {
 					signal,
 					currentSpaceId,
+					viewerUserUuid: authStore.userUuid,
 				});
 				if (token !== spaceMentionSearchToken) return;
 				localSpaceMentionItems = items;
@@ -1595,6 +1662,28 @@ $effect(() => {
 								</div>
 							{/if}
 
+							{#if !showAgentHarness && onharnesschange && mode === "agent" && (localRuntime || harnesses.length > 1 || harness !== "cohub")}
+								<ComposerSelect
+									value={harness}
+									options={harnessOptions}
+									online={localRuntime ? runtimeOnline : undefined}
+									onchange={(next) => onharnesschange?.(next as Harness)}
+									onopen={onharnessopen}
+									disabled={disabled || sending}
+									ariaLabel={m.runtime_harness({}, { locale })}
+									title={harnessTitle}
+								/>
+							{/if}
+							{#if mode === "agent" && harness !== "cohub"}
+								<ComposerSelect
+									value={localModelValue}
+									options={localModelOptions}
+									onchange={selectLocalModel}
+									disabled={disabled || sending || !runtimeOnline}
+									ariaLabel={m.runtime_model({}, { locale })}
+									title={localModelTitle}
+								/>
+							{/if}
 							{#if showAgentHarness && mode === "agent"}
 								<div class="relative shrink-0">
 									<button

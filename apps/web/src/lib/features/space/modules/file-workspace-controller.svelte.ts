@@ -123,7 +123,6 @@ export function createFileWorkspaceController(
 		error: null,
 		requestToken: 0,
 	});
-	let fileActionMenuOpenPath = $state<string | null>(null);
 	let inlineFileCopiedTimer: ReturnType<typeof setTimeout> | null = null;
 	let uploadPaneVisible = $state(false);
 	let uploadPaneTargetDir = $state("");
@@ -218,9 +217,9 @@ export function createFileWorkspaceController(
 		if (!path || !pendingFileSavePaths.has(path)) return false;
 		// While a file is being saved, its change echo must not be treated as an
 		// external edit: direct PVC writes arrive as api-fs, sandbox mutations
-		// arrive as sandbox-inotify (no mutationId) from the sandbox watcher.
+		// arrive as sandbox-watch (no mutationId) from the sandbox watcher.
 		if (source === "api-fs") return kind === "modify";
-		if (source === "sandbox-inotify")
+		if (source === "sandbox-watch")
 			return kind === "modify" || kind === "create";
 		return false;
 	}
@@ -1221,7 +1220,7 @@ export function createFileWorkspaceController(
 			const oldest = ownFileMutationIds.values().next().value;
 			if (oldest) ownFileMutationIds.delete(oldest);
 		}
-		// Sandbox mutations echo through sandbox-inotify without a mutationId, so
+		// Sandbox mutations echo through sandbox-watch without a mutationId, so
 		// also mark the path as a pending save to keep that echo from being read
 		// as an external change.
 		markFileSavePending(path);
@@ -1846,12 +1845,6 @@ export function createFileWorkspaceController(
 		get inlineFileTabs() {
 			return inlineFileTabs;
 		},
-		get fileActionMenuOpenPath() {
-			return fileActionMenuOpenPath;
-		},
-		set fileActionMenuOpenPath(value: string | null) {
-			fileActionMenuOpenPath = value;
-		},
 		get activeInlineFilePath() {
 			return activeInlineFilePath;
 		},
@@ -1883,9 +1876,6 @@ export function createFileWorkspaceController(
 		},
 		get inlineFileIsText() {
 			return filePreviewModel(getActiveInlineFile()?.response).isText;
-		},
-		get inlineFileExt() {
-			return filePreviewModel(getActiveInlineFile()?.response).language;
 		},
 		get inlineFileIsImage() {
 			return filePreviewModel(getActiveInlineFile()?.response).kind === "image";

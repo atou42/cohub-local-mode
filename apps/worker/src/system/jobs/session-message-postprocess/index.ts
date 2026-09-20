@@ -62,6 +62,7 @@ const recordBillingUsage = async (input: {
 };
 
 const recordBilling = async (message: typeof sessionMessages.$inferSelect, userId: string | null, usage: Usage | null) => {
+  if ((message.meta as { runtime?: unknown } | null)?.runtime === "local") return;
   if (!message.errorMessage && message.stopReason !== "error" && message.stopReason !== "aborted") {
     await recordBillingUsage({
       userId,
@@ -87,7 +88,7 @@ const recordBilling = async (message: typeof sessionMessages.$inferSelect, userI
 const maybeQualifyReferral = async (message: typeof sessionMessages.$inferSelect) => {
   const meta = message.meta as Record<string, unknown> | null;
   const turnId = typeof meta?.turnId === "string" ? meta.turnId : null;
-  if (!turnId || meta?.messageKind !== "assistant_final") return;
+  if (!turnId || meta?.messageKind !== "assistant_final" || meta.runtime === "local") return;
 
   // Prefer turn owner; fall back to actor stamped on the assistant message.
   const actorUserId = await resolveActorUserId(message);

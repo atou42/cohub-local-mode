@@ -1,60 +1,13 @@
 import { z } from "zod";
-import type { ContentBlock } from "../core/content.js";
+import { contentBlockSchema } from "../core/content-schema.js";
+import { harnessSchema } from "../runtime/index.js";
 import type { RealtimeCompactFrame, RealtimeEnvelope, RealtimeRoom } from "./types.js";
 import { REALTIME_DOMAINS, REALTIME_ROOM_EVENT_NAME_PATTERN } from "./types.js";
 import { BoardAwarenessClientPayloadSchema } from "./board-awareness.js";
+export { contentBlockSchema } from "../core/content-schema.js";
 export type * from "./types.js";
 
-const contentBlockMetaSchema = z.record(z.string(), z.unknown());
 const realtimeRoomSchema = z.string().regex(/^(space|user|board|room):[^:]+$/);
-
-export const contentBlockSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("text"),
-    text: z.string(),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("thinking"),
-    thinking: z.string(),
-    signature: z.string().optional(),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("image"),
-    source: z.union([
-      z.object({ type: z.literal("url"), url: z.string().url() }),
-      z.object({ type: z.literal("base64"), media_type: z.string(), data: z.string() }),
-    ]),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("shell_command"),
-    command: z.string(),
-    rawText: z.string(),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("tool_use"),
-    id: z.string(),
-    name: z.string(),
-    input: z.record(z.string(), z.unknown()),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("tool_result"),
-    tool_use_id: z.string(),
-    content: z.union([z.string(), z.array(z.unknown())]),
-    is_error: z.boolean().optional(),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("system_note"),
-    note_type: z.enum(["session_created", "forked", "compacted", "info"]),
-    text: z.string(),
-    _meta: contentBlockMetaSchema.optional(),
-  }),
-]) as z.ZodType<ContentBlock>;
 
 export const wsClientEventSchema = z.discriminatedUnion("type", [
   z.object({
@@ -89,6 +42,7 @@ export const wsClientEventSchema = z.discriminatedUnion("type", [
       content: z.array(contentBlockSchema).min(1),
       model: z.string().optional(),
       provider: z.string().optional(),
+      harness: harnessSchema.optional(),
       thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
     }),
   }),

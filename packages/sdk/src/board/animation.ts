@@ -6,7 +6,9 @@ import {
 	BoardTrackSchema,
 	DEFAULT_BOARD_RENDER_LIMITS,
 	estimateBuiltinBoardClipCost,
+	estimateBuiltinBoardEffectCost,
 	validateBuiltinBoardClip,
+	validateBuiltinBoardEffect,
 	type BoardAnimationTarget,
 	type BoardAssetRef,
 	type BoardCapability,
@@ -295,6 +297,19 @@ export class BoardExtensionRegistry {
 		const diagnostics: BoardDiagnostic[] = [];
 		const composition = parsed.data;
 		const cost = { ...ZERO_COST };
+		for (const effect of input.effects ?? []) {
+			diagnostics.push(
+				...validateBuiltinBoardEffect(effect, `effects.${effect.id}`),
+			);
+			if (!this.#extensions.has(`effect:${effect.kind}@${effect.kindVersion}`)) {
+				diagnostics.push({
+					severity: "warning",
+					code: "UNKNOWN_EFFECT",
+					message: `No renderer is registered for ${effect.kind}@${effect.kindVersion}`,
+					path: `effects.${effect.id}`,
+				});
+			}
+		}
 		const events: Array<{ at: number; direction: 1 | -1; cost: BoardRenderCost }> = [];
 		for (const clip of composition.timeline.clips) {
 			const definition = this.#extensions.get(`clip:${clip.kind}@${clip.kindVersion}`);
@@ -320,9 +335,12 @@ export class BoardExtensionRegistry {
 				cost[key] = Math.max(cost[key], active[key]);
 			}
 		}
+		// Effects are resident for the whole board, so their cost adds to the
+		// composition peak rather than competing with it.
 		for (const effect of input.effects ?? []) {
-			if (effect.kind === "effects.pulse" || effect.kind === "effects.float") {
-				cost.drawCalls += 1;
+			const estimate = estimateBuiltinBoardEffectCost(effect);
+			for (const key of Object.keys(cost) as Array<keyof BoardRenderCost>) {
+				cost[key] += estimate[key] ?? 0;
 			}
 		}
 		const limits = input.limits ?? DEFAULT_BOARD_LIMITS;

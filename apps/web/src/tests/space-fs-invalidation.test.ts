@@ -14,7 +14,7 @@ import { reconcileSpaceFsSequence } from "../lib/cache/space-fs-sequence.ts";
 function payload(
 	changes: SpaceFsChangedPayload["changes"],
 ): SpaceFsChangedPayload {
-	return { source: "sandbox-inotify", changes };
+	return { source: "sandbox-watch", changes };
 }
 
 describe("space fs invalidation", () => {
@@ -219,7 +219,7 @@ describe("space fs refresh coordinator", () => {
 describe("space fs sequence", () => {
 	it("drops duplicate and older sandbox batches", () => {
 		const result = reconcileSpaceFsSequence(
-			{ source: "sandbox-inotify", seq: 4, changes: [] },
+			{ source: "sandbox-watch", seq: 4, changes: [] },
 			5,
 		);
 
@@ -230,7 +230,7 @@ describe("space fs sequence", () => {
 	it("turns sequence gaps into authoritative resyncs", () => {
 		const result = reconcileSpaceFsSequence(
 			{
-				source: "sandbox-inotify",
+				source: "sandbox-watch",
 				seq: 8,
 				changes: [{ path: "stale.txt", kind: "create", nodeType: "file" }],
 			},

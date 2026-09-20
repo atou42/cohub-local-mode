@@ -695,7 +695,7 @@ async function connectOnce(registration: SandboxClientRegistration, run: Sandbox
         const typedMessage = message as AgentSandboxMessage | { type: "fs.changed"; payload: { resync: boolean; changes: SpaceFsChangedPayload["changes"]; seq: number } } | { type: "ports.changed"; payload: { resync: boolean; ports: SpacePortsChangedPayload["ports"]; seq: number } };
         if (typedMessage.type === "fs.changed") {
           callHookSafely(registration.spaceId, "onFsChanged", () => registration.hooks?.onFsChanged?.({
-            source: typedMessage.payload.resync && typedMessage.payload.changes.length === 0 ? "sandbox-watch-started" : "sandbox-inotify",
+            source: typedMessage.payload.resync && typedMessage.payload.changes.length === 0 ? "sandbox-watch-started" : "sandbox-watch",
             seq: typedMessage.payload.seq,
             resync: typedMessage.payload.resync,
             changes: typedMessage.payload.changes,

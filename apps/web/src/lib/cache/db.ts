@@ -57,6 +57,7 @@ export type SessionListIndexItem = {
 		latestMessageText: string | null;
 		source: string | null;
 		status: string | null;
+		activeTurn?: SessionRecord["activeTurn"];
 		userProfile?: SessionRecord["userProfile"];
 		participantProfiles?: SessionRecord["participantProfiles"];
 	};

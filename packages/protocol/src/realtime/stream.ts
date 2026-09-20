@@ -9,6 +9,8 @@ export type SessionStreamEvent = {
   baseSeq: number;
   content: ContentBlock[];
   snapshotContent?: ContentBlock[];
+  /** This frame authoritatively replaces all content blocks, including removals. */
+  replaceContent?: boolean;
   messageId?: string | null;
   messageOrdinal?: number | null;
   sourceMessageId: string | null;

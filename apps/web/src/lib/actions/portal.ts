@@ -121,6 +121,9 @@ export function floatNear(
 	}
 
 	const portalLifecycle = portal(node);
+	// Keep the node out of flow from the start: if the anchor is not measurable
+	// yet, an unpositioned portal would sit in document flow and grow the page.
+	node.style.position = "fixed";
 	place();
 	schedule();
 

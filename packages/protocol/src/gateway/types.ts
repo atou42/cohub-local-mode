@@ -69,6 +69,7 @@ export type ChannelHealthReasonCode =
   | "network"
   | "permission"
   | "provider_error"
+  | "rate_limit"
   | "unknown";
 
 export type ChannelHealth = {

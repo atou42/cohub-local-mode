@@ -3,7 +3,7 @@ import { context, trace, type Span } from "@opentelemetry/api";
 import { Redis } from "ioredis";
 import { z } from "zod";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { AGENT_REALTIME_PATCH_CHANNEL, REALTIME_OUTBOUND_CHANNEL, type RealtimeEnvelope, type RealtimeRoom, type SessionStreamError, type SessionStreamEvent, type SessionTurnLifecycleOutput } from "@cohub/protocol/realtime";
+import { AGENT_REALTIME_PATCH_CHANNEL, REALTIME_OUTBOUND_CHANNEL, SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA, getSessionStreamSnapshotKey, type RealtimeEnvelope, type RealtimeRoom, type SessionStreamError, type SessionStreamEvent, type SessionTurnLifecycleOutput } from "@cohub/protocol/realtime";
 import type { SpaceFsChangedPayload } from "@cohub/protocol/fs";
 import type { SpacePortsChangedPayload } from "@cohub/protocol/ports";
 import { injectTrace } from "@cohub/infra/tracing/propagator";
@@ -24,8 +24,6 @@ export const xaddWithMaxlen = async (client: Redis, streamKey: string, ...args: 
 export const getGatewayNodeOutboundStreamKey = (nodeId: string) => `stream:gateway:node:${nodeId}:outbound`;
 
 const SESSION_STREAM_SNAPSHOT_TTL_SECONDS = 60 * 60;
-const getSessionStreamSnapshotKey = (spaceId: string, sessionId: string) =>
-  `session:stream:snapshot:${spaceId}:${sessionId}`;
 
 type SessionStreamSnapshotMessage = {
   messageId: string | null;
@@ -294,12 +292,16 @@ const cacheSessionTurnLifecycleSnapshot = async (event: SessionTurnLifecycleOutp
   await scheduleSessionStreamSnapshotPersist(key, true);
 };
 
-const clearSessionStreamSnapshot = async (spaceId: string, sessionId: string) => {
+const clearSessionStreamSnapshot = async (spaceId: string, sessionId: string, turnId?: string) => {
   const key = getSessionStreamSnapshotKey(spaceId, sessionId);
   const state = sessionStreamSnapshotStates.get(key);
-  if (state) clearSnapshotPersistTimer(state);
-  sessionStreamSnapshotStates.delete(key);
-  await redis.del(key).catch(() => undefined);
+  if (!turnId || state?.snapshot.turnId === turnId) {
+    if (state) clearSnapshotPersistTimer(state);
+    sessionStreamSnapshotStates.delete(key);
+  }
+  if (!turnId) { await redis.del(key); return; }
+  // Old terminal deliveries can arrive after a new turn starts. Compare and delete atomically.
+  await redis.eval(SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA, 1, key, turnId);
 };
 
 export const clearPersistedSessionStreamSnapshot = clearSessionStreamSnapshot;

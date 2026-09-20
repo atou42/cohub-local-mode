@@ -6,6 +6,7 @@ import {
   canViewOwnTaskRunsAccountWide,
   canViewTaskRunViaAccountScope,
   filterSpaceIdsByPermission,
+  hasPermission,
   isTaskRunOwner,
   listAppSessionTaskRunSpaceIds,
 } from "./permissions.js";
@@ -175,5 +176,16 @@ describe("asAccountIdentity", () => {
     assert.equal(asAccountIdentity(undefined), null);
     assert.equal(asAccountIdentity({}), null);
     assert.equal(asAccountIdentity({ uuid: "   " }), null);
+  });
+});
+
+describe("hasPermission account-level", () => {
+  it("denies account-level permissions to preview sessions", async () => {
+    const previewSession = { userUuid: "user-1", spaceId: "space-1", scopes: ["file.view"] };
+    assert.equal(
+      await hasPermission({ uuid: "user-1", previewSession } as never, "space.create", { spaceId: "" }),
+      false,
+    );
+    assert.equal(await hasPermission({ uuid: "user-1" }, "space.create", { spaceId: "" }), true);
   });
 });

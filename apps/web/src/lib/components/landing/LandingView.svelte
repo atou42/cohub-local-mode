@@ -164,7 +164,7 @@ const cliLines = [
 	},
 	{ kind: "ok" as const, text: "App version updated: v2" },
 	{ kind: "gap" as const },
-	{ kind: "command" as const, text: "cohub sandbox status" },
+	{ kind: "command" as const, text: "cohub runtime status" },
 	{ kind: "out" as const, text: "provider: cloud", dim: true },
 	{ kind: "out" as const, text: "status:   running", dim: true },
 	{ kind: "gap" as const },

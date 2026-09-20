@@ -2,6 +2,7 @@
 import { AlertCircle, Check, RefreshCw, Upload, X } from "lucide-svelte";
 import { onDestroy } from "svelte";
 import UploadProgress from "$lib/components/UploadProgress.svelte";
+import { formatBytes } from "$lib/format-bytes";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { uploadSpaceEntries } from "$lib/space-upload";
@@ -57,14 +58,6 @@ let stage = $state<
 const progressPercent = $derived(
 	totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 100,
 );
-
-function formatSize(bytes: number): string {
-	if (bytes === 0) return "0 B";
-	const units = ["B", "KB", "MB", "GB"];
-	const i = Math.floor(Math.log(bytes) / Math.log(1024));
-	const value = bytes / 1024 ** i;
-	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
-}
 
 let lastSignature = $state("");
 let activeBatchId = $state("");
@@ -301,7 +294,7 @@ onDestroy(() => {
     <div class="footer">
       {totalCount === 1
         ? m.upload_file_count_one({ count: totalCount }, { locale })
-        : m.upload_file_count_many({ count: totalCount }, { locale })} · {formatSize(stage === "uploading" ? uploadedBytes : stage === "preparing" ? 0 : totalBytes)} / {formatSize(totalBytes)}{#if queuedBatches.length > 0} · {m.upload_queued({ count: queuedBatches.length }, { locale })}{/if}
+        : m.upload_file_count_many({ count: totalCount }, { locale })} · {formatBytes(stage === "uploading" ? uploadedBytes : stage === "preparing" ? 0 : totalBytes)} / {formatBytes(totalBytes)}{#if queuedBatches.length > 0} · {m.upload_queued({ count: queuedBatches.length }, { locale })}{/if}
     </div>
   </div>
 {/if}

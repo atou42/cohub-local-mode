@@ -9,6 +9,8 @@ type SandboxPodTemplateVariables = {
   ENV?: string;
   SPACE_STORAGE_PVC?: string;
   SPACE_STORAGE_SUBPATH?: string;
+  SPACE_SYSTEM_PVC?: string;
+  SPACE_SYSTEM_SUBPATH?: string;
   CONFIGS_SUBPATH?: string;
   SANDBOX_SPEC_ID?: SandboxSpecId;
 };
@@ -117,6 +119,11 @@ export const SANDBOX_POD_TEMPLATE = {
                 ? "s/${SPACE_ID}"
                 : "dev/s/${SPACE_ID}",
           },
+          {
+            name: "system-storage",
+            mountPath: "/index",
+            subPath: "${SPACE_SYSTEM_SUBPATH}/${SPACE_ID}/index",
+          },
         ],
       },
     ],
@@ -131,6 +138,12 @@ export const SANDBOX_POD_TEMPLATE = {
         name: "public-storage",
         persistentVolumeClaim: {
           claimName: "cohub-sessions-public-pvc",
+        },
+      },
+      {
+        name: "system-storage",
+        persistentVolumeClaim: {
+          claimName: "${SPACE_SYSTEM_PVC}",
         },
       },
     ],

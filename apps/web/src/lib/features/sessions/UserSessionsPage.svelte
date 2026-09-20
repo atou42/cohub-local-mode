@@ -3,6 +3,7 @@ import type {
 	SessionRecord,
 	SpaceRecord,
 	UserSessionListItem,
+	UserSessionSourceKey,
 } from "@neta-art/cohub";
 import { onDestroy, onMount, untrack } from "svelte";
 import { goto } from "$app/navigation";
@@ -26,6 +27,7 @@ import {
 	buildUserSessionRoute,
 	buildUserSessionTurnRoute,
 } from "$lib/space-routes";
+import { createSpaceWorkspaceAssetResolver } from "$lib/space-workspace-assets";
 import { authStore } from "$lib/stores/auth.svelte";
 import {
 	clearLastUserSessionId,
@@ -38,6 +40,10 @@ import {
 	fetchSpaceListWithCache,
 	getCachedSpaceList,
 } from "$lib/stores/space-list-cache";
+import {
+	type ResolveWorkspaceAsset,
+	WorkspaceAssetAccessError,
+} from "$lib/workspace-assets";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 
 const {
@@ -51,7 +57,17 @@ const {
 	};
 } = $props();
 
-const list = createUserSessionListController();
+// Scheduled prompts and channel bots flood the cross-space inbox; default to
+// human web chats so the list opens on real conversations.
+const DEFAULT_SOURCE_KEYS: readonly UserSessionSourceKey[] = ["web"];
+const list = createUserSessionListController({ source: DEFAULT_SOURCE_KEYS });
+
+let sourceFilter = $state<readonly UserSessionSourceKey[]>(DEFAULT_SOURCE_KEYS);
+
+function setSourceFilter(next: UserSessionSourceKey[]) {
+	sourceFilter = next;
+	void list.setSource(next);
+}
 
 /** Mutable space identity for host environment ports (set before syncContext). */
 const spaceBox = { current: "" as string };
@@ -65,6 +81,23 @@ type ConnectionState =
 
 const connectionBox: { current: ConnectionState } = { current: "idle" };
 let hasOpenedOnce = false;
+
+/**
+ * Workspace asset resolver for the cross-space sessions page. The active space
+ * changes with the selected session, so the resolver is rebuilt per space.
+ */
+let workspaceAssetResolverKey = "";
+let workspaceAssetResolver: ResolveWorkspaceAsset | null = null;
+
+function chatWorkspaceAssetResolver(): ResolveWorkspaceAsset {
+	const spaceId = spaceBox.current;
+	if (!spaceId) throw new WorkspaceAssetAccessError();
+	if (spaceId !== workspaceAssetResolverKey) {
+		workspaceAssetResolverKey = spaceId;
+		workspaceAssetResolver = createSpaceWorkspaceAssetResolver(spaceId);
+	}
+	return workspaceAssetResolver as ResolveWorkspaceAsset;
+}
 
 function resolveOpenPathTarget(
 	target: string | WorkspaceFileLinkTarget,
@@ -94,6 +127,8 @@ const sessionChat = createSessionChatHost({
 		);
 		await goto(href);
 	},
+	resolveWorkspaceAsset: (path, options) =>
+		chatWorkspaceAssetResolver()(path, options),
 	router: {
 		toSession: async (sessionId, opts) => {
 			// Mobile chats open in the space workspace; desktop stays on /sessions/:id.
@@ -599,6 +634,8 @@ onDestroy(() => {
 		>
 			<UserSessionsList
 				sessions={list.sessions}
+				{sourceFilter}
+				onSourceFilterChange={setSourceFilter}
 				activeSessionId={isDesktop ? (routeIsNew ? null : routeSessionId) : null}
 				loading={list.loading}
 				loadingMore={list.loadingMore}

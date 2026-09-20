@@ -15,7 +15,7 @@ import {
   type Usage as PiUsage,
 } from "@earendil-works/pi-ai";
 import type { ImageToTextConfig } from "@cohub/infra/config-runtime/model-tasks";
-import type { CompletionModelRegistry, RuntimeLlmModel } from "./models.js";
+import type { CompletionModelRegistry, RuntimeLlmModel } from "./completion-registry.js";
 import { contentBlockToPiImage, restoreRemoteImageUrls } from "./image-content.js";
 import { prepareCompletionImagesForModel, type ImageToTextCall } from "./image-to-text.js";
 import { createModelsFromRegistry, streamSimpleWithModels } from "./pi-models-adapter.js";

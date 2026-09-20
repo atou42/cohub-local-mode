@@ -5,6 +5,7 @@ import { registerBoardExampleCommands } from "./boards/examples.js";
 import { registerBoardBatchCommand } from "./boards/batch.js";
 import { registerBoardConnectionCommands } from "./boards/connections.js";
 import { registerBoardItemCommands } from "./boards/items.js";
+import { registerBoardTransactionCommands } from "./boards/transactions.js";
 
 export function registerBoardDomainCommands(boards: Command): void {
   registerBoardExampleCommands(boards);
@@ -13,4 +14,5 @@ export function registerBoardDomainCommands(boards: Command): void {
   registerBoardConnectionCommands(boards);
   registerBoardItemCommands(boards);
   registerBoardAnimationCommands(boards);
+  registerBoardTransactionCommands(boards);
 }

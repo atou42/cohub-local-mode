@@ -395,35 +395,38 @@ export function buildTurnTimelineItems(input: {
 	if (hasStreamingState && !streamingProcessInserted) {
 		const fallbackTurn = input.turns.at(-1);
 		const sessionId = input.streaming?.sessionId ?? input.sessionId ?? "active";
-		const turn = fallbackTurn
-			? { ...fallbackTurn, status: "running" as const }
-			: ({
-					id: input.streaming?.turnId ?? `streaming:${sessionId}`,
-					sessionId,
-					userUuid: null,
-					sequence: Math.max(1, Math.floor(fallbackSequence / 10)),
-					status: "running",
-					intent: "steer",
-					userContent: [],
-					userText: null,
-					assistantContent: null,
-					assistantText: null,
-					provider: null,
-					model: null,
-					stopReason: null,
-					errorMessage: null,
-					finalUsage: null,
-					totalUsage: null,
-					summary: null,
-					intermediateIndex: null,
-					intermediateSummary: null,
-					meta: null,
-					startedAt: null,
-					completedAt: null,
-					durationMs: null,
-					createdAt: renderCreatedAt,
-					updatedAt: renderCreatedAt,
-				} satisfies SessionTurnRecord);
+		// A queued follow-up is never the streaming turn; never clone it as
+		// running just because the live turn record is not loaded yet.
+		const turn =
+			fallbackTurn && !isQueuedFollowupTurn(fallbackTurn)
+				? { ...fallbackTurn, status: "running" as const }
+				: ({
+						id: input.streaming?.turnId ?? `streaming:${sessionId}`,
+						sessionId,
+						userUuid: null,
+						sequence: Math.max(1, Math.floor(fallbackSequence / 10)),
+						status: "running",
+						intent: "steer",
+						userContent: [],
+						userText: null,
+						assistantContent: null,
+						assistantText: null,
+						provider: null,
+						model: null,
+						stopReason: null,
+						errorMessage: null,
+						finalUsage: null,
+						totalUsage: null,
+						summary: null,
+						intermediateIndex: null,
+						intermediateSummary: null,
+						meta: null,
+						startedAt: null,
+						completedAt: null,
+						durationMs: null,
+						createdAt: renderCreatedAt,
+						updatedAt: renderCreatedAt,
+					} satisfies SessionTurnRecord);
 		const processIntermediateMessages =
 			input.streaming?.intermediateMessages ?? [];
 		if (processIntermediateMessages.length > 0) {

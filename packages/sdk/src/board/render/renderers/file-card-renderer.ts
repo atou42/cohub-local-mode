@@ -1,4 +1,7 @@
-import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
+import {
+	BOARD_FONT_STACK,
+	BOARD_MONO_FONT_STACK,
+} from "@cohub/protocol/board-constants";
 import {
 	CanvasTextMetrics,
 	Container,
@@ -9,7 +12,13 @@ import {
 } from "pixi.js";
 import { syncTextResolution } from "../text-resolution.js";
 import type { BoardFileItem, BoardItem } from "@cohub/protocol/board-document";
-import { fileBaseName, filePreviewKind } from "../../core/file-preview.js";
+import {
+	fileCategory,
+	fileCategoryAccent,
+	filePreviewKind,
+	fileStem,
+	fileTypeLabel,
+} from "../../core/file-preview.js";
 import { positionShell } from "./base-card-renderer.js";
 import type {
 	BoardCardRenderer,
@@ -44,8 +53,10 @@ const TITLE_LINE = TITLE_SIZE * 1.35;
 const TITLE_MAX_LINES = 2;
 const EXCERPT_SIZE = 11;
 const EXCERPT_LINE = EXCERPT_SIZE * 1.45;
-const EXCERPT_MAX_LINES = 4;
+const EXCERPT_MAX_LINES = 3;
+const TYPE_MARK_SIZE = 28;
 const GAP = 4;
+const STRIPE = 2;
 
 /** Zoom below which the title is dropped (glyphs are sub-pixel). */
 const LOD_TITLE_ZOOM = 0.35;
@@ -63,6 +74,7 @@ type FileParts = {
 	clip: Graphics;
 	cover: Sprite;
 	coverMask: Graphics;
+	typeMark: Text;
 	title: Text;
 	excerpt: Text;
 	visualSig: string;
@@ -70,6 +82,7 @@ type FileParts = {
 	/** Per-text resolution state: each Text owns its own rasterisation bucket. */
 	titleRes: { resolution: number };
 	excerptRes: { resolution: number };
+	typeMarkRes: { resolution: number };
 };
 
 const partsByContainer = new WeakMap<Container, FileParts>();
@@ -255,9 +268,13 @@ function sync(
 	const coverFailed = Boolean(key && !texture && context.hasError(key));
 	const fileState = context.fileState(item.ref.path);
 	const band = coverHeight(item, height);
+	const kind = filePreviewKind(item.snapshot);
+	const category = fileCategory(item.ref.path, item.snapshot?.mimeType);
+	const accent = fileCategoryAccent(category, context.palette);
 
 	syncTextResolution(parts.title, parts.titleRes, context.zoom);
 	syncTextResolution(parts.excerpt, parts.excerptRes, context.zoom);
+	syncTextResolution(parts.typeMark, parts.typeMarkRes, context.zoom);
 
 	// The cache key is part of the signature so a pooled container adopted by a
 	// different file always re-renders, even at an identical frame size.
@@ -271,9 +288,12 @@ function sync(
 		texture ? `${texture.width}x${texture.height}` : "none",
 		coverFailed,
 		fileState,
+		kind,
+		category,
 		context.colorScheme,
 		context.palette.surface,
 		context.palette.hover,
+		accent,
 	].join("|");
 
 	if (visualSig !== parts.visualSig) {
@@ -342,28 +362,37 @@ function sync(
 		// that survives even when the text tiers are dropped.
 		if (!band) {
 			parts.plate
-				.rect(1, 1, 2, height - 2)
-				.fill({ color: context.palette.muted, alpha: 0.35 });
+				.rect(1, 1, STRIPE, height - 2)
+				.fill({ color: accent, alpha: 0.55 });
 		}
 
 		parts.title.visible = detail !== "plate";
 		parts.excerpt.visible = detail === "full";
+		parts.typeMark.visible = kind === "blank" && detail !== "plate";
 	}
 
-	if (detail === "plate") return;
+	if (detail === "plate") {
+		parts.typeMark.visible = false;
+		return;
+	}
 
-	const title = item.snapshot?.title || fileBaseName(item.ref.path);
+	const title = item.snapshot?.title || fileStem(item.ref.path);
 	const excerpt = item.snapshot?.excerpt ?? "";
+	const mark = fileTypeLabel(item.ref.path);
 	const innerWidth = Math.max(1, width - PADDING * 2);
+	const showTypeMark = kind === "blank";
 	const textSig = [
 		title,
 		excerpt,
+		mark,
 		detail,
 		innerWidth,
 		band,
 		height,
+		kind,
 		context.palette.text,
 		context.palette.muted,
+		accent,
 	].join("|");
 	if (textSig === parts.textSig) return;
 	parts.textSig = textSig;
@@ -371,11 +400,28 @@ function sync(
 	const top = band > 0 ? band + PADDING * 0.8 : PADDING;
 	const contentBottom = height - PADDING;
 
-	const titleRoom = Math.max(0, contentBottom - top);
+	let cursor = top;
+	if (showTypeMark) {
+		const markSize = Math.max(
+			18,
+			Math.min(TYPE_MARK_SIZE, Math.round(height * 0.22)),
+		);
+		parts.typeMark.style.fill = accent;
+		parts.typeMark.style.fontSize = markSize;
+		parts.typeMark.style.lineHeight = markSize * 1.1;
+		if (parts.typeMark.text !== mark) parts.typeMark.text = mark;
+		parts.typeMark.position.set(PADDING, cursor);
+		parts.typeMark.visible = true;
+		cursor += parts.typeMark.height + GAP;
+	} else {
+		parts.typeMark.visible = false;
+	}
+
+	const titleRoom = Math.max(0, contentBottom - cursor);
 	const titleLines = linesInRoom(titleRoom, TITLE_LINE, TITLE_MAX_LINES);
 	parts.title.style.fill = context.palette.text;
 	fitTextToLines(parts.title, title, titleLines, innerWidth);
-	parts.title.position.set(PADDING, top);
+	parts.title.position.set(PADDING, cursor);
 	parts.title.visible = titleLines > 0;
 
 	if (detail !== "full") {
@@ -383,7 +429,8 @@ function sync(
 		return;
 	}
 
-	const excerptTop = top + (titleLines > 0 ? parts.title.height + GAP : 0);
+	const excerptTop =
+		cursor + (titleLines > 0 ? parts.title.height + GAP : 0);
 	const excerptRoom = contentBottom - excerptTop;
 	const excerptLines = linesInRoom(excerptRoom, EXCERPT_LINE, EXCERPT_MAX_LINES);
 	const showExcerpt = Boolean(excerpt) && excerptLines > 0;
@@ -436,9 +483,21 @@ export const fileCardRenderer: BoardCardRenderer = {
 			resolution,
 			roundPixels: true,
 		});
+		const typeMark = new Text({
+			text: "",
+			style: {
+				fill: context.palette.muted,
+				fontFamily: BOARD_MONO_FONT_STACK,
+				fontSize: TYPE_MARK_SIZE,
+				fontWeight: "700",
+				lineHeight: TYPE_MARK_SIZE * 1.1,
+			},
+			resolution,
+			roundPixels: true,
+		});
 		// Clip applies to body only so the plate stroke is not half-cut by the mask.
 		body.mask = clip;
-		body.addChild(cover, coverMask, title, excerpt);
+		body.addChild(cover, coverMask, typeMark, title, excerpt);
 		root.addChild(plate, body, clip);
 		partsByContainer.set(root, {
 			root,
@@ -447,12 +506,14 @@ export const fileCardRenderer: BoardCardRenderer = {
 			clip,
 			cover,
 			coverMask,
+			typeMark,
 			title,
 			excerpt,
 			visualSig: "",
 			textSig: "",
 			titleRes: { resolution },
 			excerptRes: { resolution },
+			typeMarkRes: { resolution },
 		});
 		if (item.type === "file") sync(root, item, context);
 		return root;
@@ -465,11 +526,15 @@ export const fileCardRenderer: BoardCardRenderer = {
 	 * would mean one draw call per distinct image and defeat the batch.
 	 */
 	renderFar: (graphics, item, context) => {
+		const category = fileCategory(
+			item.type === "file" ? item.ref.path : "",
+			item.type === "file" ? item.snapshot?.mimeType : undefined,
+		);
 		drawFarPlate(graphics, item.frame, {
 			fill: context.palette.surface,
 			fillAlpha: 0.96,
-			accent: context.palette.muted,
-			accentAlpha: 0.4,
+			accent: fileCategoryAccent(category, context.palette),
+			accentAlpha: 0.45,
 		});
 	},
 	destroy: (container) => {

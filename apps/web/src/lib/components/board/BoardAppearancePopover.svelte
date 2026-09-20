@@ -45,7 +45,7 @@ const imageStatus = $derived.by(() => {
 const imageError = $derived(
 	validationError ??
 		(imageStatus === "error"
-			? "{m.board_image_load_failed({}, { locale })}"
+			? m.board_image_load_failed({}, { locale })
 			: null),
 );
 
@@ -94,10 +94,22 @@ function patchImageOptions(
 	patchBackground({ ...current, ...patch }, commit);
 }
 
+function setEnterMotion(kind: "effects.deal" | "", commit = true) {
+	const appearance = patchBoardAppearance(editor.appearance, {
+		motion: kind ? { enter: { kind, kindVersion: 1, params: {} } } : undefined,
+	});
+	if (commit) editor.setAppearance(appearance);
+	else editor.previewAppearance(appearance);
+}
+
 function reset() {
 	imageUrl = "";
 	validationError = null;
-	patchBackground({ kind: "solid" });
+	const appearance = patchBoardAppearance(editor.appearance, {
+		background: { kind: "solid" },
+		motion: undefined,
+	});
+	editor.setAppearance(appearance);
 }
 </script>
 
@@ -144,15 +156,40 @@ function reset() {
 			{/if}
 			{#if editor.appearance.background.kind === "image" && editor.appearance.background.imageUrl}
 				<div class="image-options">
-					<label>{m.board_fit({}, { locale })} <select value={editor.appearance.background.fit ?? "cover"} onchange={(event) => patchImageOptions({ fit: event.currentTarget.value as "cover" | "contain" | "repeat" })}><option value="cover">{m.board_cover({}, { locale })}</option><option value="contain">{m.board_contain({}, { locale })}</option><option value="repeat">{m.board_repeat({}, { locale })}</option></select></label>
-					<label>{m.board_position({}, { locale })} <select value={editor.appearance.background.position ?? "center"} onchange={(event) => patchImageOptions({ position: event.currentTarget.value as "center" | "top" | "bottom" | "left" | "right" })}><option value="center">{m.board_pos_center({}, { locale })}</option><option value="top">{m.board_pos_top({}, { locale })}</option><option value="bottom">{m.board_pos_bottom({}, { locale })}</option><option value="left">{m.board_pos_left({}, { locale })}</option><option value="right">{m.board_pos_right({}, { locale })}</option></select></label>
-					<label>{m.board_opacity({}, { locale })} <input type="range" min="0.1" max="1" step="0.05" value={editor.appearance.background.opacity ?? 1} oninput={(event) => patchImageOptions({ opacity: Number(event.currentTarget.value) }, false)} onchange={(event) => patchImageOptions({ opacity: Number(event.currentTarget.value) })} /></label>
+					<div class="option-row">
+						<label for="board-image-fit">{m.board_fit({}, { locale })}</label>
+						<select id="board-image-fit" value={editor.appearance.background.fit ?? "cover"} onchange={(event) => patchImageOptions({ fit: event.currentTarget.value as "cover" | "contain" | "repeat" })}><option value="cover">{m.board_cover({}, { locale })}</option><option value="contain">{m.board_contain({}, { locale })}</option><option value="repeat">{m.board_repeat({}, { locale })}</option></select>
+					</div>
+					<div class="option-row">
+						<label for="board-image-position">{m.board_position({}, { locale })}</label>
+						<select id="board-image-position" value={editor.appearance.background.position ?? "center"} onchange={(event) => patchImageOptions({ position: event.currentTarget.value as "center" | "top" | "bottom" | "left" | "right" })}><option value="center">{m.board_pos_center({}, { locale })}</option><option value="top">{m.board_pos_top({}, { locale })}</option><option value="bottom">{m.board_pos_bottom({}, { locale })}</option><option value="left">{m.board_pos_left({}, { locale })}</option><option value="right">{m.board_pos_right({}, { locale })}</option></select>
+					</div>
+					<div class="option-row">
+						<label for="board-image-opacity">{m.board_opacity({}, { locale })}</label>
+						<input id="board-image-opacity" type="range" min="0.1" max="1" step="0.05" value={editor.appearance.background.opacity ?? 1} oninput={(event) => patchImageOptions({ opacity: Number(event.currentTarget.value) }, false)} onchange={(event) => patchImageOptions({ opacity: Number(event.currentTarget.value) })} />
+					</div>
 				</div>
 			{/if}
 		</div>
 	{/if}
 
+	<div class="motion-section">
+		<label class="field-label" for="board-enter-motion">{m.board_motion_enter({}, { locale })}</label>
+		<select
+			id="board-enter-motion"
+			value={editor.appearance.motion?.enter?.kind ?? ""}
+			onchange={(event) => setEnterMotion(event.currentTarget.value as "effects.deal" | "")}
+		>
+			<option value="">{m.board_motion_none({}, { locale })}</option>
+			<option value="effects.deal">{m.board_motion_deal({}, { locale })}</option>
+		</select>
+		<p class="section-hint">{m.board_motion_hint({}, { locale })}</p>
+	</div>
+
 	<div class="appearance-footer">
+		{#if editor.saving}
+			<span class="save-status" role="status">{m.common_saving({}, { locale })}</span>
+		{/if}
 		<button type="button" class="reset-button" onclick={reset}><RotateCcw class="h-3.5 w-3.5" /> {m.common_reset({}, { locale })}</button>
 	</div>
 </div>
@@ -182,11 +219,16 @@ function reset() {
 	.error, .loading { margin: 7px 0 0; font-size: 11px; line-height: 1.35; }
 	.error { color: var(--error-700); }
 	.loading { color: var(--text-tertiary); }
+	.motion-section { display: grid; gap: 5px; margin: 12px 2px 4px; padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+	.motion-section select { height: 30px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); padding: 0 7px; color: var(--text-primary); font-size: 12px; }
+	.section-hint { margin: 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.35; }
 	.image-options { display: grid; gap: 8px; margin-top: 12px; }
-	.image-options label { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 11px; }
+	.option-row { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; }
+	.option-row label { color: var(--text-tertiary); font-size: 11px; }
 	.image-options select { height: 30px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); padding: 0 7px; color: var(--text-primary); }
 	.image-options input[type="range"] { width: 100%; accent-color: var(--brand); }
 	.appearance-footer { justify-content: flex-end; margin-top: 8px; border-top: 1px solid var(--border-subtle); padding-top: 8px; }
+	.save-status { margin-right: auto; color: var(--text-tertiary); font-size: 11px; }
 	.reset-button { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: var(--text-tertiary); font-size: 11px; }
 	@media (pointer: coarse) { .appearance-popover { padding: 12px; } .icon-button, .reset-button, .mode-tabs button, .apply-button { min-height: 40px; } .swatch { width: 34px; height: 34px; } .url-row input { height: 40px; } }
 </style>

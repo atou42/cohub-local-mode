@@ -27,6 +27,7 @@ import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { m } from "$lib/paraglide/messages.js";
 import { uiState } from "$lib/stores/ui.svelte";
 import SpacePresenceStack from "./SpacePresenceStack.svelte";
+import SpaceRuntimeStatus from "./SpaceRuntimeStatus.svelte";
 
 type HeaderRouteView =
 	| "space"
@@ -164,6 +165,7 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 </script>
 
 {#snippet HeaderActions()}
+	<SpaceRuntimeStatus spaceId={context.spaceId} canManage={context.space?.access?.permissions.includes("sandbox.manage") === true} />
 	{#if context.nativeActivityEnabled && context.activeSessionId}
 		<button
 			type="button"
@@ -179,7 +181,6 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 			</span>
 		</button>
 	{/if}
-
 	{#if context.activeSessionId && context.canManageSessionAccess}
 		<button
 			type="button"

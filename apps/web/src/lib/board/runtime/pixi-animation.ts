@@ -40,7 +40,17 @@ import {
 	samplePathPose,
 	timelinePosition,
 } from "$lib/board/runtime/animation-core";
-import type { BoardRuntimeData } from "$lib/board/runtime/board-runtime";
+import {
+	type BoardRuntimeData,
+	diffBoardRuntimeData,
+} from "$lib/board/runtime/board-runtime";
+import {
+	type EntranceMotionParams,
+	entranceLandingAlpha,
+	entrancePose,
+	entranceProgress,
+	entranceTotalMs,
+} from "$lib/board/runtime/entrance-motion";
 
 type BasePose = {
 	x: number;
@@ -362,6 +372,7 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 		boardId: "",
 		effects: [],
 		compositions: [],
+		enter: null,
 		playback: null,
 		playbackPolicy: null,
 	};
@@ -374,6 +385,10 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 	>();
 	let targetIdsByComposition = new Map<string, Set<string>>();
 	let activeEffects: BoardRuntimeData["effects"] = [];
+	let enterEffectsByItem = new Map<
+		string,
+		BoardRuntimeData["effects"][number]
+	>();
 
 	const compositionKey = (
 		composition: Pick<BoardComposition, "id" | "revision">,
@@ -408,7 +423,17 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 			);
 		}
 		activeEffects = next.effects.filter(
-			(effect) => effect.enabled && effect.lifecycle !== "manual",
+			(effect) =>
+				effect.enabled &&
+				effect.lifecycle !== "manual" &&
+				effect.lifecycle !== "on-enter",
+		);
+		enterEffectsByItem = new Map(
+			next.effects.flatMap((effect) =>
+				effect.lifecycle === "on-enter" && effect.target.type === "item"
+					? [[effect.target.itemId, effect] as const]
+					: [],
+			),
 		);
 	}
 	const cameraFocusTargetCache = new Map<
@@ -431,6 +456,11 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 	const particleResources = new Map<string, ParticleResource>();
 	const trailResources = new Map<string, TrailResource>();
 	const revealResources = new Map<string, RevealResource>();
+	const landingStrokes = new Map<string, Graphics>();
+	const enterings = new Map<
+		string,
+		{ startedAt: number; params: EntranceMotionParams; seed: string }
+	>();
 	let worldPose: BasePose | null = null;
 	let frameId = 0;
 	let sharedPlayback: BoardPlaybackSnapshot | null = null;
@@ -498,6 +528,8 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 		particleResources.clear();
 		trailResources.clear();
 		revealResources.clear();
+		for (const graphics of landingStrokes.values()) graphics.destroy();
+		landingStrokes.clear();
 	}
 
 	function poseFor(poses: Map<string, AnimationPose>, nodeId: string) {
@@ -509,6 +541,43 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 		return pose;
 	}
 
+	function enterMotionFor(itemId: string) {
+		const effect = enterEffectsByItem.get(itemId);
+		if (effect) {
+			// A node-level on-enter effect always wins, including when disabled:
+			// `enabled: false` is how a single node opts out of the Board default.
+			if (!effect.enabled) return null;
+			return effect.kind === "effects.deal" && effect.kindVersion === 1
+				? {
+						kind: effect.kind,
+						params: effect.params as EntranceMotionParams,
+						seed: effect.seed,
+					}
+				: null;
+		}
+		if (data.enter?.kind !== "effects.deal" || data.enter.kindVersion !== 1)
+			return null;
+		return {
+			kind: data.enter.kind,
+			params: data.enter.params as EntranceMotionParams,
+			seed: `${data.enter.kind}:${itemId}`,
+		};
+	}
+
+	function activateEnteringItems(ids: readonly string[], startedAt: number) {
+		let changed = false;
+		for (const id of ids) {
+			const spec = enterMotionFor(id);
+			if (spec?.kind !== "effects.deal") continue;
+			if (enterings.has(id)) continue;
+			enterings.set(id, { startedAt, ...spec });
+			changed = true;
+		}
+		if (!changed) return;
+		materializationVersion += 1;
+		start();
+	}
+
 	function applyEffect(
 		effect: BoardEffectInput & { revision: number },
 		now: number,
@@ -517,6 +586,7 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 		if (
 			!effect.enabled ||
 			effect.lifecycle === "manual" ||
+			effect.lifecycle === "on-enter" ||
 			effect.target.type !== "item"
 		)
 			return false;
@@ -1017,6 +1087,8 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 			}
 		}
 
+		const hasEntrance = applyEntrances(now, poses, layers);
+
 		for (const [nodeId, pose] of poses) {
 			const entry = nodeWithBase(nodeId);
 			if (entry) applyPose(entry.container, entry.base, pose);
@@ -1032,12 +1104,85 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 			!ended &&
 			!sample?.waiting;
 		return (
+			hasEntrance ||
 			hasContinuousEffect ||
 			Boolean(
 				playbackActive &&
 					(hasSupportedClip || (sequence?.timeline.tracks.length ?? 0) > 0),
 			)
 		);
+	}
+
+	function applyEntrances(
+		now: number,
+		poses: Map<string, AnimationPose>,
+		layers: { front: Container },
+	): boolean {
+		if (enterings.size === 0) return false;
+		let activeEntrance = false;
+		for (const [id, entering] of enterings) {
+			const elapsed = now - entering.startedAt;
+			if (elapsed > entranceTotalMs(reducedMotion, entering.params)) {
+				enterings.delete(id);
+				syncLandingStroke(id, 0, layers.front);
+				continue;
+			}
+			activeEntrance = true;
+			const progress = entranceProgress(
+				elapsed,
+				reducedMotion,
+				entering.params,
+			);
+			if (progress < 1) {
+				composePose(
+					poseFor(poses, id),
+					entrancePose(
+						`${entering.seed}:${id}`,
+						progress,
+						reducedMotion,
+						entering.params,
+					),
+				);
+				continue;
+			}
+			// Landing highlight only starts once the node has settled.
+			syncLandingStroke(
+				id,
+				entranceLandingAlpha(elapsed, reducedMotion, entering.params),
+				layers.front,
+			);
+		}
+		return activeEntrance;
+	}
+
+	function syncLandingStroke(id: string, alpha: number, layer: Container) {
+		const entry = options.getNode(id);
+		if (!entry || alpha <= 0) {
+			const existing = landingStrokes.get(id);
+			if (existing) {
+				existing.destroy();
+				landingStrokes.delete(id);
+			}
+			return;
+		}
+		let graphics = landingStrokes.get(id);
+		if (!graphics) {
+			graphics = new Graphics();
+			layer.addChild(graphics);
+			landingStrokes.set(id, graphics);
+		}
+		const frame = entry.item.frame;
+		graphics.clear();
+		graphics.roundRect(frame.x, frame.y, frame.width, frame.height, 4).stroke({
+			color: options.getAccentColor(),
+			width: 2,
+			alpha,
+		});
+	}
+
+	function setEnteringItems(ids: readonly string[]) {
+		if (ids.length === 0 || ids.length > 12) return;
+		activateEnteringItems(ids, Date.now());
 	}
 
 	function tick() {
@@ -1124,20 +1269,31 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 	}
 
 	function setData(next: BoardRuntimeData) {
-		if (next.compositions !== data.compositions) {
+		const diff = diffBoardRuntimeData(data, next);
+		if (
+			!diff.compositions &&
+			!diff.effects &&
+			!diff.playback &&
+			!diff.playbackPolicy &&
+			!diff.board &&
+			!diff.enter
+		)
+			return;
+
+		if (diff.compositions) {
 			clearResources();
 			cameraFocusBySequence = prepareCameraFocusClips(next.compositions);
 			cameraFocusTargetCache.clear();
 		}
-		if (
-			next.compositions !== data.compositions ||
-			next.effects !== data.effects
-		) {
+		if (diff.compositions || diff.effects) {
 			rebuildRuntimeIndexes(next);
+			// Only the materialization index depends on these; `enter` is resolved
+			// per node at activation time, so it never invalidates the cache.
+			materializationVersion += 1;
 		}
 		data = next;
-		materializationVersion += 1;
-		syncPlayback();
+		if (diff.compositions || diff.playback || diff.playbackPolicy || diff.board)
+			syncPlayback();
 		start();
 	}
 
@@ -1205,6 +1361,7 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 			) ?? [])
 				ids.add(itemId);
 		}
+		for (const id of enterings.keys()) ids.add(id);
 
 		materializationCache = ids;
 		materializationCacheVersion = materializationVersion;
@@ -1221,7 +1378,13 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 		worldPose = null;
 		// Scene sync may materialize the first target after the runtime's initial
 		// frame has stopped. Resume only when there is animation data to evaluate.
-		if (data.effects.length > 0 || data.playback || autoplayPlayback) start();
+		if (
+			data.effects.length > 0 ||
+			data.playback ||
+			autoplayPlayback ||
+			enterings.size > 0
+		)
+			start();
 	}
 
 	function visibilityChanged() {
@@ -1243,6 +1406,7 @@ export function createBoardAnimationRuntime(options: RuntimeOptions) {
 	return {
 		setData,
 		setActive,
+		setEnteringItems,
 		start,
 		nodeIdsToMaterialize,
 		prepareSceneSync,

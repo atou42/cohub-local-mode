@@ -81,14 +81,16 @@ export const buildTurnObjectPrefix = (input: {
 }) =>
   `${envObjectKeyPrefix()}spaces/${input.spaceId}/sessions/${input.sessionId}/turns/${input.turnId}/`;
 
-export const writeTurnObjectJson = async (
-  objectKey: string,
-  value: unknown,
-) => {
+export type PreparedTurnObject = { content: string; sha256: string; sizeBytes: number };
+
+/** Serialize once so callers can address an object by its digest without hashing the payload twice. */
+export const prepareTurnObjectJson = (value: unknown): PreparedTurnObject => {
   const content = `${JSON.stringify(value)}\n`;
+  return { content, sha256: createHash("sha256").update(content).digest("hex"), sizeBytes: Buffer.byteLength(content, "utf8") };
+};
+
+export const writeTurnObjectContent = async (objectKey: string, prepared: PreparedTurnObject) => {
   const safeKey = sanitizeTurnObjectKey(objectKey);
-  const sha256 = createHash("sha256").update(content).digest("hex");
-  const sizeBytes = Buffer.byteLength(content, "utf8");
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= env.TURN_OBJECT_S3_MAX_ATTEMPTS; attempt++) {
@@ -98,18 +100,15 @@ export const writeTurnObjectJson = async (
       env.TURN_OBJECT_S3_TIMEOUT_MS,
     );
     try {
-      await getS3Client().send(
-        new PutObjectCommand({
-          Bucket: env.TURN_OBJECT_S3_BUCKET,
-          Key: safeKey,
-          Body: content,
-          ContentType: "application/json; charset=utf-8",
-          CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
-          Metadata: { sha256 },
-        }),
-        { abortSignal: abortController.signal },
-      );
-      return { sizeBytes, sha256 };
+      await getS3Client().send(new PutObjectCommand({
+        Bucket: env.TURN_OBJECT_S3_BUCKET,
+        Key: safeKey,
+        Body: prepared.content,
+        ContentType: "application/json; charset=utf-8",
+        CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        Metadata: { sha256: prepared.sha256 },
+      }), { abortSignal: abortController.signal });
+      return { sizeBytes: prepared.sizeBytes, sha256: prepared.sha256 };
     } catch (error) {
       lastError = error;
       if (
@@ -125,3 +124,6 @@ export const writeTurnObjectJson = async (
 
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 };
+
+export const writeTurnObjectJson = (objectKey: string, value: unknown) =>
+  writeTurnObjectContent(objectKey, prepareTurnObjectJson(value));

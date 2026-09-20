@@ -69,9 +69,12 @@ type WindowManagerOptions = {
 	syncUrl: (ref: WindowRef | null, replace?: boolean) => void;
 	onBudgetCleanup?: () => void;
 	weightLimit?: number;
+	/** App tabs kept mounted in the background; the rest stay as data-only tabs. */
+	appKeepAliveLimit?: number;
 };
 
 const DEFAULT_WEIGHT_LIMIT = 16;
+const DEFAULT_APP_KEEP_ALIVE_LIMIT = 3;
 
 function asFileResponse(response: unknown): {
 	kind?: string;
@@ -112,6 +115,8 @@ export function createWindowManager(options: WindowManagerOptions) {
 	/** Compact session navigation hides surfaces without disposing their state. */
 	let suspended = $state(false);
 	const weightLimit = options.weightLimit ?? DEFAULT_WEIGHT_LIMIT;
+	const appKeepAliveLimit =
+		options.appKeepAliveLimit ?? DEFAULT_APP_KEEP_ALIVE_LIMIT;
 	/** Set while closes are already accounted for here — a close this controller
 	 * drives, or a context teardown. Domain "tab closed" reports are then ignored,
 	 * so tearing down an old context cannot write over the URL of the new one. */
@@ -145,6 +150,32 @@ export function createWindowManager(options: WindowManagerOptions) {
 
 	function lastAccessed(ref: WindowRef) {
 		return accessedAt[tabId(ref.kind, ref.key)] ?? 0;
+	}
+
+	/**
+	 * App tabs whose surface should stay mounted while they are inactive. The
+	 * active App is always kept (an empty stage is worse than one extra iframe);
+	 * remaining slots go to the most recently used others. Untouched tabs rank
+	 * as more recently opened first.
+	 */
+	function retainedAppIds(): ReadonlySet<string> {
+		const ids = options.getAppTabs().map((tab) => tab.appId);
+		if (ids.length <= appKeepAliveLimit) return new Set(ids);
+		const active = options.getActiveAppId();
+		const ranked = ids
+			.map((appId, index) => ({
+				appId,
+				index,
+				lastAccessed: accessedAt[tabId("app", appId)] ?? 0,
+			}))
+			.sort((a, b) => b.lastAccessed - a.lastAccessed || b.index - a.index);
+		const kept = new Set<string>();
+		if (active && ids.includes(active)) kept.add(active);
+		for (const item of ranked) {
+			if (kept.size >= appKeepAliveLimit) break;
+			kept.add(item.appId);
+		}
+		return kept;
 	}
 
 	/** Whether a domain still holds this tab, active or not. */
@@ -583,6 +614,7 @@ export function createWindowManager(options: WindowManagerOptions) {
 		currentRef,
 		touch,
 		tabClosed,
+		retainedAppIds,
 		openFile,
 		openBoard,
 		openPort,

@@ -1,9 +1,10 @@
 import { BillingAccessBlockedError, COHUB_BILLING_FEATURES, billingOperations } from "@cohub/billing";
 import { DEFAULT_SANDBOX_SPEC_ID, SANDBOX_SPECS, getSandboxSpecRank, isSandboxSpecId, type SandboxSpecId } from "@cohub/sandbox-controller";
 import { createLogger } from "@cohub/infra/logging";
+import { getCurrentRequestId } from "@cohub/infra/tracing";
 import { Hono, type Context } from "hono";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { getDefaultSpaceModsForEnv, type AgentHarness } from "@cohub/protocol";
+import { fileWatcherStatusSchema, getDefaultSpaceModsForEnv, harnessSchema, isLocalHarness, runtimeStopConfirmationSchema, type AgentHarness } from "@cohub/protocol";
 import {
   parseSpaceSlug,
   validatePublicIdentifierAssignment,
@@ -23,7 +24,7 @@ import {
   sessionTurns,
 } from "@cohub/db";
 import { eq, and, inArray, desc, lt, or, sql } from "drizzle-orm";
-import { useAuth, getOptionalAuth, getAppSessionPrincipal, getPreviewSessionPrincipal, getExecutionPrincipal, requireValidId, buildSpaceListItems, authzDenied, getSpacePublicProfile, normalizePublicAvatarUrl } from "../../lib/middleware.js";
+import { useAuth, getOptionalAuth, getAppSessionPrincipal, requireValidId, buildSpaceListItems, authzDenied, getSpacePublicProfile, normalizePublicAvatarUrl } from "../../lib/middleware.js";
 import { config } from "../../config.js";
 import { scheduleSandboxAutoDestroy } from "../../sandbox-idle-scheduler.js";
 import { attachSandboxPublicEndpoints } from "../../sandbox-public-network.js";
@@ -72,7 +73,9 @@ import {
 import { checkpointFsJsonError, listCheckpointDirectory, readCheckpointFile } from "../../checkpoint-fs.js";
 import type { AuthUser } from "../../lib/middleware.js";
 import { submitSessionPrompt } from "../../session-prompts.js";
-import { ModelUnavailableError, parsePromptEnv, PromptEnvValidationError } from "@cohub/core/sessions";
+import { getRuntimeRegistration, getSessionRuntimeRecovery, confirmRuntimeStopped } from "../../runtime.js";
+import runtimeArchivesRouter from "./runtime-archives.route.js";
+import { HarnessUnavailableError, ModelUnavailableError, parsePromptEnv, PromptEnvValidationError } from "@cohub/core/sessions";
 import { delegatedPromptAuthFromAppSession, promptAuthContextFromAppSession } from "../../prompt-auth-context.js";
 import { buildSessionTurnResponse } from "../../session-turn-response.js";
 import { getSessionTurnById, hydrateTurnAuthorProfiles } from "../../session-turns.js";
@@ -105,8 +108,8 @@ import {
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const getSpaceSaveCheckpointLockKey = (spaceId: string) => `cohub:space:${spaceId}:save-checkpoint`;
-
 const router = new Hono();
+router.route("/:id/runtime/archives", runtimeArchivesRouter);
 const { CronExpressionParser } = cronParser;
 
 type SpaceRouteSessionRecord = NonNullable<Awaited<ReturnType<typeof getSpaceSessionById>>>;
@@ -347,6 +350,7 @@ type SpacePromptInput = {
   content?: ContentBlock[];
   model?: string | null;
   provider?: string | null;
+  harness?: "cohub" | "pi" | "codex" | null;
   thinkingLevel?: string | null;
   serviceTier?: string | null;
   clientMessageId?: string | null;
@@ -719,7 +723,6 @@ async function insertHomeSpaceRecord(
  * Create the first-time Home space for a user. Idempotent under concurrency:
  * unique conflicts re-select the winner instead of failing the entry path.
  * Bootstraps from `HOME_BOOTSTRAP_CHECKPOINT_ID` when set, else blank.
- * Only call from normal account sessions (never work/preview/execution).
  */
 async function ensureHomeSpace(user: AuthUser): Promise<SpaceRow | null> {
   const bootstrapSource = resolveHomeBootstrap();
@@ -826,17 +829,11 @@ router.get("/default", async (c) => {
 
   // Prefer existing home / recent space.
   let space = await findDefaultSpaceCandidate(identity.uuid);
-  // Ensure only for normal account sessions. Work / preview / execution
-  // principals may list via viewer grants but must not mint spaces.
-  const canEnsureHome =
-    !getAppSessionPrincipal(c) &&
-    !getPreviewSessionPrincipal(c) &&
-    !getExecutionPrincipal(c);
-  if (!space && canEnsureHome) {
+  if (!space) {
     space = await ensureHomeSpace(user);
   }
 
-  return c.json({ space: space ? await buildDefaultSpaceResponse(c, space, user) : null });
+  return c.json({ space: space ? await buildSpaceResponse(c, space, user) : null });
 });
 
 // ── POST /api/spaces ─────────────────────────────────────────────────────────
@@ -844,6 +841,7 @@ router.get("/default", async (c) => {
 router.post("/", async (c) => {
   const user = useAuth(c);
   if (user instanceof Response) return user;
+  if (!(await hasPermission(user, "space.create", { spaceId: "" }))) return authzDenied(c);
 
   const body = (await c.req
     .json<{
@@ -1051,21 +1049,21 @@ router.post("/", async (c) => {
       onBootstrapFailure: "throw",
     });
   } catch (error) {
-    if (error instanceof Error && error.message === "failed to register local sandbox") {
-      return c.json({ message: "failed to register local sandbox" }, 500);
-    }
-    if (error instanceof Error && error.message === "failed to allocate create_space task id") {
-      return c.json({ message: "failed to create bootstrap job" }, 500);
-    }
-    throw error;
+    const message =
+      error instanceof Error && error.message === "failed to register local sandbox"
+        ? error.message
+        : "failed to create bootstrap job";
+    // Space row is already committed — return it so the caller can close with
+    // a created-but-not-provisioned result instead of 409-ing on the same name.
+    return c.json({ message, space: { id: space.id, name: space.name } }, 500);
   }
 
   if (!provisioned.taskRunId) {
-    return c.json({ message: "failed to create bootstrap job" }, 500);
+    return c.json({ message: "failed to create bootstrap job", space: { id: space.id, name: space.name } }, 500);
   }
 
   return c.json({
-    space: await serializeSpaceForResponse(provisioned.space, user),
+    space: await buildSpaceResponse(c, provisioned.space, user),
     taskRunId: provisioned.taskRunId,
   });
 });
@@ -1089,7 +1087,7 @@ function stripSensitiveSpaceFields(item: Record<string, unknown>): Record<string
   return rest;
 }
 
-async function buildDefaultSpaceResponse(c: Context, space: SpaceRow, user: AuthUser) {
+async function buildSpaceResponse(c: Context, space: SpaceRow, user: AuthUser) {
   if (!getAppSessionPrincipal(c)) return serializeSpaceForResponse(space, user);
   const [item] = await buildSpaceListItems([space]);
   return item ? stripSensitiveSpaceFields(item) : null;
@@ -1854,6 +1852,55 @@ router.post("/:id/commands", async (c) => {
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
 
+router.get("/:id/runtime", async (c) => {
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
+  const spaceId = c.req.param("id");
+  if (!requireValidId(spaceId)) return c.json({ message: "space not found" }, 404);
+  if (!(await hasPermission(user, "sandbox.view", { spaceId }))) return authzDenied(c);
+  const [sandbox, registration] = await Promise.all([
+    getSpaceSandboxBySpaceId(spaceId), getRuntimeRegistration(spaceId),
+  ]);
+  const rawWatcher = sandbox?.provider === "local" && registration
+    ? await redisCommandClient.get(`sandbox:watcher:${spaceId}`).catch(() => null) : null;
+  let fileWatcher = null;
+  if (rawWatcher) {
+    try {
+      const parsed = fileWatcherStatusSchema.safeParse(JSON.parse(rawWatcher));
+      if (parsed.success) fileWatcher = parsed.data;
+    } catch { /* Invalid telemetry never affects Runtime availability. */ }
+  }
+  return c.json({ kind: sandbox?.provider ?? "cloud", online: Boolean(registration), runtimeId: registration?.runtimeId ?? null, capabilities: registration?.capabilities ?? null, fileWatcher });
+});
+
+router.get("/:id/sessions/:sessionId/runtime", async (c) => {
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
+  const spaceId = c.req.param("id");
+  const sessionId = c.req.param("sessionId");
+  if (!requireValidId(spaceId) || !requireValidId(sessionId)) return c.json({ message: "Session not found / Session 不存在" }, 404);
+  if (!(await hasPermission(user, "session.view", { spaceId, sessionId }))) return authzDenied(c);
+  const [recovery, canManage] = await Promise.all([
+    getSessionRuntimeRecovery(spaceId, sessionId),
+    hasPermission(user, "sandbox.manage", { spaceId }),
+  ]);
+  return c.json({ ...recovery, canManage });
+});
+
+router.post("/:id/sessions/:sessionId/runtime/confirm-stopped", async (c) => {
+  const user = useAuth(c);
+  if (user instanceof Response) return user;
+  const spaceId = c.req.param("id");
+  const sessionId = c.req.param("sessionId");
+  if (!requireValidId(spaceId) || !requireValidId(sessionId)) return c.json({ message: "Session not found / Session 不存在" }, 404);
+  if (!(await hasPermission(user, "sandbox.manage", { spaceId }))) return authzDenied(c);
+  const parsed = runtimeStopConfirmationSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ message: "Invalid confirmation / 确认请求无效" }, 400);
+  const accepted = await confirmRuntimeStopped(spaceId, sessionId, user.uuid, parsed.data);
+  if (!accepted) return c.json({ message: "Runtime state changed; refresh before confirming / Runtime 状态已变化，请刷新后确认" }, 409);
+  return c.json({ accepted: true }, 202);
+});
+
 router.post("/:id/prompt", async (c) => {
   const user = useAuth(c);
   if (user instanceof Response) return user;
@@ -1942,6 +1989,9 @@ router.post("/:id/prompt", async (c) => {
   if (!promptIntent) return c.json({ message: "intent must be one of: followup, steer" }, 400);
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
   if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
+  if (body.harness !== undefined && body.harness !== null && !harnessSchema.safeParse(body.harness).success) {
+    return c.json({ message: "harness must be one of: cohub, pi, codex" }, 400);
+  }
   const promptServiceTier = body.serviceTier === undefined
     ? undefined
     : body.serviceTier === null
@@ -2011,21 +2061,23 @@ router.post("/:id/prompt", async (c) => {
   }
 
   const requestedModel = body.model?.trim() || null;
+  const localHarness = isLocalHarness(body.harness);
   const requestedProvider = body.provider?.trim() || (
-    requestedModel ? (effectiveAgentHarness === "pi" ? "cohub" : effectiveAgentHarness) : null
+    requestedModel && !localHarness ? (effectiveAgentHarness === "pi" ? "cohub" : effectiveAgentHarness) : null
   );
-  if (effectiveAgentHarness === "pi") {
+  if (localHarness && effectiveAgentHarness !== "pi") {
+    return c.json({ message: "Session Agent harness cannot be switched to a CLI Runtime" }, 409);
+  }
+  if (mode !== "immediate" && localHarness) return c.json({ message: "Local Harness scheduling is unavailable" }, 422);
+  if (!localHarness && effectiveAgentHarness === "pi") {
     if (promptServiceTier) {
       return c.json({ code: "service_tier_unavailable", message: "Speed tiers are not available for Pi" }, 422);
     }
-    if (
-      requestedModel &&
-      requestedProvider &&
-      !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))
-    ) {
+    if (requestedModel && requestedProvider &&
+      !(await validatePromptModel({ userId: user.uuid, provider: requestedProvider, model: requestedModel }))) {
       return c.json({ code: "model_unavailable", message: "requested model is not available" }, 422);
     }
-  } else {
+  } else if (!localHarness && effectiveAgentHarness !== "pi") {
     try {
       const selection = await validateExternalHarnessSelection({
         harness: effectiveAgentHarness,
@@ -2034,13 +2086,9 @@ router.post("/:id/prompt", async (c) => {
         thinkingLevel: promptThinkingLevel ?? null,
         serviceTier: promptServiceTier ?? null,
       });
-      if (!selection.ok) {
-        return c.json({ code: selection.code, message: selection.message }, 422);
-      }
+      if (!selection.ok) return c.json({ code: selection.code, message: selection.message }, 422);
     } catch (error) {
-      if (error instanceof HarnessCatalogError) {
-        return c.json({ code: error.code, message: error.message }, 503);
-      }
+      if (error instanceof HarnessCatalogError) return c.json({ code: error.code, message: error.message }, 503);
       throw error;
     }
   }
@@ -2141,13 +2189,14 @@ router.post("/:id/prompt", async (c) => {
         sourceClientId: getRequestSource(c)?.clientId ?? null,
         model: requestedModel,
         provider: requestedProvider,
+        harness: body.harness ?? null,
         thinkingLevel: promptThinkingLevel ?? null,
         serviceTier: promptServiceTier,
         generationPolicy,
         intent: promptIntent,
         accessMode,
         env: promptEnv,
-        context: { kind: "public_api", auth: await getPromptAuthContext(c, spaceId) },
+        context: { kind: "public_api", requestId: getCurrentRequestId(), auth: await getPromptAuthContext(c, spaceId) },
       }, {}, requestedModel && requestedProvider
         ? { prevalidatedModel: { provider: requestedProvider, model: requestedModel } }
         : {});
@@ -2186,6 +2235,7 @@ router.post("/:id/prompt", async (c) => {
         }
         return res;
       }
+      if (error instanceof HarnessUnavailableError) return c.json({ code: error.code, message: error.message, ...(createdSessionId ? { sessionId: createdSessionId } : {}) }, 503);
       if (error instanceof ModelUnavailableError) {
         return c.json(
           { code: error.code, message: "requested model is not available", ...(createdSessionId ? { sessionId: createdSessionId } : {}) },

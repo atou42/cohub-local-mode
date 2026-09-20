@@ -1,5 +1,174 @@
 # @neta-art/cohub-cli
 
+## 7.0.1
+
+### Patch Changes
+
+- 65499d6: **Event-driven local Runtime recovery.** Recovery is Session-scoped and triggered by real
+  events: the local Runtime reports pending executions in bounded batches after connecting,
+  Gateway peer disconnects and transport uncertainty enqueue reconciliation for that Session,
+  and only the affected Chat exposes stop confirmation. Realtime and channel notifications are
+  best effort; committed messages and terminal turns stay authoritative. `runtime.hello` drops
+  `pendingExecutions`, `RuntimeStatus` drops the Space-wide `recovery` / `canManage` fields, and
+  `confirmRuntimeStopped(sessionId, …)` requests `expectedTurnId`. The local Runtime was never
+  live, so these type changes ship as a patch.
+  
+  **事件驱动的本地 Runtime 恢复。** 恢复改为 Session 粒度并由真实事件触发：本地 Runtime 连接后
+  分批上报待恢复执行，Gateway peer 断开与传输结果不确定都会为该 Session 入队协调，仅受影响的
+  Chat 暴露停止确认。实时与渠道通知降级为 best effort，已提交的消息与终态 turn 仍是权威数据。
+  `runtime.hello` 移除 `pendingExecutions`，`RuntimeStatus` 移除 Space 级 `recovery` / `canManage`，
+  `confirmRuntimeStopped(sessionId, …)` 需要 `expectedTurnId`。本地 Runtime 从未上线，因此这些类型
+  变更为 patch。
+- Updated dependencies [c19a941]
+- Updated dependencies [65499d6]
+  - @neta-art/cohub@8.19.0
+
+## 7.0.0
+
+### Major Changes
+
+- 566be22: Add local Runtime support: `cohub runtime up|status` connects a local workspace and
+  dispatches turns to local Pi or Codex Harnesses. Sessions, turns, messages, streaming
+  and resumption stay on the existing Cohub pipeline, and disconnections reconcile
+  automatically.
+  
+  The previous `cohub sandbox up|status` commands are removed; use `cohub runtime` instead.
+
+### Minor Changes
+
+- eff7ca6: Add structured App authorization with explicit targets, viewer-controlled fallback, host capability negotiation, and incremental consent. Preserve legacy authorization return types. Fix logged-out consent, login recovery, canonical App slug resolution, and viewer cache isolation. Add `apps authorize --extend`.
+  
+  新增结构化 App 授权、明确目标、用户 Space 回退、宿主能力协商与增量授权，保留旧接口返回类型。修复未登录授权、登录恢复、App slug 解析与账户缓存隔离；CLI 新增 `apps authorize --extend`。
+
+### Patch Changes
+
+- Updated dependencies [eff7ca6]
+- Updated dependencies [566be22]
+  - @neta-art/cohub@8.18.0
+
+## 6.12.0
+
+### Minor Changes
+
+- 50d6f00: **App version history and provenance.** Published apps now expose their immutable version history, and every version carries the session it was published from.
+  
+  - Public app pages gain a Cohub bar version switcher: `?cohub_v=<n>` selects a version, `getBySlug(…, { version })` fetches that version's content, and `listPublicVersions()` returns the history. SSR resolves the requested version; switching is a client-side fetch that keeps the URL shareable.
+  - `AppVersionRecord.source` and `AppVersionSource` describe provenance (`sessionId`, `turnId`, `turnSequence`, `via`). The raw `meta.source` stamped at publish time is no longer exposed, provenance is validated against the app's own space, and session identity/title is included only when the caller holds `session.view` for the source session — so a private session never leaks through a published app, and viewer-scoped responses are never shared-cached.
+  - `cohub apps versions` prints a Source column: the source session title when visible, otherwise the publishing channel.
+  - The public page docks the Cohub bar above the App instead of floating over it, keeps the Cohub wordmark in that bar, and opens a version's source session in a new tab. Version history loads off the public page's critical path, so the first render never waits for it.
+
+### Patch Changes
+
+- Updated dependencies [50d6f00]
+- Updated dependencies [4071454]
+- Updated dependencies [f33c6ca]
+- Updated dependencies [c89672c]
+- Updated dependencies [f33c6ca]
+- Updated dependencies [f33c6ca]
+  - @neta-art/cohub@8.17.0
+
+## 6.11.2
+
+### Patch Changes
+
+- Updated dependencies [96a30a9]
+  - @neta-art/cohub@8.16.0
+
+## 6.11.1
+
+### Patch Changes
+
+- Updated dependencies [eff8a32]
+- Updated dependencies [a5ffd93]
+  - @neta-art/cohub@8.15.0
+
+## 6.11.0
+
+### Minor Changes
+
+- 1363e2c: Show pricing in `cohub models ls` and `cohub models show`.
+  
+  - `models ls` prints each LLM's per-million-token cost, e.g. `$3 /M input · $15 /M output · $0.30 /M cache read`.
+  - `models ls --model-type multimodal` and `models show` render a compact unit price such as `$0.04 / image` or `$0.10–$0.50 / second · resolution`.
+  - `models ls --model-type multimodal --json` now includes the raw `pricing` object for machines.
+  - `models ls` now hides models marked `hidden` (matching the web picker) for both human and `--json` output, and omits providers left with no visible models.
+
+### Patch Changes
+
+- Updated dependencies [c7b6df3]
+- Updated dependencies [fd5fdd5]
+- Updated dependencies [785f9a9]
+  - @neta-art/cohub@8.14.0
+
+## 6.10.0
+
+### Minor Changes
+
+- 5232f9f: Add space webhook triggers (`on.event: webhook`) and hook `uses` App Actions.
+
+### Patch Changes
+
+- Updated dependencies [5232f9f]
+  - @neta-art/cohub@8.13.0
+
+## 6.9.1
+
+### Patch Changes
+
+- Updated dependencies [2fe6bee]
+- Updated dependencies [95622b1]
+  - @neta-art/cohub@8.12.1
+
+## 6.9.0
+
+### Minor Changes
+
+- 311c47d: Board edit history is now replayable. `createBoardReplayPlayer()` (SDK) turns a Board's transaction log into render documents — it rewinds through the server-computed inverses and plays forward through payloads, handling version gaps and paging in both directions — and `cohub boards transactions <board>` (CLI, alias `history`) pages through the same log. The API exposes `GET /spaces/:id/boards/:boardId/transactions`, which returns newest-first pages read under one repeatable-read snapshot with the current rows as the replay anchor. Read-only: nothing is ever written to the Board. In the web workspace, "Replay history" opens a private read-only stage with a scrubber, play/pause, speed control, step, camera follow and live tail appends.
+- a869400: Board motion is now optional and preset-based. Boards default to no motion; the built-in `effects.deal` preset can be selected as the default enter motion (`appearance.motion.enter`) or applied to an individual node with an `on-enter` effect. `kindVersion` defaults to `1` on effect and preset input. Reduced-motion handling is preserved.
+  
+  The Board-local theme registry is removed from `@neta-art/cohub/board/render`: `getBoardThemeRenderer`, `registerBoardThemeRenderer`, `BoardThemeRenderer`, `BoardThemeContext` and `cleanBoardTheme` no longer exist. The registry was never wired to `appearance.theme` and always resolved to the single built-in background; use `createBoardBackground` / `updateBoardBackground` instead. Board colors continue to come from Cohub theme tokens, and `appearance.theme` / `appearance.mood` are now optional and ignored by rendering.
+- 41b2ae5: Apps can open as an **overlay**: a transparent, chrome-free layer above the Space workspace instead of a preview tab. `cohub desktop open <app> --as overlay` requests it, and a page published with `<meta name="cohub:surface" content="overlay">` opens that way by default. Inside the App, `context.invocation.surface` reads `"overlay"`, and `cohub.app.requestConfigure({ geometry, inputRegion })` controls where the overlay sits and which rectangles accept pointer events — everything else (context, auth, Space APIs, realtime, `surface.handle()` + `--call`, composer chips, navigation, commerce) works as in a tab. Overlays close through `cohub.app.requestClose()` or `Escape` in the workspace.
+  
+  Republishing now updates page-derived metadata (title, description, icon, image, lang, theme color, surface) when the current value is the one extraction last wrote; values a publisher set by hand that differ from the page are kept.
+
+### Patch Changes
+
+- Updated dependencies [a1df456]
+- Updated dependencies [311c47d]
+- Updated dependencies [a869400]
+- Updated dependencies [41b2ae5]
+- Updated dependencies [35be140]
+- Updated dependencies [bea9903]
+  - @neta-art/cohub@8.12.0
+
+## 6.8.2
+
+### Patch Changes
+
+- Updated dependencies [1f326f4]
+- Updated dependencies [a34dc95]
+- Updated dependencies [925d712]
+  - @neta-art/cohub@8.11.0
+
+## 6.8.1
+
+### Patch Changes
+
+- a8201f0: CLI help now resolves the command path before printing, so unknown prefixes like `cohub cli apps publish --help` error instead of dumping top-level help. Local uploads honor `http_proxy`/`https_proxy` via Node's `--use-env-proxy`, send `Content-Length`, and retry transient PUT failures.
+- Updated dependencies [5f4f0bc]
+  - @neta-art/cohub@8.10.2
+
+## 6.8.0
+
+### Minor Changes
+
+- 8633eb5: CLI commands now fall back to the Home space when `-s` / `COHUB_SPACE_ID` are omitted (`GET /api/spaces/default`, cached per login). `apps publish` infers `--source` from runtime (workspace in a sandbox, local otherwise). `getCohubContext()` treats runtime as sandbox only when an execution token is present.
+
+### Patch Changes
+
+- Updated dependencies [8633eb5]
+  - @neta-art/cohub@8.10.1
+
 ## 6.7.0
 
 ### Minor Changes

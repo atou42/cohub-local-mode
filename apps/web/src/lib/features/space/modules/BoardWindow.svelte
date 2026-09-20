@@ -9,14 +9,14 @@ import type {
 import {
 	type BoardCommitHandler,
 	type BoardRuntimeData,
-	type BoardRuntimeProps,
 	type BoardRuntimeViewState,
 	resolveBoardRuntime,
 } from "$lib/board/runtime/board-runtime";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
-import MobileWindowTabsChrome from "./MobileWindowTabsChrome.svelte";
-import WindowFloatChrome from "./WindowFloatChrome.svelte";
+import PreviewHeader from "./PreviewHeader.svelte";
+import type { PreviewChrome } from "./preview-header";
+import { previewHeaderVariant } from "./preview-header";
 import type { Window } from "./windows";
 
 type InlineBoardPanelState = {
@@ -43,14 +43,11 @@ type Props = {
 			| { ok: false; code: string; message: string };
 	}>;
 	active?: boolean;
-	immersive: boolean;
+	chrome: PreviewChrome;
 	isMobile: boolean;
 	collaborators?: Map<string, BoardCollaboratorProfile>;
 	activities?: BoardAutomationActivity[];
 	onOpenActivity?: (activity: BoardAutomationActivity) => void | Promise<void>;
-	treeVisible?: boolean;
-	onToggleTree?: () => void | Promise<void>;
-	onToggleImmersive: () => void | Promise<void>;
 	onCommit: (
 		boardId: string,
 		path: string,
@@ -75,14 +72,11 @@ let {
 	shell,
 	onNavigationOpen,
 	active = true,
-	immersive,
+	chrome,
 	isMobile,
 	collaborators = new Map(),
 	activities = [],
 	onOpenActivity,
-	treeVisible = true,
-	onToggleTree,
-	onToggleImmersive,
 	onCommit,
 	onRetrySave,
 	onActivateWindow,
@@ -93,6 +87,7 @@ let {
 }: Props = $props();
 
 const locale = $derived(getLocale());
+const immersive = $derived(chrome.immersive);
 
 let boardRuntimeLoadAttempt = $state(0);
 const boardRuntimeModulePromise = $derived.by(() => {
@@ -102,46 +97,28 @@ const boardRuntimeModulePromise = $derived.by(() => {
 });
 </script>
 
-{#snippet TabsChrome()}
-	{#if isMobile}
-		<MobileWindowTabsChrome
-			tabs={windows}
-			onActivate={onActivateWindow}
-			onClose={onCloseWindow}
-		/>
-	{:else if immersive}
-		<WindowFloatChrome
-			tabs={windows}
-			filesVisible={treeVisible}
-			onActivate={onActivateWindow}
-			onClose={onCloseWindow}
-			onToggleFiles={onToggleTree}
-			onExit={onToggleImmersive}
-		/>
-	{/if}
+{#snippet Header()}
+	<PreviewHeader
+		{windows}
+		variant={previewHeaderVariant({ isMobile, immersive })}
+		actions={[]}
+		{chrome}
+		onActivate={onActivateWindow}
+		onClose={onCloseWindow}
+	/>
 {/snippet}
 
-{#snippet LoadingPanel()}
-	<div class="flex h-full min-w-0 flex-col bg-bg-primary">
-		{@render TabsChrome()}
+<div class="flex h-full min-w-0 flex-col bg-bg-primary">
+	{@render Header()}
+	{#if board.loading}
 		<div class="flex flex-1 items-center justify-center text-xs text-text-tertiary">{m.common_loading({}, { locale })}</div>
-	</div>
-{/snippet}
-
-{#if board.loading}
-	{@render LoadingPanel()}
-{:else if board.error}
-	<div class="flex h-full min-w-0 flex-col bg-bg-primary">
-		{@render TabsChrome()}
+	{:else if board.error}
 		<div class="m-4 rounded-lg border border-error-soft/30 bg-error-bg p-4 text-sm text-error-soft">{board.error}</div>
-	</div>
-{:else if board.boardId && board.document && board.runtime}
-	{#await boardRuntimeModulePromise}
-		{@render LoadingPanel()}
-	{:then boardRuntimeModule}
-		{@const BoardRuntime = boardRuntimeModule.default}
-		<div class="relative flex h-full min-w-0 flex-col bg-bg-primary">
-			{@render TabsChrome()}
+	{:else if board.boardId && board.document && board.runtime}
+		{#await boardRuntimeModulePromise}
+			<div class="flex flex-1 items-center justify-center text-xs text-text-tertiary">{m.common_loading({}, { locale })}</div>
+		{:then boardRuntimeModule}
+			{@const BoardRuntime = boardRuntimeModule.default}
 			<div class="min-h-0 flex-1">
 				{#key board.boardId}
 					<BoardRuntime
@@ -167,19 +144,13 @@ const boardRuntimeModulePromise = $derived.by(() => {
 					/>
 				{/key}
 			</div>
-		</div>
-	{:catch}
-		<div class="flex h-full min-w-0 flex-col bg-bg-primary">
-			{@render TabsChrome()}
+		{:catch}
 			<div class="m-4 flex flex-col items-start gap-2 rounded-lg border border-error-soft/30 bg-error-bg p-4 text-sm text-error-soft">
 				<span>{m.board_failed_load({}, { locale })}</span>
 				<button type="button" class="action-btn" onclick={() => { boardRuntimeLoadAttempt += 1; }}>{m.common_retry({}, { locale })}</button>
 			</div>
-		</div>
-	{/await}
-{:else}
-	<div class="flex h-full min-w-0 flex-col bg-bg-primary">
-		{@render TabsChrome()}
+		{/await}
+	{:else}
 		<div class="m-4 rounded-lg border border-error-soft/30 bg-error-bg p-4 text-sm text-error-soft">{m.board_data_unavailable({}, { locale })}</div>
-	</div>
-{/if}
+	{/if}
+</div>

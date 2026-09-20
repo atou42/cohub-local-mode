@@ -72,12 +72,41 @@ cohub -s <spaceId> spaces invites revoke <code> --yes
 cohub -s <spaceId> run -- git status
 ```
 
-Many space-scoped commands need a target Space:
+Many space-scoped commands need a target Space. Without an explicit target, commands
+also use the Space remembered for the current directory before falling back to Home:
 
 ```bash
 cohub -s <spaceId> spaces prompt "message" --json
 COHUB_SPACE_ID=<spaceId> cohub spaces prompt "message" --json
 ```
+
+## Local Runtime
+
+Connect one local workspace to a Space and select Pi or Codex per turn.
+
+```bash
+cohub runtime up ./project --harness pi --harness codex
+cohub runtime up ./project --space <spaceId> --harness codex
+cohub -s <spaceId> spaces prompt "Continue" --harness codex
+cohub runtime status --space <spaceId>
+cohub runtime logs --space <spaceId> --follow
+```
+
+Runtime diagnostics stay as redacted JSONL under the local Runtime state directory and
+are never uploaded automatically. Use `runtime logs --json` to export a failure report;
+events carry the local `runtimeId` plus server `requestId` / `traceparent` when a turn has
+reached the Agent trace.
+
+The Runtime uses WebSockets, native Pi RPC / Codex app-server, and existing cloud
+streaming. Local executables and credentials are required. `sandbox up` has been
+removed. Reconnection and result reconciliation are automatic; no recovery command is needed.
+When a result genuinely cannot be determined, the affected Chat offers an explicit stop
+confirmation. See [Runtime details](../../docs/local-runtime.md).
+
+When `--space` is omitted, Runtime remembers a Space for the canonical local directory,
+account, and environment in `~/.config/cohub/runtime-spaces.json`. The first start creates
+and records a local Space; later starts reuse it. An explicit `--space` or `COHUB_SPACE_ID`
+overrides and updates the directory binding.
 
 ## Chats and prompts
 
@@ -227,6 +256,8 @@ cohub search "query" --limit 20 --json
 
 ## Models and multimodal generation
 
+`models ls` prints each LLM's per-million-token cost (`$3 /M input · $15 /M output`, with cache rates when declared) and hides models marked `hidden`. `models ls --model-type multimodal` prints each model's unit price (`$0.04 / image`, `$0.10–$0.50 / second`); use `--json` for the raw `pricing` object (`unit`, `amount` or `min`/`max`, optional `note`).
+
 ```bash
 cohub models ls --json
 cohub models ls --model-type multimodal --json
@@ -254,6 +285,11 @@ cohub generate "keep the character identity from all reference images" \
   --image reference_image=https://example.com/reference-1.png \
   --image reference_image=https://example.com/reference-2.png
 
+cohub generate "Lip-sync to this spoken take" \
+  --model seedance-2-0-fast \
+  --image reference_image=https://example.com/portrait.png \
+  --audio reference_audio=https://example.com/speech.mp3
+
 cohub generate "a calm lake" \
   --model <model> \
   --async
@@ -271,9 +307,10 @@ Supported inputs:
 --video <path-or-url>
 --video reference_video=<path-or-url>
 --audio <path-or-url>
+--audio reference_audio=<path-or-url>
 ```
 
-Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles in one request.
+Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request.
 
 Pass generation parameters with `--param key=value` or `--parameters '<json>'`.
 
@@ -349,7 +386,7 @@ legacy bare targets. A bare target checks the current Space for a file first, th
 falls back to the same App references as `apps get`. Showing a preview is
 idempotent: repeating it re-activates the same tab and refreshes any launch state
 carried by the reference. With `--call`, the command waits for the App to announce readiness, invokes the method,
-and waits for the App to complete the same UI command with `client.ui.reportResult()`.
+and waits for the App to complete the same UI command with `client.desktop.reportResult()`.
 
 App authors decide what is callable by registering handlers inside the App:
 

@@ -1,4 +1,5 @@
 import {
+	BOARD_BUILTIN_CAPABILITIES,
 	BOARD_BUILTIN_CLIP_KINDS,
 	BOARD_BUILTIN_EFFECT_KINDS,
 	DEFAULT_BOARD_RENDER_LIMITS,
@@ -6,10 +7,26 @@ import {
 } from "./board-constants.js";
 import type { BoardDiagnostic, BoardEffect } from "./board.js";
 import { BoardCameraFocusParamsSchema } from "./board.js";
+import { BoardDealParamsSchema } from "./board-animation.js";
 import type { BoardProceduralClip } from "./board-composition.js";
 
 const CLIPS = new Set<string>(BOARD_BUILTIN_CLIP_KINDS);
 const EFFECTS = new Set<string>(BOARD_BUILTIN_EFFECT_KINDS);
+const BUILTIN_VERSIONS = new Set(
+	BOARD_BUILTIN_CAPABILITIES.map((c) => `${c.kind}:${c.id}@${c.version}`),
+);
+
+/**
+ * True when a built-in renderer exists for exactly this kind@version. A known
+ * kind at an unknown version is not built-in: it must not pass as one.
+ */
+export function isBuiltinBoardCapability(
+	kind: "clip" | "effect",
+	id: string,
+	version: number,
+): boolean {
+	return BUILTIN_VERSIONS.has(`${kind}:${id}@${version}`);
+}
 const record = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value && typeof value === "object" && !Array.isArray(value));
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -60,16 +77,69 @@ export function validateBuiltinBoardClip(
 }
 
 export function validateBuiltinBoardEffect(
-	effect: Pick<BoardEffect, "kind" | "target">,
+	effect: Pick<
+		BoardEffect,
+		"kind" | "kindVersion" | "target" | "lifecycle" | "timeOrigin" | "params"
+	>,
 	path = "effect",
 ): BoardDiagnostic[] {
-	if (!EFFECTS.has(effect.kind) || effect.target.type === "item") return [];
-	return [{
-		severity: "error",
-		code: "INVALID_BOARD_EFFECT",
-		message: `${effect.kind} must target an item`,
-		path: `${path}.target`,
-	}];
+	const diagnostics: BoardDiagnostic[] = [];
+	if (effect.lifecycle === "on-enter") {
+		if (effect.target.type !== "item") {
+			diagnostics.push({
+				severity: "error",
+				code: "INVALID_BOARD_EFFECT",
+				message: "on-enter effects must target an item",
+				path: `${path}.target`,
+			});
+		}
+		if (effect.timeOrigin !== "activation") {
+			diagnostics.push({
+				severity: "error",
+				code: "INVALID_BOARD_EFFECT",
+				message: "on-enter effects must use activation time",
+				path: `${path}.timeOrigin`,
+			});
+		}
+	} else if (EFFECTS.has(effect.kind) && effect.target.type !== "item") {
+		diagnostics.push({
+			severity: "error",
+			code: "INVALID_BOARD_EFFECT",
+			message: `${effect.kind} must target an item`,
+			path: `${path}.target`,
+		});
+	}
+	if (effect.kind === "effects.deal" && effect.kindVersion === 1) {
+		if (effect.lifecycle !== "on-enter") {
+			diagnostics.push({
+				severity: "error",
+				code: "INVALID_BOARD_EFFECT",
+				message: "effects.deal must use the on-enter lifecycle",
+				path: `${path}.lifecycle`,
+			});
+		}
+		const parsed = BoardDealParamsSchema.safeParse(effect.params);
+		if (!parsed.success) {
+			diagnostics.push({
+				severity: "error",
+				code: "INVALID_BOARD_EFFECT",
+				message:
+					parsed.error.issues[0]?.message ??
+					"invalid effects.deal parameters",
+				path: `${path}.params`,
+			});
+		}
+	}
+	return diagnostics;
+}
+
+export function estimateBuiltinBoardEffectCost(
+	effect: Pick<BoardEffect, "kind" | "kindVersion" | "params">,
+): Partial<BoardRenderCost> {
+	// Every resident built-in effect keeps one pose pass alive per frame.
+	return isBuiltinBoardCapability("effect", effect.kind, effect.kindVersion)
+		? { drawCalls: 1 }
+		: {};
 }
 
 export function estimateBuiltinBoardClipCost(

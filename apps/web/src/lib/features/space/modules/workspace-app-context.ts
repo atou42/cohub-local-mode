@@ -8,7 +8,7 @@ export type WorkspaceAppOpenContext = {
 };
 
 export type WorkspaceAppInvocation = AppRuntimeInvocationContext & {
-	surface: "app";
+	surface: "app" | "overlay";
 	source: WorkspaceAppOpenContext["source"];
 	spaceId: string;
 };
@@ -16,9 +16,10 @@ export type WorkspaceAppInvocation = AppRuntimeInvocationContext & {
 export function createWorkspaceAppInvocation(
 	spaceId: string,
 	input: WorkspaceAppOpenContext,
+	surface: WorkspaceAppInvocation["surface"] = "app",
 ): WorkspaceAppInvocation {
 	return {
-		surface: "app",
+		surface,
 		source: input.source,
 		spaceId,
 		...(input.sessionId ? { sessionId: input.sessionId } : {}),

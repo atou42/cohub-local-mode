@@ -111,6 +111,29 @@ export function hasGrantedAppScopes(
 }
 
 /**
+ * The Space ids of cached grants that cover every requested scope, scanning all
+ * Spaces. Used for account-level scopes, which are not bound to one Space but
+ * must be renewed against a Space whose grant actually exists. The coverage is
+ * already validated here, so callers must not re-check with a per-Space key
+ * (a legacy, Space-less entry would otherwise never match).
+ */
+export function listGrantedAppSpacesForScopes(
+	userUuid: string | null | undefined,
+	appId: string,
+	scopes: readonly Permission[],
+	homeSpaceId?: string,
+): string[] {
+	if (!userUuid || !appId || scopes.length === 0) return [];
+	const spaces = new Set<string>();
+	for (const grant of listGrantedAppScopes(userUuid, appId, homeSpaceId)) {
+		if (scopes.every((scope) => scopeListHasPermission(grant.scopes, scope))) {
+			spaces.add(grant.spaceId);
+		}
+	}
+	return [...spaces];
+}
+
+/**
  * Lists every cached grant for an app — one entry per space — so hosts can
  * report what the viewer previously consented to without a server round trip.
  * Entries past their re-consent window are dropped on read.

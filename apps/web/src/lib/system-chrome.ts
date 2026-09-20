@@ -1,5 +1,8 @@
-export const DEFAULT_PWA_THEME_COLOR = "#F8F8FA";
-export const DEFAULT_PWA_BACKGROUND_COLOR = "#F8F8FA";
+// Matches light `--bg-primary` (oklch(100% 0 0)). The manifest, the inline
+// FOUC script and this fallback must agree so cold start, first paint and the
+// root canvas share one color.
+export const DEFAULT_PWA_THEME_COLOR = "#FFFFFF";
+export const DEFAULT_PWA_BACKGROUND_COLOR = "#FFFFFF";
 
 /**
  * Keep browser chrome aligned with the actual shell background, including

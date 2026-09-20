@@ -220,8 +220,8 @@ async function confirmDanger(opts: { yes?: boolean }, detail: string): Promise<v
   if (answer !== "y" && answer !== "yes") return error("Cancelled");
 }
 
-function commerceClient(spacesCmd: Command) {
-  const spaceId = resolveSpace(spacesCmd);
+async function commerceClient(spacesCmd: Command) {
+  const spaceId = await resolveSpace(spacesCmd);
   return { spaceId, commerce: createClient().space(spaceId).commerce };
 }
 
@@ -241,7 +241,7 @@ Examples:
     .description("Initialize commerce for the target space")
     .option("--json", "Output as JSON")
     .action(async (opts: JsonOption) => {
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.setup();
         if (jsonRequested(opts)) return outJson(result);
@@ -265,7 +265,7 @@ Examples:
     .description("List products")
     .option("--json", "Output as JSON")
     .action(async (opts: JsonOption) => {
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.listProducts();
         if (jsonRequested(opts)) return outJson(result);
@@ -303,7 +303,7 @@ Examples:
         status: parseChoice(opts.status, "status", PRODUCT_STATUSES),
         visibility: parseChoice(opts.visibility, "visibility", PRODUCT_VISIBILITIES),
       };
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.createProduct(input);
         if (jsonRequested(opts)) return outJson(result);
@@ -334,7 +334,7 @@ Examples:
         visibility: parseChoice(opts.visibility, "visibility", PRODUCT_VISIBILITIES),
       });
       if (Object.keys(input).length === 0) return error("Nothing to update", "Pass --name, --description, --clear-description, --status, or --visibility.");
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.updateProduct(productKey, input);
         if (jsonRequested(opts)) return outJson(result);
@@ -354,7 +354,7 @@ Examples:
     .action(async (opts: ProductArchiveOptions) => {
       const productKey = requireText(opts.productKey, "product key", "--product-key <key>");
       await confirmDanger(opts, `archive product "${productKey}"`);
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.updateProduct(productKey, { status: "archived" });
         if (jsonRequested(opts)) return outJson(result);
@@ -378,7 +378,7 @@ Examples:
     .description("List benefits")
     .option("--json", "Output as JSON")
     .action(async (opts: JsonOption) => {
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.listBenefits();
         if (jsonRequested(opts)) return outJson(result);
@@ -415,7 +415,7 @@ Examples:
             ? parseInteger(opts.expiresInDays, "expires-in-days", { fallback: 0, min: 1 })
             : undefined,
         };
-        const { commerce } = commerceClient(spacesCmd);
+        const { commerce } = await commerceClient(spacesCmd);
         try {
           const result = await commerce.createBenefit(input);
           if (jsonRequested(opts)) return outJson(result);
@@ -433,7 +433,7 @@ Examples:
         type: "feature" as const,
         metadata: parseMetadataJson(opts.metadataJson),
       };
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.createBenefit(input);
         if (jsonRequested(opts)) return outJson(result);
@@ -464,7 +464,7 @@ Examples:
         metadata: parseMetadataJson(opts.metadataJson),
       });
       if (Object.keys(input).length === 0) return error("Nothing to update", "Pass --name, --description, --clear-description, --status, or --metadata-json.");
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.updateBenefit(benefitKey, input);
         if (jsonRequested(opts)) return outJson(result);
@@ -484,7 +484,7 @@ Examples:
     .action(async (opts: BenefitArchiveOptions) => {
       const benefitKey = requireText(opts.benefitKey, "benefit key", "--benefit-key <key>");
       await confirmDanger(opts, `archive benefit "${benefitKey}"`);
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.updateBenefit(benefitKey, { status: "archived" });
         if (jsonRequested(opts)) return outJson(result);
@@ -505,7 +505,7 @@ Examples:
         productKey: requireText(opts.productKey, "product key", "--product-key <key>"),
         benefitKey: requireText(opts.benefitKey, "benefit key", "--benefit-key <key>"),
       };
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.bindProductBenefit(input);
         if (jsonRequested(opts)) return outJson(result);
@@ -528,7 +528,7 @@ Examples:
         benefitKey: requireText(opts.benefitKey, "benefit key", "--benefit-key <key>"),
       };
       await confirmDanger(opts, `unbind benefit "${input.benefitKey}" from product "${input.productKey}"`);
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.unbindProductBenefit(input);
         if (jsonRequested(opts)) return outJson(result);
@@ -549,7 +549,7 @@ Examples:
     .option("--limit <limit>", "Page size, max 50")
     .option("--json", "Output as JSON")
     .action(async (opts: OrdersListOptions) => {
-      const { commerce } = commerceClient(spacesCmd);
+      const { commerce } = await commerceClient(spacesCmd);
       try {
         const result = await commerce.listOrders({
           page: parseInteger(opts.page, "page", { fallback: 1, min: 1 }),

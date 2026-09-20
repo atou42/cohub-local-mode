@@ -55,6 +55,7 @@ export const BOARD_BUILTIN_CLIP_KINDS = [
 export const BOARD_BUILTIN_EFFECT_KINDS = [
   "effects.pulse",
   "effects.float",
+  "effects.deal",
 ] as const;
 
 /**
@@ -127,6 +128,25 @@ function clipSchema(id: (typeof BOARD_BUILTIN_CLIP_KINDS)[number]) {
   }
 }
 
+function effectSchema(id: (typeof BOARD_BUILTIN_EFFECT_KINDS)[number]) {
+  switch (id) {
+    case "effects.deal":
+      return {
+        params: {
+          lift: { unit: "board" },
+          swing: { unit: "board" },
+          curve: { unit: "board" },
+          tilt: { unit: "degree" },
+          scale: { unit: "ratio" },
+          duration: { unit: "ms" },
+          landing: { unit: "ms" },
+        },
+      };
+    default:
+      return undefined;
+  }
+}
+
 export const BOARD_BUILTIN_CAPABILITIES: BoardCapability[] = [
   ...BOARD_BUILTIN_CLIP_KINDS.map((id) => {
     const schema = clipSchema(id);
@@ -138,10 +158,14 @@ export const BOARD_BUILTIN_CAPABILITIES: BoardCapability[] = [
       ...(schema ? { schema } : {}),
     };
   }),
-  ...BOARD_BUILTIN_EFFECT_KINDS.map((id) => ({
-    kind: "effect" as const,
-    id,
-    version: 1,
-    renderers: ["webgpu", "webgl"] as Array<"webgpu" | "webgl">,
-  })),
+  ...BOARD_BUILTIN_EFFECT_KINDS.map((id) => {
+    const schema = effectSchema(id);
+    return {
+      kind: "effect" as const,
+      id,
+      version: 1,
+      renderers: ["webgpu", "webgl"] as Array<"webgpu" | "webgl">,
+      ...(schema ? { schema } : {}),
+    };
+  }),
 ];

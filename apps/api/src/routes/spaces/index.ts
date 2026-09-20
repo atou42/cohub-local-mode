@@ -16,6 +16,7 @@ import startupRouter from "./startup.route.js";
 import commerceRouter from "./commerce.route.js";
 import completionsRouter from "./completions.route.js";
 import publicFilesRouter from "./public-files.route.js";
+import webhooksRouter from "./webhooks.route.js";
 
 const router = new Hono();
 
@@ -52,5 +53,6 @@ router.route("/:id/presence", presenceRouter);
 router.route("/", previewSessionRouter);
 router.route("/", startupRouter);
 router.route("/", commerceRouter);
+router.route("/", webhooksRouter);
 
 export default router;

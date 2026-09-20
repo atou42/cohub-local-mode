@@ -5,6 +5,7 @@ import {
 	BoxSelect,
 	Copy,
 	ExternalLink,
+	History,
 	ImageDown,
 	LayoutDashboard,
 	LocateFixed,
@@ -29,6 +30,7 @@ const {
 	onAddToGeneration,
 	regeneratingNodeId = null,
 	onExport,
+	onReplay,
 }: {
 	editor: BoardEditor;
 	position: { x: number; y: number };
@@ -40,6 +42,8 @@ const {
 	regeneratingNodeId?: string | null;
 	/** Opens the export dialog; absent until the stage can render one. */
 	onExport?: () => void;
+	/** Opens the replay view; absent in view mode. */
+	onReplay?: () => void;
 } = $props();
 
 const locale = $derived(getLocale());
@@ -165,6 +169,12 @@ const actions = $derived.by<MenuAction[]>(() => {
 			label: hasSelection ? "Export selection…" : "Export image…",
 			icon: ImageDown,
 			run: onExport,
+		});
+	if (onReplay)
+		list.push({
+			label: m.board_replay({}, { locale }),
+			icon: History,
+			run: onReplay,
 		});
 	return list;
 });

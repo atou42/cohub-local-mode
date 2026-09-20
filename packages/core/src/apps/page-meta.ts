@@ -1,4 +1,4 @@
-import type { HtmlPageMeta } from "./html-meta.js";
+import type { AppSurfaceRole, HtmlPageMeta } from "./html-meta.js";
 
 export type AppExtractedPageMeta = HtmlPageMeta & {
   sourcePath?: string;
@@ -13,6 +13,7 @@ export type AppPublishExtractedPageMeta = {
   image: string | null;
   lang: string | null;
   themeColor: string | null;
+  surface: AppSurfaceRole | null;
   sourcePath: string;
 };
 
@@ -225,89 +226,98 @@ export function materializeHtmlPageMeta(
     image: resolveAppPageAssetRef(page.image, assetKey, toPublicUrl),
     lang: cleanAppMetaText(page.lang, 32),
     themeColor: cleanAppMetaText(page.themeColor, 64),
+    surface: page.surface,
     sourcePath: page.sourcePath,
     extractedAt,
   };
 }
 
-function preferExistingOrExtracted(
-  existing: unknown,
-  extracted: unknown,
-  max = 500,
-): string | null {
-  const prev = cleanAppMetaText(existing, max);
-  const next = cleanAppMetaText(extracted, max);
-  // Keep solid absolute/data values; upgrade weak relative leftovers from older publishes.
-  if (prev && !isWeakAppPageMediaRef(prev)) return prev;
-  return next ?? prev;
-}
+type ExtractedField = "title" | "description" | "icon" | "image" | "lang" | "themeColor";
 
-function preferExistingOrExtractedText(
-  existing: unknown,
-  extracted: unknown,
-  max = 500,
-): string | null {
-  return cleanAppMetaText(existing, max) ?? cleanAppMetaText(extracted, max);
+const EXTRACTED_FIELD_MAX: Record<ExtractedField, number> = {
+  title: 500,
+  description: 300,
+  icon: 8192,
+  image: 8192,
+  lang: 32,
+  themeColor: 64,
+};
+
+/**
+ * Whether the effective value of a field is one extraction wrote on an earlier
+ * publish (and may therefore update or remove) rather than one the publisher
+ * set by hand. Weak relative media refs from before extraction recorded its
+ * snapshot also count as ours, so an old `/favicon.svg` still gets upgraded.
+ */
+function ownedByExtraction(
+  current: string | null,
+  previouslyExtracted: string | null,
+  field: ExtractedField,
+): boolean {
+  if (current === null) return true;
+  if (previouslyExtracted !== null && current === previouslyExtracted) return true;
+  return (field === "icon" || field === "image") && isWeakAppPageMediaRef(current);
 }
 
 /**
- * Merge extracted page fields into work/version meta.
- * - `extracted` snapshot is always refreshed (raw provenance)
- * - effective title/description/icon/image keep existing values and only fill blanks
+ * Merge extracted page fields into App / version meta.
+ *
+ * - `extracted` is always refreshed: it is the raw provenance snapshot.
+ * - An effective field follows the page while its value is what extraction
+ *   last wrote (or is empty). A value that differs from the last snapshot is
+ *   taken to be the publisher's and is kept.
+ * - `presentation.surface` follows the same rule, with `window` (the default)
+ *   kept implicit.
+ *
+ * Ownership is inferred from values, not recorded, so a publisher who types in
+ * exactly what extraction already produced has not pinned anything: the field
+ * keeps following the page. Pinning is done by editing the page itself, or by
+ * setting a value that differs from it.
  */
 export function mergeAppPageMeta(
   current: AppPageMetaInput,
   extracted: AppExtractedPageMeta | null | undefined,
 ): Record<string, unknown> | null {
   const meta: Record<string, unknown> = isRecord(current) ? { ...current } : {};
-  if (extracted) {
-    meta.extracted = {
-      title: extracted.title,
-      description: extracted.description,
-      icon: extracted.icon,
-      image: extracted.image,
-      lang: extracted.lang ?? null,
-      themeColor: extracted.themeColor ?? null,
-      sourcePath: extracted.sourcePath ?? null,
-      extractedAt: extracted.extractedAt ?? new Date().toISOString(),
-    };
+  if (!extracted) return Object.keys(meta).length ? meta : null;
 
-    // Legacy `name` counts as an existing title so republish does not clobber it.
-    const existingTitle = cleanAppMetaText(meta.title) ?? cleanAppMetaText(meta.name);
-    const nextTitle = existingTitle ?? cleanAppMetaText(extracted.title);
-    const nextDescription = preferExistingOrExtractedText(
-      meta.description,
-      extracted.description,
-      300,
-    );
-    const nextIcon = preferExistingOrExtracted(meta.icon, extracted.icon, 8192);
-    const nextImage = preferExistingOrExtracted(meta.image, extracted.image, 8192);
-    const nextLang = preferExistingOrExtractedText(meta.lang, extracted.lang, 32);
-    const nextThemeColor = preferExistingOrExtractedText(
-      meta.themeColor,
-      extracted.themeColor,
-      64,
-    );
+  const previous = isRecord(meta.extracted) ? meta.extracted : null;
+  meta.extracted = {
+    title: extracted.title,
+    description: extracted.description,
+    icon: extracted.icon,
+    image: extracted.image,
+    lang: extracted.lang ?? null,
+    themeColor: extracted.themeColor ?? null,
+    surface: extracted.surface ?? null,
+    sourcePath: extracted.sourcePath ?? null,
+    extractedAt: extracted.extractedAt ?? new Date().toISOString(),
+  };
 
-    if (nextTitle) meta.title = nextTitle;
-    else delete meta.title;
-    // Promote legacy `name` into `title` once, then drop the duplicate.
-    delete meta.name;
+  // Legacy `name` counts as a hand-set title; promote it once and drop the duplicate.
+  if (meta.title === undefined && meta.name !== undefined) meta.title = meta.name;
+  delete meta.name;
 
-    if (nextDescription) meta.description = nextDescription;
-    else delete meta.description;
-
-    if (nextIcon) meta.icon = nextIcon;
-    else delete meta.icon;
-
-    if (nextImage) meta.image = nextImage;
-    else delete meta.image;
-
-    if (nextLang) meta.lang = nextLang;
-    else delete meta.lang;
-
-    if (nextThemeColor) meta.themeColor = nextThemeColor;
-    else delete meta.themeColor;
+  for (const field of Object.keys(EXTRACTED_FIELD_MAX) as ExtractedField[]) {
+    const max = EXTRACTED_FIELD_MAX[field];
+    const value = cleanAppMetaText(meta[field], max);
+    const owned = ownedByExtraction(value, cleanAppMetaText(previous?.[field], max), field);
+    // A weak media ref we own is still better than nothing when the page stops declaring one.
+    const fallback = owned && (field === "icon" || field === "image") ? value : null;
+    const next = owned ? (cleanAppMetaText(extracted[field], max) ?? fallback) : value;
+    if (next) meta[field] = next;
+    else delete meta[field];
   }
+
+  const presentation = isRecord(meta.presentation) ? { ...meta.presentation } : {};
+  const surface = typeof presentation.surface === "string" ? presentation.surface : null;
+  const previousSurface = typeof previous?.surface === "string" ? previous.surface : null;
+  if (surface === null || surface === previousSurface) {
+    if (extracted.surface && extracted.surface !== "window") presentation.surface = extracted.surface;
+    else delete presentation.surface;
+  }
+  if (Object.keys(presentation).length) meta.presentation = presentation;
+  else delete meta.presentation;
+
   return Object.keys(meta).length ? meta : null;
 }

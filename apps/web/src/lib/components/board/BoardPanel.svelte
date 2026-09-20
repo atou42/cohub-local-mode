@@ -6,6 +6,7 @@ import {
 	worldPoint,
 } from "@neta-art/cohub/board";
 import { onDestroy, onMount, untrack } from "svelte";
+import { createBoardAssetManager } from "$lib/board/board-asset-manager";
 import { createSpaceBoardAssetSource } from "$lib/board/board-asset-source";
 import {
 	type BoardAwarenessController,
@@ -89,6 +90,21 @@ const resolvedAssetSource = $derived(
 	assetSource ?? createSpaceBoardAssetSource(spaceId),
 );
 
+/**
+ * One preview-texture owner for the whole panel. The live stage and the replay
+ * overlay share it: Pixi's `Assets` cache returns the same texture per URL, so
+ * two independent owners would tear down each other's textures on release.
+ */
+const assets = createBoardAssetManager({
+	spaceId: untrack(() => spaceId),
+	loadVideoPreviews:
+		typeof navigator === "undefined" ||
+		!(navigator as Navigator & { connection?: { saveData?: boolean } })
+			.connection?.saveData,
+	resolveSpaceFileUrl: (_spaceId, path) =>
+		untrack(() => resolvedAssetSource).resolveFileUrl(path),
+});
+
 let stageWrap: HTMLDivElement | null = $state(null);
 let contextMenu = $state<{ x: number; y: number } | null>(null);
 /**
@@ -99,6 +115,9 @@ let exportBridge = $state<BoardStageExportBridge | null>(null);
 let exportOpen = $state(false);
 let generationOpen = $state(false);
 let appearanceOpen = $state(false);
+let replayOpen = $state(false);
+/** Latest version seen over realtime; the replay view appends when it grows. */
+let liveVersion = $state(0);
 let backgroundLoadState = $state<BoardBackgroundLoadState | null>(null);
 let generationSelectionRequest = $state(0);
 let playingId = $state<string | null>(null);
@@ -208,6 +227,8 @@ async function regenerateTask(nodeId: string) {
 const boardClient = sdk
 	.space(untrack(() => spaceId))
 	.board(untrack(() => boardId));
+/** Stable reference: the replay view loads once per mount and must not see a new function per render. */
+const fetchTransactions = boardClient.transactions.bind(boardClient);
 const awareness: BoardAwarenessController = createBoardAwarenessController({
 	send: (seq, update) => boardClient.updateAwareness(seq, update),
 	onChange: () => {
@@ -426,7 +447,7 @@ function handleReadonlyKeydown(
 }
 
 function handleKeydown(event: KeyboardEvent) {
-	if (!active || generationOpen) return;
+	if (!active || generationOpen || replayOpen) return;
 	if (event.key === "Escape" && playingId) {
 		event.preventDefault();
 		closeMedia();
@@ -655,6 +676,9 @@ onMount(() => {
 	if (!readonly) {
 		unsubscribeAwareness = boardClient.subscribe({
 			awareness: (event) => awareness.receive(event),
+			changed: (event) => {
+				liveVersion = Math.max(liveVersion, event.payload.version);
+			},
 		});
 	}
 	// Live task snapshot updates: when a task node's run completes or fails, its
@@ -696,6 +720,7 @@ $effect(() => {
 	playingId = null;
 	exportOpen = false;
 	generationOpen = false;
+	replayOpen = false;
 	clearSpaceHeld();
 });
 
@@ -712,6 +737,7 @@ onDestroy(() => {
 	unsubscribeAwareness = null;
 	void awareness.destroy().finally(() => unsubscribe?.());
 	editor.destroy();
+	assets.destroy();
 });
 </script>
 
@@ -745,6 +771,7 @@ onDestroy(() => {
 		<BoardStage
 			{editor}
 			{runtime}
+			{assets}
 			{active}
 			{awareness}
 			{awarenessVersion}
@@ -834,6 +861,26 @@ onDestroy(() => {
 		{/if}
 		<BoardZoomMenu {editor} {immersive} />
 
+		{#if replayOpen}
+			{#await import("$lib/components/board/BoardReplayView.svelte") then { default: BoardReplayView }}
+				<BoardReplayView
+					{boardId}
+					{path}
+					{spaceId}
+					{runtime}
+					{assets}
+					assetSource={resolvedAssetSource}
+					initialDocument={editor.document}
+					initialCamera={editor.camera}
+					profiles={collaborators}
+					{isMobile}
+					{fetchTransactions}
+					{liveVersion}
+					onClose={() => { replayOpen = false; }}
+				/>
+			{/await}
+		{/if}
+
 		{#if contextMenu}
 			<BoardContextMenu
 				{editor}
@@ -844,6 +891,7 @@ onDestroy(() => {
 				onAddToGeneration={addSelectionToGeneration}
 				position={contextMenu}
 				onExport={exportBridge ? openExport : undefined}
+				onReplay={!readonly ? () => { contextMenu = null; replayOpen = true; } : undefined}
 				onClose={() => { contextMenu = null; }}
 			/>
 		{/if}

@@ -8,7 +8,7 @@ export type SpaceFsChange = {
 };
 
 export type SpaceFsChangedPayload = {
-  source: "sandbox-inotify" | "api-fs" | "bootstrap" | "sandbox-watch-started";
+  source: "sandbox-watch" | "api-fs" | "bootstrap" | "sandbox-watch-started";
   /** Client-generated id used to identify an API write echoed over realtime. */
   mutationId?: string;
   seq?: number;

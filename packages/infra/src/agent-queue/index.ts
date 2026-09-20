@@ -8,6 +8,22 @@ export const AGENT_SANDBOX_BASH_JOB_NAME = "sandbox_bash" as const;
 export const AGENT_SANDBOX_BASH_ATOMIC_JOB_NAME = "sandbox_bash_atomic" as const;
 export const AGENT_RUN_COMMAND_JOB_NAME = "run_command" as const;
 export const AGENT_SANDBOX_FS_MUTATION_JOB_NAME = "sandbox_fs_mutation" as const;
+export const AGENT_RUNTIME_RECOVERY_JOB_NAME = "runtime_recovery" as const;
+export type AgentRuntimeRecoveryJobData = {
+  spaceId: string;
+  sessionId: string;
+  expectedTurnId: string;
+  expectedHarness: "pi" | "codex";
+  expectedOwnerUserId: string;
+  confirmation?: { actorUserId: string; revision: string };
+};
+export function enqueueRuntimeRecovery(queue: Queue, data: AgentRuntimeRecoveryJobData) {
+  const suffix = data.confirmation ? `confirm-${data.confirmation.revision}` : `recover-${data.expectedTurnId}`;
+  return queue.add(AGENT_RUNTIME_RECOVERY_JOB_NAME, data, {
+    jobId: `runtime-${data.sessionId}-${suffix}`, attempts: data.confirmation ? 12 : 8, backoff: { type: "exponential", delay: data.confirmation ? 5000 : 1000 },
+    removeOnComplete: true, removeOnFail: true,
+  });
+}
 
 export type AgentSandboxBashUploadJobData = {
   spaceId: string;

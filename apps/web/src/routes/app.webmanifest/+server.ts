@@ -2,11 +2,10 @@ import type { RequestHandler } from "@sveltejs/kit";
 import { buildAppPwaMeta, resolvePublicAppStartUrl } from "$lib/app-pwa";
 import { loadPublicAppDetail } from "$lib/server/public-api";
 import { PUBLIC_PAGE_CACHE_CONTROL } from "$lib/server/public-cache";
-
-// Manifest colors are a cross-platform install/cold-start fallback. The
-// running shell synchronizes theme-color from the computed app background.
-const THEME_COLOR = "#F8F8FA";
-const BACKGROUND_COLOR = "#F8F8FA";
+import {
+	DEFAULT_PWA_BACKGROUND_COLOR,
+	DEFAULT_PWA_THEME_COLOR,
+} from "$lib/system-chrome";
 
 function iconMimeType(url: string) {
 	const path = url.split("?")[0]?.split("#")[0]?.toLowerCase() ?? "";
@@ -78,8 +77,8 @@ export const GET: RequestHandler = async ({ fetch, url }) => {
 		id: startUrl,
 		start_url: startUrl,
 		scope: "/",
-		theme_color: meta.themeColor || THEME_COLOR,
-		background_color: BACKGROUND_COLOR,
+		theme_color: meta.themeColor || DEFAULT_PWA_THEME_COLOR,
+		background_color: DEFAULT_PWA_BACKGROUND_COLOR,
 		display: "standalone",
 		icons,
 	};

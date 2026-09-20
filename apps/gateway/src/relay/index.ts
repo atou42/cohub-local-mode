@@ -2,10 +2,12 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 import { createLogger } from "@cohub/infra/logging";
+import { fileWatcherStatusSchema } from "@cohub/protocol";
 import { gatewayConfig } from "../config.js";
 import { redisCommandClient, REALTIME_OUTBOUND_CHANNEL } from "../redis.js";
 import { enqueueSpaceHookFromEvent } from "../space-hooks.js";
 import { authorizeLocalSandbox, reportLocalSandboxStatus } from "../api-client.js";
+import { relayAuthClose } from "../local-sandbox-auth.js";
 
 const logger = createLogger({ serviceName: "cohub-gateway" });
 
@@ -14,6 +16,7 @@ const logger = createLogger({ serviceName: "cohub-gateway" });
 // socket, to open data channels that get transparently piped to cloud peers.
 type RegisteredRunner = {
   spaceId: string;
+  runtimeId?: string;
   socket: WebSocket;
   tokenHash: string;
   connectedAt: number;
@@ -78,7 +81,7 @@ async function publishRelayWatcherEvent(spaceId: string, frameType: string, payl
     const changes = Array.isArray(record.changes) ? record.changes : [];
     type = "space.fs.changed";
     eventPayload = {
-      source: resync && changes.length === 0 ? "sandbox-watch-started" : "sandbox-inotify",
+      source: resync && changes.length === 0 ? "sandbox-watch-started" : "sandbox-watch",
       seq,
       resync,
       changes,
@@ -136,7 +139,7 @@ export async function handleRelayControlConnection(socket: WebSocket, request: I
       closeSocket(socket, 4400, "message too large");
       return;
     }
-    let frame: { type?: string; spaceId?: string; payload?: unknown };
+    let frame: { type?: string; spaceId?: string; runtimeId?: string; payload?: unknown };
     try {
       frame = JSON.parse(data.toString());
     } catch {
@@ -155,8 +158,14 @@ export async function handleRelayControlConnection(socket: WebSocket, request: I
         return { ok: false as const, status: 500, message: "authorization failed" };
       });
       if (!auth.ok) {
+        logger.info("[Relay] local sandbox authorization rejected", {
+          spaceId,
+          status: auth.status,
+          message: auth.message,
+        });
         socket.send(JSON.stringify({ type: "error", status: auth.status, message: auth.message }));
-        closeSocket(socket, auth.status >= 500 ? 1011 : 4403, auth.status >= 500 ? "authorization unavailable" : "forbidden");
+        const close = relayAuthClose(auth.status);
+        closeSocket(socket, close.code, close.reason);
         return;
       }
 
@@ -165,10 +174,16 @@ export async function handleRelayControlConnection(socket: WebSocket, request: I
       if (previous && previous.socket !== socket) {
         closeSocket(previous.socket, 4409, "replaced by new runner");
       }
-      runner = { spaceId, socket, tokenHash: hashToken(token).toString("base64"), connectedAt: Date.now() };
+      runner = {
+        spaceId,
+        ...(typeof frame.runtimeId === "string" && /^[0-9a-f-]{36}$/i.test(frame.runtimeId) ? { runtimeId: frame.runtimeId } : {}),
+        socket,
+        tokenHash: hashToken(token).toString("base64"),
+        connectedAt: Date.now(),
+      };
       runnersBySpace.set(spaceId, runner);
       socket.send(JSON.stringify({ type: "registered" }));
-      logger.info("[Relay] local sandbox registered", { spaceId });
+      logger.info("[Relay] local sandbox registered", { spaceId, runtimeId: runner.runtimeId ?? null });
 
       await reportLocalSandboxStatus({
         spaceId,
@@ -176,12 +191,23 @@ export async function handleRelayControlConnection(socket: WebSocket, request: I
         wsEndpoint: buildRelayWsEndpoint(spaceId),
         hostname: gatewayConfig.nodeId,
         gatewayNodeId: gatewayConfig.nodeId,
-      }).catch((error) => logger.warn("[Relay] failed to report ready", { spaceId, error }));
+        runtimeId: runner.runtimeId ?? null,
+      }).catch((error) => logger.warn("[Relay] failed to report ready", { spaceId, runtimeId: runner?.runtimeId ?? null, error }));
       return;
     }
 
     if (frame.type === "ping") {
       socket.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+
+    if (frame.type === "watcher.status" && runner && runnersBySpace.get(runner.spaceId)?.socket === socket) {
+      const value = frame.payload;
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const parsed = fileWatcherStatusSchema.safeParse({ ...value, observedAt: new Date().toISOString() });
+      if (!parsed.success) return;
+      await redisCommandClient.set(`sandbox:watcher:${runner.spaceId}`, JSON.stringify(parsed.data), "EX", 60)
+        .catch((error) => logger.warn("[Relay] watcher status unavailable", { error }));
       return;
     }
 
@@ -200,8 +226,8 @@ export async function handleRelayControlConnection(socket: WebSocket, request: I
     // Only clear if this socket is still the active runner for the space.
     if (runnersBySpace.get(spaceId)?.socket === socket) {
       runnersBySpace.delete(spaceId);
-      logger.info("[Relay] local sandbox disconnected", { spaceId });
-      await reportLocalSandboxStatus({ spaceId, status: "stopped" }).catch((error) =>
+      logger.info("[Relay] local sandbox disconnected", { spaceId, runtimeId: runner.runtimeId ?? null });
+      await reportLocalSandboxStatus({ spaceId, status: "stopped", runtimeId: runner.runtimeId ?? null }).catch((error) =>
         logger.warn("[Relay] failed to report stopped", { spaceId, error }),
       );
     }
@@ -233,7 +259,7 @@ export function handleRelayPeerConnection(socket: WebSocket, request: IncomingMe
   const channelId = randomUUID();
   const timer = setTimeout(() => {
     if (pendingPeers.delete(channelId)) {
-      logger.warn("[Relay] data channel pairing timed out", { spaceId, channelId });
+      logger.warn("[Relay] data channel pairing timed out", { spaceId, channelId, runtimeId: runnersBySpace.get(spaceId)?.runtimeId ?? null });
       closeSocket(socket, 4408, "pairing timed out");
     }
   }, DATA_PAIR_TIMEOUT_MS);
@@ -252,7 +278,7 @@ export function handleRelayPeerConnection(socket: WebSocket, request: IncomingMe
   } catch (error) {
     clearTimeout(timer);
     pendingPeers.delete(channelId);
-    logger.warn("[Relay] failed to ask runner to open channel", { spaceId, channelId, error });
+    logger.warn("[Relay] failed to ask runner to open channel", { spaceId, channelId, runtimeId: runner.runtimeId ?? null, error });
     closeSocket(socket, 4503, "runner unavailable");
   }
 }
@@ -278,18 +304,19 @@ export function handleRelayDataConnection(runnerSocket: WebSocket, request: Inco
   const token = parseBearer(request);
   const runner = runnersBySpace.get(pending.spaceId);
   if (!token || !runner || !sameHash(hashToken(token), Buffer.from(runner.tokenHash, "base64"))) {
+    logger.warn("[Relay] data channel authorization rejected", { spaceId: pending.spaceId, channelId, runtimeId: runner?.runtimeId ?? null });
     closeSocket(runnerSocket, 4401, "unauthorized data channel");
     return;
   }
   clearTimeout(pending.timer);
   pendingPeers.delete(channelId);
-  pipe(pending.spaceId, channelId, pending.peerSocket, runnerSocket);
+  pipe(pending.spaceId, channelId, pending.peerSocket, runnerSocket, runner.runtimeId);
 }
 
 // pipe wires two sockets together with transparent frame forwarding. The
 // gateway does not parse the agent-sandbox protocol; it only relays bytes.
-function pipe(spaceId: string, channelId: string, peer: WebSocket, runner: WebSocket) {
-  logger.info("[Relay] data channel paired", { spaceId, channelId });
+function pipe(spaceId: string, channelId: string, peer: WebSocket, runner: WebSocket, runtimeId?: string) {
+  logger.info("[Relay] data channel paired", { spaceId, channelId, runtimeId: runtimeId ?? null });
 
   const forward = (from: WebSocket, to: WebSocket) => {
     from.on("message", (data, isBinary) => {

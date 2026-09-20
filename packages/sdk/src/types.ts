@@ -63,6 +63,8 @@ export type {
   BoardDiagnostic,
   BoardEffect,
   BoardEffectInput,
+  BoardAnimationSpec,
+  BoardDealParams,
   BoardAnimationTarget,
   BoardCompositionPlayback,
   BoardEasing,
@@ -81,6 +83,10 @@ export type {
   BoardTimeline,
   BoardTimelineMarker,
   BoardTrack,
+  BoardTransactionOperation,
+  BoardTransactionRecord,
+  BoardTransactionsPage,
+  BoardTransactionsReadInput,
   BoardValidationResult,
   SpaceStartupResponse,
 } from "@cohub/protocol";
@@ -1202,6 +1208,24 @@ export type UserSessionListItem = SessionRecord & {
   space?: UserSessionSpaceSummary | null;
 };
 
+
+/**
+ * Source kinds for the `source` query on `GET /api/me/sessions`. Keys match the
+ * `Source/*` labels a space sidebar shows; `other` catches anything unlabelled.
+ */
+export type UserSessionSourceKey =
+  | "public_api"
+  | "scheduled_task"
+  | "space_hook"
+  | "web"
+  | "websocket"
+  | "cli"
+  | "feishu"
+  | "wechat"
+  | "discord"
+  | "qq"
+  | "other";
+
 export type UserSessionsResponse = {
   sessions: UserSessionListItem[];
   pageInfo?: {
@@ -1231,6 +1255,8 @@ export type CreateSpacePromptInput = {
   content?: ContentBlock[];
   model?: string | null;
   provider?: string | null;
+  /** Harness selected for this turn. */
+  harness?: "cohub" | "pi" | "codex" | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: ModelThinkingLevel | null;
   /** External harness service tier. `null` explicitly selects Standard. */
@@ -1571,6 +1597,7 @@ export type SpaceModListItem = {
 export const PERMISSIONS = [
   "space.view",
   "space.edit",
+  "space.create",
   "space.label.view",
   "space.label.manage",
   "space.label.assign",
@@ -1578,6 +1605,7 @@ export const PERMISSIONS = [
   "session.edit",
   "session.prompt.readonly",
   "session.prompt.fullaccess",
+  "session.access.manage",
   "generation.create",
   "file.view",
   "file.view.filtered",
@@ -1599,6 +1627,7 @@ export const PERMISSIONS = [
   "mod.manage",
   "space.commerce.view",
   "space.commerce.manage",
+  "app.manage",
   "user.space.list",
   "user.session.list",
   "user.taskrun.list",
@@ -1606,6 +1635,22 @@ export const PERMISSIONS = [
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
+
+/**
+ * Account-level permissions, not bound to a specific Space. Mirrored from
+ * `@cohub/core` alongside {@link PERMISSIONS}. A request whose scopes are all
+ * account-level needs no target Space and must not open a Space picker.
+ */
+export const USER_LEVEL_PERMISSIONS = new Set<Permission>([
+	"user.space.list",
+	"user.session.list",
+	"user.taskrun.list",
+	"user.usage.read",
+	"space.create",
+]);
+
+export const isUserLevelPermission = (permission: Permission): boolean =>
+	USER_LEVEL_PERMISSIONS.has(permission);
 
 /** A held permission that already covers the checked one. */
 const IMPLIED_PERMISSIONS: Partial<Record<Permission, readonly Permission[]>> = {

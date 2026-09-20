@@ -1,26 +1,14 @@
 <script lang="ts">
-import { LoaderCircle } from "lucide-svelte";
+import { LoaderCircle, Minus, MoveHorizontal, Plus } from "lucide-svelte";
 import type {
 	PDFDocumentLoadingTask,
 	PDFDocumentProxy,
 	RenderTask,
 } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { untrack } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
-
-export type PdfPreviewControls = {
-	page: number;
-	pageCount: number;
-	scale: number;
-	fitWidth: boolean;
-	rendering: boolean;
-	goToPage: (page: number) => void;
-	zoomIn: () => void;
-	zoomOut: () => void;
-	fitPageWidth: () => void;
-};
 
 type PageLayout = {
 	page: number;
@@ -34,7 +22,6 @@ type Props = {
 	base64?: string | null;
 	version: string;
 	isMobile?: boolean;
-	onControlsChange?: (controls: PdfPreviewControls | null) => void;
 };
 
 const MIN_SCALE = 0.25;
@@ -56,7 +43,6 @@ let {
 	base64 = null,
 	version,
 	isMobile = false,
-	onControlsChange,
 }: Props = $props();
 
 const locale = $derived(getLocale());
@@ -69,11 +55,12 @@ let pdfDocument: PDFDocumentProxy | null = $state(null);
 let pageLayouts: PageLayout[] = $state([]);
 let visiblePages: number[] = $state([]);
 let pageNumber = $state(1);
+let pageDraft = $state("");
+let pageInputFocused = $state(false);
 let manualScale = $state(1);
 let renderedScale = $state(1);
 let fitWidth = $state(true);
 let loading = $state(true);
-let renderingCount = $state(0);
 let progress = $state<number | null>(null);
 let error = $state<string | null>(null);
 let passwordPrompt = $state(false);
@@ -92,11 +79,43 @@ const renderedScales = new Map<number, number>();
 let pageOffsets: number[] = [];
 let mountVersion = $state(0);
 
+// Keep the control bar out of the reader's way: it shows on first paint, on
+// pointer / scroll activity, and for keyboard focus, then fades when idle.
+const CONTROLS_IDLE_MS = 1800;
+let controlsRevealed = $state(true);
+let controlsIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleControlsIdle() {
+	if (controlsIdleTimer) clearTimeout(controlsIdleTimer);
+	controlsIdleTimer = setTimeout(() => {
+		controlsRevealed = false;
+		controlsIdleTimer = null;
+	}, CONTROLS_IDLE_MS);
+}
+
+function noteControlsActivity() {
+	controlsRevealed = true;
+	scheduleControlsIdle();
+}
+
+onMount(scheduleControlsIdle);
+onDestroy(() => {
+	if (controlsIdleTimer) clearTimeout(controlsIdleTimer);
+});
+
 const sourceKey = $derived(
 	`${version}:${url ?? `inline:${base64?.length ?? 0}`}`,
 );
 const pageCount = $derived(pageLayouts.length);
-const rendering = $derived(renderingCount > 0);
+const pageInputValue = $derived(
+	pageInputFocused ? pageDraft : String(pageNumber),
+);
+
+function commitPage() {
+	const parsed = Number.parseInt(pageDraft, 10);
+	if (Number.isFinite(parsed)) goToPage(parsed);
+	pageDraft = String(pageNumber);
+}
 
 function clampScale(value: number) {
 	return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
@@ -129,8 +148,6 @@ function cancelRenders() {
 	for (const task of renderTasks.values()) task.cancel();
 	renderTasks.clear();
 	renderedScales.clear();
-	// `renderingCount` is not reset here: each in-flight render still runs its own
-	// `finally`, so zeroing it would double-count against the next generation.
 }
 
 function releaseCanvas(canvas: HTMLCanvasElement) {
@@ -341,7 +358,6 @@ async function renderPage(
 	const layout = pageLayouts[pageNumber - 1];
 	if (!document || !layout || renderTasks.has(pageNumber)) return;
 	renderedScales.set(pageNumber, scale);
-	renderingCount += 1;
 	try {
 		const page = await document.getPage(pageNumber);
 		if (canvases.get(pageNumber) !== canvas) return;
@@ -378,8 +394,6 @@ async function renderPage(
 			renderedScales.delete(pageNumber);
 			console.error(`PDF page ${pageNumber} render failed`, cause);
 		}
-	} finally {
-		renderingCount = Math.max(0, renderingCount - 1);
 	}
 }
 
@@ -542,38 +556,22 @@ $effect(() => {
 		}
 	});
 });
-
-$effect(() => {
-	const callback = onControlsChange;
-	if (!callback) return;
-	const controls: PdfPreviewControls | null =
-		pdfDocument && pageCount > 0
-			? {
-					page: pageNumber,
-					pageCount,
-					scale: renderedScale,
-					fitWidth,
-					rendering,
-					goToPage,
-					zoomIn: () => zoomBy(SCALE_STEP),
-					zoomOut: () => zoomBy(1 / SCALE_STEP),
-					fitPageWidth,
-				}
-			: null;
-	untrack(() => callback(controls));
-	return () => untrack(() => callback(null));
-});
 </script>
 
 <div
-	class="relative h-full min-h-0 w-full overflow-hidden bg-bg-primary"
+	class="pdf-root relative h-full min-h-0 w-full overflow-hidden bg-bg-primary"
 	role="region"
 	aria-label={`PDF preview: ${name}`}
+	onpointermove={noteControlsActivity}
+	onpointerdown={noteControlsActivity}
 >
 	<div
 		bind:this={viewportElement}
 		class="h-full overflow-auto overscroll-contain px-2 py-2 sm:px-4 sm:py-4"
-		onscroll={updateVisiblePages}
+		onscroll={() => {
+			updateVisiblePages();
+			noteControlsActivity();
+		}}
 	>
 		<div
 			bind:this={pagesElement}
@@ -635,6 +633,69 @@ $effect(() => {
 			</div>
 		</div>
 	{/if}
+
+	{#if pageCount > 0 && !loading && !passwordPrompt && !error}
+		<div
+			class="pdf-controls"
+			data-revealed={controlsRevealed}
+			role="group"
+			aria-label={m.preview_pages({}, { locale })}
+		>
+			<input
+				class="pdf-controls-input"
+				type="text"
+				inputmode="numeric"
+				aria-label={m.inline_page_number({}, { locale })}
+				value={pageInputValue}
+				oninput={(event) => (pageDraft = event.currentTarget.value)}
+				onfocus={(event) => {
+					pageInputFocused = true;
+					pageDraft = String(pageNumber);
+					event.currentTarget.select();
+				}}
+				onblur={() => {
+					pageInputFocused = false;
+					commitPage();
+				}}
+				onkeydown={(event) => {
+					if (event.key === "Enter") event.currentTarget.blur();
+				}}
+			/>
+			<span class="pdf-controls-total">/ {pageCount}</span>
+			<span class="pdf-controls-divider"></span>
+			<button
+				type="button"
+				class="pdf-controls-btn"
+				title={m.inline_zoom_out({}, { locale })}
+				aria-label={m.inline_zoom_out({}, { locale })}
+				onclick={() => zoomBy(1 / SCALE_STEP)}
+			>
+				<Minus class="h-4 w-4" />
+			</button>
+			<span class="pdf-controls-scale">{Math.round(renderedScale * 100)}%</span>
+			<button
+				type="button"
+				class="pdf-controls-btn"
+				title={m.inline_zoom_in({}, { locale })}
+				aria-label={m.inline_zoom_in({}, { locale })}
+				onclick={() => zoomBy(SCALE_STEP)}
+			>
+				<Plus class="h-4 w-4" />
+			</button>
+			<span class="pdf-controls-divider"></span>
+			<button
+				type="button"
+				class="pdf-controls-btn"
+				class:active={fitWidth}
+				title={m.inline_fit_width({}, { locale })}
+				aria-label={m.inline_fit_width({}, { locale })}
+				aria-pressed={fitWidth}
+				onclick={fitPageWidth}
+			>
+				<MoveHorizontal class="h-4 w-4" />
+			</button>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -645,5 +706,108 @@ $effect(() => {
 	canvas {
 		display: block;
 		background: var(--bg-surface);
+	}
+
+	.pdf-controls {
+		position: absolute;
+		bottom: 16px;
+		left: 50%;
+		z-index: 10;
+		display: flex;
+		max-width: calc(100% - 24px);
+		transform: translateX(-50%);
+		align-items: center;
+		gap: 2px;
+		border: 1px solid var(--border-subtle);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+		padding: 4px 6px;
+		box-shadow: 0 8px 20px
+			color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
+		backdrop-filter: blur(12px);
+		/* Idle: stay out of the document's way; revealed by activity or focus. */
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 160ms ease;
+	}
+
+	.pdf-controls[data-revealed="true"],
+	.pdf-controls:focus-within {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.pdf-controls-input {
+		width: 2.5rem;
+		height: 1.5rem;
+		flex: 0 0 auto;
+		border: 1px solid var(--border-subtle);
+		border-radius: 6px;
+		background: var(--bg-input);
+		color: var(--text-primary);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		text-align: center;
+	}
+
+	.pdf-controls-input:focus {
+		border-color: color-mix(in srgb, var(--brand) 50%, transparent);
+		outline: none;
+	}
+
+	.pdf-controls-total,
+	.pdf-controls-scale {
+		flex: 0 0 auto;
+		color: var(--text-tertiary);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.pdf-controls-scale {
+		min-width: 2.25rem;
+		text-align: center;
+	}
+
+	.pdf-controls-divider {
+		width: 1px;
+		height: 1rem;
+		margin-inline: 3px;
+		flex: 0 0 auto;
+		background: var(--border-subtle);
+	}
+
+	.pdf-controls-btn {
+		display: inline-flex;
+		height: 1.5rem;
+		width: 1.5rem;
+		flex: 0 0 auto;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-tertiary);
+		cursor: pointer;
+		transition: background-color 120ms ease, color 120ms ease;
+	}
+
+	.pdf-controls-btn:hover {
+		background: var(--bg-hover);
+		color: var(--text-secondary);
+	}
+
+	.pdf-controls-btn.active {
+		background: var(--bg-hover-strong);
+		color: var(--text-secondary);
+	}
+
+	@media (pointer: coarse) {
+		.pdf-controls {
+			bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+		}
+		.pdf-controls-btn {
+			height: 1.75rem;
+			width: 1.75rem;
+		}
 	}
 </style>

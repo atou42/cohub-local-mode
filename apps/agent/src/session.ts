@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { access, stat } from "node:fs/promises";
 import { trace } from "@opentelemetry/api";
+import { SessionManager } from "./runtime/local-session-manager.js";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { sessionMessages, sessionTurns } from "@cohub/db";
-import { SessionManager } from "./runtime/local-session-manager.js";
 import type { ContentBlock } from "@cohub/protocol/core";
 import { normalizeContentBlocksSafe } from "@cohub/core/content/normalize";
 import { getSpace } from "./api.js";
@@ -26,7 +26,12 @@ import { db } from "./db.js";
 import { createCohubAgentSession, type CohubAgentSession } from "./runtime/session-runtime.js";
 import type { AgentTurnAbortEvent } from "./abort.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ContextProjectionOptions } from "@cohub/protocol";
+import { loadRuntimeContext } from "./runtime/context-store.js";
 import { appendTerminalGenerationMessages } from "./generation-session-sync.js";
+import { syncCloudContext } from "./runtime/cloud-context.js";
+import { hydrateContextImages } from "./runtime/context-images.js";
+import { readPublicAssetImageUrl } from "./public-asset-storage.js";
 import type { createSandboxCodingTools } from "./sandbox/tools.js";
 import type { Permission } from "@cohub/core/permissions";
 import type { PromptAccessMode } from "@cohub/core/sessions";
@@ -63,13 +68,10 @@ async function syncGenerationMessagesToSessionFile(sessionId: string, sessionMan
   const rows = await db.select({ message: sessionMessages }).from(sessionMessages)
     .innerJoin(sessionTurns, eq(sessionMessages.turnId, sessionTurns.id))
     .where(and(
-      eq(sessionMessages.sessionId, sessionId),
-      eq(sessionTurns.sessionId, sessionId),
-      eq(sessionTurns.executionKind, "direct_generation"),
+      eq(sessionMessages.sessionId, sessionId), eq(sessionTurns.sessionId, sessionId), eq(sessionTurns.executionKind, "direct_generation"),
       ...(typeof beforeTurnSequence === "number" ? [sql`${sessionTurns.sequence} < ${beforeTurnSequence}`] : []),
       sql`${sessionMessages.meta}->>'messageKind' in ('generation_request', 'generation_result')`,
-    ))
-    .orderBy(asc(sessionMessages.sequence));
+    )).orderBy(asc(sessionMessages.sequence));
   if (rows.length === 0) return [];
   return appendTerminalGenerationMessages(rows.map((row) => row.message), sessionManager);
 }
@@ -1199,6 +1201,16 @@ export async function loadOrCreateSessionHandle(input: {
   const spaceWorkspaceDir = getAgentWorkspacePath(input.spaceId);
   const spaceSessionsDir = getAgentSpaceSessionsPath(input.spaceId);
   const fileSignature = await getSessionFileSignature(existingSessionFile);
+  const cachedHandle = input.sessionHandles.get(sessionKey);
+  const projectionOptions: ContextProjectionOptions = {
+    resolveApi: ({ provider, model }) => provider && model ? input.modelRegistry.find(provider, model)?.api ?? null : null,
+  };
+  const durableHead = await loadRuntimeContext({ spaceId: input.spaceId, sessionId: input.sessionId, beforeSequence: input.beforeTurnSequence ?? undefined, headOnly: true });
+  const cachedMarker = cachedHandle?.sessionManager.getCustomEntries("cohub.context").at(-1)?.data as { revision?: string } | undefined;
+  const durableContext = cachedMarker?.revision === durableHead.revision && fileSignature
+    && sameSessionFileSignature(cachedHandle?.sessionFileSignature ?? null, fileSignature)
+    ? durableHead
+    : await hydrateContextImages(await loadRuntimeContext({ spaceId: input.spaceId, sessionId: input.sessionId, beforeSequence: input.beforeTurnSequence ?? undefined }), readPublicAssetImageUrl);
 
   const spaceInfo = await getSpace({ spaceId: input.spaceId }).catch((error: unknown) => {
     logger.warn(`[Agent] Failed to load space info for ${input.spaceId}; falling back to platform config`, error);
@@ -1210,11 +1222,9 @@ export async function loadOrCreateSessionHandle(input: {
   if (existing) {
     if (sameSessionFileSignature(existing.sessionFileSignature, fileSignature)) {
       existing.spaceOwnerUserId = spaceOwnerUserId;
-      if (!existing.currentUserMessageId) {
-        const appended = await syncGenerationMessagesToSessionFile(input.sessionId, existing.sessionManager, input.beforeTurnSequence).catch((error) => {
-          logger.warn(`[Session] failed to project generation messages sessionId=${input.sessionId}:`, error);
-          return [] as AgentMessage[];
-        });
+      if (!existing.currentUserMessageId && syncCloudContext(existing.sessionManager, durableContext, projectionOptions)) {
+        await existing.session.reload();
+        const appended = await syncGenerationMessagesToSessionFile(input.sessionId, existing.sessionManager, input.beforeTurnSequence);
         if (appended.length > 0) existing.session.agent.state.messages.push(...appended);
       }
       logger.debug(`[Session] reuse sessionId=${input.sessionId} spaceId=${input.spaceId}`);
@@ -1244,6 +1254,7 @@ export async function loadOrCreateSessionHandle(input: {
     sessionManager = tmpManager;
   }
 
+  syncCloudContext(sessionManager, durableContext, projectionOptions);
   await syncGenerationMessagesToSessionFile(input.sessionId, sessionManager, input.beforeTurnSequence).catch((error) => {
     logger.warn(`[Session] failed to project generation messages sessionId=${input.sessionId}:`, error);
   });

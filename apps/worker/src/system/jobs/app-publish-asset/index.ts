@@ -274,13 +274,15 @@ function getMimeType(path: string) {
   );
 }
 
-function assertSafeRelativePath(
-  input: string,
-  options?: { allowEmpty?: boolean; rejectDotSegments?: boolean },
-) {
-  const value = String(input ?? "")
-    .replace(/\\/g, "/")
-    .trim();
+function getWorkAssetCacheControl(contentType: string) {
+  // HTML stays fresh for three days; other assets retain immutable caching.
+  return contentType.split(";", 1)[0]?.trim().toLowerCase() === "text/html"
+    ? "public, max-age=259200"
+    : IMMUTABLE_PUBLIC_CACHE_CONTROL;
+}
+
+function assertSafeRelativePath(input: string, options?: { allowEmpty?: boolean; rejectDotSegments?: boolean }) {
+  const value = String(input ?? "").replace(/\\/g, "/").trim();
   if (!value) {
     if (options?.allowEmpty) return "";
     throw new WorkPublishAssetError(400, "invalid path", "path_invalid");
@@ -638,22 +640,15 @@ async function mapWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-async function putWorkAssetObject(input: {
-  objectKey: string;
-  body: Buffer | string;
-  contentType: string;
-  sha256: string;
-}) {
-  await getS3Client().send(
-    new PutObjectCommand({
-      Bucket: requireStorage().bucket,
-      Key: input.objectKey,
-      Body: input.body,
-      ContentType: input.contentType,
-      CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
-      Metadata: { sha256: input.sha256 },
-    }),
-  );
+async function putWorkAssetObject(input: { objectKey: string; body: Buffer | string; contentType: string; sha256: string }) {
+  await getS3Client().send(new PutObjectCommand({
+    Bucket: requireStorage().bucket,
+    Key: input.objectKey,
+    Body: input.body,
+    ContentType: input.contentType,
+    CacheControl: getWorkAssetCacheControl(input.contentType),
+    Metadata: { sha256: input.sha256 },
+  }));
 }
 
 async function writeArtifactManifest(input: {
@@ -812,7 +807,7 @@ async function putWorkFileObject(input: {
         Body: body,
         ContentLength: prepared.snapshot.size,
         ContentType: input.contentType,
-        CacheControl: IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        CacheControl: getWorkAssetCacheControl(input.contentType),
         Metadata: { sha256: prepared.sha256 },
       },
       queueSize: 2,
@@ -935,6 +930,7 @@ function extractPageMetaFromHtml(
     image: keepSiteAssetRef(page.image, available),
     lang: page.lang,
     themeColor: page.themeColor,
+    surface: page.surface,
     sourcePath,
   };
 }

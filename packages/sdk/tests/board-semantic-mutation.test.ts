@@ -19,10 +19,8 @@ function document(items = [item("a", "A"), item("b", "B")]): BoardDocument {
     kind: "cohub.board",
     version: 1,
     appearance: {
-      theme: "clean",
       background: { kind: "solid" },
       grid: { visible: false, size: 24, opacity: 0.12 },
-      mood: "clean",
     },
     viewport: { x: 0, y: 0, zoom: 1 },
     items,

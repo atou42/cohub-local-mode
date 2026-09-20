@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!--
+      interactive-widget=resizes-content: Android Chrome shrinks the layout
+      viewport when the soft keyboard opens instead of panning the visual
+      viewport. Panning can leave the shell offset after the keyboard closes,
+      exposing the root canvas below the composer. iOS ignores this key.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>Cohub</title>
     <meta name="application-name" content="Cohub" />
     <meta name="apple-mobile-web-app-title" content="Cohub" />
@@ -21,7 +30,7 @@
         document.write(`<link rel="manifest" href="${href}" crossorigin="use-credentials" />`);
       })();
     </script>
-    <meta name="theme-color" content="#F8F8FA" />
+    <meta name="theme-color" content="#FFFFFF" />
     <script>
       // Prevent FOUC — resolve theme before first paint
       (() => {
@@ -65,12 +74,14 @@
           : resolveUiLocale(localePreference, navigator.languages || [navigator.language]);
         document.documentElement.lang = locale;
 
+        // Mirrors --bg-primary of each theme (theme-registry.ts) so browser
+        // chrome and the root canvas share one color before hydration.
         var themeColors = {
-          dark: '#1F2026',
-          light: '#F8F8FA',
-          'solarized-dark': '#002B36',
-          'solarized-light': '#FDF6E3',
-          'neta-studio': '#1A191A'
+          dark: '#101213',
+          light: '#FFFFFF',
+          'solarized-dark': '#011415',
+          'solarized-light': '#FFFADE',
+          'neta-studio': '#050605'
         };
         var stored = readStoredValue('cohub-theme');
         var resolved;

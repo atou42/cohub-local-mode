@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   getSpaceHooksRedisKey,
   isSpaceHookableEvent,
+  shouldRefreshSpaceHooksCache,
   SPACE_HOOK_DISPATCH_JOB,
   SPACE_HOOK_TASK_TYPE,
-  SPACE_HOOKS_DIR,
+  SPACE_HOOK_WEBHOOK_EVENT,
   type SpaceHookEventEnvelope,
 } from "@cohub/protocol";
 import { buildAgentRunCommandJobId } from "../agent-queue/index.js";
@@ -62,13 +63,6 @@ function collectChangedPaths(payload: Record<string, unknown>) {
     if (typeof change.oldPath === "string" && change.oldPath.trim()) paths.push(change.oldPath);
   }
   return paths;
-}
-
-function touchesSpaceHooksDir(paths: string[]): boolean {
-  return paths.some((path) => {
-    const normalized = path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
-    return normalized === SPACE_HOOKS_DIR || normalized.startsWith(`${SPACE_HOOKS_DIR}/`);
-  });
 }
 
 /**
@@ -168,8 +162,9 @@ function isDuplicateJobError(error: unknown) {
  * Fan-out helper for event publishers.
  *
  * - Filters non-hookable / re-entrant events
- * - Invalidates definition cache when `.cohub/hooks/**` changes
+ * - Invalidates definition cache when `.cohub/hooks/**` changes or the workspace becomes ready
  * - Skips enqueue when Redis cache confirms the space has zero hooks
+ *   (`space.workspace.ready` always bypasses this gate)
  * - Enqueues an internal `space_hook.dispatch` system job (never writes task_runs)
  */
 export async function maybeEnqueueSpaceHookTask(input: {
@@ -189,6 +184,9 @@ export async function maybeEnqueueSpaceHookTask(input: {
   const spaceId = asString(input.event.spaceId);
   const type = asString(input.event.type);
   if (!spaceId || !type || !isSpaceHookableEvent(type)) return null;
+  // Webhooks are addressed HTTP triggers, not broadcast domain events.
+  // Secret checks live on the HTTP receiver; never fan them out here.
+  if (type === SPACE_HOOK_WEBHOOK_EVENT) return null;
 
   const payload = isRecord(input.event.payload) ? input.event.payload : {};
   if (isReentrantSpaceHookEvent({ type, payload })) return null;
@@ -202,13 +200,15 @@ export async function maybeEnqueueSpaceHookTask(input: {
     payload,
   };
 
-  const hooksConfigChanged = type === "space.fs.changed"
-    && touchesSpaceHooksDir(collectChangedPaths(payload));
-  if (input.redis && hooksConfigChanged) {
+  const refreshCache = shouldRefreshSpaceHooksCache({
+    type,
+    paths: collectChangedPaths(payload),
+  });
+  if (input.redis && refreshCache) {
     await invalidateSpaceHooksCache(input.redis, spaceId);
   }
 
-  if (input.redis && !hooksConfigChanged) {
+  if (input.redis && !refreshCache) {
     const gate = await resolveHooksCacheGate(input.redis, spaceId);
     if (gate === "empty") return null;
   }

@@ -1,4 +1,7 @@
-import { buildAppRuntimeReady } from "@cohub/protocol/app-runtime";
+import { buildAppRuntimeCloseRequest, buildAppRuntimeReady, buildAppRuntimeConfigureRequest, buildAppRuntimePointer, type AppRuntimeConfigureRequest, type AppRuntimeAnchor, type AppRuntimeRect } from "@cohub/protocol/app-runtime";
+
+// Re-export configure types so tsdown can emit them in the DTS bundle.
+export type { AppRuntimeConfigureRequest, AppRuntimeAnchor, AppRuntimeRect };
 import {
   buildAppNavigationOpenMessage,
   type AppNavigationOpenResponse,
@@ -6,20 +9,37 @@ import {
   type AppNavigationCall,
   parseAppNavigationOpenResponse,
 } from "@cohub/protocol/app-navigation";
-import type { Permission } from "./types.js";
+import type { CreateSpaceInput, Permission } from "./types.js";
+import { appAuthorizationRequestSchema, appAuthorizationResultSchema, type AppAuthorizationRequest as ProtocolAuthorizationRequest, type AppAuthorizationResult } from "@cohub/protocol";
+export type { AppAuthorizationResult } from "@cohub/protocol";
+export type AppAuthorizationRequest = Omit<ProtocolAuthorizationRequest, "scopes"> & { scopes: Permission[] };
+
+export class AppRuntimeError extends Error {
+  readonly retryable: boolean;
+  constructor(readonly code: string, message: string, readonly requestId?: string) {
+    super(message);
+    this.name = "AppRuntimeError";
+    this.retryable = code === "host_timeout" || code === "login_timeout" || code === "request_failed";
+  }
+}
 
 export type AppRuntimeInvocationContext = {
-  surface: "page" | "app" | "background" | "broker";
-  source?: "desktop_command" | "user" | "route";
+  surface: "page" | "app" | "overlay" | "background" | "broker";
+  source?: "desktop_command" | "user" | "route" | "embed";
   spaceId?: string;
   sessionId?: string;
   turnId?: string;
   toolCallId?: string;
+  /**
+   * The App whose page embeds this one, when `source` is `embed`. Present only
+   * when that App's published content is served from the embedding frame.
+   */
+  embedder?: { appId: string; slug: string };
 };
 
 /** Current navigation context supplied by the embedding Cohub shell. */
 export type AppRuntimeShellContext = {
-  surface: "workspace" | "background" | "broker";
+  surface: "workspace" | "background" | "broker" | "embed";
   space: { id: string; name?: string | null } | null;
   session: { id: string } | null;
   /** The Turn currently in view, not necessarily the Turn being generated. */
@@ -32,6 +52,9 @@ export type AppRuntimeGrantSummary = {
 };
 
 export type AppRuntimeContext = {
+  /** Host capabilities, independent of the viewer's granted permissions. */
+  capabilities?: { authorization: 2; serverGrants: true };
+  mode?: "bridge" | "broker";
   app: {
     id: string;
     slug: string;
@@ -66,7 +89,7 @@ type RuntimeResponse =
   | { type: "cohub.app.authorize.result"; requestId: string; token: string | null }
   | { type: "cohub.app.purchase.result"; requestId: string; checkout: { providerKey: string | null; checkoutUrl: string | null; checkoutUsable: boolean; status: string | null; message: string | null; orderId: string; productKey: string } | null }
   | { type: "cohub.app.checkout-state.result"; requestId: string; status: AppRuntimeCheckoutStatus; orderId: string | null }
-  | { type: "cohub.app.error"; requestId: string; message: string };
+  | { type: "cohub.app.error"; requestId: string; message: string; code?: string };
 
 /**
  * Options for a single app runtime transport request.
@@ -86,14 +109,27 @@ export type AppRuntimeRequestOptions = {
  */
 export type AppContextChangedListener = (context: AppRuntimeContext) => void;
 
+/** A developer-facing diagnostic forwarded by the host. */
+export type AppDiagnostic = {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown>;
+};
+
+export type AppDiagnosticListener = (diagnostic: AppDiagnostic) => void;
+
 export interface AppRuntimeTransport {
   request<T>(
     message: Record<string, unknown>,
     options?: AppRuntimeRequestOptions,
   ): Promise<T | null>;
   subscribeContextChanged?: (listener: AppContextChangedListener) => () => void;
+  /** Subscribes to host diagnostics (developer-facing, non-blocking). */
+  subscribeDiagnostics?: (listener: AppDiagnosticListener) => () => void;
   /** Whether this transport can address the embedding Cohub workspace. */
   supportsNavigation?: boolean;
+  /** Posts a one-way message to the host; no reply is expected. */
+  notify?: (message: Record<string, unknown>) => void;
 }
 
 const isBrowser = () => typeof window !== "undefined" && typeof window.parent !== "undefined";
@@ -121,11 +157,64 @@ const generateRequestId = () =>
 export class ParentBridgeTransport implements AppRuntimeTransport {
   readonly supportsNavigation = true;
   private trustedParentOrigin: string | null = null;
+  private readyAnnounced = false;
   private contextListeners = new Set<AppContextChangedListener>();
   private contextListener: ((event: MessageEvent) => void) | null = null;
+  private diagnosticListeners = new Set<AppDiagnosticListener>();
+  private diagnosticListener: ((event: MessageEvent) => void) | null = null;
+
+  /**
+   * Tells the host the runtime is ready once, before any subscription. Hosts
+   * gate unsolicited messages (context pushes, diagnostics) on this handshake,
+   * so the diagnostic subscription must trigger it too — an app that never
+   * subscribes to context still needs diagnostics to arrive.
+   */
+  private announceReady() {
+    if (this.readyAnnounced || !hasParent()) return;
+    const parentOrigin = this.trustedParentOrigin ?? getParentOrigin();
+    if (!parentOrigin) return;
+    try {
+      window.parent.postMessage(buildAppRuntimeReady(), parentOrigin);
+      this.readyAnnounced = true;
+    } catch {
+      // The host may have been disposed during app startup.
+    }
+  }
+
+  subscribeDiagnostics(listener: AppDiagnosticListener) {
+    if (!hasParent() || typeof window.addEventListener !== "function") return () => {};
+    this.diagnosticListeners.add(listener);
+    this.announceReady();
+    if (!this.diagnosticListener) {
+      this.diagnosticListener = (event) => {
+        if (event.source !== window.parent) return;
+        const parentOrigin = this.trustedParentOrigin ?? getParentOrigin();
+        if (parentOrigin && event.origin !== parentOrigin) return;
+        const data = event.data as { type?: string; code?: unknown; message?: unknown; detail?: unknown };
+        if (data?.type !== "cohub.app.diagnostic") return;
+        if (typeof data.code !== "string" || typeof data.message !== "string") return;
+        const diagnostic: AppDiagnostic = {
+          code: data.code,
+          message: data.message,
+          ...(data.detail && typeof data.detail === "object"
+            ? { detail: data.detail as Record<string, unknown> }
+            : {}),
+        };
+        for (const current of this.diagnosticListeners) current(diagnostic);
+      };
+      window.addEventListener("message", this.diagnosticListener);
+    }
+    return () => {
+      this.diagnosticListeners.delete(listener);
+      if (this.diagnosticListeners.size === 0 && this.diagnosticListener) {
+        window.removeEventListener("message", this.diagnosticListener);
+        this.diagnosticListener = null;
+      }
+    };
+  }
 
   subscribeContextChanged(listener: AppContextChangedListener) {
-    if (!hasParent()) return () => {};
+    if (!hasParent() || typeof window.addEventListener !== "function") return () => {};
     this.contextListeners.add(listener);
     if (!this.contextListener) {
       this.contextListener = (event) => {
@@ -137,14 +226,7 @@ export class ParentBridgeTransport implements AppRuntimeTransport {
         for (const current of this.contextListeners) current(data.context);
       };
       window.addEventListener("message", this.contextListener);
-      const parentOrigin = this.trustedParentOrigin ?? getParentOrigin();
-      if (parentOrigin) {
-        try {
-          window.parent.postMessage(buildAppRuntimeReady(), parentOrigin);
-        } catch {
-          // The host may have been disposed during app startup.
-        }
-      }
+      this.announceReady();
     }
     return () => {
       this.contextListeners.delete(listener);
@@ -153,6 +235,15 @@ export class ParentBridgeTransport implements AppRuntimeTransport {
         this.contextListener = null;
       }
     };
+  }
+
+  notify(message: Record<string, unknown>) {
+    if (!hasParent()) return;
+    try {
+      window.parent.postMessage(message, this.trustedParentOrigin ?? getParentOrigin() ?? "*");
+    } catch {
+      // The host may have been disposed.
+    }
   }
 
   request<T>(
@@ -193,7 +284,7 @@ export class ParentBridgeTransport implements AppRuntimeTransport {
         cleanup();
         this.trustedParentOrigin = event.origin;
         if (data.type === "cohub.app.error") {
-          reject(new Error(data.message));
+          reject(new AppRuntimeError(data.code ?? "request_failed", data.message, requestId));
           return;
         }
         resolve(data as T);
@@ -259,6 +350,7 @@ export class PopupBrokerTransport implements AppRuntimeTransport {
       return {
         type: "cohub.app.context.result",
         context: {
+          mode: "broker",
           app: { id: appId ?? "", slug: "", url: null },
           space: { id: "" },
           permissions: { scopes: [], appScopes: [], viewerScopes: [] },
@@ -302,6 +394,7 @@ export class PopupBrokerTransport implements AppRuntimeTransport {
       }
 
       let ready = false;
+      let loginPending = false;
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let closeChecker: ReturnType<typeof setInterval> | null = null;
@@ -329,9 +422,22 @@ export class PopupBrokerTransport implements AppRuntimeTransport {
         const data = event.data;
         if (!data) return;
 
+        if (data.type === "cohub.app.broker.progress" && !loginPending && !ready) {
+          loginPending = true;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => finish(() => reject(new AppRuntimeError("login_timeout", "Login did not complete in time."))), 600_000);
+          return;
+        }
+
         // Handshake: broker signals it's ready to receive the actual request.
         if (data.type === "cohub.app.broker.ready" && !ready) {
+          if (message.type === "cohub.app.authorize.v2" && (data as { authorizationVersion?: number }).authorizationVersion !== 2) {
+            finish(() => reject(new AppRuntimeError("unsupported", "This host does not support structured authorization.")));
+            return;
+          }
           ready = true;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => finish(() => reject(new AppRuntimeError("host_timeout", "Authorization timed out."))), timeoutMs);
           try {
             popup.postMessage({ ...message, requestId }, this.brokerOrigin);
           } catch {
@@ -344,7 +450,7 @@ export class PopupBrokerTransport implements AppRuntimeTransport {
         if (data.requestId !== requestId) return;
         finish(() => {
           if (data.type === "cohub.app.error") {
-            reject(new Error((data as { message: string }).message));
+            reject(new AppRuntimeError((data as { code?: string }).code ?? "request_failed", (data as { message: string }).message, requestId));
             return;
           }
           resolve(data as T);
@@ -357,7 +463,8 @@ export class PopupBrokerTransport implements AppRuntimeTransport {
       closeChecker = setInterval(() => {
         if (popup.closed) {
           finish(() => {
-            if (!ready) reject(new Error("Authorization window was closed."));
+            if (message.type === "cohub.app.authorize.v2") resolve({ result: { status: "cancelled" } } as T);
+            else if (!ready) reject(new Error("Authorization window was closed."));
             else resolve(null);
           });
         }
@@ -370,9 +477,10 @@ const TOKEN_STORAGE_PREFIX = "cohub:app-token";
 
 const AUTHORIZED_GRANTS_STORAGE_PREFIX = "cohub:app-auth-grants";
 
-/** Outcome of {@link AppRuntimeApi.requestSpaceAuthorization}. */
+/** Outcome of {@link AppRuntimeApi.requestSpaceAuthorization} / {@link AppRuntimeApi.requestCreateSpaceAuthorization}. */
 export type AppRuntimeAuthorizationResult = {
   granted: boolean;
+  /** Picked or created Space. Null on deny. Set with `granted: false` when create persisted but did not provision. */
   space: { id: string; name: string | null } | null;
 };
 
@@ -425,20 +533,111 @@ export class AppRuntimeApi {
    * back to a base session token that only carries app-side scopes. */
   private authorizedGrants: AppRuntimeAuthorizedGrant[] | null = null;
 
+  /**
+   * Rect input regions are hover-gated by the host, which needs to know when
+   * the pointer leaves them. A cross-origin frame swallows those moves once
+   * the host makes it interactive, so while a rect region is active we report
+   * the pointer ourselves. `all`/`none` need no reporting: their state is
+   * known without it.
+   */
+  private pointerListening = false;
+  private pointerForwarding = false;
+  private pointerDown = false;
+  private pointerFrame: number | null = null;
+  private pointerPending: { x: number; y: number } | null = null;
+  /** Cleanup for the constructor's diagnostic subscription; cleared on dispose. */
+  private diagnosticUnsubscribe: (() => void) | null;
+
+  private readonly onPointerMove = (event: PointerEvent) => {
+    if (!this.pointerForwarding) return;
+    this.pointerDown = event.buttons !== 0;
+    this.queuePointer(event.clientX, event.clientY);
+  };
+
+  private readonly onPointerDown = (event: PointerEvent) => {
+    if (!this.pointerForwarding) return;
+    this.pointerDown = true;
+    this.flushPointer(event.clientX, event.clientY);
+  };
+
+  private readonly onPointerUp = (event: PointerEvent) => {
+    // Deliver the release even after forwarding stopped mid-press (the App
+    // may have switched to `none`), or the host would keep the region hot.
+    if (!this.pointerForwarding && !this.pointerDown) return;
+    this.pointerDown = false;
+    this.flushPointer(event.clientX, event.clientY);
+  };
+
+  private readonly onPointerCancel = (event: PointerEvent) => {
+    if (!this.pointerForwarding && !this.pointerDown) return;
+    this.pointerDown = false;
+    this.flushPointer(event.clientX, event.clientY);
+  };
+
+  /** Coalesce moves to one message per frame; presses flush immediately. */
+  private queuePointer(x: number, y: number) {
+    this.pointerPending = { x, y };
+    if (this.pointerFrame !== null) return;
+    this.pointerFrame = requestAnimationFrame(() => {
+      this.pointerFrame = null;
+      const pending = this.pointerPending;
+      this.pointerPending = null;
+      if (pending && this.pointerForwarding) {
+        this.reportPointer(pending.x, pending.y, this.pointerDown);
+      }
+    });
+  }
+
+  private flushPointer(x: number, y: number) {
+    if (this.pointerFrame !== null) {
+      cancelAnimationFrame(this.pointerFrame);
+      this.pointerFrame = null;
+    }
+    this.pointerPending = null;
+    this.reportPointer(x, y, this.pointerDown);
+  }
+
+  private reportPointer(x: number, y: number, down: boolean) {
+    this.transport.notify?.(buildAppRuntimePointer({ x, y, down }));
+  }
+
+  private setPointerForwarding(on: boolean) {
+    if (typeof window === "undefined" || !this.transport.notify) return;
+    this.pointerForwarding = on;
+    if (!on || this.pointerListening) return;
+    // Listeners stay attached once a rect region has been declared, so an
+    // in-flight release is still reported after the App opts out.
+    this.pointerListening = true;
+    window.addEventListener("pointermove", this.onPointerMove, { passive: true, capture: true });
+    window.addEventListener("pointerdown", this.onPointerDown, true);
+    window.addEventListener("pointerup", this.onPointerUp, true);
+    window.addEventListener("pointercancel", this.onPointerCancel, true);
+  }
+
   constructor(
     transport: AppRuntimeTransport = new ParentBridgeTransport(),
     appId?: string,
     appIdResolver?: AppIdResolver,
   ) {
     this.transport = transport;
+    this.contextUnsubscribe = transport.subscribeContextChanged?.((context) => this.observeContext(context)) ?? null;
     this.appIdResolver = appIdResolver;
+    // Surface host diagnostics (e.g. an app requesting a Space the viewer can't
+    // access) to the app author's console. Non-blocking and viewer-invisible.
+    // Kept so `dispose()` can release the window listener.
+    this.diagnosticUnsubscribe =
+      transport.subscribeDiagnostics?.((diagnostic) => {
+        console.warn(
+          `[cohub] ${diagnostic.message} (${diagnostic.code})`,
+          diagnostic.detail ?? {},
+        );
+      }) ?? null;
     if (appId) {
       // appId known up-front — keys are immediately available.
       this.tokenStorageKey = `${TOKEN_STORAGE_PREFIX}:${appId}`;
       this.grantsStorageKey = `${AUTHORIZED_GRANTS_STORAGE_PREFIX}:${appId}`;
       this.storageKeysReady = Promise.resolve();
-      // Restore a cached token from localStorage (broker-mode UX optimization;
-      // see §0 — this is not a security measure).
+      // Broker must establish the current viewer before reusing a cached token.
       this.token = this.readStoredToken();
       this.authorizedGrants = this.readStoredGrants();
     } else if (appIdResolver) {
@@ -466,7 +665,8 @@ export class AppRuntimeApi {
       if (appId) {
         this.tokenStorageKey = `${TOKEN_STORAGE_PREFIX}:${appId}`;
         this.grantsStorageKey = `${AUTHORIZED_GRANTS_STORAGE_PREFIX}:${appId}`;
-        // Now that keys are known, hydrate from localStorage.
+        // Broker context is anonymous until it confirms the viewer. Never
+        // hydrate a previous account's App token before that confirmation.
         const stored = this.readStoredToken();
         if (stored && !this.token) this.token = stored;
         const storedGrants = this.readStoredGrants();
@@ -477,6 +677,10 @@ export class AppRuntimeApi {
   }
 
   private readStoredToken(): string | null {
+    if (this.transport instanceof PopupBrokerTransport) {
+      this.writeStoredToken(null);
+      return null;
+    }
     if (!this.tokenStorageKey || typeof localStorage === "undefined") return null;
     try {
       return localStorage.getItem(this.tokenStorageKey);
@@ -486,6 +690,7 @@ export class AppRuntimeApi {
   }
 
   private writeStoredToken(token: string | null) {
+    if (this.transport instanceof PopupBrokerTransport) token = null;
     if (!this.tokenStorageKey || typeof localStorage === "undefined") return;
     try {
       if (token) localStorage.setItem(this.tokenStorageKey, token);
@@ -518,16 +723,70 @@ export class AppRuntimeApi {
     }
   }
 
+  private serverGrants = false;
+  private viewerIdentity: string | null | undefined;
+  private identityVersion = 0;
+  private contextUnsubscribe: (() => void) | null = null;
+
+  private observeContext(context: AppRuntimeContext) {
+    if (context.capabilities?.serverGrants) this.serverGrants = true;
+    if (context.viewer === undefined) return;
+    const viewer = context.viewer?.userUuid ?? null;
+    if (this.viewerIdentity !== undefined && viewer !== this.viewerIdentity) {
+      this.identityVersion++;
+      this.token = null;
+      this.authorizedGrants = null;
+      this.writeStoredToken(null);
+      this.writeStoredGrants(null);
+    }
+    this.viewerIdentity = viewer;
+  }
+
   async context() {
     const response = await this.transport.request<{ context: AppRuntimeContext }>(
       { type: "cohub.app.context" },
       { timeoutMs: 8_000, retryIntervalMs: 250 },
     );
+    if (response?.context) this.observeContext(response.context);
     return response?.context ?? null;
   }
 
   onContextChanged(listener: AppContextChangedListener) {
     return this.transport.subscribeContextChanged?.(listener) ?? (() => {});
+  }
+
+  /** Subscribes to developer-facing host diagnostics. */
+  onDiagnostic(listener: AppDiagnosticListener) {
+    return this.transport.subscribeDiagnostics?.(listener) ?? (() => {});
+  }
+
+  /**
+   * Releases listeners and any pending pointer frame this runtime registered.
+   * Safe to call more than once.
+   */
+  dispose() {
+    // Clear before invoking so an injected transport's non-idempotent cleanup
+    // still runs exactly once.
+    const unsubscribe = this.diagnosticUnsubscribe;
+    this.diagnosticUnsubscribe = null;
+    unsubscribe?.();
+    this.contextUnsubscribe?.();
+    this.contextUnsubscribe = null;
+    this.pointerForwarding = false;
+    this.pointerPending = null;
+    if (this.pointerFrame !== null) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(this.pointerFrame);
+      }
+      this.pointerFrame = null;
+    }
+    if (this.pointerListening && typeof window !== "undefined") {
+      window.removeEventListener("pointermove", this.onPointerMove, { capture: true });
+      window.removeEventListener("pointerdown", this.onPointerDown, true);
+      window.removeEventListener("pointerup", this.onPointerUp, true);
+      window.removeEventListener("pointercancel", this.onPointerCancel, true);
+      this.pointerListening = false;
+    }
   }
 
   async navigationOpen(
@@ -567,19 +826,52 @@ export class AppRuntimeApi {
     );
   }
 
+  /**
+   * Asks the host to close this App: a workspace tab closes, an embedded page
+   * forwards the request to its embedder, a standalone page closes the tab.
+   * No-op in broker mode, where the App owns its own window.
+   */
+  requestClose() {
+    this.transport.notify?.(buildAppRuntimeCloseRequest());
+  }
+
+  /**
+   * Requests the host to update the overlay's geometry or pointer hit regions.
+   * Only meaningful when the App was opened as an `overlay` surface; the host
+   * is free to clamp or ignore values that violate its layout policy.
+   *
+   * A non-empty rect `inputRegion` also starts reporting the pointer to the
+   * host, which is how the host learns when it leaves the region.
+   */
+  requestConfigure(input: Omit<AppRuntimeConfigureRequest, "protocol" | "version" | "type">) {
+    this.transport.notify?.(buildAppRuntimeConfigureRequest(input));
+    if (input.inputRegion !== undefined) {
+      this.setPointerForwarding(
+        Array.isArray(input.inputRegion) && input.inputRegion.length > 0,
+      );
+    }
+  }
+
   async getAccessToken(options?: { forceRefresh?: boolean }) {
     await this.ensureStorageKeys();
+    const identityVersion = this.identityVersion;
+    // Broker tokens are intentionally memory-only, but still valid for this
+    // runtime instance. Reopening a popup for every API call breaks non-click
+    // requests and can be blocked by the browser.
     if (this.token && !options?.forceRefresh) return this.token;
     if (options?.forceRefresh) {
       this.token = null;
       this.writeStoredToken(null);
     }
+    const serverGrants = this.serverGrants;
+    // Compatibility for older hosts whose tokens contained viewer permissions.
+    // Modern hosts resolve grants server-side and must never re-open consent.
     // When refreshing a token, re-authorize every consent the app previously
     // obtained so the refreshed token retains those viewer grants. A plain
     // /session token only carries app-side scopes, which would cause 403 on
     // viewer-scoped operations. Each authorize call returns a token carrying
     // all live grants, so the last response is the complete token.
-    if (options?.forceRefresh && this.authorizedGrants && this.authorizedGrants.length > 0) {
+    if (!serverGrants && options?.forceRefresh && this.authorizedGrants && this.authorizedGrants.length > 0) {
       // A denied consent (the viewer denied the dialog, or the server
       // rejected the renewal) is dropped; a transient failure (network,
       // unavailable host) keeps the consent so a later refresh can renew it.
@@ -591,12 +883,14 @@ export class AppRuntimeApi {
             { type: "cohub.app.authorize", scopes: grant.scopes, spaceId: grant.spaceId },
             { timeoutMs: 120_000 },
           );
+          if (identityVersion !== this.identityVersion) return null;
           const token = response?.token ?? null;
           if (!token) continue; // denied — drop this consent, keep the others
           this.token = token;
           next = recordConsent(next, responseSpaceId(response?.space?.id) ?? grant.spaceId, grant.scopes);
           refreshed = true;
         } catch {
+          if (identityVersion !== this.identityVersion) return null;
           // Transient failure — keep the consent untouched.
           next = recordConsent(next, grant.spaceId, grant.scopes);
         }
@@ -614,16 +908,50 @@ export class AppRuntimeApi {
       { type: "cohub.app.token", forceRefresh: Boolean(options?.forceRefresh) },
       { timeoutMs: 20_000 },
     );
+    if (identityVersion !== this.identityVersion) return null;
     this.token = response?.token ?? null;
     this.writeStoredToken(this.token);
     return this.token;
   }
 
+  /** Structured authorization. Legacy hosts cannot execute this message. */
+  async authorize(input: AppAuthorizationRequest): Promise<AppAuthorizationResult> {
+    const parsed = appAuthorizationRequestSchema.safeParse(input);
+    if (!parsed.success) throw new AppRuntimeError("invalid_request", "Invalid authorization request.");
+    await this.ensureStorageKeys();
+    const context = await this.context();
+    if (context?.mode !== "broker" && context?.capabilities?.authorization !== 2) {
+      throw new AppRuntimeError("unsupported", "This host does not support structured authorization.");
+    }
+    const identityVersion = this.identityVersion;
+    const response = await this.transport.request<{ token?: string; result?: unknown }>(
+      { type: "cohub.app.authorize.v2", ...parsed.data },
+      { timeoutMs: 120_000 },
+    );
+    if (identityVersion !== this.identityVersion) throw new AppRuntimeError("session_changed", "The signed-in account changed. Please try again.");
+    if (!response) throw new AppRuntimeError("host_timeout", "Authorization host did not respond. It may not support structured authorization.");
+    const result = appAuthorizationResultSchema.safeParse(response.result);
+    if (!result.success) throw new AppRuntimeError("invalid_response", "Invalid authorization result.");
+    this.serverGrants = true;
+    if (result.data.status === "granted") {
+      if (typeof response.token !== "string" || !response.token) throw new AppRuntimeError("invalid_response", "Authorization token is missing.");
+      this.token = response.token;
+      this.writeStoredToken(this.token);
+    }
+    return result.data;
+  }
+
   /**
-   * Requests viewer consent. Without a `spaceId` the grant targets the app's
-   * home space; with one it targets that space — the app may only grant what
-   * the viewer can already do there themselves. Reuses a previous grant
-   * silently unless `alwaysAsk` forces the consent dialog.
+   * @deprecated Use authorize() to receive the actual target and grant.
+   * Requests viewer consent. With an accessible `spaceId` the grant targets
+   * that Space; otherwise the host resolves a viewer-controlled Space (the
+   * invocation or embedding Space, then the viewer's last picked Space, then
+   * their first accessible one) — never the app author's home Space. The app
+   * may only grant what the viewer can already do there themselves. Reuses a
+   * previous grant silently unless `alwaysAsk` forces the consent dialog.
+   *
+   * Returns whether a token was granted; use
+   * {@link requestSpaceAuthorization} when the app needs to know which Space.
    */
   async requestAuthorization(input: { scopes: Permission[]; reason?: string; spaceId?: string; alwaysAsk?: boolean }) {
     await this.ensureStorageKeys();
@@ -645,6 +973,7 @@ export class AppRuntimeApi {
   }
 
   /**
+   * @deprecated Use authorize() with a pick-space target.
    * Asks the viewer to pick a Space and grant the scopes on it — one consent
    * dialog covers both. Resolves with the picked space so the app knows where
    * it may act; `space` is null when the viewer denied.
@@ -659,6 +988,41 @@ export class AppRuntimeApi {
     const spaceId = typeof response?.space?.id === "string" ? response.space.id : null;
     const spaceName = typeof response?.space?.name === "string" ? response.space.name : null;
     // A denial leaves any existing token untouched.
+    if (token) {
+      this.token = token;
+      this.writeStoredToken(token);
+    }
+    if (token && spaceId) {
+      this.authorizedGrants = recordConsent(this.authorizedGrants, spaceId, input.scopes);
+      this.writeStoredGrants(this.authorizedGrants);
+    }
+    return {
+      granted: Boolean(token),
+      space: spaceId ? { id: spaceId, name: spaceName } : null,
+    };
+  }
+
+  /**
+   * One consent: create a viewer-owned Space (full `CreateSpaceInput`, same
+   * as `spaces.create`) and grant the scopes on it. Never silent — each
+   * confirm mints a new Space. The host creates with the viewer's account
+   * token.
+   * `{ granted: false, space }` means the Space was created but not provisioned;
+   * no grant was issued. A viewer deny is `{ granted: false, space: null }`.
+   */
+  async requestCreateSpaceAuthorization(input: {
+    scopes: Permission[];
+    space: CreateSpaceInput;
+    reason?: string;
+  }): Promise<AppRuntimeAuthorizationResult> {
+    await this.ensureStorageKeys();
+    const response = await this.transport.request<{ token: string | null; space?: { id?: unknown; name?: unknown } | null }>(
+      { type: "cohub.app.authorize", scopes: input.scopes, reason: input.reason, createSpace: input.space },
+      { timeoutMs: 120_000 },
+    );
+    const token = response?.token ?? null;
+    const spaceId = typeof response?.space?.id === "string" ? response.space.id : null;
+    const spaceName = typeof response?.space?.name === "string" ? response.space.name : null;
     if (token) {
       this.token = token;
       this.writeStoredToken(token);
@@ -744,8 +1108,8 @@ export function createSlugAppIdResolver(deps: {
       const url = `${deps.apiBaseUrl}/api/apps/by-slug/${encodeURIComponent(deps.ownerUsername)}/${encodeURIComponent(deps.spaceSlug)}/${encodeURIComponent(deps.appSlug)}`;
       const response = await doFetch(url);
       if (!response.ok) throw new Error(`getBySlug failed: ${response.status}`);
-      const data = (await response.json()) as { work?: { id?: string } } | null;
-      return data?.work?.id ?? null;
+      const data = (await response.json()) as { app?: { id?: string }; work?: { id?: string } } | null;
+      return data?.app?.id ?? data?.work?.id ?? null;
     })().catch(() => {
       // Do not cache failures — allow a later retry.
       cached = null;

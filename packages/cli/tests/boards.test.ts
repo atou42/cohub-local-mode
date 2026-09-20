@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   BOARD_BUILTIN_CLIP_KINDS,
   BOARD_BUILTIN_EFFECT_KINDS,
+  BoardMotionSchema,
   BoardAuthoringItemSchema,
   BoardCompositionInputSchema,
   BoardCreateInputSchema,
@@ -42,12 +43,14 @@ test("Board commands and every subcommand expose -h", () => {
     "examples",
     "rename",
     "background",
+    "motion",
     "playback-policy",
     "batch",
     "connections",
     "items",
     "effects",
     "compositions",
+    "transactions",
     "export",
     "playback",
     "watch",
@@ -83,7 +86,9 @@ test("every Board example is valid semantic input", () => {
         ? BoardAuthoringItemSchema
         : kind === "effect"
           ? effectInput
-          : BoardCompositionInputSchema;
+          : kind === "motion"
+            ? BoardMotionSchema
+            : BoardCompositionInputSchema;
     const parsed = schema.safeParse(value);
     assert.equal(parsed.success, true, key);
     if (parsed.success && kind === "composition") {

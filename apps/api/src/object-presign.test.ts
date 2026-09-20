@@ -57,7 +57,7 @@ describe("object presigning", () => {
 
   it("signs exact PUT length and OSS create-only conditions when requested", () => {
     const signed = createPresignedPutObjectUrl(
-      storage,
+      { ...storage, endpoint: "https://oss-us-west-1.aliyuncs.com", publicEndpoint: "https://oss-us-west-1.aliyuncs.com" },
       "dev/p/space/file.html",
       "text/html",
       "public, max-age=300",
@@ -76,4 +76,15 @@ describe("object presigning", () => {
     });
   });
 
+  it("signs S3 conditional creation and integrity without adding ACL headers", () => {
+    const signed = createPresignedPutObjectUrl(storage, "native/sha.jsonl", "application/x-ndjson", "private, max-age=0", null,
+      { contentLength: 3, contentMd5: "test-md5", forbidOverwrite: true });
+    assert.equal(signed.headers?.["if-none-match"], "*");
+    assert.equal(signed.headers?.["content-md5"], "test-md5");
+    assert.equal(signed.headers?.["x-amz-acl"], undefined);
+    assert.equal(signed.headers?.["x-oss-object-acl"], undefined);
+    const headers = new URL(signed.uploadUrl).searchParams.get("X-Amz-SignedHeaders");
+    assert(headers?.includes("content-md5"));
+    assert(!headers?.includes("acl"));
+  });
 });

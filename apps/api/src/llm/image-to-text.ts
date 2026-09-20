@@ -12,7 +12,7 @@ import {
 } from "@cohub/infra/config-runtime/model-tasks";
 import { contentBlockToPiImage, restoreRemoteImageUrls } from "./image-content.js";
 import { createModelsFromRegistry } from "./pi-models-adapter.js";
-import type { RuntimeLlmModel } from "./models.js";
+import type { RuntimeLlmModel } from "./completion-registry.js";
 
 export type ImageToTextCall = CompletionImageDescriptionFallback;
 

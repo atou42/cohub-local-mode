@@ -1,4 +1,4 @@
-import type { SpaceHookEventEnvelope } from "@cohub/protocol";
+import { SPACE_HOOK_WEBHOOK_EVENT, type SpaceHookEventEnvelope } from "@cohub/protocol";
 
 export const SPACE_HOOK_FS_PATHS_LIMIT = 100;
 
@@ -103,6 +103,12 @@ export function buildSpaceHookEnv(input: SpaceHookContextInput): Record<string, 
     env.COHUB_HOOK_FS_KINDS = summary.kinds.join(",");
   }
 
+  if (event.type === SPACE_HOOK_WEBHOOK_EVENT) {
+    setEnv(env, "COHUB_HOOK_WEBHOOK_NAME", asString(event.payload.name));
+    // Raw JSON so both shell (`jq`) and prompt consumers see the exact payload.
+    env.COHUB_HOOK_WEBHOOK_BODY = JSON.stringify(event.payload.body ?? null);
+  }
+
   if (event.type === "task.updated") {
     const task = isRecord(event.payload.task) ? event.payload.task : null;
     setEnv(env, "COHUB_HOOK_TASK_ID", task ? asString(task.id) : null);
@@ -139,6 +145,7 @@ const PROMPT_CONTEXT_LABELS: Array<{ key: string; label: string }> = [
   { key: "COHUB_HOOK_TASK_STATUS", label: "taskStatus" },
   { key: "COHUB_HOOK_TASK_CHANGED", label: "taskChanged" },
   { key: "COHUB_HOOK_TASK_ERROR", label: "taskError" },
+  { key: "COHUB_HOOK_WEBHOOK_NAME", label: "webhook" },
 ];
 
 /** Compact prompt appendix mirrored from the shared hook env. */
@@ -154,6 +161,10 @@ export function buildSpaceHookPromptAppendix(env: Record<string, string>): strin
     for (const path of paths.split("\n")) {
       if (path) lines.push(`  - ${path}`);
     }
+  }
+  const body = env.COHUB_HOOK_WEBHOOK_BODY;
+  if (body && body !== "null") {
+    lines.push("- body:", "```json", body, "```");
   }
   return lines.join("\n");
 }

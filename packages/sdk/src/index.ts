@@ -1,3 +1,14 @@
+export {
+  RUNTIME_PROTOCOL_VERSION, RUNTIME_MAX_FRAME_BYTES, RUNTIME_RECOVERY_BATCH_SIZE, runtimeCommandSchema, runtimeEventSchema, runtimeReadySchema,
+  contextToPiMessages, selectRuntimeContextMessages, isLocalHarness, resolveHarness,
+  RUNTIME_ARCHIVE_SEGMENT_BYTES, harnessArchiveIndexSchema, validateArchiveBoundary,
+} from "@cohub/protocol";
+export type {
+  HarnessKind, LocalHarness, RuntimeCapabilities, RuntimeCommand, RuntimeContext, RuntimePendingExecution,
+  RuntimeContextMessage, RuntimeTurnInput, RuntimeTurnUserMessage, RuntimeMessage, RuntimeExecutionEvent, HarnessArchive,
+  RuntimeStatus, RuntimeSessionRecoveryStatus, RuntimeStopConfirmation, HarnessArchiveIndex, RuntimeArchiveSegment, RuntimeArchiveUpload, RuntimeArchivePage,
+  RuntimeTraceContext,
+} from "@cohub/protocol";
 export { CohubHttpClient, createHttpClient } from "./http.js";
 export { BillingApi } from "./apis/billing.js";
 export { CohubClient, createCohubClient } from "./client.js";
@@ -25,11 +36,17 @@ export { ReferralsApi } from "./apis/referrals.js";
 export { buildSpaceInvitePath, buildSpacePath } from "./apis/invitations.js";
 export type { BuildSpaceInvitePathInput, BuildSpacePathInput } from "./apis/invitations.js";
 export type { ReferenceResourceSelector } from "./apis/references.js";
-export { ParentBridgeTransport, PopupBrokerTransport, AppRuntimeApi, createSlugAppIdResolver, createAppRuntime, resolveAppTransport } from "./app-runtime.js";
-export type { AppContextChangedListener, AppIdResolver, AppRuntimeInvocationContext, AppRuntimeModeConfig, AppRuntimeRequestOptions, AppRuntimeShellContext, AppRuntimeTransport } from "./app-runtime.js";
+export type { AppAuthorizationRequest } from "./app-runtime.js";
+export type { AppAuthorizationResult, AppAuthorizationTarget, AppAuthorizationGrant } from "@cohub/protocol";
+export { ParentBridgeTransport, PopupBrokerTransport, AppRuntimeError, AppRuntimeApi, createSlugAppIdResolver, createAppRuntime, resolveAppTransport } from "./app-runtime.js";
+export type { AppContextChangedListener, AppDiagnostic, AppDiagnosticListener, AppIdResolver, AppRuntimeInvocationContext, AppRuntimeModeConfig, AppRuntimeRequestOptions, AppRuntimeShellContext, AppRuntimeTransport, AppRuntimeConfigureRequest, AppRuntimeAnchor, AppRuntimeRect } from "./app-runtime.js";
+export { attachAppEmbed } from "./app-embed.js";
+export type { AppEmbedAttachOptions, AppEmbedHandle, AppEmbedShell } from "./app-embed.js";
 export type { AppNavigationCall, AppNavigationLaunch, AppNavigationOpenMessage, AppNavigationOpenResponse, AppNavigationTarget } from "@cohub/protocol/app-navigation";
 export { createAppBridgeCore } from "./app-bridge-core.js";
-export type { AppBridgeAuthorizationContext, AppBridgeCore, AppBridgeCoreConfig, AppBridgeCoreApp, AppBridgeDialogState, AppAuthorizeRequest, AppCheckoutStarted, AppPurchaseRequest, AppBridgeGetAccessToken, AppBridgeGetViewerUuid, AppBridgeRequestSignIn, AppPromotionAttributionContext } from "./app-bridge-core.js";
+export type { AppBridgeAuthorizationContext, AppBridgeCore, AppBridgeCoreConfig, AppBridgeCoreApp, AppBridgeDialogState, AppBridgeDiagnostic, AppAuthorizeRequest, AppCheckoutStarted, AppPurchaseRequest, AppBridgeGetAccessToken, AppBridgeGetViewerUuid, AppBridgeRequestSignIn, AppPromotionAttributionContext } from "./app-bridge-core.js";
+export { normalizeSpacePickerQuery, orderSpacePickerItems, filterSpacePickerItems, selectSpacePickerItems } from "./space-picker.js";
+export type { SpacePickerFilter, SpacePickerItem, SpacePickerOptions } from "./space-picker.js";
 export { clearGrantedAppScopes, hasGrantedAppScopes, setGrantedAppScopes } from "./app-grant-cache.js";
 export { SessionPatchReducer, createSessionPatchReducer } from "./session-patch-reducer.js";
 export {
@@ -170,7 +187,9 @@ export type {
 export {
   BoardClient,
   SpacePublicFilesApi,
+  SpaceWebhooksApi,
 } from "./apis/spaces.js";
+export type { SpaceWebhookListItem, SpaceWebhookTriggerResponse } from "@cohub/protocol";
 export {
   BOARD_COLOR_IDS,
   BOARD_GEO_KINDS,
@@ -181,9 +200,11 @@ export type {
 } from "@cohub/protocol";
 export {
   BOARD_ANIMATION_CHANNEL_CAPABILITIES,
+  BoardAnimationSpecSchema,
   BoardAuthoringItemSchema,
   BoardCompositionInputSchema,
   BoardCompositionSchema,
+  BoardDealParamsSchema,
   BoardEffectInputSchema,
   BoardEffectSchema,
   BoardItemPatchSchema,
@@ -195,7 +216,7 @@ export {
 } from "@cohub/protocol";
 export * from "./board/animation.js";
 export type { CreatePublicAssetUploadInput, CreatePublicAssetUploadResponse, PublicAssetMimeType, PublicAssetPurpose, PublicAssetUploadProgress, PublicAssetUploadProtocol, UploadAppSourceInput, UploadChatAttachmentInput, UploadChatImageAttachmentInput, UploadPublicAssetInput } from "./apis/public-assets.js";
-export type { AppActionRunResponse, AppAuthorizeResponse, AppContent, AppContentDownload, AppCreateInput, AppDetailResponse, AppExtractedPageMeta, AppGetResponse, AppMeta, AppPresentationMeta, AppPromotionCreateInput, AppPromotionEventResponse, AppPromotionProvider, AppPromotionProviderStatus, AppPromotionRecord, AppPromotionStatsResponse, AppPublicOwnerRecord, AppPublicSpaceRecord, AppRecord, AppResolveResponse, AppSessionResponse, AppStatus, AppTargetType, AppUpdateInput, AppVersionRecord, AppViewerGrantRecord, AppViewSource, AppViewStatsResponse, AppVisibility } from "./apis/apps.js";
+export type { AppActionRunResponse, AppAuthorizeResponse, AppContent, AppContentDownload, AppCreateInput, AppDetailResponse, AppExtractedPageMeta, AppGetResponse, AppMeta, AppPresentationMeta, AppPromotionCreateInput, AppPromotionEventResponse, AppPromotionProvider, AppPromotionProviderStatus, AppPromotionRecord, AppPromotionStatsResponse, AppPublicOwnerRecord, AppPublicSpaceRecord, AppRecord, AppResolveResponse, AppSessionResponse, AppStatus, AppTargetType, AppUpdateInput, AppVersionRecord, AppViewerGrantRecord, AppViewSource, AppViewStatsResponse, AppVisibility, PublicAppVersionSummary } from "./apis/apps.js";
 export type {
   PublicFileCreateUploadInput,
   PublicFileCreateUploadResponse,
@@ -211,11 +232,13 @@ export type {
   AppBoardArtifactManifest,
   AppBoardAsset,
   AppContentKind,
+  AppVersionSource,
 } from "@cohub/protocol";
 export {
   isTerminalDesktopCommandStatus,
   isDesktopCallMethod,
   parseDesktopCommand,
+  resolveOpenSurface,
   DESKTOP_COMMAND_DEFAULT_TIMEOUT_MS,
   DESKTOP_COMMAND_MAX_TIMEOUT_MS,
   DESKTOP_COMMAND_PAYLOAD_MAX_BYTES,
@@ -232,6 +255,7 @@ export type {
   DesktopCommandRecord,
   DesktopCommandStatus,
   DesktopOpenCommand,
+  DesktopSurface,
   DesktopTarget,
   DesktopAppTarget,
   DesktopCall,

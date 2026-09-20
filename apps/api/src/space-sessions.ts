@@ -40,18 +40,25 @@ import { fallbackPublicUserProfile, getProfilesByUuids } from "./user-profiles.j
 import { enqueueSessionMessagePostprocess } from "./session-message-postprocess-queue.js";
 import { enqueueSessionTitleGeneration } from "./session-title-queue.js";
 import { touchSpaceActivity } from "./space-activity.js";
+import { pickActiveTurns } from "./session-active-turns.js";
+import { sessionListSourceCondition } from "./session-source-filter.js";
 import {
   decodeSessionListCursor,
   mergeUserSessionListBranches,
   resolveSessionListLimit,
   paginateSessionRows,
   type SessionListCursor,
+  type SessionSourceFilter,
 } from "./session-list.js";
 
 export {
   encodeSessionListCursor,
   InvalidSessionListCursorError,
+  InvalidSessionSourceFilterError,
+  MAX_SESSION_LIST_LIMIT,
   mergeUserSessionListBranches,
+  parseSessionSourceKeys,
+  type SessionSourceFilter,
 } from "./session-list.js";
 
 
@@ -345,6 +352,31 @@ const sessionListOrderBy = [
   desc(spaceSessions.id),
 ] as const;
 
+const ACTIVE_TURN_STATUSES = ["queued", "running", "abort_requested"] as const;
+
+export async function attachActiveTurns<T extends { id: string }>(sessions: T[]) {
+  if (sessions.length === 0) return pickActiveTurns(sessions, []);
+
+  const rows = await db
+    .select({
+      sessionId: sessionTurns.sessionId,
+      id: sessionTurns.id,
+      status: sessionTurns.status,
+      provider: sessionTurns.provider,
+      model: sessionTurns.model,
+      startedAt: sessionTurns.startedAt,
+      meta: sessionTurns.meta,
+    })
+    .from(sessionTurns)
+    .where(and(
+      inArray(sessionTurns.sessionId, sessions.map((session) => session.id)),
+      inArray(sessionTurns.status, [...ACTIVE_TURN_STATUSES]),
+    ))
+    .orderBy(asc(sessionTurns.sessionId), desc(sessionTurns.sequence));
+
+  return pickActiveTurns(sessions, rows);
+}
+
 export const listSpaceSessions = async (
   spaceId: string,
   options?: { limit?: number; cursor?: string | null },
@@ -359,7 +391,11 @@ export const listSpaceSessions = async (
       : eq(spaceSessions.spaceId, spaceId),
   ).orderBy(...sessionListOrderBy).limit(limit + 1);
 
-  return paginateSessionRows(rows, limit);
+  const page = paginateSessionRows(rows, limit);
+  return {
+    ...page,
+    sessions: await attachActiveTurns(page.sessions),
+  };
 };
 
 export type UserSessionSpaceSummary = {
@@ -417,6 +453,8 @@ export const attachSessionSpaceSummaries = async <T extends { spaceId: string }>
   }));
 };
 
+
+
 /**
  * List sessions created by or participated in by a user, across spaces.
  *
@@ -427,32 +465,35 @@ export const attachSessionSpaceSummaries = async <T extends { spaceId: string }>
  */
 export const listUserSessions = async (
   userUuid: string,
-  options?: { limit?: number; cursor?: string | null },
+  options?: { limit?: number; cursor?: string | null; source?: SessionSourceFilter | null },
 ) => {
   const limit = resolveSessionListLimit(options?.limit);
   const cursor = decodeSessionListCursor(options?.cursor);
   const activityCursor = sessionListActivityCursorCondition(cursor);
+  const sourceCondition = sessionListSourceCondition(options?.source ?? null);
   const branchLimit = limit + 1;
 
-  const creatorWhere = activityCursor
-    ? and(eq(spaceSessions.userUuid, userUuid), activityCursor)
-    : eq(spaceSessions.userUuid, userUuid);
+  const creatorWhere = and(eq(spaceSessions.userUuid, userUuid), activityCursor, sourceCondition);
 
-  const participantOnly = and(
+  const participantWhere = and(
     userSessionParticipantCondition(userUuid),
     sql`${spaceSessions.userUuid} is distinct from ${userUuid}`,
+    activityCursor,
+    sourceCondition,
   );
-  const participantWhere = activityCursor
-    ? and(participantOnly, activityCursor)
-    : participantOnly;
 
   const [creatorRows, participantRows] = await Promise.all([
     db.select().from(spaceSessions).where(creatorWhere).orderBy(...sessionListOrderBy).limit(branchLimit),
     db.select().from(spaceSessions).where(participantWhere).orderBy(...sessionListOrderBy).limit(branchLimit),
   ]);
 
-  return mergeUserSessionListBranches([creatorRows, participantRows], limit);
+  const page = mergeUserSessionListBranches([creatorRows, participantRows], limit);
+  return {
+    ...page,
+    sessions: await attachActiveTurns(page.sessions),
+  };
 };
+
 
 const getNextSessionSequence = async (sessionId: string) => {
   const [row] = await db.select({ max: sql<number>`coalesce(max(${sessionMessages.sequence}), 0)::int` }).from(sessionMessages).where(eq(sessionMessages.sessionId, sessionId));
@@ -647,6 +688,7 @@ export const persistMessageNode = async (input: PersistMessageInput & { message:
           summary: turnRow.summary ?? null,
           intermediateIndex: turnRow.intermediateIndex ?? null,
           intermediateSummary: turnRow.intermediateSummary ?? null,
+          harnessIndex: turnRow.harnessIndex ?? null,
           meta: normalizeRecord(turnRow.meta),
           thinkingLevel: extractThinkingLevel(turnRow.meta),
           startedAt: turnRow.startedAt instanceof Date ? turnRow.startedAt.toISOString() : null,

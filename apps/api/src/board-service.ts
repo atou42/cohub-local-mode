@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import {
   boardClips,
   boardConnections,
@@ -58,7 +58,7 @@ import {
   type ExistingNodeRow,
   planNodeWrites,
 } from "./board-node-plan.js";
-import { collectValidationNodeIds } from "./board-validation-projection.js";
+import { collectEnterMotionItemIds, collectValidationNodeIds } from "./board-validation-projection.js";
 import { db } from "./db/index.js";
 import { dispatchBoardChanged, dispatchBoardPlaybackChanged } from "./board-events.js";
 import {
@@ -444,6 +444,7 @@ export async function applyBoardTransaction(input: {
     const touchedEffectIds = transaction.operations
       .filter((operation) => operation.type === "effect.upsert" || operation.type === "effect.delete")
       .map((operation) => operation.type === "effect.upsert" ? operation.payload.effect.id : operation.payload.effectId);
+    const enterTargetItemIds = collectEnterMotionItemIds(transaction.operations);
     const [validationNodes, nodeRows, validationConnections, validationEffects, validationCompositions, validationTracks, validationClips] = await Promise.all([
       validationNodeIds.length
         ? tx.select({ nodeId: boardNodes.nodeId }).from(boardNodes).where(and(
@@ -470,7 +471,19 @@ export async function applyBoardTransaction(input: {
       hasNodeDelete || hasEffectDelete || hasCompositionOperation
         ? tx.select().from(boardEffects).where(eq(boardEffects.boardId, board.id))
         : touchedEffectIds.length
-          ? tx.select().from(boardEffects).where(and(eq(boardEffects.boardId, board.id), inArray(boardEffects.id, touchedEffectIds)))
+          ? tx.select().from(boardEffects).where(and(
+              eq(boardEffects.boardId, board.id),
+              enterTargetItemIds.length
+                ? or(
+                  inArray(boardEffects.id, touchedEffectIds),
+                  and(
+                    eq(boardEffects.lifecycle, "on-enter"),
+                    eq(boardEffects.targetType, "item"),
+                    inArray(boardEffects.targetId, enterTargetItemIds),
+                  ),
+                )
+                : inArray(boardEffects.id, touchedEffectIds),
+          ))
           : Promise.resolve([]),
       needsCompositionHeaders
         ? tx.select().from(boardCompositions).where(eq(boardCompositions.boardId, board.id))

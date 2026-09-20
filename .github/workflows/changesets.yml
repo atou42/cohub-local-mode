@@ -59,3 +59,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: 0
+
+      - name: Push package tags
+        # @changesets/cli v3 prints "Created git tags." instead of "New tag:", so
+        # changesets/action@v1 never parses them and leaves the tags unpushed.
+        # Push the tags the publish step created locally.
+        run: git push origin --tags

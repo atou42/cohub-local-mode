@@ -50,6 +50,7 @@ const createPresignedObjectUrl = (
   putConditions?: {
     contentLength?: number;
     forbidOverwrite?: boolean;
+    contentMd5?: string;
   },
 ) => {
   if (!storage.bucket) throw new Error("bucket is required");
@@ -72,7 +73,8 @@ const createPresignedObjectUrl = (
     ...(method === "PUT" && putConditions?.contentLength != null
       ? { "content-length": String(putConditions.contentLength) }
       : {}),
-    ...(method === "PUT" && putConditions?.forbidOverwrite ? { "x-oss-forbid-overwrite": "true" } : {}),
+    ...(method === "PUT" && putConditions?.forbidOverwrite ? (storage.endpoint?.includes("aliyuncs.com") ? { "x-oss-forbid-overwrite": "true" } : { "if-none-match": "*" }) : {}),
+    ...(method === "PUT" && putConditions?.contentMd5 ? { "content-md5": putConditions.contentMd5 } : {}),
   };
   const signedHeaders = Object.keys(headers).sort().join(";");
   url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
@@ -126,6 +128,7 @@ export const createPresignedPutObjectUrl = (
   conditions?: {
     contentLength?: number;
     forbidOverwrite?: boolean;
+    contentMd5?: string;
   },
 ) => {
   const signed = createPresignedObjectUrl(

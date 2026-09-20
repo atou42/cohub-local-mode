@@ -69,9 +69,37 @@ test("canonical /api/apps wire speaks the app vocabulary", () => {
   const version = serializeAppVersionRecord(versionRow, "canonical");
   assert.ok("appId" in version, "version uses appId");
   assert.ok(!("workId" in version));
+  assert.equal(version.source, null, "version defaults to no provenance");
 
   assert.ok("appId" in serializePromotionRecord(promotionRow, "canonical"));
   assert.equal(appScopesBodyField("canonical"), "appScopes");
+});
+
+test("version meta never re-emits the raw publish source", () => {
+  const withSource = {
+    ...versionRow,
+    meta: { title: "Launch", source: { sessionId: "770e8400-e29b-41d4-a716-446655440010" } },
+  } as Parameters<typeof serializeAppVersionRecord>[0];
+  assert.deepEqual(serializeAppVersionRecord(withSource, "canonical").meta, { title: "Launch" });
+
+  const sourceOnly = {
+    ...versionRow,
+    meta: { source: { sessionId: "770e8400-e29b-41d4-a716-446655440010" } },
+  } as Parameters<typeof serializeAppVersionRecord>[0];
+  assert.equal(serializeAppVersionRecord(sourceOnly, "canonical").meta, null);
+});
+
+test("version provenance survives both wire dialects", () => {
+  const source = {
+    sessionId: "770e8400-e29b-41d4-a716-446655440010",
+    turnId: "770e8400-e29b-41d4-a716-446655440011",
+    turnSequence: 4,
+    session: { id: "770e8400-e29b-41d4-a716-446655440010", title: "Build the launch page" },
+  } as const;
+  const canonical = serializeAppVersionRecord(versionRow, "canonical", source);
+  const legacy = serializeAppVersionRecord(versionRow, "legacy", source);
+  assert.deepEqual(canonical.source, source);
+  assert.deepEqual(legacy.source, source);
 });
 
 test("legacy /api/works wire keeps the work vocabulary", () => {

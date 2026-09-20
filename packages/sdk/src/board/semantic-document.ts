@@ -17,10 +17,8 @@ import {
 } from "@cohub/protocol/board-document";
 
 export const DEFAULT_BOARD_APPEARANCE = BoardAppearanceSchema.parse({
-  theme: "clean",
   background: { kind: "solid" },
   grid: { visible: false, size: 24, opacity: 0.12 },
-  mood: "clean",
 });
 
 /** Convert a public authoring Item to the renderer/editor document shape. */

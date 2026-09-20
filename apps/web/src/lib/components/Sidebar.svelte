@@ -51,10 +51,7 @@ import { logtoClient } from "$lib/auth";
 import { handleUnauthorizedError } from "$lib/auth-redirect";
 import { clearAllIndexedDbCache } from "$lib/cache/clear";
 import { canUseUserScopedCache, getCacheUserKey } from "$lib/cache/keys";
-import {
-	clearCachedPaletteOverview,
-	invalidatePaletteOverview,
-} from "$lib/command-palette/palette-overview";
+import { clearCachedPaletteOverview } from "$lib/command-palette/palette-overview";
 import ChannelProviderIcon from "$lib/components/ChannelProviderIcon.svelte";
 import NewLabelPopover from "$lib/components/NewLabelPopover.svelte";
 import SidebarFlyout from "$lib/components/SidebarFlyout.svelte";
@@ -1060,6 +1057,9 @@ async function loadMoreSessionsForSpace(spaceId: string) {
 			cursor,
 			includeForks: true,
 		});
+		// A space switch resets `sessions`/`sessionsPageInfo`; drop this page unless
+		// the request still belongs to the space on screen.
+		if (spaceId !== currentSpaceId) return;
 		const moreSessions = result.sessions ?? [];
 		const nextPageInfo = result.pageInfo ?? {
 			hasMore: false,
@@ -3402,7 +3402,11 @@ $effect(() => {
 	}
 });
 
-// Track the most recently visited space in localStorage
+// Track the most recently visited space in localStorage. Visiting a space is
+// a device-local signal the palette already folds into its first frame, so it
+// must NOT invalidate the overview snapshot — doing so forced a server
+// refetch on the next palette open. Cross-device recency is picked up by the
+// freshness window and the focus/visibility revalidation instead.
 $effect(() => {
 	if (mode !== "space") return;
 	const userUuid = authStore.userUuid;
@@ -3410,7 +3414,6 @@ $effect(() => {
 	untrack(() => {
 		const sessionId = activeSession?.id ?? null;
 		setRecentSpace(userUuid, currentSpaceId, sessionId);
-		invalidatePaletteOverview();
 	});
 });
 </script>

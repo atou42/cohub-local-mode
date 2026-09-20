@@ -5,10 +5,12 @@ import type {
 	BoardSemanticCommand,
 } from "@cohub/protocol";
 import {
+	type BoardAnimationSpec,
 	type BoardAuthoringSnapshot,
 	parseBoardPlaybackPolicy,
 } from "@cohub/protocol";
 import type { AppNavigationOpenMessage } from "@cohub/protocol/app-navigation";
+import { BoardAppearanceSchema } from "@cohub/protocol/board-document";
 import type {
 	AppRuntimeShellContext,
 	BoardPlaybackPolicy,
@@ -36,6 +38,8 @@ export type BoardRuntimeData = {
 	boardId: string;
 	effects: Array<BoardEffectInput & { revision: number }>;
 	compositions: Array<BoardCompositionInput & { revision: number }>;
+	/** Optional board-wide enter preset. Omitted means no automatic motion. */
+	enter: BoardAnimationSpec | null;
 	playback: BoardPlaybackSnapshot | null;
 	playbackPolicy: BoardPlaybackPolicy | null;
 };
@@ -43,12 +47,57 @@ export type BoardRuntimeData = {
 export function boardRuntimeDataFromAuthoring(
 	snapshot: BoardAuthoringSnapshot,
 ): BoardRuntimeData {
+	const appearance = BoardAppearanceSchema.safeParse(
+		snapshot.board.metadata.appearance,
+	);
 	return {
 		boardId: snapshot.board.id,
 		effects: snapshot.effects ?? [],
 		compositions: snapshot.compositions ?? [],
+		enter: appearance.success ? (appearance.data.motion?.enter ?? null) : null,
 		playback: snapshot.playback ?? null,
 		playbackPolicy: parseBoardPlaybackPolicy(snapshot.board.metadata),
+	};
+}
+
+/**
+ * Compare an entrance preset by value. Every appearance parse rebuilds it, so
+ * reference equality would report a change on unrelated background edits.
+ */
+export function sameBoardAnimationSpec(
+	a: BoardAnimationSpec | null,
+	b: BoardAnimationSpec | null,
+): boolean {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	return (
+		a.kind === b.kind &&
+		a.kindVersion === b.kindVersion &&
+		JSON.stringify(a.params) === JSON.stringify(b.params)
+	);
+}
+
+export type BoardRuntimeDataDiff = {
+	board: boolean;
+	effects: boolean;
+	compositions: boolean;
+	enter: boolean;
+	playback: boolean;
+	playbackPolicy: boolean;
+};
+
+/** Reference diff for the runtime slices, with `enter` compared by value. */
+export function diffBoardRuntimeData(
+	prev: BoardRuntimeData,
+	next: BoardRuntimeData,
+): BoardRuntimeDataDiff {
+	return {
+		board: next.boardId !== prev.boardId,
+		effects: next.effects !== prev.effects,
+		compositions: next.compositions !== prev.compositions,
+		enter: !sameBoardAnimationSpec(next.enter, prev.enter),
+		playback: next.playback !== prev.playback,
+		playbackPolicy: next.playbackPolicy !== prev.playbackPolicy,
 	};
 }
 

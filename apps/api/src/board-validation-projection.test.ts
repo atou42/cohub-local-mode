@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { BoardOperation } from "@cohub/protocol";
-import { collectValidationNodeIds } from "./board-validation-projection.js";
+import type { BoardEffect, BoardOperation } from "@cohub/protocol";
+import { collectEnterMotionItemIds, collectValidationNodeIds } from "./board-validation-projection.js";
 
 test("validation projection includes only node ids referenced by the transaction", () => {
   const operations: BoardOperation[] = [
@@ -43,4 +43,45 @@ test("validation projection includes only node ids referenced by the transaction
     },
   ];
   assert.deepEqual(new Set(collectValidationNodeIds(operations)), new Set(["title", "hero"]));
+});
+
+function effectUpsert(
+  effect: Pick<BoardEffect, "id" | "target" | "kind" | "lifecycle" | "timeOrigin" | "seed">,
+): BoardOperation {
+  return {
+    type: "effect.upsert",
+    payload: {
+      effect: {
+        kindVersion: 1,
+        enabled: true,
+        layer: "front",
+        params: {},
+        assetRefs: [],
+        metadata: {},
+        ...effect,
+      },
+    },
+  };
+}
+
+test("on-enter upserts project their target items so existing enter effects are loaded", () => {
+  const enter = effectUpsert({
+    id: "deal-b",
+    target: { type: "item", itemId: "hero" },
+    kind: "effects.deal",
+    lifecycle: "on-enter",
+    timeOrigin: "activation",
+    seed: "deal-b",
+  });
+  const pulse = effectUpsert({
+    id: "pulse",
+    target: { type: "item", itemId: "title" },
+    kind: "effects.pulse",
+    lifecycle: "when-visible",
+    timeOrigin: "visible",
+    seed: "pulse",
+  });
+  // A second effect id on the same node is exactly what a touched-id-only query would miss.
+  assert.deepEqual(collectEnterMotionItemIds([enter, pulse]), ["hero"]);
+  assert.deepEqual(collectEnterMotionItemIds([pulse]), []);
 });

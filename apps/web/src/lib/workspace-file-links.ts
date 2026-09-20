@@ -37,10 +37,15 @@ function safeDecodeUri(value: string) {
 function extractLinePosition(value: string) {
 	const match = value.match(/:(\d+)(?::(\d+))?$/);
 	if (!match) return { path: value };
+	const path = value.slice(0, match.index);
+	// Only a path-like prefix (contains a directory or extension) can carry a
+	// line suffix; otherwise `tel:123` / `a:1` would be read as a line reference
+	// instead of a scheme.
+	if (!path.includes("/") && !path.includes(".")) return { path: value };
 	const line = Number(match[1]);
 	const column = match[2] ? Number(match[2]) : undefined;
 	return {
-		path: value.slice(0, match.index),
+		path,
 		position:
 			line > 0
 				? {
@@ -89,13 +94,14 @@ export function normalizeWorkspaceFileLinkTarget(
 ): WorkspaceFileLinkTarget | null {
 	const raw = href.trim();
 	if (!raw || raw.startsWith("#")) return null;
-	if (raw.startsWith("//") || SCHEME_PATTERN.test(raw)) return null;
+	if (raw.startsWith("//")) return null;
 
 	const withoutQuery = stripQueryAndHash(raw).trim();
 	if (!withoutQuery) return null;
 
 	// Encoded punctuation belongs to the filename, not a URL or line suffix.
 	const { path: encodedPath, position } = extractLinePosition(withoutQuery);
+	if (SCHEME_PATTERN.test(encodedPath)) return null;
 	const pathWithPosition = safeDecodeUri(encodedPath);
 	if (!pathWithPosition) return null;
 	if (pathWithPosition.startsWith("//")) return null;
@@ -131,4 +137,53 @@ export function normalizeWorkspaceFileLink(
 	options: NormalizeWorkspaceFileLinkOptions = {},
 ) {
 	return normalizeWorkspaceFileLinkTarget(href, options)?.path ?? null;
+}
+
+const PUBLIC_FILE_HREF_PATTERN = /^\/p\/([^/?#]+)\/(.+)$/;
+
+/** Decode one path segment; reject separators and traversal after decoding. */
+function decodePublicPathSegment(segment: string): string | null {
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(segment);
+	} catch {
+		return null;
+	}
+	if (!decoded || decoded === "." || decoded === "..") return null;
+	if (
+		decoded.includes("/") ||
+		decoded.includes("\\") ||
+		hasControlCharacter(decoded)
+	) {
+		return null;
+	}
+	return decoded;
+}
+
+/**
+ * Root-relative `/p/{spaceId}/{path}` marks a Space public file. The origin is
+ * omitted because the path is authored inside Cohub; it is rewritten to the
+ * absolute CDN URL when the markdown HTML is prepared.
+ */
+export function parsePublicFileHref(
+	href: string,
+): { spaceId: string; path: string } | null {
+	const raw = href.trim();
+	if (!raw.startsWith("/p/")) return null;
+
+	const withoutQuery = stripQueryAndHash(raw).trim();
+	const match = withoutQuery.match(PUBLIC_FILE_HREF_PATTERN);
+	if (!match) return null;
+
+	const spaceId = decodePublicPathSegment(match[1]);
+	if (!spaceId) return null;
+
+	const path: string[] = [];
+	for (const segment of match[2].split("/")) {
+		const decoded = decodePublicPathSegment(segment);
+		if (!decoded) return null;
+		path.push(decoded);
+	}
+
+	return { spaceId, path: path.join("/") };
 }

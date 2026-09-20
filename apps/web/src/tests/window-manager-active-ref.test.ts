@@ -8,6 +8,10 @@ import { createWindowManager } from "../lib/features/space/modules/window-manage
 ) => value;
 
 const WORK_ID = "123e4567-e89b-42d3-a456-426614174000";
+const APP_A = "11111111-1111-4111-8111-111111111111";
+const APP_B = "22222222-2222-4222-8222-222222222222";
+const APP_C = "33333333-3333-4333-8333-333333333333";
+const APP_D = "44444444-4444-4444-8444-444444444444";
 
 type Ref = { kind: "file" | "board" | "port" | "app"; key: string };
 
@@ -15,7 +19,7 @@ type Ref = { kind: "file" | "board" | "port" | "app"; key: string };
  * A harness with all four domains mounted, so cross-domain fallback and
  * out-of-band closes can be exercised the way the page wires them.
  */
-function createHarness() {
+function createHarness(options: { appKeepAliveLimit?: number } = {}) {
 	let filePaths: string[] = [];
 	let activeFilePath: string | null = null;
 	let boardPaths: string[] = [];
@@ -97,6 +101,7 @@ function createHarness() {
 			urls.push(ref);
 		},
 		weightLimit: 100,
+		appKeepAliveLimit: options.appKeepAliveLimit,
 	});
 
 	return {
@@ -237,6 +242,49 @@ test("compact session navigation suspends tabs without disposing runtimes", asyn
 		boardOpenCount(),
 		opensBeforeSuspend,
 		"restoring a mounted Board must reuse its editor runtime",
+	);
+});
+
+test("only the most recently used Apps stay mounted in the background", () => {
+	const { controller } = createHarness();
+	const open = (appId: string) =>
+		controller.openApp({ appId, openContext: { source: "user" } });
+
+	open(APP_A);
+	open(APP_B);
+	open(APP_C);
+	assert.deepEqual(
+		[...controller.retainedAppIds()].sort(),
+		[APP_A, APP_B, APP_C].sort(),
+		"every App fits while there is room",
+	);
+
+	open(APP_D);
+	assert.deepEqual(
+		[...controller.retainedAppIds()].sort(),
+		[APP_B, APP_C, APP_D].sort(),
+		"the least recently used App falls out of the mounted set",
+	);
+
+	// Re-activating the dropped App makes it newest again and evicts the LRU.
+	controller.activate("app", APP_A);
+	assert.deepEqual(
+		[...controller.retainedAppIds()].sort(),
+		[APP_A, APP_C, APP_D].sort(),
+	);
+});
+
+test("the active App is always retained, even with a keep-alive window of 1", () => {
+	const { controller } = createHarness({ appKeepAliveLimit: 1 });
+	controller.openApp({ appId: APP_A, openContext: { source: "user" } });
+	controller.openApp({ appId: APP_B, openContext: { source: "user" } });
+	assert.deepEqual([...controller.retainedAppIds()], [APP_B]);
+
+	controller.activate("app", APP_A);
+	assert.deepEqual(
+		[...controller.retainedAppIds()],
+		[APP_A],
+		"activating an App must keep its surface mounted",
 	);
 });
 
@@ -393,4 +441,27 @@ test("panels open only once their tab is the committed active surface", () => {
 			`onOpenPanel must follow ${activeAssignment}`,
 		);
 	}
+});
+
+test("workspace App tabs keep recent surfaces mounted while inactive", () => {
+	const domain = readFileSync(
+		new URL(
+			"../lib/features/space/modules/SpaceFileDomain.svelte",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	const window = readFileSync(
+		new URL("../lib/features/space/modules/AppWindow.svelte", import.meta.url),
+		"utf8",
+	);
+
+	// One AppWindow per retained tab, keyed by App id, so switching tabs cannot
+	// reuse a single instance and destroy the inactive iframe.
+	assert.match(domain, /\{#each retainedAppTabs as tab \(tab\.appId\)\}/);
+	assert.match(domain, /active=\{isActiveApp\}/);
+	// Only the visible tab mounts the shared header; background tabs must not
+	// render duplicate chrome.
+	assert.match(window, /\{#if active\}\s*<PreviewHeader/);
+	assert.equal(window.match(/<PreviewHeader/g)?.length, 1);
 });

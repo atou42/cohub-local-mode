@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="cohub:surface" content="overlay" />
+    <!-- Follow the host theme: a mismatched color-scheme makes Chromium paint
+         an opaque backdrop behind the frame and the overlay loses its transparency. -->
+    <meta name="color-scheme" content="light dark" />
+    <title>Milk Frog</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- The companion. The stage box is kept in sync with `app.js` so the
+         sprite, the control strip and the overlay hit region share one box. -->
+    <div id="stage">
+      <div id="thought" aria-hidden="true" data-kind="thinking">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+      </div>
+
+      <div id="above">
+        <div id="bubble" role="status" aria-live="polite"></div>
+      </div>
+
+      <button id="frog" type="button" aria-label="Milk Frog companion" title="Milk Frog">
+        <canvas id="sprite"></canvas>
+      </button>
+
+      <div id="controls" role="toolbar" aria-label="Milk Frog actions">
+        <button type="button" data-action="chatter" aria-pressed="true" title="Mute chatter">✦</button>
+        <button type="button" data-action="chat" title="Open the current chat">◫</button>
+        <button type="button" data-action="mode" title="Toggle dock mode">▣</button>
+        <button type="button" data-action="close" title="Dismiss">✕</button>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

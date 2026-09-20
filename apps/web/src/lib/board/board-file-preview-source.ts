@@ -42,7 +42,6 @@ const MEMO_LIMIT = 512;
 
 type PreviewRequest = {
 	path: string;
-	title?: string;
 	mimeType?: string | null;
 	size?: number;
 	mtimeMs?: number;
@@ -187,7 +186,6 @@ async function readSnapshot(
 ): Promise<FilePreviewResult> {
 	const base = buildFileSnapshot({
 		path: request.path,
-		title: request.title,
 		mimeType: request.mimeType ?? undefined,
 		size: request.size,
 		mtimeMs: request.mtimeMs,
@@ -209,7 +207,6 @@ async function readSnapshot(
 			return {
 				facts: buildFileSnapshot({
 					path: request.path,
-					title: request.title,
 					mimeType: file.mimeType,
 					size: file.size,
 					mtimeMs: file.mtimeMs,
@@ -221,7 +218,6 @@ async function readSnapshot(
 		return {
 			facts: buildFileSnapshot({
 				path: request.path,
-				title: request.title,
 				content: isTextFileResponse(resolved) ? resolved.content : null,
 				mimeType: resolved.mimeType,
 				size: resolved.size,

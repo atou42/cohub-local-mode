@@ -171,7 +171,7 @@ export function registerSpaceActivity(
 		.description("Space activity overview: usage, contributors, rankings")
 		.option("--json", "Output as JSON")
 		.action(async (days: string | undefined, opts: SpaceActivityCliOptions) => {
-			const spaceId = resolveSpace(spacesCmd);
+			const spaceId = await resolveSpace(spacesCmd);
 			let parsedDays: number;
 			try {
 				parsedDays = parseActivityDays(days);

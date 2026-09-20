@@ -245,6 +245,7 @@ export interface GatewaySessionTurnPatchOutput extends GatewaySessionOutputBase 
 
 export interface GatewaySessionTurnErrorOutput extends GatewaySessionOutputBase {
   type: "session.turn.error";
+  turnId?: string | null;
   anchorUserMessageId: string | null;
   error: string;
 }

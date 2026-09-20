@@ -12,6 +12,7 @@
 - `fs.ls`
 - `fs.find`
 - `fs.grep`
+- `fs.search`（可选的 Tantivy 候选文件搜索）
 - `process.start`
 - `process.abort`
 
@@ -52,6 +53,7 @@ apps/sandbox/
   process/
   protocol/
   rpc/
+  search/
   workspace/
   ws/
 ```
@@ -96,6 +98,10 @@ pnpm dev
 ```bash
 docker build -f apps/sandbox/Dockerfile -t cohub-sandbox:latest apps/sandbox
 ```
+
+The search index is optional. At startup, the sandbox probes `/opt/cohub/bin/cohub-search`, `/usr/local/bin/cohub-search`, and `/tmp/cohub-search`; `COHUB_SEARCH_BIN` can specify another path. When the binary exists, the sandbox reconciles the index after workspace preparation and forwards incremental filewatch changes to the standalone search process. Release binaries are at `https://public.cohub.live/search/<version>/cohub-search-linux-amd64`.
+
+The index defaults to `/index/workspace-candidates`, and the Unix socket defaults to `/tmp/cohub-search/search.sock`. Override them with `COHUB_SEARCH_INDEX_DIR` and `COHUB_SEARCH_SOCKET`. Cloud sandboxes mount `/index` from the system PVC at `{SPACE_SYSTEM_SUBPATH}/{SPACE_ID}/index`; the search process creates `workspace-candidates` itself. Other index families can use separate directories under the same mount.
 
 当前运行时基础环境参考现有 agent 镜像，保留了较完整的工具链，包括：
 

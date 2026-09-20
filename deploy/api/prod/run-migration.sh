@@ -149,7 +149,7 @@ echo -e "${YELLOW}等待 Migration Job 完成...${NC}"
 echo ""
 
 # 等待 Job 完成，同时显示进度
-if kubectl wait --for=condition=complete "job/${APP_NAME}-migrate" -n "$NAMESPACE" --timeout=180s; then
+if kubectl wait --for=condition=complete "job/${APP_NAME}-migrate" -n "$NAMESPACE" --timeout=660s; then
   echo ""
   echo -e "${GREEN}✅ Migration 完成${NC}"
   echo ""

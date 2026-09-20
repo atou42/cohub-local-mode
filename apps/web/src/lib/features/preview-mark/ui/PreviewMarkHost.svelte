@@ -597,7 +597,7 @@ onDestroy(() => {
 		position: fixed;
 		bottom: max(20px, env(safe-area-inset-bottom, 0px));
 		left: 50%;
-		z-index: 110;
+		z-index: var(--z-mark);
 		transform: translateX(-50%);
 		max-width: min(360px, calc(100vw - 32px));
 		border: 1px solid var(--border-subtle);
@@ -616,7 +616,7 @@ onDestroy(() => {
 	.mark-overlay {
 		position: fixed;
 		inset: 0;
-		z-index: 100;
+		z-index: var(--z-mark);
 		display: flex;
 		align-items: stretch;
 		justify-content: center;

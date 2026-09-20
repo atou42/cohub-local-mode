@@ -1,5 +1,151 @@
 # @neta-art/cohub
 
+## 8.19.0
+
+### Minor Changes
+
+- c19a941: **App management for builders.** Apps are governed by a single `app.manage` permission — create, publish versions, change config/status, read stats, delete your own — granted to `host` and `builder` instead of leaning on `space.edit`, so Space builders can run Apps without gaining host-only Space settings. There is no separate `app.publish` atom.
+  
+  - `app_source` uploads (used by the local CLI / local agent publish path) now require `app.manage`; `space_avatar` stays on `space.edit`.
+  - App deletion: hosts may delete any App, builders only the Apps they published themselves.
+  - App detail responses now report the actual `publisher` (App creator); the public Cohub bar credits that identity instead of always showing the Space owner, and the App authorize dialog names that author.
+  - The App management page shows Edit / Disable / stats / Update version for `app.manage` holders, and Delete only for hosts or the App's publisher.
+  - The `Permission` union gains `"app.manage"`.
+
+### Patch Changes
+
+- 65499d6: **Event-driven local Runtime recovery.** Recovery is Session-scoped and triggered by real
+  events: the local Runtime reports pending executions in bounded batches after connecting,
+  Gateway peer disconnects and transport uncertainty enqueue reconciliation for that Session,
+  and only the affected Chat exposes stop confirmation. Realtime and channel notifications are
+  best effort; committed messages and terminal turns stay authoritative. `runtime.hello` drops
+  `pendingExecutions`, `RuntimeStatus` drops the Space-wide `recovery` / `canManage` fields, and
+  `confirmRuntimeStopped(sessionId, …)` requests `expectedTurnId`. The local Runtime was never
+  live, so these type changes ship as a patch.
+  
+  **事件驱动的本地 Runtime 恢复。** 恢复改为 Session 粒度并由真实事件触发：本地 Runtime 连接后
+  分批上报待恢复执行，Gateway peer 断开与传输结果不确定都会为该 Session 入队协调，仅受影响的
+  Chat 暴露停止确认。实时与渠道通知降级为 best effort，已提交的消息与终态 turn 仍是权威数据。
+  `runtime.hello` 移除 `pendingExecutions`，`RuntimeStatus` 移除 Space 级 `recovery` / `canManage`，
+  `confirmRuntimeStopped(sessionId, …)` 需要 `expectedTurnId`。本地 Runtime 从未上线，因此这些类型
+  变更为 patch。
+
+## 8.18.0
+
+### Minor Changes
+
+- eff7ca6: Add structured App authorization with explicit targets, viewer-controlled fallback, host capability negotiation, and incremental consent. Preserve legacy authorization return types. Fix logged-out consent, login recovery, canonical App slug resolution, and viewer cache isolation. Add `apps authorize --extend`.
+  
+  新增结构化 App 授权、明确目标、用户 Space 回退、宿主能力协商与增量授权，保留旧接口返回类型。修复未登录授权、登录恢复、App slug 解析与账户缓存隔离；CLI 新增 `apps authorize --extend`。
+- 566be22: Add local Runtime support: `cohub runtime up|status` connects a local workspace and
+  dispatches turns to local Pi or Codex Harnesses. Sessions, turns, messages, streaming
+  and resumption stay on the existing Cohub pipeline, and disconnections reconcile
+  automatically.
+  
+  The previous `cohub sandbox up|status` commands are removed; use `cohub runtime` instead.
+
+## 8.17.0
+
+### Minor Changes
+
+- 50d6f00: **App version history and provenance.** Published apps now expose their immutable version history, and every version carries the session it was published from.
+  
+  - Public app pages gain a Cohub bar version switcher: `?cohub_v=<n>` selects a version, `getBySlug(…, { version })` fetches that version's content, and `listPublicVersions()` returns the history. SSR resolves the requested version; switching is a client-side fetch that keeps the URL shareable.
+  - `AppVersionRecord.source` and `AppVersionSource` describe provenance (`sessionId`, `turnId`, `turnSequence`, `via`). The raw `meta.source` stamped at publish time is no longer exposed, provenance is validated against the app's own space, and session identity/title is included only when the caller holds `session.view` for the source session — so a private session never leaks through a published app, and viewer-scoped responses are never shared-cached.
+  - `cohub apps versions` prints a Source column: the source session title when visible, otherwise the publishing channel.
+  - The public page docks the Cohub bar above the App instead of floating over it, keeps the Cohub wordmark in that bar, and opens a version's source session in a new tab. Version history loads off the public page's critical path, so the first render never waits for it.
+- c89672c: `GET /api/me/sessions` no longer returns `sourceCounts`. The per-origin totals required a full aggregate over the account's sessions on every page fetch, which does not scale with large scheduled-task volumes. The source picker in the web inbox now lists every origin statically without counts.
+
+### Patch Changes
+
+- 4071454: `GET /api/me/sessions?source=…` now filters by each session's source **system label** instead of the raw `space_sessions.source` string. Channel sessions are stored as `feishu:dm:…` or `channel:feishu`, so matching the raw column dropped every Feishu/WeChat/Discord/QQ chat from its own filter and leaked it into `other`; labels carry the attribution the normalizer already made at creation, so this fixes every provider at once and matches what a space sidebar shows.
+- f33c6ca: Queued follow-up turns no longer render (or resume) as running generation. A session's newest unfinished turn can be a queued follow-up waiting behind a running one, so live generation is now resumed only from `running` / `abort_requested` turns: a queued turn stays in the follow-up queue instead of being cloned as the streaming turn, and an empty pending snapshot is never persisted or restored.
+- f33c6ca: The web model picker shows availability dots for generation models too, not just LLMs — the same status feed now marks unavailable or degraded image/video/audio models in the picker, in both the collapsed row and the expanded model list.
+- f33c6ca: Space `@` mentions in the composer now share the command palette's space search instead of maintaining a second scorer. An empty query lists recently visited Spaces in the palette's Recent order, and a typed query goes through the same merge (fuzzy text match weighted against viewer tier and recency), so a mention and the palette can no longer disagree about which Space ranks first — and the removed duplicate logic drops the per-keystroke scan over cached session lists.
+
+## 8.16.0
+
+### Minor Changes
+
+- 96a30a9: `GET /api/me/sessions` filters by any session source instead of only `web`. `?source=web,feishu` takes a comma-separated list of source kinds, where `web` also matches a null source (legacy rows) and `other` matches anything unlabelled; unknown kinds return `400`. Responses carry `sourceCounts` so callers can build a picker from the kinds an account actually has. `user.listSessions({ source: ["web"] })`.
+
+## 8.15.0
+
+### Minor Changes
+
+- eff8a32: Public app detail responses (`AppDetailResponse`) now expose `totalViews`, the app's all-time view count. `by-slug`, `:id/public` and `:id` all return it, so hosts can surface a view count without a separate stats request. It is `null` when the rollup total is temporarily unavailable — a view count never fails a detail response.
+- a5ffd93: `GET /api/me/sessions` accepts `source=web` to return only human web chats, so scheduled prompts and channel bots no longer bury real conversations. `user.listSessions({ source: "web" })` exposes it, and the web inbox defaults to this filter with a Web App / All toggle.
+
+## 8.14.0
+
+### Minor Changes
+
+- c7b6df3: Consent dialogs now target a Space the viewer controls, and app misconfiguration stays off the viewer's screen.
+  
+  - **Viewer-controlled default target**: a Space-bound `auth.request` no longer silently targets the app author's home Space. The host resolves a default from the invocation Space, then the embedding shell's Space, then the viewer's last-picked Space, then their first accessible Space — falling back to `GET /api/spaces/default`, which ensures a home Space. The target is resolved _before_ silent reuse, so a legacy home-Space cached grant can no longer silently re-authorize the author's Space. An explicit `spaceId` the viewer cannot access is treated as no target (with a developer diagnostic that never leaks the resolved Space id) instead of failing after they consent. If the viewer's Space list cannot be loaded (bounded by a timeout), confirmation is blocked rather than falling through to the app author's Space. Silent renewal for client-known targets (account grants, or the Space the app was invoked in) happens before the list is loaded, so returning viewers skip that round trip and are not blocked by a transient list failure.
+  - **Shared Space picker model**: `normalizeSpacePickerQuery`, `orderSpacePickerItems`, `filterSpacePickerItems`, and `selectSpacePickerItems` (plus their types) are exported from `@neta-art/cohub/space-picker`, so every host can render the same chooser.
+  - **Selection owned by the bridge core**: `AppBridgeDialogState` gains `selectedSpaceId` and `canChangeSpace`, `AppAuthorizeRequest` gains `defaultSpaceId`, and `AppBridgeCore` gains `setSelectedSpace(id)`. Hosts render; the core decides. Concurrent authorize requests can no longer overwrite each other and leave one unanswered: the dialog is reserved synchronously and later requests join or replace it, and a replaced silent attempt never clears the newer one. Confirmation only accepts a Space the host actually loaded; an accessible explicit `spaceId` is pinned in the core (not just hidden in the UI), so a host cannot redirect a grant the caller then acts on.
+  - **Structured authorize errors**: failed grants return a machine-readable `code` (`space_inaccessible`, `scope_not_held`, `app_not_accessible`, `consent_required`, `space_not_found`, `migration_pending`).
+  - **Developer diagnostics**: the host forwards `cohub.app.diagnostic` events and the SDK logs them to the app author's console via `console.warn` (the diagnostic subscription also announces runtime readiness, so apps that never read context still receive them). Delivery is non-fatal — a throwing host transport cannot break authorization — and is limited to the iframe bridge host today. Viewer-facing copy stays neutral for app-configuration failures and is mapped per error code. Account-level scopes silently reuse a grant on **any** Space that covers them (legacy, Space-less entries included), trying each in turn; picker mode only reuses the last-picked Space while the viewer still has it. Silent renewal retries once with a refreshed token on a 401 (an auth failure is never treated as a revoked grant), clears the cache only for a 403/404 grant rejection, and is capped and timeout-bounded. `AppRuntimeApi` exposes an idempotent `dispose()` to release its diagnostic and pointer listeners.
+- 785f9a9: Add a `session.access.manage` permission so builders can share a session. Session-level access (share/unshare) is now authorized by this permission instead of the host-only `member.manage`; space-level access and member management remain host-only. The permission is part of the public permission vocabulary and is not granted to Apps.
+
+### Patch Changes
+
+- fd5fdd5: Release overlay rect input regions when the pointer leaves them. Once the host makes a cross-origin overlay frame interactive it swallows pointer events, so the host could not tell that the pointer had left a rect region — a resting overlay kept the whole window unclickable. The SDK now reports the pointer while a rect `inputRegion` is active, and the host releases the region as soon as it is outside. Ownership is frozen while any button is held (including a drag that began on the page underneath), and an overlay that opts out or closes loses interaction immediately.
+  
+  `requestConfigure` also now treats `geometry` as the complete shape: a present object replaces the current one (`{}` fills the layer), and a geometry with any invalid axis is ignored rather than silently becoming a fill.
+
+## 8.13.0
+
+### Minor Changes
+
+- 5232f9f: Add space webhook triggers (`on.event: webhook`) and hook `uses` App Actions.
+
+## 8.12.1
+
+### Patch Changes
+
+- 2fe6bee: The App consent dialog now merges identical authorization requests. When an App calls `auth.request()` again with the same scopes and target while the dialog is still open — for example on every context update — the new request joins the open dialog and receives the same answer, instead of dismissing it with a spurious denial and opening a fresh one. Requests for a different consent still replace the dialog as before.
+- 95622b1: Realtime subscriptions now surface rejected room subscriptions instead of silently receiving nothing. When the gateway rejects the Space room (for example an app session without `space.view`), `session.subscribe()` calls its `error` handler and `space.events.subscribe()` its handler with the `system.subscribe.error` event, so an App can tell the viewer why it is not receiving events.
+
+## 8.12.0
+
+### Minor Changes
+
+- 311c47d: Board edit history is now replayable. `createBoardReplayPlayer()` (SDK) turns a Board's transaction log into render documents — it rewinds through the server-computed inverses and plays forward through payloads, handling version gaps and paging in both directions — and `cohub boards transactions <board>` (CLI, alias `history`) pages through the same log. The API exposes `GET /spaces/:id/boards/:boardId/transactions`, which returns newest-first pages read under one repeatable-read snapshot with the current rows as the replay anchor. Read-only: nothing is ever written to the Board. In the web workspace, "Replay history" opens a private read-only stage with a scrubber, play/pause, speed control, step, camera follow and live tail appends.
+- a869400: Board motion is now optional and preset-based. Boards default to no motion; the built-in `effects.deal` preset can be selected as the default enter motion (`appearance.motion.enter`) or applied to an individual node with an `on-enter` effect. `kindVersion` defaults to `1` on effect and preset input. Reduced-motion handling is preserved.
+  
+  The Board-local theme registry is removed from `@neta-art/cohub/board/render`: `getBoardThemeRenderer`, `registerBoardThemeRenderer`, `BoardThemeRenderer`, `BoardThemeContext` and `cleanBoardTheme` no longer exist. The registry was never wired to `appearance.theme` and always resolved to the single built-in background; use `createBoardBackground` / `updateBoardBackground` instead. Board colors continue to come from Cohub theme tokens, and `appearance.theme` / `appearance.mood` are now optional and ignored by rendering.
+- 41b2ae5: Apps can open as an **overlay**: a transparent, chrome-free layer above the Space workspace instead of a preview tab. `cohub desktop open <app> --as overlay` requests it, and a page published with `<meta name="cohub:surface" content="overlay">` opens that way by default. Inside the App, `context.invocation.surface` reads `"overlay"`, and `cohub.app.requestConfigure({ geometry, inputRegion })` controls where the overlay sits and which rectangles accept pointer events — everything else (context, auth, Space APIs, realtime, `surface.handle()` + `--call`, composer chips, navigation, commerce) works as in a tab. Overlays close through `cohub.app.requestClose()` or `Escape` in the workspace.
+  
+  Republishing now updates page-derived metadata (title, description, icon, image, lang, theme color, surface) when the current value is the one extraction last wrote; values a publisher set by hand that differ from the page are kept.
+- 35be140: Generation model declarations can carry a display `pricing` block (`unit`, `amount` or `min`/`max`, optional `note`). `models.listMultimodal()` returns it with each model, and the web model picker renders it next to the model id.
+- bea9903: `space.create` is now a user-level permission: creating a Space is authorized by holding it rather than by the caller's principal type. `POST /api/spaces` accepts execution tokens again, so `cohub spaces create` works inside a Sandbox; app sessions need a `space.create` viewer grant, preview sessions are denied, and real account sessions are unchanged. Auto-minting the first-time Home space is now an unconditional parameterless system default.
+
+### Patch Changes
+
+- a1df456: Board file cards drop the `TYPE · size` meta line; the title, excerpt and category stripe already carry enough to recognise a file. The `fileMetaLine` / `formatFileSize` helpers remain available for custom card renderers.
+
+## 8.11.0
+
+### Minor Changes
+
+- 1f326f4: Add `client.auth.requestCreateSpace()` so Apps can create a viewer-owned Space in one consent. The host uses the viewer's account token against the existing create API, then grants the requested scopes on the new Space.
+- a34dc95: Apps can embed other Apps by rendering their public pages in iframes. `cohub.app.embed.attach(frame, { appId, shell, onCloseRequest })` forwards the embedder's shell location and relays the embedded App's close intent; the embedded App sees `context.shell.surface === "embed"` and, once the embedder is verified against the frame origin, `context.invocation.embedder`. Any App can call `cohub.app.requestClose()` to ask its host to close the surface it runs in.
+- 925d712: Board file cards read better: titles come from frontmatter (`title`/`name`/`label`/`heading`) or the first H1 and drop the file extension; frontmatter is split reliably (BOM, leading blanks, `+++` TOML, trailing fence whitespace); covers accept more keys including nested `image.src`; excerpts vary by file kind (prose for docs, leading comment for code, `description` for JSON/YAML). Cards show a `TYPE · size` meta line, a category-coloured stripe, and a large type mark when there is no cover or excerpt.
+
+## 8.10.2
+
+### Patch Changes
+
+- 5f4f0bc: Retry stalled WebSocket connection handshakes after a configurable timeout.
+
+## 8.10.1
+
+### Patch Changes
+
+- 8633eb5: CLI commands now fall back to the Home space when `-s` / `COHUB_SPACE_ID` are omitted (`GET /api/spaces/default`, cached per login). `apps publish` infers `--source` from runtime (workspace in a sandbox, local otherwise). `getCohubContext()` treats runtime as sandbox only when an execution token is present.
+
 ## 8.10.0
 
 ### Minor Changes

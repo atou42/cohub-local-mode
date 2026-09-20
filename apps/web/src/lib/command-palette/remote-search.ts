@@ -1,15 +1,18 @@
 import type { GlobalSearchResult, GlobalSearchType } from "@neta-art/cohub";
 import { sdk } from "$lib/sdk";
+import { registerSpaceOrigin } from "$lib/space-origin";
 import { patchCachedSpaceRecordSoon } from "$lib/stores/space-record-cache";
 
 function cacheRemoteSpaceResult(item: GlobalSearchResult) {
 	if (item.type !== "space") return;
+	registerSpaceOrigin({ id: item.spaceId, origin: "cloud" });
 	const result = item as GlobalSearchResult & {
 		spaceName?: string | null;
 		excerpt?: string | null;
 	};
 	patchCachedSpaceRecordSoon({
 		id: item.spaceId,
+		origin: "cloud",
 		...(item.ownerProfile?.userUuid
 			? { userUuid: item.ownerProfile.userUuid }
 			: {}),

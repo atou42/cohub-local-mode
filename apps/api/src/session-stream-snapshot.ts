@@ -1,6 +1,7 @@
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { StoredIntermediateMessage } from "@cohub/protocol/model";
 import { and, asc, eq, sql } from "drizzle-orm";
+import { SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA, getSessionStreamSnapshotKey } from "@cohub/protocol/realtime";
 import { redisCommandClient } from "./redis.js";
 import { db } from "./db/index.js";
 import { sessionMessages } from "@cohub/db";
@@ -10,8 +11,7 @@ import {
   resolveSnapshotStreamMessageId,
 } from "./session-stream-snapshot-merge.js";
 
-export const getSessionStreamSnapshotKey = (spaceId: string, sessionId: string) =>
-  `session:stream:snapshot:${spaceId}:${sessionId}`;
+export { getSessionStreamSnapshotKey };
 
 export type SessionStreamSnapshotMessage = {
   messageId: string | null;
@@ -154,6 +154,9 @@ export const getSessionStreamSnapshot = async (input: { spaceId: string; session
   return enrichSessionStreamSnapshot(snapshot);
 };
 
-export const clearSessionStreamSnapshot = async (input: { spaceId: string; sessionId: string }) => {
-  await redisCommandClient.del(getSessionStreamSnapshotKey(input.spaceId, input.sessionId)).catch(() => undefined);
+export const clearSessionStreamSnapshot = async (input: { spaceId: string; sessionId: string; turnId?: string | null }) => {
+  const key = getSessionStreamSnapshotKey(input.spaceId, input.sessionId);
+  if (!input.turnId) { await redisCommandClient.del(key).catch(() => undefined); return; }
+  // A delayed terminal delivery for an older turn must not drop the current stream state.
+  await redisCommandClient.eval(SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA, 1, key, input.turnId).catch(() => undefined);
 };

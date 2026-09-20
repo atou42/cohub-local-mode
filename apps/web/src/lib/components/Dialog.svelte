@@ -53,7 +53,7 @@ const SCALE_TRANSITION_OUT = { ...TRANSITION_OUT, start: 0.95 };
 {#if open}
   <div
     use:portal
-    class="fixed inset-0 z-[100] flex items-end justify-center p-0 lg:items-center lg:p-4"
+    class="fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center p-0 lg:items-center lg:p-4"
     in:fade={TRANSITION_IN}
     out:fade={TRANSITION_OUT}
     role="dialog"

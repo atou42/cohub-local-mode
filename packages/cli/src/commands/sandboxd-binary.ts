@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat, lstat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -13,7 +13,7 @@ import { Readable } from "node:stream";
 //
 // IMPORTANT: this must point at a tag whose CDN artifacts have already been
 // published by .github/workflows/sandbox-binaries-build.yml. Only bump it AFTER
-// that tag's publish-cdn job has succeeded, otherwise `sandbox up` 404s on the
+// that tag's publish-cdn job has succeeded, otherwise `runtime up` 404s on the
 // default download.
 export const SANDBOXD_VERSION = "v1.82.4";
 
@@ -23,7 +23,7 @@ const BINARY_NAME = "cohub-sandboxd";
 // GitHub Release assets are not publicly downloadable). Overridable for staging
 // or self-hosting.
 const cdnBaseUrl = (): string =>
-  (process.env.COHUB_SANDBOXD_CDN_BASE_URL?.trim() || "https://public.cohub.run/sandboxd").replace(/\/+$/, "");
+  (process.env.COHUB_SANDBOXD_CDN_BASE_URL?.trim() || "https://public.cohub.live/sandboxd").replace(/\/+$/, "");
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_STALE_MS = 5 * 60 * 1000;
@@ -55,8 +55,13 @@ const archiveName = (version: string, target: Target): string =>
   `${BINARY_NAME}_${version}_${target.goos}_${target.goarch}.tar.gz`;
 
 const isExecutableFile = async (path: string): Promise<boolean> => {
-  const info = await stat(path).catch(() => null);
+  const info = await lstat(path).catch(() => null);
   return Boolean(info?.isFile());
+};
+
+const isSafeArchiveFile = async (path: string): Promise<boolean> => {
+  const info = await lstat(path).catch(() => null);
+  return Boolean(info?.isFile() && info.nlink === 1);
 };
 
 const sha256File = async (path: string): Promise<string> => {
@@ -103,12 +108,20 @@ const fetchText = (url: string, accept: string): Promise<string> =>
     return (await response.text()).trim();
   });
 
-// List the entries of a `.tar.gz` without extracting, so we can reject archives
-// that contain anything other than the expected single binary (path traversal,
-// symlinks, extra entries) before touching the filesystem.
-const listTarGz = (archivePath: string): Promise<string[]> =>
+// v1.82.4 is already public as a binary-only archive. The native watcher
+// release adds the two notices; the old shape is accepted only for this pin.
+const CURRENT_BINARY_ONLY_VERSION = "v1.82.4";
+export function validSandboxdArchiveEntries(entries: string[], version = SANDBOXD_VERSION): boolean {
+  const binaryOnly = version === CURRENT_BINARY_ONLY_VERSION && entries.length === 1 && entries[0] === BINARY_NAME;
+  const expected = [BINARY_NAME, "LICENSE", "NOTICE"];
+  const withNotices = entries.length === expected.length && expected.every((entry) => entries.includes(entry));
+  return binaryOnly || withNotices;
+}
+
+// Reject unexpected paths before extracting the checksum-verified release.
+const listTarGz = (archivePath: string, verbose = false): Promise<string[]> =>
   new Promise((res, rej) => {
-    const child = spawn("tar", ["-tzf", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("tar", [verbose ? "-tvzf" : "-tzf", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -125,7 +138,19 @@ const listTarGz = (archivePath: string): Promise<string[]> =>
     );
   });
 
-// Extract a single-file `.tar.gz` using the system tar (universally present on
+export async function validateSandboxdArchive(archivePath: string, version = SANDBOXD_VERSION): Promise<string[]> {
+  const entries = await listTarGz(archivePath);
+  if (!validSandboxdArchiveEntries(entries, version)) {
+    throw new SandboxdDownloadError(`Unexpected sandbox archive contents: ${entries.join(", ") || "(empty)"}`);
+  }
+  const details = await listTarGz(archivePath, true);
+  if (details.length !== entries.length || details.some((line) => !line.startsWith("-") || /(?: link to | -> | == )/.test(line))) {
+    throw new SandboxdDownloadError("Sandbox archive must contain only regular files");
+  }
+  return entries;
+}
+
+// Extract the verified `.tar.gz` using the system tar (universally present on
 // macOS and Linux), keeping the CLI free of native archive dependencies.
 const extractTarGz = (archivePath: string, cwd: string): Promise<void> =>
   new Promise((res, rej) => {
@@ -141,7 +166,7 @@ const extractTarGz = (archivePath: string, cwd: string): Promise<void> =>
   });
 
 // Cross-process lock via atomic mkdir, mirroring the CLI self-update lock so two
-// concurrent `sandbox up` invocations don't download the same archive twice.
+// concurrent `runtime up` invocations don't download the same archive twice.
 const withLock = async <T>(version: string, fn: () => Promise<T>): Promise<T> => {
   const lockPath = join(cacheDir(version), ".download.lock");
   await mkdir(dirname(lockPath), { recursive: true });
@@ -189,17 +214,15 @@ const downloadAndVerify = async (version: string, target: Target): Promise<strin
       throw new SandboxdDownloadError(`Checksum mismatch for ${name} (expected ${expected}, got ${actual})`);
     }
 
-    // Verify the archive contains exactly the expected binary before extracting,
-    // guarding against path traversal / unexpected entries from a tampered CDN.
-    const entries = await listTarGz(archivePath);
-    if (entries.length !== 1 || entries[0] !== BINARY_NAME) {
-      throw new SandboxdDownloadError(`Unexpected archive contents for ${name}: ${entries.join(", ") || "(empty)"}`);
-    }
-
-    // Extract the single binary from the archive.
+    const entries = await validateSandboxdArchive(archivePath, version);
     await extractTarGz(archivePath, tempDir);
+    for (const entry of entries) {
+      if (!(await isSafeArchiveFile(join(tempDir, entry)))) {
+        throw new SandboxdDownloadError(`Unsafe sandbox archive entry: ${entry}`);
+      }
+    }
     const extractedBinary = join(tempDir, BINARY_NAME);
-    if (!(await isExecutableFile(extractedBinary))) {
+    if (!(await isSafeArchiveFile(extractedBinary))) {
       throw new SandboxdDownloadError(`Archive ${name} did not contain ${BINARY_NAME}`);
     }
 

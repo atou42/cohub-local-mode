@@ -6,6 +6,7 @@ import type { RealtimeRoom, RealtimeRoomDescriptor } from "@cohub/protocol/realt
 import type { BillingPayload } from "@cohub/protocol";
 import type { GatewayAuthUser } from "./config.js";
 import { gatewayConfig } from "./config.js";
+import { verifyLocalSandboxAccessToken } from "./local-sandbox-auth.js";
 
 const parseJson = async <T>(response: Response): Promise<T | null> => {
   return response.json().catch(() => null) as Promise<T | null>;
@@ -236,6 +237,7 @@ export const submitInternalSessionPrompt = async (input: {
   source: string;
   model?: string | null;
   provider?: string | null;
+  harness?: "cohub" | "pi" | "codex";
   thinkingLevel?: string | null;
   context?: Record<string, unknown> | null;
 }): Promise<{ ok: true; turnId: string; userMessageId: string; trace: TraceIdentifiers }> => {
@@ -255,6 +257,7 @@ export const submitInternalSessionPrompt = async (input: {
       source: input.source,
       model: input.model ?? null,
       provider: input.provider ?? null,
+      harness: input.harness ?? "cohub",
       thinkingLevel: input.thinkingLevel ?? null,
       context: input.context ?? null,
     }),
@@ -367,11 +370,15 @@ export type LocalSandboxAuthorizeResult =
   | { ok: false; status: number; message: string };
 
 // Authorize a local sandbox runner's control connection. The user's access
-// token is forwarded so the API can verify sandbox.manage on the target space.
+// token is verified locally first so expired leftovers never hit the API, then
+// forwarded so the API can check sandbox.manage on the target space.
 export const authorizeLocalSandbox = async (input: {
   authToken: string;
   spaceId: string;
 }): Promise<LocalSandboxAuthorizeResult> => {
+  const local = await verifyLocalSandboxAccessToken(input.authToken);
+  if (!local.ok) return local;
+
   const response = await fetch(`${gatewayConfig.apiBaseUrl}/internal/gateway/local-sandbox/authorize`, {
     method: "POST",
     headers: {
@@ -381,6 +388,7 @@ export const authorizeLocalSandbox = async (input: {
       ...buildTraceHeaders(),
     },
     body: JSON.stringify({ spaceId: input.spaceId }),
+    signal: AbortSignal.timeout(10_000),
   });
   const data = await parseJson<{ ok?: boolean; spaceId?: string; userId?: string; message?: string }>(response);
   if (!response.ok || !data?.ok || !data.spaceId || !data.userId) {
@@ -397,6 +405,7 @@ export const reportLocalSandboxStatus = async (input: {
   wsEndpoint?: string | null;
   hostname?: string | null;
   gatewayNodeId?: string | null;
+  runtimeId?: string | null;
 }): Promise<void> => {
   const response = await fetch(`${gatewayConfig.apiBaseUrl}/internal/gateway/local-sandbox/status`, {
     method: "POST",

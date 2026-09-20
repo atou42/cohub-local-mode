@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SpaceHookEventEnvelope } from "@cohub/protocol";
+import { SPACE_HOOK_WEBHOOK_EVENT, getSpaceHookName, type SpaceHookEventEnvelope } from "@cohub/protocol";
 import { picomatch } from "./picomatch-shim.js";
 import type { SpaceHookDefinition } from "./types.js";
 
@@ -162,6 +162,13 @@ export function spaceHookMatchesEvent(
   }
   if (event.type === "session.turn.finalized") {
     return matchSessionTurnFinalized(hook, event);
+  }
+  if (event.type === SPACE_HOOK_WEBHOOK_EVENT) {
+    // Webhooks are addressed, not broadcast: only the same-named hook file runs.
+    const name = typeof event.payload.name === "string" ? event.payload.name : null;
+    return name && getSpaceHookName(hook.path) === name
+      ? { matched: true }
+      : { matched: false, reason: "webhook_name" };
   }
 
   return { matched: true };

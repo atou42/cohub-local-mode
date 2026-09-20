@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
 	BOARD_AUTHORING_SCHEMAS,
 	BOARD_BUILTIN_CLIP_KINDS,
+	BOARD_BUILTIN_EFFECT_KINDS,
+	isBuiltinBoardCapability,
 	BoardConnectionSchema,
 	BoardEffectInputSchema,
 	BoardTrackSchema,
@@ -14,6 +16,7 @@ import {
 	validateBoardNodeInput,
 	BoardItemValidationError,
 } from "./src/index.js";
+import { BoardAppearanceSchema } from "./src/board-document.js";
 
 test("built protocol exports stay aligned with source exports", async () => {
 	const built = await import("./dist/index.js");
@@ -163,6 +166,26 @@ test("Composition inspect output can be applied without server revision", () => 
 	assert.equal("revision" in input, false);
 });
 
+test("Board motion is optional and exposes a built-in capability", () => {
+	const appearance = BoardAppearanceSchema.parse({
+		background: { kind: "solid" },
+		grid: { visible: false },
+	});
+	assert.equal(appearance.motion, undefined);
+	assert.ok(BOARD_BUILTIN_EFFECT_KINDS.includes("effects.deal"));
+
+	const enabled = BoardAppearanceSchema.parse({
+		motion: { enter: { kind: "effects.deal", params: { lift: 120 } } },
+	});
+	assert.equal(enabled.motion?.enter?.kind, "effects.deal");
+	assert.equal(
+		BoardAppearanceSchema.safeParse({
+			motion: { enter: { kind: "effects.deal", params: { duration: 60_000 } } },
+		}).success,
+		false,
+	);
+});
+
 test("authoring capabilities serialize every schema lazily", () => {
 	assert.deepEqual(Object.keys(BOARD_AUTHORING_SCHEMAS), [
 		"item", "itemPatch", "mutation", "composition", "effect", "create",
@@ -191,4 +214,12 @@ test("connection and effect envelopes reject unknown fields", () => {
 		seed: "seed",
 		unknown: true,
 	}).success, false);
+});
+
+test("built-in capability lookup is exact on kind@version", () => {
+	assert.equal(isBuiltinBoardCapability("effect", "effects.deal", 1), true);
+	// A known kind at an unshipped version has no renderer and must not pass as built-in.
+	assert.equal(isBuiltinBoardCapability("effect", "effects.deal", 2), false);
+	assert.equal(isBuiltinBoardCapability("clip", "motion.path", 2), false);
+	assert.equal(isBuiltinBoardCapability("effect", "effects.unknown", 1), false);
 });

@@ -15,6 +15,11 @@ export type ThemeMetadata = {
 	value: ResolvedTheme;
 	label: string;
 	description: string;
+	/**
+	 * sRGB hex of the theme's `--bg-primary`. Feeds `<meta theme-color>` and
+	 * the manifest; must stay in sync with `styles/themes/*.css` and the inline
+	 * FOUC script in `app.html` (covered by `tests/theme-chrome-color.test.ts`).
+	 */
 	themeColor: string;
 	isDark: boolean;
 	shikiTheme:
@@ -36,7 +41,7 @@ export const THEME_REGISTRY = {
 		value: "dark",
 		label: "Dark",
 		description: "Always use the default dark theme",
-		themeColor: "#1F2026",
+		themeColor: "#101213",
 		isDark: true,
 		shikiTheme: "github-dark",
 		mermaidVariables: {
@@ -51,7 +56,7 @@ export const THEME_REGISTRY = {
 		value: "light",
 		label: "Light",
 		description: "Always use the default light theme",
-		themeColor: "#F8F8FA",
+		themeColor: "#FFFFFF",
 		isDark: false,
 		shikiTheme: "github-light",
 		mermaidVariables: {
@@ -66,7 +71,7 @@ export const THEME_REGISTRY = {
 		value: "solarized-dark",
 		label: "Solarized Dark",
 		description: "A calm low-contrast dark theme for long sessions",
-		themeColor: "#002B36",
+		themeColor: "#011415",
 		isDark: true,
 		shikiTheme: "solarized-dark",
 		mermaidVariables: {
@@ -81,7 +86,7 @@ export const THEME_REGISTRY = {
 		value: "solarized-light",
 		label: "Solarized Light",
 		description: "A warm light theme tuned for reading and code",
-		themeColor: "#FDF6E3",
+		themeColor: "#FFFADE",
 		isDark: false,
 		shikiTheme: "solarized-light",
 		mermaidVariables: {
@@ -96,7 +101,7 @@ export const THEME_REGISTRY = {
 		value: "neta-studio",
 		label: "Neta Studio",
 		description: "A graphite studio theme with cream ink and teal accents",
-		themeColor: "#1A191A",
+		themeColor: "#050605",
 		isDark: true,
 		shikiTheme: "github-dark",
 		mermaidVariables: {

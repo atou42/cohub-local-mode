@@ -1,10 +1,17 @@
 <script lang="ts">
 import {
 	type AppNavigationOpenMessage,
+	buildAppNavigationOpenMessage,
 	buildAppNavigationOpenResponse,
 	parseAppNavigationOpenMessage,
 } from "@cohub/protocol/app-navigation";
-import { parseAppRuntimeReady } from "@cohub/protocol/app-runtime";
+import type { AppRuntimeConfigureRequest } from "@cohub/protocol/app-runtime";
+import {
+	parseAppRuntimeCloseRequest,
+	parseAppRuntimeConfigureRequest,
+	parseAppRuntimePointer,
+	parseAppRuntimeReady,
+} from "@cohub/protocol/app-runtime";
 import type { AppComposerChip } from "@cohub/protocol/app-surface";
 import type {
 	AppContent,
@@ -12,39 +19,33 @@ import type {
 	AppRuntimeInvocationContext,
 	AppRuntimeShellContext,
 } from "@neta-art/cohub";
-import { onMount, untrack } from "svelte";
+import { onMount, type Snippet, untrack } from "svelte";
 import { page } from "$app/state";
 import { appDisplayTitle } from "$lib/app-page-meta";
 import { type AppLaunchState, resolveAppFrame } from "$lib/app-url";
 import WorkBoardSurface from "$lib/components/app/AppBoardSurface.svelte";
 import WorkFileSurface from "$lib/components/app/AppFileSurface.svelte";
 import { readAppCheckoutState } from "$lib/components/app/app-checkout-state";
-import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
-import UserIdentity from "$lib/components/UserIdentity.svelte";
+import CohubBar, {
+	type CohubBarOwner,
+	type CohubBarSpace,
+} from "$lib/components/app/CohubBar.svelte";
 import AppAuthorizeDialog from "$lib/features/app/AppAuthorizeDialog.svelte";
 import { createAppBridgeHost } from "$lib/features/app/bridge-host.svelte";
 import {
 	type AppSurfaceHost,
 	createAppSurfaceHost,
 } from "$lib/features/app/surface-host";
+import { useCompactShell } from "$lib/layout/compact-shell.svelte";
 import { parseNewChatBackgroundAction } from "$lib/new-chat-background-bridge";
 import { emitSpaceConfigBackgroundAction } from "$lib/space-config";
+import { createSpaceWorkspaceAssetResolver } from "$lib/space-workspace-assets";
+import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 
-type AppSurfaceMode = "page" | "background" | "app";
+type AppSurfaceMode = "page" | "background" | "app" | "overlay";
 
-type AppSpace = {
-	id: string;
-	slug: string | null;
-	name: string | null;
-	userUuid: string;
-	publicProfile?: { avatarUrl: string | null } | null;
-};
-
-type AppOwner = {
-	username: string | null;
-	displayName: string;
-	avatarUrl?: string | null;
-} | null;
+type AppSpace = CohubBarSpace & { userUuid: string };
+type AppOwner = CohubBarOwner;
 
 type Props = {
 	app: Pick<
@@ -61,7 +62,11 @@ type Props = {
 	>;
 	space?: AppSpace | null;
 	owner?: AppOwner;
+	/** Member who published the App; the Cohub bar credits this identity, falling back to the Space owner. */
+	publisher?: AppOwner;
 	content?: AppContent | null;
+	/** All-time view count shown in the public Cohub bar. */
+	totalViews?: number | null;
 	mode?: AppSurfaceMode;
 	launchState?: AppLaunchState | null;
 	invocation?: AppRuntimeInvocationContext;
@@ -73,6 +78,12 @@ type Props = {
 	onSurfaceHost?: (host: AppSurfaceHost | null) => void;
 	onComposerChip?: (chip: AppComposerChip | null) => void;
 	onReady?: () => void;
+	/** The App asked to close the surface it runs in. */
+	onCloseRequest?: () => void;
+	/** The App asked to change its overlay geometry or input region. */
+	onConfigureRequest?: (request: AppRuntimeConfigureRequest) => void;
+	/** The App reported the pointer while it owns it (overlay rect regions). */
+	onPointerState?: (state: { x: number; y: number; down: boolean }) => void;
 	onNavigationOpen?: (
 		message: AppNavigationOpenMessage,
 	) => Promise<
@@ -81,13 +92,17 @@ type Props = {
 			"protocol" | "version" | "type" | "requestId"
 		>
 	>;
+	/** Extra controls rendered in the public Cohub bar (e.g. version switcher). */
+	barActions?: Snippet;
 };
 
 const {
 	app,
 	space = null,
 	owner = null,
+	publisher = null,
 	content = null,
+	totalViews = null,
 	mode = "page",
 	launchState = null,
 	invocation = undefined,
@@ -95,14 +110,21 @@ const {
 	onSurfaceHost = undefined,
 	onComposerChip = undefined,
 	onReady = undefined,
+	onCloseRequest = undefined,
+	onConfigureRequest = undefined,
+	onPointerState = undefined,
 	onNavigationOpen = undefined,
+	barActions = undefined,
 }: Props = $props();
 
 let frame: HTMLIFrameElement | null = $state(null);
 let bridgeReady = $state(false);
 let runtimeReady = $state(false);
+let frameHasLoaded = $state(false);
 let readyReported = false;
 let contextSyncWarningReported = false;
+/** Native file surfaces size their media from the shared compact signal. */
+const isMobile = $derived(useCompactShell());
 
 function reportReady() {
 	if (readyReported) return;
@@ -111,15 +133,63 @@ function reportReady() {
 }
 
 const isBackground = $derived(mode === "background");
-const isAppWindow = $derived(mode === "app");
-const spaceName = $derived(space?.name || space?.slug || "Space");
 const appTitle = $derived(appDisplayTitle(app?.meta, app?.slug ?? "App"));
-const publisherName = $derived(owner?.displayName ?? "Cohub");
-const publisherAvatarUrl = $derived(owner?.avatarUrl?.trim() || null);
+// Who the viewer sees as the App's author: the publisher, or the Space owner when unknown.
+const publisherIdentity = $derived(publisher ?? owner);
 const hideCohubBar = $derived(app?.meta?.presentation?.hideCohubBar === true);
-// Board and file Works render natively; only web and port Works are embedded.
+// Board and file Apps render natively; only web and port Apps are embedded.
 const boardContent = $derived(content?.kind === "board" ? content : null);
 const fileContent = $derived(content?.kind === "file" ? content : null);
+const workspaceAssetResolver = $derived(
+	createSpaceWorkspaceAssetResolver(app.spaceId),
+);
+const appNavigationEnabled = $derived(Boolean(onNavigationOpen));
+
+/**
+ * Native Apps (board/file) render markdown in the host, outside the App
+ * iframe, so their links need to reach the same navigation bridge the iframe
+ * uses instead of falling through to a raw browser navigation.
+ */
+function openWorkFileLink(target: WorkspaceFileLinkTarget) {
+	if (!onNavigationOpen) return;
+	void onNavigationOpen(
+		buildAppNavigationOpenMessage({
+			requestId: crypto.randomUUID(),
+			target: {
+				kind: "file",
+				spaceId: app.spaceId,
+				path: target.path,
+				...(target.position ? { view: target.position } : {}),
+			},
+		}),
+	);
+}
+
+async function openWorkUrlLink(href: string, event: MouseEvent) {
+	if (!onNavigationOpen) return;
+	let url: URL;
+	try {
+		url = new URL(href, window.location.href);
+	} catch {
+		return;
+	}
+	// External links and non-App routes keep the default browser behavior.
+	if (url.origin !== window.location.origin || !url.pathname.includes("/w/")) {
+		return;
+	}
+	event.preventDefault();
+	try {
+		const result = await onNavigationOpen(
+			buildAppNavigationOpenMessage({
+				requestId: crypto.randomUUID(),
+				target: { kind: "app", ref: url.href },
+			}),
+		);
+		if (!result.handled) window.location.assign(url.href);
+	} catch {
+		window.location.assign(url.href);
+	}
+}
 const embeddedContent = $derived(
 	content && (content.kind === "web" || content.kind === "port")
 		? content
@@ -149,6 +219,7 @@ const frameReplyTarget = $derived(frameOrigin ?? page.url.origin);
 $effect(() => {
 	void iframeSrc;
 	runtimeReady = false;
+	frameHasLoaded = false;
 	surfaceHost?.reset();
 });
 
@@ -226,6 +297,20 @@ function pushSurfaceContext() {
 async function onFrameMessage(event: MessageEvent) {
 	if (event.source !== frame?.contentWindow) return;
 	if (!frameOrigin || event.origin !== frameOrigin) return;
+	if (parseAppRuntimeCloseRequest(event.data)) {
+		onCloseRequest?.();
+		return;
+	}
+	const configure = parseAppRuntimeConfigureRequest(event.data);
+	if (configure) {
+		onConfigureRequest?.(configure);
+		return;
+	}
+	const pointer = parseAppRuntimePointer(event.data);
+	if (pointer) {
+		onPointerState?.({ x: pointer.x, y: pointer.y, down: pointer.down });
+		return;
+	}
 	const navigation = parseAppNavigationOpenMessage(event.data);
 	if (navigation) {
 		let result:
@@ -288,14 +373,24 @@ onMount(() => {
 });
 </script>
 
-<div class={isBackground ? "app-surface background" : isAppWindow ? "app-surface app" : "app-surface page"}>
+<div class="app-surface {mode}">
+	{#if mode === "page" && !hideCohubBar}
+		<CohubBar {app} {space} publisher={publisherIdentity} {totalViews} actions={barActions} />
+	{/if}
+
 	{#if boardContent}
 		<div class="app-native">
 			<WorkBoardSurface content={boardContent} />
 		</div>
 	{:else if fileContent}
 		<div class="app-native">
-			<WorkFileSurface content={fileContent} />
+			<WorkFileSurface
+				content={fileContent}
+				{isMobile}
+				resolveWorkspaceAsset={workspaceAssetResolver}
+				onOpenFile={appNavigationEnabled ? openWorkFileLink : undefined}
+				onOpenUrl={appNavigationEnabled ? openWorkUrlLink : undefined}
+			/>
 		</div>
 	{:else if !app}
 		<div class="empty-state">Loading App…</div>
@@ -303,54 +398,26 @@ onMount(() => {
 		<iframe
 			bind:this={frame}
 			class="app-frame"
+			class:loading={!frameHasLoaded}
 			title={appTitle}
 			sandbox={frameSandbox}
 			allow={framePermissions}
+			allowtransparency={mode === "overlay" ? true : undefined}
 			src={iframeSrc}
 			onload={() => {
 				// load only marks the document as visually ready. Context waits for
 				// the new document's runtime handshake.
-				runtimeReady = false;
+				// Any App can announce ready before its initial load event. Preserve
+				// that handshake; later in-frame navigations must announce again.
+				const isFirstLoad = !frameHasLoaded;
+				frameHasLoaded = true;
+				if (!isFirstLoad) runtimeReady = false;
 				surfaceHost?.reset();
 				reportReady();
 			}}
 		></iframe>
 	{:else if !hasFrameSource}
 		<div class="empty-state">App asset is unavailable.</div>
-	{/if}
-
-	{#if mode === "page" && !hideCohubBar}
-		<footer class="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-3 pb-3 sm:pb-4">
-			<div class="app-bar pointer-events-auto flex h-12 w-full max-w-[860px] items-center gap-3 rounded-lg border border-border-subtle bg-bg-surface/95 px-2.5 text-[11px] text-text-tertiary shadow-lg shadow-bg-primary/15 backdrop-blur-md supports-[not(backdrop-filter:blur(0))]:bg-bg-surface sm:px-3">
-				<div class="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
-					<img src="/favicon.svg" alt="Cohub" class="block h-5 w-5 shrink-0 rounded-[5px]" />
-					<div class="hidden h-4 w-px shrink-0 bg-border-subtle sm:block"></div>
-					<div class="flex min-w-0 items-center gap-2 overflow-hidden">
-						<SpaceAvatar name={spaceName} profile={space?.publicProfile} size="xs" class="translate-y-0" />
-						<span class="min-w-0 truncate font-medium leading-none text-text-secondary">{spaceName}</span>
-						<span class="hidden shrink-0 leading-none text-text-tertiary sm:inline">/</span>
-						<span class="hidden min-w-0 truncate font-medium leading-none text-text-primary sm:inline">{appTitle}</span>
-					</div>
-				</div>
-				<div class="flex shrink-0 items-center gap-2">
-					<div class="flex min-w-0 items-center gap-2 overflow-hidden">
-						<span class="hidden shrink-0 leading-none text-text-tertiary md:inline">Published by</span>
-						<UserIdentity
-							name={publisherName}
-							avatarUrl={publisherAvatarUrl}
-							username={owner?.username}
-							size="xs"
-							class="min-w-0 text-text-secondary"
-							avatarClass="h-5 w-5 rounded-full bg-bg-elevated text-[8px]"
-							nameClass="hidden max-w-32 truncate font-medium leading-none sm:inline"
-						/>
-					</div>
-					<button type="button" class="inline-flex h-8 shrink-0 items-center justify-center rounded-md px-2.5 font-medium leading-none text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 disabled:pointer-events-none disabled:opacity-50">
-						Remix
-					</button>
-				</div>
-			</div>
-		</footer>
 	{/if}
 </div>
 
@@ -361,7 +428,10 @@ onMount(() => {
 	error={host.authError}
 	saving={host.authSaving}
 	appName={appTitle}
-	authorName={owner?.displayName}
+	authorName={publisherIdentity?.displayName}
+	selectedSpaceId={host.selectedSpaceId}
+	canChangeSpace={host.canChangeSpace}
+	onSelectSpace={host.setSelectedSpace}
 	onConfirm={(spaceId) => void host.confirmAuth(spaceId)}
 	onCancel={host.cancelAuth}
 />
@@ -374,27 +444,50 @@ onMount(() => {
 		color: var(--text-primary);
 	}
 
+	/*
+	 * The public App page is a column: the Cohub bar reserves its own row and
+	 * the App fills the rest, so the App's viewport is exactly what the viewer
+	 * can see. Height is inherited from the `html, body { height: 100% }` chain
+	 * (see app.css) rather than `dvh`.
+	 */
 	.app-surface.page {
-		min-height: 100vh;
+		display: flex;
+		height: 100%;
+		flex-direction: column;
 	}
 
 	.app-surface.background,
-	.app-surface.app {
+	.app-surface.app,
+	.app-surface.overlay {
 		width: 100%;
 		height: 100%;
 	}
 
-	/* App windows live inside the workspace pane and own no page chrome. */
-	.app-surface.app {
+	/* App windows and overlays live inside the workspace and own no page chrome. */
+	.app-surface.app,
+	.app-surface.overlay {
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
 	}
 
 	.app-surface.app .app-frame,
-	.app-surface.app .app-native {
+	.app-surface.app .app-native,
+	.app-surface.overlay .app-frame,
+	.app-surface.overlay .app-native {
 		flex: 1 1 auto;
 		min-height: 0;
+	}
+
+	/* An overlay is a transparent layer: the App paints its own pixels. */
+	.app-surface.overlay,
+	.app-surface.overlay .app-frame {
+		background: transparent;
+	}
+
+	/* Nothing to see until the App's own document paints; the layer must not flash. */
+	.app-surface.overlay .app-frame.loading {
+		visibility: hidden;
 	}
 
 	.app-frame {
@@ -412,12 +505,12 @@ onMount(() => {
 		min-height: 0;
 	}
 
-	.app-surface.page .app-native {
-		height: 100vh;
-	}
-
-	.app-surface.page .app-frame {
-		height: 100vh;
+	.app-surface.page .app-native,
+	.app-surface.page .app-frame,
+	.app-surface.page .empty-state {
+		flex: 1 1 0;
+		height: auto;
+		min-height: 0;
 	}
 
 	.empty-state {

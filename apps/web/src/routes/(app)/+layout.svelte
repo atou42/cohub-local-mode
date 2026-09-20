@@ -54,6 +54,7 @@ import {
 	LEFT_SIDEBAR_RAIL,
 	uiState,
 } from "$lib/stores/ui.svelte";
+import { installViewportOffsetGuard } from "$lib/viewport-offset-guard";
 import { resolveWorkspaceSpaceId } from "$lib/workspace-route";
 
 const VCONSOLE_DISABLED_STORAGE_KEY = "cohub:vconsole-disabled";
@@ -578,6 +579,7 @@ onMount(() => {
 	}
 
 	let stopDesktopCommands: (() => void) | null = null;
+	const stopViewportOffsetGuard = installViewportOffsetGuard();
 
 	void authStore.ensureLoaded().finally(() => {
 		authReady = true;
@@ -600,6 +602,7 @@ onMount(() => {
 		delete window.cohubDisableVConsole;
 		delete window.cohubEnableVConsole;
 		stopDesktopCommands?.();
+		stopViewportOffsetGuard();
 		turnNotifications.stop();
 		nativeActivityBridge?.stop();
 		nativeActivityBridge = null;
@@ -621,7 +624,7 @@ onMount(() => {
 </svelte:head>
 
 {#if !authReady}
-  <main class="app-shell min-h-screen text-text-primary">
+  <main class="app-shell h-full text-text-primary">
     <CenteredLoading label={m.shell_loading({}, { locale })} size="page" />
   </main>
 {:else}

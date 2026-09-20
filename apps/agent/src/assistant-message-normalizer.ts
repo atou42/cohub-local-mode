@@ -230,7 +230,7 @@ export function normalizeAssistantTurn(
       blocks.push({
         type: "thinking",
         thinking: block.thinking,
-        ...(typeof block.signature === "string" ? { signature: block.signature } : {}),
+        ...(typeof (block.thinkingSignature ?? block.signature) === "string" ? { signature: String(block.thinkingSignature ?? block.signature) } : {}),
         ...(block._meta && typeof block._meta === "object" ? { _meta: block._meta as Record<string, unknown> } : {}),
       });
       continue;

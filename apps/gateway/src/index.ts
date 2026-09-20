@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { httpInstrumentationMiddleware } from "@hono/otel";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { isLocalHarness } from "@cohub/protocol/runtime";
 import type { ContentBlock } from "@cohub/protocol/core";
 import type {
   RealtimeCompactFrame,
@@ -48,6 +49,7 @@ import {
 import { markChannelDegraded, touchChannelOutbound } from "./channel-health.js";
 import { handleAsrWebSocketConnection } from "./asr/session.js";
 import { handleRelayControlConnection, handleRelayDataConnection, handleRelayPeerConnection } from "./relay/index.js";
+import { closeRuntimeRelay, handleRuntimeConnection, handleRuntimePeer } from "./relay/runtime.js";
 import {
   createPubSubRedisClient,
   redisCommandClient,
@@ -791,6 +793,7 @@ const submitWebsocketSessionMessage = async (ctx: WsConnectionContext, requestId
     source: "websocket",
     model,
     provider,
+    harness: isLocalHarness(payload.harness) ? payload.harness : "cohub",
     thinkingLevel,
     context: {
       kind: "websocket",
@@ -958,12 +961,14 @@ async function main() {
   const relayControlWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const relayDataWss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 });
   const relayPeerWss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 });
+  const runtimeWss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 
   const websocketRoutes = new Map<string, WebSocketServer>([
     ["/ws", wss],
     ["/asr/ws", asrWss],
     ["/sandbox/relay", relayControlWss],
     ["/sandbox/relay/data", relayDataWss],
+    ["/runtime/relay", runtimeWss],
   ]);
 
   // Match /internal/sandbox-relay/:spaceId for cloud peers.
@@ -971,6 +976,12 @@ async function main() {
 
   server.on("upgrade", (request, socket, head) => {
     const pathname = request.url ? new URL(request.url, "http://localhost").pathname : "";
+
+    if (/^\/internal\/runtime-relay\/[0-9a-f-]{36}$/.test(pathname)) {
+      const spaceId = pathname.slice("/internal/runtime-relay/".length);
+      runtimeWss.handleUpgrade(request, socket, head, (websocket) => handleRuntimePeer(websocket, request, spaceId));
+      return;
+    }
 
     if (pathname.startsWith(RELAY_PEER_PREFIX)) {
       const spaceId = decodeURIComponent(pathname.slice(RELAY_PEER_PREFIX.length)).trim();
@@ -997,6 +1008,7 @@ async function main() {
     });
   });
 
+  runtimeWss.on("connection", (socket, request) => handleRuntimeConnection(socket, request));
   asrWss.on("connection", handleAsrWebSocketConnection);
   relayControlWss.on("connection", (socket, request) => void handleRelayControlConnection(socket, request));
   relayDataWss.on("connection", (socket, request) => handleRelayDataConnection(socket, request));
@@ -1431,11 +1443,16 @@ async function main() {
 
   logger.info(`@cohub/gateway listening on :${gatewayConfig.port}`);
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info("[Gateway] Received shutdown signal, stopping...");
-    await manager.stop();
-    logger.info("[Gateway] Shutdown complete");
-    process.exit(0);
+    const results = await Promise.allSettled([manager.stop(), closeRuntimeRelay()]);
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) logger.error("[Gateway] Shutdown failed", failed.reason);
+    else logger.info("[Gateway] Shutdown complete");
+    process.exit(failed ? 1 : 0);
   };
 
   process.on("SIGTERM", shutdown);

@@ -54,6 +54,7 @@ type SandboxCapabilities struct {
 	FSTree             bool `json:"fsTree,omitempty"`
 	FSFind             bool `json:"fsFind"`
 	FSGrep             bool `json:"fsGrep"`
+	FSSearch           bool `json:"fsSearch,omitempty"`
 	ProcessStart       bool `json:"processStart"`
 	ProcessStartArgv   bool `json:"processStartArgv,omitempty"`
 	ProcessWrite       bool `json:"processWrite,omitempty"`
@@ -176,6 +177,24 @@ type FSChangedPayload struct {
 	Seq     int64      `json:"seq"`
 	Resync  bool       `json:"resync,omitempty"`
 	Changes []FSChange `json:"changes"`
+}
+
+type FSSearchParams struct {
+	Literals []string `json:"literals"`
+	Path     string   `json:"path,omitempty"`
+	CWD      string   `json:"cwd,omitempty"`
+	Glob     string   `json:"glob,omitempty"`
+	Limit    int      `json:"limit,omitempty"`
+}
+
+type FSSearchResult struct {
+	Path          string   `json:"path"`
+	Matches       []string `json:"matches"`
+	IndexFamily   string   `json:"indexFamily"`
+	SchemaVersion int      `json:"schemaVersion"`
+	Coverage      string   `json:"coverage"`
+	Truncated     bool     `json:"truncated,omitempty"`
+	State         string   `json:"state,omitempty"`
 }
 
 type FSChanged struct {

@@ -9,13 +9,15 @@ import {
 import { createClient } from "../client.js";
 import { table, json as outJson, jsonRequested, error, handleHttp, type Row } from "../output.js";
 
-type MultimodalModelSummary = Pick<PublicGenerationDeclaration, "model" | "title" | "description">;
+type MultimodalModelSummary = Pick<PublicGenerationDeclaration, "model" | "title" | "description" | "pricing">;
 
-function toMultimodalModelSummary(model: PublicGenerationDeclaration): MultimodalModelSummary {
+export function toMultimodalModelSummary(model: PublicGenerationDeclaration): MultimodalModelSummary {
   return {
     model: model.model,
     ...(model.title ? { title: model.title } : {}),
     ...(model.description ? { description: model.description } : {}),
+    // Keep pricing structured for `--json`; the human table formats it separately.
+    ...(model.pricing ? { pricing: model.pricing } : {}),
   };
 }
 
@@ -27,6 +29,101 @@ function printSection(title: string, lines: string[]): void {
 
 type GenerationContentSpec = PublicGenerationDeclaration["content"]["input"][number];
 type GenerationParameterSpec = NonNullable<PublicGenerationDeclaration["parameters"]>[string];
+export type GenerationModelPricing = NonNullable<PublicGenerationDeclaration["pricing"]>;
+
+const PRICE_UNIT_LABELS: Record<GenerationModelPricing["unit"], string> = {
+  image: "image",
+  second: "second",
+  request: "request",
+  "1m_tokens": "1M tokens",
+};
+
+/** USD amounts stay compact while preserving the precision the value actually needs. */
+function formatUsdAmount(value: number): string {
+  const magnitude = Math.abs(value);
+  const isWholeDollar = magnitude >= 1 && Number.isInteger(value);
+  const fractionDigits = value === 0 || isWholeDollar ? 0 : magnitude < 0.01 ? 4 : 2;
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })}`;
+}
+
+/**
+ * Render a display-only unit price, e.g. `$0.04 / image` or `$0.10–$0.50 / second`,
+ * optionally suffixed with a qualifier note.
+ *
+ * The raw `pricing` object is preserved in `--json` for machines; this string
+ * targets humans and agents reading the table output.
+ */
+export function formatGenerationPrice(pricing: GenerationModelPricing): string {
+  const unit = PRICE_UNIT_LABELS[pricing.unit];
+  const value = typeof pricing.amount === "number"
+    ? formatUsdAmount(pricing.amount)
+    : pricing.min === pricing.max
+      ? formatUsdAmount(pricing.min)
+      : `${formatUsdAmount(pricing.min)}\u2013${formatUsdAmount(pricing.max)}`;
+  const base = `${value} / ${unit}`;
+  return pricing.note ? `${base} \u00b7 ${pricing.note}` : base;
+}
+
+type LlmModelCost = {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
+
+/** LLM catalog entries carry cost as an untyped `model.cost` bag; validate it before use. */
+function readLlmModelCost(model: Record<string, unknown>): LlmModelCost | null {
+  const cost = model.cost;
+  if (!cost || typeof cost !== "object") return null;
+  const { input, output, cacheRead, cacheWrite } = cost as Partial<LlmModelCost>;
+  if (typeof input !== "number" || typeof output !== "number") return null;
+  return {
+    input,
+    output,
+    ...(typeof cacheRead === "number" ? { cacheRead } : {}),
+    ...(typeof cacheWrite === "number" ? { cacheWrite } : {}),
+  };
+}
+
+/** Zero or absent per-token components carry no signal, so they are omitted. */
+function formatLlmCostValue(value: number | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value) && value !== 0 ? formatUsdAmount(value) : null;
+}
+
+/**
+ * Render per-million-token LLM cost, e.g. `$3 /M input · $15 /M output`,
+ * appending cache rates only when the model declares them.
+ */
+export function formatLlmModelCost(model: Record<string, unknown>): string {
+  const cost = readLlmModelCost(model);
+  if (!cost) return "";
+  const parts: Array<[number | undefined, string]> = [
+    [cost.input, "input"],
+    [cost.output, "output"],
+    [cost.cacheRead, "cache read"],
+    [cost.cacheWrite, "cache write"],
+  ];
+  return parts.flatMap(([value, label]) => {
+    const formatted = formatLlmCostValue(value);
+    return formatted ? [`${formatted} /M ${label}`] : [];
+  }).join(" \u00b7 ");
+}
+
+/**
+ * Drop hidden models from LLM discovery, mirroring generation models and the web
+ * picker. Providers left with no visible model are removed so the catalog shape
+ * matches what is actually shown. Explicit `true` is the only hidden signal.
+ */
+export function filterHiddenLlmModels<T extends { model: Record<string, unknown> }>(
+  catalog: Record<string, T[]>,
+): Record<string, T[]> {
+  const visible: Record<string, T[]> = {};
+  for (const [provider, entries] of Object.entries(catalog)) {
+    const models = entries.filter((entry) => entry.model.hidden !== true);
+    if (models.length > 0) visible[provider] = models;
+  }
+  return visible;
+}
 
 function formatContentSpec(spec: GenerationContentSpec): string {
   const details: string[] = [];
@@ -59,6 +156,7 @@ function printMultimodalModel(model: PublicGenerationDeclaration): void {
   console.log(model.title ?? model.model);
   printSection("Model", [model.model]);
   if (model.description) printSection("Description", [model.description]);
+  if (model.pricing) printSection("Pricing", [formatGenerationPrice(model.pricing)]);
 
   printSection("Input", model.content.input.map(formatContentSpec));
 
@@ -108,6 +206,11 @@ Examples:
           table(models as unknown as Row[], [
             { key: "model", label: "Model" },
             { key: "title", label: "Title" },
+            {
+              key: "pricing",
+              label: "Price",
+              format: (value) => (value ? formatGenerationPrice(value as GenerationModelPricing) : ""),
+            },
             { key: "description", label: "Description" },
           ]);
           return;
@@ -118,15 +221,21 @@ Examples:
         }
 
         const catalog = await client.models.list();
-        if (jsonRequested(opts)) return outJson(catalog);
+        const visibleCatalog = filterHiddenLlmModels(catalog);
+        if (jsonRequested(opts)) return outJson(visibleCatalog);
+        if (Object.keys(visibleCatalog).length === 0) return console.log("  (empty)");
 
-        // catalog is Record<provider, ModelCatalogEntry[]>
-        for (const [provider, entries] of Object.entries(catalog)) {
+        for (const [provider, entries] of Object.entries(visibleCatalog)) {
           console.log(`\n  ${provider}`);
           console.log(`  ${"─".repeat(provider.length)}`);
-          table(entries as Row[], [
+          table(entries.map((entry) => ({
+            id: entry.id,
+            provider: entry.provider,
+            cost: formatLlmModelCost(entry.model),
+          })), [
             { key: "id", label: "ID" },
             { key: "provider", label: "Provider" },
+            { key: "cost", label: "Cost" },
           ]);
         }
       } catch (e: unknown) {

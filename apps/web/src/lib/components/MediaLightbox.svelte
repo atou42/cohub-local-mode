@@ -8,6 +8,7 @@ import {
 	ZoomOut,
 } from "lucide-svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox.svelte";
+import { createImageGestureHandlers } from "$lib/gestures/image-gesture";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -56,6 +57,7 @@ function resetView() {
 	panX = 0;
 	panY = 0;
 	dragging = false;
+	imageGesture?.reset();
 }
 
 function setZoom(next: number, options?: { resetPan?: boolean }) {
@@ -104,145 +106,20 @@ $effect(() => {
 	return () => window.removeEventListener("keydown", onKey);
 });
 
-// ─── Touch swipe (gallery) / pinch zoom ───
-let swipeStartX = $state(0);
-let swipeStartY = $state(0);
-const pointers = new Map<number, { clientX: number; clientY: number }>();
-let pinchStart: {
-	distance: number;
-	zoom: number;
-	panX: number;
-	panY: number;
-} | null = null;
-let panTouchStart: {
-	pointerId: number;
-	clientX: number;
-	clientY: number;
-	panX: number;
-	panY: number;
-} | null = null;
+// ─── Touch / pointer gestures ───
+const imageGesture = createImageGestureHandlers({
+	getState: () => ({ zoom, panX, panY }),
+	setState: (state) => {
+		zoom = state.zoom;
+		panX = state.panX;
+		panY = state.panY;
+	},
+	onDraggingChange: (value) => (dragging = value),
+	onSwipe: (deltaX) =>
+		deltaX > 0 ? mediaLightbox.prev() : mediaLightbox.next(),
+});
 
-function pointerDistance(
-	a: { clientX: number; clientY: number },
-	b: { clientX: number; clientY: number },
-) {
-	return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-}
-
-function onTouchStart(e: TouchEvent) {
-	if (e.target !== e.currentTarget) return;
-	if (zoom > 1) return;
-	swipeStartX = e.touches[0].clientX;
-	swipeStartY = e.touches[0].clientY;
-}
-
-function onTouchEnd(e: TouchEvent) {
-	if (e.target !== e.currentTarget) return;
-	if (zoom > 1) return;
-	const dx = e.changedTouches[0].clientX - swipeStartX;
-	const dy = e.changedTouches[0].clientY - swipeStartY;
-	if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
-		dx > 0 ? mediaLightbox.prev() : mediaLightbox.next();
-	}
-}
-
-function onImagePointerDown(e: PointerEvent) {
-	if (mediaLightbox.current?.type !== "image") return;
-	// Left button / touch only — keep right-click for browser image context menu.
-	if (e.pointerType === "mouse" && e.button !== 0) return;
-	// Ignore events that start on chrome (toolbar etc. sits above); stage/img only.
-	const target = e.target as HTMLElement | null;
-	if (target && target !== e.currentTarget && target.tagName !== "IMG") return;
-
-	(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-	pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
-
-	if (pointers.size === 2) {
-		const [a, b] = [...pointers.values()];
-		pinchStart = {
-			distance: pointerDistance(a, b),
-			zoom,
-			panX,
-			panY,
-		};
-		panTouchStart = null;
-		dragging = false;
-		return;
-	}
-
-	if (zoom > 1) {
-		e.preventDefault();
-		dragging = true;
-		panTouchStart = {
-			pointerId: e.pointerId,
-			clientX: e.clientX,
-			clientY: e.clientY,
-			panX,
-			panY,
-		};
-		dragStartX = e.clientX;
-		dragStartY = e.clientY;
-		dragOriginX = panX;
-		dragOriginY = panY;
-	}
-}
-
-function onImagePointerMove(e: PointerEvent) {
-	if (!pointers.has(e.pointerId)) return;
-	pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
-
-	if (pointers.size >= 2 && pinchStart) {
-		const [a, b] = [...pointers.values()];
-		if (!a || !b || pinchStart.distance <= 0) return;
-		e.preventDefault();
-		markGestureZoom();
-		const next = clampZoom(
-			pinchStart.zoom * (pointerDistance(a, b) / pinchStart.distance),
-		);
-		zoom = next;
-		if (next <= 1) {
-			panX = 0;
-			panY = 0;
-		}
-		return;
-	}
-
-	if (!panTouchStart || panTouchStart.pointerId !== e.pointerId) return;
-	if (zoom <= 1) return;
-	e.preventDefault();
-	panX = panTouchStart.panX + (e.clientX - panTouchStart.clientX);
-	panY = panTouchStart.panY + (e.clientY - panTouchStart.clientY);
-}
-
-function onImagePointerUp(e: PointerEvent) {
-	pointers.delete(e.pointerId);
-	const target = e.currentTarget as HTMLElement;
-	if (target.hasPointerCapture(e.pointerId)) {
-		target.releasePointerCapture(e.pointerId);
-	}
-
-	if (pointers.size < 2) pinchStart = null;
-
-	if (panTouchStart?.pointerId === e.pointerId) {
-		panTouchStart = null;
-		dragging = false;
-	}
-
-	// Resume single-finger pan if one pointer remains while zoomed.
-	if (pointers.size === 1 && zoom > 1) {
-		const [pointerId, pointer] = [...pointers.entries()][0];
-		panTouchStart = {
-			pointerId,
-			clientX: pointer.clientX,
-			clientY: pointer.clientY,
-			panX,
-			panY,
-		};
-		dragging = true;
-	}
-}
-
-// ─── Mouse pan (desktop) ───
+// ─── Mouse fallback ───
 function onImageMouseDown(e: MouseEvent) {
 	// Pointer events already cover modern browsers; keep mouse path as fallback
 	// only when pointer events are unavailable.
@@ -424,11 +301,9 @@ const imageCursor = $derived(
 
 {#if mediaLightbox.open && mediaLightbox.current}
 	<div
-		class="fixed inset-0 z-[9999] flex items-center justify-center bg-overlay-scrim-strong"
+		class="fixed inset-0 z-[var(--z-lightbox)] flex items-center justify-center bg-overlay-scrim-strong"
 		onclick={onBackdropClick}
 		onkeydown={onBackdropKeyDown}
-		ontouchstart={onTouchStart}
-		ontouchend={onTouchEnd}
 		tabindex="-1"
 		role="dialog"
 		aria-modal="true"
@@ -518,7 +393,8 @@ const imageCursor = $derived(
 		{#if mediaLightbox.current.type === "image"}
 			<div
 				bind:this={imageStageEl}
-				class="absolute inset-0 z-0 flex items-center justify-center overflow-hidden"
+				class="absolute inset-0 z-0 flex items-center justify-center overflow-hidden touch-none overscroll-none"
+				data-drawer-swipe-ignore
 				role="button"
 				tabindex="0"
 				aria-label={m.media_image_hint({}, { locale })}
@@ -537,10 +413,10 @@ const imageCursor = $derived(
 						}
 					}
 				}}
-				onpointerdown={onImagePointerDown}
-				onpointermove={onImagePointerMove}
-				onpointerup={onImagePointerUp}
-				onpointercancel={onImagePointerUp}
+				onpointerdown={imageGesture.onPointerDown}
+				onpointermove={imageGesture.onPointerMove}
+				onpointerup={imageGesture.onPointerUp}
+				onpointercancel={imageGesture.onPointerCancel}
 				onmousedown={onImageMouseDown}
 				ondblclick={resetView}
 			>
@@ -549,8 +425,8 @@ const imageCursor = $derived(
 					src={mediaLightbox.current.src}
 					alt={mediaLightbox.current.alt ?? ""}
 					draggable="false"
-					style={`transform: translate(${panX}px, ${panY}px) scale(${zoom}); ${dragging || gestureZooming ? "" : "transition: transform 120ms ease-out;"}`}
-					class="max-w-[90vw] max-h-[85vh] object-contain rounded-lg select-none"
+					style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); ${dragging || gestureZooming ? "" : "transition: transform 120ms ease-out;"}`}
+					class="max-w-[90vw] max-h-[85vh] object-contain rounded-lg select-none will-change-transform"
 				/>
 			</div>
 		{:else}

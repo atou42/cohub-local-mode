@@ -1,0 +1,89 @@
+name: Search Binary Build
+
+# Daily PR/main runs only when search sources change, so ordinary development
+# does not pay for a Rust toolchain. Tag releases are handled separately by
+# search-release.yml so every v*.*.* tag still gets a built binary.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/search/**'
+      - '.github/workflows/search-build.yml'
+  pull_request:
+    paths:
+      - 'apps/search/**'
+      - '.github/workflows/search-build.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: search-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Format, lint, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/search
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/search/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('apps/search/Cargo.lock', 'apps/search/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --all-targets
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build static binary
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
+
+      - name: Stage binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/cohub-search dist/cohub-search-linux-amd64
+          (cd dist && sha256sum cohub-search-linux-amd64 > cohub-search-linux-amd64.sha256)
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cohub-search-linux-amd64
+          path: |
+            apps/search/dist/cohub-search-linux-amd64
+            apps/search/dist/cohub-search-linux-amd64.sha256
+          if-no-files-found: error
+          retention-days: 14

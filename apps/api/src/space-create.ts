@@ -238,54 +238,54 @@ export async function provisionCreatedSpace(
   let space = input.space;
   const extraEnv = input.extraEnv ?? [];
 
-  await setSpaceEnv(space.id, extraEnv);
-
-  if (sandbox.provider === "local") {
-    try {
-      await ensureSpaceSandbox({
-        spaceId: space.id,
-        provider: "local",
-        status: "stopped",
-        runtimeStatus: "unknown",
-        stopReason: "disconnected",
-        stoppedAt: new Date(),
-      });
-    } catch (error) {
-      logger.error("[LocalSandbox] failed to register local sandbox after space creation", {
-        spaceId: space.id,
-        error,
-      });
-      throw new Error("failed to register local sandbox");
-    }
-  } else {
-    void scheduleSandboxAutoDestroy({
-      spaceId: space.id,
-      policy: sandbox.autoDestroy,
-      baseAt: space.createdAt ? new Date(space.createdAt) : new Date(),
-    }).catch((error) =>
-      logger.error("[SandboxAutoDestroy] failed to schedule policy after space creation", {
-        spaceId: space.id,
-        error,
-      }),
-    );
-    void reconcileSpaceSandbox({
-      ...getSpaceProvisionParams(user, space),
-      mode: "ensure",
-      reason: "space_created",
-    }).catch((error) =>
-      logger.error("[SandboxPublicNetwork] failed to reconcile after space creation", {
-        spaceId: space.id,
-        error,
-      }),
-    );
-  }
-
   const taskData: Record<string, unknown> = { source: bootstrapSource };
   // TODO: gitToken is stored in taskData (BullMQ Redis + DB task_runs).
   // For long-term security, encrypt it or use a temporary token reference.
   if (gitToken) taskData.gitToken = gitToken;
 
   try {
+    await setSpaceEnv(space.id, extraEnv);
+
+    if (sandbox.provider === "local") {
+      try {
+        await ensureSpaceSandbox({
+          spaceId: space.id,
+          provider: "local",
+          status: "stopped",
+          runtimeStatus: "unknown",
+          stopReason: "disconnected",
+          stoppedAt: new Date(),
+        });
+      } catch (error) {
+        logger.error("[LocalSandbox] failed to register local sandbox after space creation", {
+          spaceId: space.id,
+          error,
+        });
+        throw new Error("failed to register local sandbox");
+      }
+    } else {
+      void scheduleSandboxAutoDestroy({
+        spaceId: space.id,
+        policy: sandbox.autoDestroy,
+        baseAt: space.createdAt ? new Date(space.createdAt) : new Date(),
+      }).catch((error) =>
+        logger.error("[SandboxAutoDestroy] failed to schedule policy after space creation", {
+          spaceId: space.id,
+          error,
+        }),
+      );
+      void reconcileSpaceSandbox({
+        ...getSpaceProvisionParams(user, space),
+        mode: "ensure",
+        reason: "space_created",
+      }).catch((error) =>
+        logger.error("[SandboxPublicNetwork] failed to reconcile after space creation", {
+          spaceId: space.id,
+          error,
+        }),
+      );
+    }
+
     const job = await enqueueTask({
       type: "create_space",
       spaceId: space.id,

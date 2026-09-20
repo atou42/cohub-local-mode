@@ -27,10 +27,11 @@ import {
 import {
 	type BoardRenderContext,
 	type BoardRenderPalette,
+	createBoardBackground,
 	getBoardCardRenderer,
 	getBoardResolution,
-	getBoardThemeRenderer,
 	textZoomBucket,
+	updateBoardBackground,
 } from "@neta-art/cohub/board/render";
 import {
 	Application,
@@ -41,7 +42,7 @@ import {
 } from "pixi.js";
 import { onDestroy, onMount, untrack } from "svelte";
 import { goto } from "$app/navigation";
-import { createBoardAssetManager } from "$lib/board/board-asset-manager";
+import type { BoardAssetManager } from "$lib/board/board-asset-manager";
 import type { BoardAssetSource } from "$lib/board/board-asset-source";
 import {
 	type BoardAwarenessController,
@@ -94,6 +95,7 @@ import { getResolvedTheme } from "$lib/theme.svelte";
 const {
 	editor,
 	runtime,
+	assets,
 	spaceId,
 	assetSource,
 	readonly = false,
@@ -109,6 +111,13 @@ const {
 }: {
 	editor: BoardEditor;
 	runtime: BoardRuntimeData;
+	/**
+	 * Preview texture owner. Shared by every stage showing the same board (the
+	 * live editor and its replay overlay) so a texture one stage releases is not
+	 * torn out from under another — Pixi's `Assets` cache hands back the same
+	 * texture instance per URL.
+	 */
+	assets: BoardAssetManager;
 	/**
 	 * Cache scope for previews. Still required in view mode: it namespaces asset
 	 * keys so identical paths from different Spaces never collide.
@@ -157,7 +166,6 @@ let nodeLayer: Container | null = null;
 let effectsFront: Container | null = null;
 let screenEffects: Container | null = null;
 let background: Container | null = null;
-let backgroundThemeId: string | null = null;
 let boardBackdrop: BoardThemeBackground | null = $state(null);
 let backdropUrl: string | null = $state(null);
 let backdropLoadState: BoardBackgroundLoadState | null = $state(null);
@@ -200,19 +208,13 @@ function handleSpaceStyleChanged(event: Event) {
 	themeCache = null;
 }
 
-// One manager per mounted board; the space id and source are fixed for the mount.
-const assets = createBoardAssetManager({
-	spaceId: untrack(() => spaceId),
-	loadVideoPreviews:
-		typeof navigator === "undefined" ||
-		!(navigator as Navigator & { connection?: { saveData?: boolean } })
-			.connection?.saveData,
-	resolveSpaceFileUrl: (_spaceId, path) =>
-		untrack(() => assetSource).resolveFileUrl(path),
-});
-const unsubscribeAssets = assets.subscribe(() => {
-	assetVersion += 1;
-});
+// The manager is owned by the parent (BoardPanel) and may be shared with the
+// replay stage, so this component never destroys it.
+$effect(() =>
+	assets.subscribe(() => {
+		assetVersion += 1;
+	}),
+);
 
 // Bumped when a workspace file change invalidates a cached preview, so visible
 // file cards can refresh their snapshot.
@@ -493,7 +495,6 @@ function syncBackground(theme: BoardThemeSnapshot) {
 	if (!sameBackdrop(boardBackdrop, nextBackdrop)) boardBackdrop = nextBackdrop;
 	const nextUrl = nextBackdrop?.url ?? null;
 	if (backdropUrl !== nextUrl) backdropUrl = nextUrl;
-	const themeRenderer = getBoardThemeRenderer(editor.document);
 	const context = {
 		app,
 		document: editor.document,
@@ -505,14 +506,12 @@ function syncBackground(theme: BoardThemeSnapshot) {
 				backdropLoadState.status === "ready",
 		),
 	};
-	if (!background || backgroundThemeId !== themeRenderer.id) {
-		background?.destroy({ children: true });
-		background = themeRenderer.createBackground(context);
-		backgroundThemeId = themeRenderer.id;
+	if (!background) {
+		background = createBoardBackground(context);
 		app.stage.addChildAt(background, 0);
 		return;
 	}
-	themeRenderer.updateBackground?.(background, context);
+	updateBoardBackground(background, context);
 }
 
 function scheduleRender() {
@@ -582,6 +581,7 @@ function syncStage() {
 		previewItems.get(id) ?? editor.itemById(id);
 	const context = buildContext(palette, getDisplayItem);
 	const visibleIds = computeVisibleIds();
+	animationRuntime?.setEnteringItems(editor.consumeRecentlyAdded());
 	const animationIds =
 		animationRuntime?.nodeIdsToMaterialize() ?? new Set<string>();
 	const pinnedIds = new Set(editor.selection);
@@ -1099,7 +1099,6 @@ async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
 			if (item?.type !== "file") return null;
 			const result = await loadFilePreview(spaceId, {
 				path,
-				title: item.snapshot?.title,
 				mimeType: item.snapshot?.mimeType,
 				size: item.snapshot?.size,
 				mtimeMs: item.snapshot?.mtimeMs,
@@ -1359,12 +1358,12 @@ onMount(async () => {
 		});
 	} catch (error) {
 		console.error("{m.board_failed_init({}, { locale })}", error);
-		instance.destroy(true);
+		instance.destroy({ removeView: true });
 		return;
 	}
 	// The component may have been torn down while init was awaiting.
 	if (disposed) {
-		instance.destroy(true);
+		instance.destroy({ removeView: true });
 		return;
 	}
 	app = instance;
@@ -1442,7 +1441,14 @@ onMount(async () => {
 });
 
 $effect(() => {
-	animationRuntime?.setData(runtime);
+	// The entrance preset lives in the document appearance, while effects and
+	// compositions arrive through the runtime snapshot. Keep the renderer's
+	// animation model coherent for both local edits and remote refreshes.
+	editor.appearance;
+	animationRuntime?.setData({
+		...runtime,
+		enter: editor.appearance.motion?.enter ?? null,
+	});
 });
 
 function setBackdropLoadState(state: BoardBackgroundLoadState | null) {
@@ -1515,7 +1521,6 @@ onDestroy(() => {
 	resizeObserver?.disconnect();
 	cancelAnimationFrame(resizeFrame);
 	cancelAnimationFrame(renderFrame);
-	unsubscribeAssets();
 	unsubscribeTaskRuns();
 	unsubscribePreviews();
 	if (host) {
@@ -1534,7 +1539,6 @@ onDestroy(() => {
 	const context = buildContext(getPalette(), (id) => editor.itemById(id));
 	scene?.destroy(context);
 	scene = null;
-	assets.destroy();
 	background?.destroy({ children: true });
 	background = null;
 	effectsBehind = null;
@@ -1544,7 +1548,9 @@ onDestroy(() => {
 	world = null;
 	overlay = null;
 	farLayer = null;
-	app?.destroy(true);
+	// `destroy(true)` would release Pixi's global pools and the shared Assets
+	// cache, breaking any other live renderer. Remove only this canvas.
+	app?.destroy({ removeView: true });
 	app = null;
 	onExportReady?.(null);
 	onBackgroundLoadStateChange?.(null);

@@ -271,6 +271,23 @@ const templates: Record<string, unknown> = {
     seed: "float-hero",
     params: { distance: 8, period: 2200 },
   },
+  "effect:deal": {
+    id: "deal-title",
+    target: { type: "item", itemId: "title" },
+    kind: "effects.deal",
+    kindVersion: 1,
+    lifecycle: "on-enter",
+    timeOrigin: "activation",
+    seed: "deal-title",
+    params: {},
+  },
+  "motion:enter-deal": {
+    enter: {
+      kind: "effects.deal",
+      kindVersion: 1,
+      params: {},
+    },
+  },
   "composition:fade": {
     id: "intro",
     name: "Intro",
@@ -396,7 +413,8 @@ Kinds:
   create [workflow|media|animation]
   batch basic
   item text|image|video|audio|file|task|geo|frame|draw|arrow
-  effect pulse|float
+  effect pulse|float|deal
+  motion enter-deal
   composition fade|reveal|draw-reveal|motion-path|trail|impact|flash|particles|camera-shake|camera-focus
 
 Examples:

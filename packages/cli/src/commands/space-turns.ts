@@ -163,8 +163,8 @@ export function registerSpaceTurns(
   const turnsCmd = spacesCmd
     .command("turns")
     .description("Browse turns across the space")
-    .hook("preAction", () => {
-      resolveSpace(spacesCmd);
+    .hook("preAction", async () => {
+      await resolveSpace(spacesCmd);
     });
 
   turnsCmd
@@ -190,7 +190,7 @@ export function registerSpaceTurns(
         throw cause;
       }
 
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = dependencies.createClient?.() ?? createClient();
       try {
         try {
@@ -253,7 +253,7 @@ export function registerSpaceTurns(
     .description("Read persisted intermediate messages from the CDN archive")
     .option("--json", "Output as JSON")
     .action(async (sessionId: string, turnId: string, options: { json?: boolean }) => {
-      const spaceId = resolveSpace(spacesCmd);
+      const spaceId = await resolveSpace(spacesCmd);
       const client = dependencies.createClient?.() ?? createClient();
       try {
         const archive = await client.space(spaceId).session(sessionId).turns.intermediate.get(turnId);

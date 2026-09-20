@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	ignore "github.com/sabhiram/go-gitignore"
@@ -21,6 +23,7 @@ import (
 	"github.com/cohub/apps/sandbox/env"
 	"github.com/cohub/apps/sandbox/process"
 	"github.com/cohub/apps/sandbox/protocol"
+	"github.com/cohub/apps/sandbox/search"
 )
 
 type IdentityRouter interface {
@@ -36,6 +39,7 @@ type Dispatcher struct {
 	mu             sync.Mutex
 	gitignoreMu    sync.Mutex
 	gitignoreCache *gitignoreCacheEntry
+	searchManager  *search.Manager
 }
 
 type gitignoreMatcher struct {
@@ -103,6 +107,12 @@ func (d *Dispatcher) SetRouter(router IdentityRouter) {
 	d.router = router
 }
 
+func (d *Dispatcher) SetSearchManager(manager *search.Manager) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.searchManager = manager
+}
+
 func (d *Dispatcher) nextSeq() int64 {
 	return atomic.AddInt64(&d.opSeq, 1)
 }
@@ -143,6 +153,8 @@ func (d *Dispatcher) Handle(request protocol.RPCRequest, ownerIdentity string) (
 		return accepted, d.complete(request, accepted.OpID, d.handleFSFind(request))
 	case "fs.grep":
 		return accepted, d.complete(request, accepted.OpID, d.handleFSGrep(request))
+	case "fs.search":
+		return accepted, d.complete(request, accepted.OpID, d.handleFSSearch(request))
 	case "process.start":
 		return accepted, d.handleProcessStart(request, accepted.OpID, ownerIdentity)
 	case "process.write":
@@ -220,6 +232,26 @@ type fsFindParams struct {
 	IgnoreVcs  bool     `json:"ignoreVcs"`
 	FullPath   bool     `json:"fullPath"`
 	Ignore     []string `json:"ignore"`
+}
+
+type fsSearchParams struct {
+	Literals []string `json:"literals"`
+	Path     string   `json:"path"`
+	CWD      string   `json:"cwd"`
+	Glob     string   `json:"glob"`
+	Limit    int      `json:"limit"`
+}
+
+func validateSearchLiterals(literals []string) error {
+	if len(literals) == 0 {
+		return fmt.Errorf("literals must contain at least one search literal")
+	}
+	for _, literal := range literals {
+		if utf8.RuneCountInString(strings.TrimSpace(literal)) < 3 {
+			return fmt.Errorf("search literals must contain at least 3 non-whitespace characters")
+		}
+	}
+	return nil
 }
 
 type fsGrepParams struct {
@@ -929,6 +961,77 @@ func (d *Dispatcher) handleFSFind(request protocol.RPCRequest) interface{} {
 		"path":      resolved.path,
 		"matches":   matches,
 		"truncated": truncated,
+	}
+}
+
+func (d *Dispatcher) handleFSSearch(request protocol.RPCRequest) interface{} {
+	var params fsSearchParams
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return d.failed(request, "", "BAD_REQUEST", err.Error())
+	}
+	if err := validateSearchLiterals(params.Literals); err != nil {
+		return d.failed(request, "", "BAD_REQUEST", err.Error())
+	}
+
+	resolved, errResponse, ok := d.resolvePathForRequest(request, params.Path, params.CWD)
+	if !ok {
+		return errResponse
+	}
+
+	d.mu.Lock()
+	manager := d.searchManager
+	d.mu.Unlock()
+	if manager == nil || !manager.Enabled() {
+		return d.failed(request, "", "INTERNAL_ERROR", "search index is unavailable")
+	}
+	if !manager.ProcessReady() {
+		failed := d.failed(request, "", "SEARCH_UNAVAILABLE", "search index is not ready; retry later")
+		failed.Error.Retryable = true
+		return failed
+	}
+
+	pathPrefix, err := filepath.Rel(d.cfg.WorkspaceDir, resolved.path)
+	if err != nil {
+		return d.failed(request, "", "IO_ERROR", err.Error())
+	}
+	if pathPrefix == "." {
+		pathPrefix = ""
+	} else {
+		pathPrefix = filepath.ToSlash(pathPrefix)
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	result, err := manager.Query(context.Background(), search.QueryInput{
+		Literals:   params.Literals,
+		PathPrefix: pathPrefix,
+		Glob:       params.Glob,
+		Limit:      limit,
+	})
+	if err != nil {
+		return d.failed(request, "", "INTERNAL_ERROR", err.Error())
+	}
+
+	matches := make([]string, 0, len(result.Matches))
+	for _, match := range result.Matches {
+		absolute := filepath.Join(d.cfg.WorkspaceDir, filepath.FromSlash(match))
+		relative, relErr := filepath.Rel(resolved.path, absolute)
+		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		matches = append(matches, filepath.ToSlash(relative))
+	}
+	return map[string]interface{}{
+		"path":          resolved.path,
+		"matches":       matches,
+		"indexFamily":   result.IndexFamily,
+		"schemaVersion": result.SchemaVersion,
+		"coverage":      result.Coverage,
+		"truncated":     result.Truncated,
+		"state":         result.State,
 	}
 }
 

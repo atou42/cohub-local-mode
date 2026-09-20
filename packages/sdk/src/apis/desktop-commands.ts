@@ -18,6 +18,7 @@ export type {
   DesktopCall,
   DesktopFileTarget,
   DesktopOpenCommand,
+  DesktopSurface,
   DesktopTarget,
 } from "@cohub/protocol/desktop-command";
 

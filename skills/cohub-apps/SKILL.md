@@ -58,6 +58,25 @@ Start with empty scopes. Add the smallest permission set needed for the App. Pub
 - `session.prompt.fullaccess`
 - `command.execute`
 
+Anything outside that list — other Spaces, generation, account data — raises a viewer
+consent dialog at runtime through `client.auth.authorize()`. Pass an explicit
+`target` (`{ kind: "account" }`, `{ kind: "space", spaceId }`, or
+`{ kind: "pick-space" }`) and act on the Space the result reports, which may
+differ from the request when the viewer cannot use it.
+
+```ts
+const consent = await client.auth.authorize({
+  target: { kind: "space", spaceId },
+  scopes: ["file.view"],
+  reason: "Read the Space you opened this App from.",
+});
+if (consent.status !== "granted" || consent.target.kind !== "space") return;
+const space = client.space(consent.target.spaceId);
+```
+
+Call it from a user gesture, never on page load. Full contract:
+[app-authorization.md](https://github.com/talesofai/cohub/blob/main/docs/app-authorization.md).
+
 ## Publish
 
 Publish creates the App or updates an existing App with the same slug:

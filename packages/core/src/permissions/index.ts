@@ -7,6 +7,7 @@ export type Audience = "member_user" | "signed_in_user" | "anonymous_user";
 export const ALL_PERMISSIONS = [
   "space.view",
   "space.edit",
+  "space.create",
   "space.label.view",
   "space.label.manage",
   "space.label.assign",
@@ -14,6 +15,7 @@ export const ALL_PERMISSIONS = [
   "session.edit",
   "session.prompt.readonly",
   "session.prompt.fullaccess",
+  "session.access.manage",
   "generation.create",
   "file.view",
   "file.view.filtered",
@@ -35,6 +37,7 @@ export const ALL_PERMISSIONS = [
   "mod.manage",
   "space.commerce.view",
   "space.commerce.manage",
+  "app.manage",
   "user.space.list",
   "user.session.list",
   "user.taskrun.list",
@@ -43,12 +46,13 @@ export const ALL_PERMISSIONS = [
 
 const ALL_PERMISSION_SET = new Set<Permission>(ALL_PERMISSIONS);
 
-/** Permissions that grant access to the viewer's own account-level data, not bound to a specific space. */
+/** Account-level permissions, not bound to a specific space. */
 export const USER_LEVEL_PERMISSIONS = new Set<Permission>([
   "user.space.list",
   "user.session.list",
   "user.taskrun.list",
   "user.usage.read",
+  "space.create",
 ]);
 
 export const isUserLevelPermission = (permission: Permission): boolean =>
@@ -118,6 +122,7 @@ export const ROLE_PERMISSIONS: Record<SpaceRole, ReadonlySet<Permission>> = {
     "session.edit",
     "session.prompt.readonly",
     "session.prompt.fullaccess",
+    "session.access.manage",
     "generation.create",
     "file.view",
     "file.edit",
@@ -138,6 +143,7 @@ export const ROLE_PERMISSIONS: Record<SpaceRole, ReadonlySet<Permission>> = {
     "mod.manage",
     "space.commerce.view",
     "space.commerce.manage",
+    "app.manage",
   ]),
   builder: new Set([
     "space.view",
@@ -147,6 +153,7 @@ export const ROLE_PERMISSIONS: Record<SpaceRole, ReadonlySet<Permission>> = {
     "session.edit",
     "session.prompt.readonly",
     "session.prompt.fullaccess",
+    "session.access.manage",
     "generation.create",
     "file.view",
     "file.edit",
@@ -161,6 +168,7 @@ export const ROLE_PERMISSIONS: Record<SpaceRole, ReadonlySet<Permission>> = {
     "command.execute",
     "sandbox.view",
     "mod.view",
+    "app.manage",
   ]),
   guest: new Set([
     "space.view",

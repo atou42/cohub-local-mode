@@ -15,19 +15,8 @@ import type {
 	TaskRunRecord,
 	UserProfile,
 } from "@neta-art/cohub";
-import { parseAppRef } from "@neta-art/cohub";
 import type { BoardDocument } from "@neta-art/cohub/board";
-import {
-	Check,
-	Copy,
-	Download,
-	ListTree,
-	MoreHorizontal,
-	Pencil,
-	TextCursorInput,
-	Trash2,
-	X,
-} from "lucide-svelte";
+import { Check, Copy, X } from "lucide-svelte";
 import { onDestroy, onMount, tick, untrack } from "svelte";
 import {
 	beforeNavigate,
@@ -42,7 +31,6 @@ import {
 	type AccessState,
 	isBlockingAccessState,
 } from "$lib/access/access-state";
-import { floatNear } from "$lib/actions/portal";
 import { appDisplayTitle } from "$lib/app-page-meta";
 import type {
 	BoardAutomationActivity,
@@ -63,6 +51,10 @@ import UserIdentity from "$lib/components/UserIdentity.svelte";
 import { createDeferredMount } from "$lib/deferred-mount.svelte";
 import { invalidateInstalledApps } from "$lib/features/app/app-center";
 import {
+	loadAppPreview,
+	resolveAppNavigation,
+} from "$lib/features/app/app-open";
+import {
 	APPS_CHANGED_EVENT,
 	createAppMutationBuffer,
 	dispatchAppsChanged,
@@ -71,7 +63,14 @@ import {
 	upsertAppSnapshot,
 } from "$lib/features/app/app-realtime";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
-import { registerDesktopCommandHost } from "$lib/features/desktop-command/bus";
+import {
+	type AppSurfaceCallOutcome,
+	createAppSurfaceRegistry,
+} from "$lib/features/app/surface-registry";
+import {
+	type DesktopCommandOutcome,
+	registerDesktopCommandHost,
+} from "$lib/features/desktop-command/bus";
 import {
 	createSessionChatHost,
 	getSessionTitle,
@@ -84,10 +83,8 @@ import {
 	parseResourceLabelRealtimePayload,
 	syncResourceLabelsToCache,
 } from "$lib/labels/resource-label-cache-sync";
-import {
-	COMPACT_SHELL_MAX_WIDTH_PX,
-	DESKTOP_SHELL_MIN_WIDTH_PX,
-} from "$lib/layout/breakpoints";
+import { DESKTOP_SHELL_MIN_WIDTH_PX } from "$lib/layout/breakpoints";
+import { useCompactShell } from "$lib/layout/compact-shell.svelte";
 import { DURATION_PANEL } from "$lib/motion.svelte";
 import {
 	getNativeFocusViewState,
@@ -130,6 +127,7 @@ import {
 } from "$lib/stores/ui.svelte";
 import type { LocalUploadEntry } from "$lib/upload-entries";
 import {
+	denyWorkspaceAsset,
 	type ResolveWorkspaceAsset,
 	resolveWorkspaceFileAsset,
 } from "$lib/workspace-assets";
@@ -137,6 +135,8 @@ import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import { resolveWorkspaceSpaceId } from "$lib/workspace-route";
 import { createAppPreviewController } from "./modules/app-window-controller.svelte";
 import { createBoardWindowController } from "./modules/board-window-controller.svelte";
+import DesktopLayerHost from "./modules/DesktopLayerHost.svelte";
+import { createDesktopLayerManager } from "./modules/desktop-layer-manager.svelte";
 import { createFileWorkspaceController } from "./modules/file-workspace-controller.svelte";
 import { classifyInlineFileFsChange } from "./modules/file-workspace-utils";
 import {
@@ -191,6 +191,11 @@ import {
 	workspaceFilePreviewKind,
 } from "./modules/windows";
 import type { WorkspaceAppOpenContext } from "./modules/workspace-app-context";
+import {
+	OVERLAY_LIMIT_MESSAGE,
+	openPublishedApp,
+	type PublishedAppOpenInput,
+} from "./modules/workspace-app-open";
 import { createWorkspaceLayoutController } from "./modules/workspace-layout-controller.svelte";
 import { displayUserName, fallbackUserName } from "./space-utils";
 
@@ -271,20 +276,7 @@ const routeTurnSequence = $derived.by(() => {
 		? Math.floor(sequence)
 		: null;
 });
-let isMobile = $state(
-	typeof window !== "undefined"
-		? window.matchMedia(`(max-width: ${COMPACT_SHELL_MAX_WIDTH_PX}px)`).matches
-		: false,
-);
-$effect(() => {
-	if (typeof window === "undefined") return;
-	const mql = window.matchMedia(`(max-width: ${COMPACT_SHELL_MAX_WIDTH_PX}px)`);
-	const handler = (event: MediaQueryListEvent) => {
-		isMobile = event.matches;
-	};
-	mql.addEventListener("change", handler);
-	return () => mql.removeEventListener("change", handler);
-});
+const isMobile = $derived(useCompactShell());
 const isRouteDetailView = $derived(
 	routeView === "checkpoint-new" ||
 		routeView === "checkpoint" ||
@@ -305,7 +297,11 @@ let newChatProfileBodyEl: HTMLDivElement | null = $state(null);
 function hasAccessPermission(permission: Permission): boolean {
 	return space?.access?.permissions.includes(permission) === true;
 }
-const canManageSessionAccess = $derived(hasAccessPermission("member.manage"));
+// Sharing manages a session's access policy, a distinct capability from content
+// editing. Builders and hosts both hold `session.access.manage`.
+const canManageSessionAccess = $derived(
+	hasAccessPermission("session.access.manage"),
+);
 // True when the backend returned only minimal info (session-level access only)
 const spaceHasMinimalAccess = $derived(space?.accessLevel === "minimal");
 // Right sidebar (files panel) is only available when the user has full space
@@ -316,6 +312,8 @@ const rightSidebarAvailable = $derived(
 );
 const canEditFiles = $derived(hasAccessPermission("file.edit"));
 const canEditSpace = $derived(hasAccessPermission("space.edit"));
+// Managing Apps is a builder capability; deleting someone else's App stays a host one.
+const canManageApp = $derived(hasAccessPermission("app.manage"));
 const spaceOwnerUsername = $derived(
 	space?.ownerProfile?.username ??
 		(space?.userUuid === authStore.userUuid
@@ -330,6 +328,14 @@ let connectionStateBox: {
 
 const sessionChat = createSessionChatHost({
 	openPath: (target) => openLinkedInlineFile(target),
+	// Shared, non-member sessions can't read workspace files: short-circuit to a
+	// lightweight placeholder instead of issuing requests that always fail.
+	// Public `/p/{spaceId}/{path}` references are rewritten to CDN URLs before
+	// this resolver runs, so they still render for those viewers.
+	resolveWorkspaceAsset: (path, options) =>
+		spaceHasMinimalAccess
+			? denyWorkspaceAsset(path, options)
+			: resolveWorkspaceAsset(path, options),
 	router: {
 		toSession: async (sessionId, opts) => {
 			// Keep open file/board/port preview when new chat becomes a real session.
@@ -444,39 +450,18 @@ async function handleAppNavigationOpen(message: AppNavigationOpenMessage) {
 		return openWorkspaceNavigation(message.target);
 	}
 	try {
-		const parsedRef = parseAppRef(message.target.ref);
-		if ("id" in parsedRef) {
-			// IDs are stable and avoid an unnecessary slug lookup.
-			const parsed = await sdk.apps
-				.get(parsedRef.id)
-				.catch(() => sdk.apps.getPublicById(parsedRef.id));
-			return openResolvedAppNavigation(
-				message,
-				parsed.app.id,
-				appDisplayTitle(parsed.app.meta, parsed.app.slug),
-				{ source: "user" },
-				message.target.launch,
-			);
-		}
-		const parsed = await sdk.apps.getBySlug(
-			parsedRef.username,
-			parsedRef.spaceSlug,
-			parsedRef.appSlug,
+		const { detail: parsed, launch } = await resolveAppNavigation(
+			sdk.apps,
+			message.target.ref,
+			message.target.launch,
 		);
-		const launch =
-			message.target.launch ??
-			(parsedRef.search || parsedRef.hash
-				? {
-						...(parsedRef.search ? { search: parsedRef.search } : {}),
-						...(parsedRef.hash ? { hash: parsedRef.hash } : {}),
-					}
-				: undefined);
 		return openResolvedAppNavigation(
 			message,
 			parsed.app.id,
 			appDisplayTitle(parsed.app.meta, parsed.app.slug),
 			{ source: "user" },
 			launch,
+			parsed.app.meta,
 		);
 	} catch {
 		return { handled: false as const, reason: "inaccessible" as const };
@@ -519,26 +504,64 @@ async function openWorkspaceNavigation(target: AppNavigationTarget) {
 	return { handled: false as const, reason: "unsupported" as const };
 }
 
+async function loadPublishedAppMeta(appId: string) {
+	return (await loadAppPreview(sdk.apps, appId)).app.meta ?? null;
+}
+
+function showWorkspaceNotice(message: string) {
+	workspaceNotice = message;
+	if (workspaceNoticeTimer) clearTimeout(workspaceNoticeTimer);
+	workspaceNoticeTimer = setTimeout(() => {
+		workspaceNotice = null;
+		workspaceNoticeTimer = null;
+	}, 3000);
+}
+
+async function openWorkspaceApp(input: PublishedAppOpenInput) {
+	const opened = await openPublishedApp(input, {
+		spaceId,
+		loadMeta: loadPublishedAppMeta,
+		openWindow: (open) => windowManager.openApp(open),
+		openOverlay: (open) => desktopLayers.openOverlay(open),
+	});
+	if (!opened.ok && opened.reason === "overlay_limit") {
+		showWorkspaceNotice(OVERLAY_LIMIT_MESSAGE);
+	}
+	return opened;
+}
+
+async function callOpenedApp(
+	appId: string,
+	surface: "window" | "overlay",
+	call: { method: string; input?: unknown; commandId: string },
+) {
+	// Applying launch state changes the iframe source reactively. Flush that
+	// update before calling so AppSurface resets the old runtime first; the
+	// surface host then waits for the new document's ready handshake.
+	await tick();
+	return surface === "overlay"
+		? desktopLayers.callSurface({ appId, ...call })
+		: appPreview.callSurface({ appId, ...call });
+}
+
 async function openResolvedAppNavigation(
 	message: AppNavigationOpenMessage,
 	appId: string,
 	label: string,
 	openContext: WorkspaceAppOpenContext,
 	launch?: { search?: string; hash?: string },
+	meta?: AppRecord["meta"],
 ) {
-	windowManager.openApp({
+	const opened = await openWorkspaceApp({
 		appId,
 		label,
 		launch: launch ?? null,
 		openContext,
+		...(meta !== undefined ? { meta } : {}),
 	});
+	if (!opened.ok) return { handled: true as const };
 	if (!message.call) return { handled: true as const };
-	// Applying launch state changes the iframe source reactively. Flush that
-	// update before calling so AppSurface resets the old runtime first; the
-	// surface host then waits for the new document's ready handshake.
-	await tick();
-	const result = await appPreview.callSurface({
-		appId,
+	const result = await callOpenedApp(appId, opened.surface, {
 		method: message.call.method,
 		input: message.call.input,
 		commandId: message.requestId,
@@ -558,8 +581,39 @@ async function openResolvedAppNavigation(
 			};
 }
 
+/**
+ * Maps a surface call result onto a desktop command outcome. `ok` is
+ * `pending`, not `applied`: the App acknowledged delivery and settles the
+ * command itself through `client.desktop.reportResult()`.
+ */
+function desktopCallOutcome(
+	called: AppSurfaceCallOutcome | undefined,
+): DesktopCommandOutcome {
+	if (!called) {
+		return {
+			status: "rejected",
+			error: {
+				code: "surface_unavailable",
+				message: "The App surface did not return a call result.",
+			},
+		};
+	}
+	if (called.ok) return { status: "pending" };
+	return {
+		status:
+			called.code === "surface_not_supported" ||
+			called.code === "method_not_found"
+				? "unsupported"
+				: "rejected",
+		error: { code: called.code, message: called.message },
+	};
+}
+
+/** Mounted App iframes across every host (tabs and overlays), keyed by app id. */
+const appSurfaces = createAppSurfaceRegistry();
 const appPreview = createAppPreviewController({
 	getSpaceId: () => spaceId,
+	surfaces: appSurfaces,
 	onOpenPanel: () => {
 		if (uiState.filesColumnHidden) uiState.setFilesColumnHidden(false);
 		ensurePreviewPanelFits();
@@ -571,6 +625,9 @@ const appPreview = createAppPreviewController({
 	},
 	onAppClosed: (appId) => windowManager.tabClosed("app", appId),
 });
+
+// Desktop overlay layer — manages App surfaces that float above the workspace.
+const desktopLayers = createDesktopLayerManager({ surfaces: appSurfaces });
 const inlineAppPreview = $derived(appPreview.preview);
 const inlineAppTabs = $derived(appPreview.previews);
 const activeInlineAppId = $derived(appPreview.activeAppId);
@@ -579,9 +636,8 @@ const inlinePortPreview = $derived(portPreview.preview);
 const inlinePortTabs = $derived(portPreview.previews);
 const activeInlinePort = $derived(portPreview.activePort);
 const portReadyToast = $derived(portPreview.readyToast);
-let previewTabCleanupNotice = $state<string | null>(null);
-let fileActionMenuAnchorEl: HTMLElement | null = $state(null);
-let previewTabCleanupNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+let workspaceNotice = $state<string | null>(null);
+let workspaceNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 const spaceStatus = createSpaceStatusController({
 	getSpaceId: () => spaceId,
 	getBootstrapStatus: () => bootstrapStatus,
@@ -723,15 +779,11 @@ const windowManager = createWindowManager({
 	getPortEndpointUrl: (port) => previewEndpoints[port]?.url,
 	syncUrl: (ref, replace = true) => syncPreviewQuery(ref, replace),
 	onBudgetCleanup: () => {
-		previewTabCleanupNotice = "Closed inactive previews to keep things fast.";
-		if (previewTabCleanupNoticeTimer)
-			clearTimeout(previewTabCleanupNoticeTimer);
-		previewTabCleanupNoticeTimer = setTimeout(() => {
-			previewTabCleanupNotice = null;
-			previewTabCleanupNoticeTimer = null;
-		}, 3000);
+		showWorkspaceNotice("Closed inactive previews to keep things fast.");
 	},
 });
+/** App tabs whose surfaces stay mounted while inactive (MRU window). */
+const retainedAppIds = $derived(windowManager.retainedAppIds());
 const inlineFileCopied = $derived(fileWorkspace.inlineFileCopied);
 const openAppPublish = (
 	targetType: "file" | "directory" | "port",
@@ -745,7 +797,6 @@ const inlineFileIsHtml = $derived(fileWorkspace.inlineFileIsHtml);
 const inlineFileHasRenderedPreview = $derived(
 	fileWorkspace.inlineFileHasRenderedPreview,
 );
-const inlineFileExt = $derived(fileWorkspace.inlineFileExt);
 const inlineFileIsImage = $derived(fileWorkspace.inlineFileIsImage);
 const inlineFileIsVideo = $derived(fileWorkspace.inlineFileIsVideo);
 const inlineFileIsAudio = $derived(fileWorkspace.inlineFileIsAudio);
@@ -860,6 +911,15 @@ $effect(() => {
 		});
 		return;
 	}
+	const overlayChip = desktopLayers.composerChip;
+	if (overlayChip) {
+		sessionChat.reportActiveSource({
+			kind: "app",
+			appId: overlayChip.appId,
+			...overlayChip.chip,
+		});
+		return;
+	}
 	if (activeWindowKind) {
 		sessionChat.reportActiveSource(null);
 		return;
@@ -875,14 +935,6 @@ $effect(() => {
 	sessionChat.reportActiveSource(null);
 });
 
-const inlineFilePanHandlers = makeImagePanHandlers(
-	() => fileWorkspace.inlineFileZoom,
-	() => fileWorkspace.inlineFilePanX,
-	() => fileWorkspace.inlineFilePanY,
-	(v) => (fileWorkspace.inlineFilePanX = v),
-	(v) => (fileWorkspace.inlineFilePanY = v),
-	(v) => (fileWorkspace.inlineFileDragging = v),
-);
 let workspaceBodyEl = $state<HTMLDivElement | null>(null);
 const previewLayout = createWorkspaceLayoutController({
 	getIsCompact: () => isMobile,
@@ -1428,45 +1480,6 @@ function userTitle(
 		.filter(Boolean)
 		.join(" · ");
 }
-// Image pan handlers
-function makeImagePanHandlers(
-	zoom: () => number,
-	panX: () => number,
-	panY: () => number,
-	setPanX: (v: number) => void,
-	setPanY: (v: number) => void,
-	setDragging: (v: boolean) => void,
-) {
-	let dragStartX = 0;
-	let dragStartY = 0;
-	let startPanX = 0;
-	let startPanY = 0;
-	return {
-		start: (e: MouseEvent) => {
-			if (zoom() <= 1) return;
-			e.preventDefault();
-			dragStartX = e.clientX;
-			dragStartY = e.clientY;
-			startPanX = panX();
-			startPanY = panY();
-			setDragging(true);
-			document.addEventListener("mousemove", handleMove);
-			document.addEventListener("mouseup", handleEnd);
-		},
-	};
-	function handleMove(e: MouseEvent) {
-		const dx = e.clientX - dragStartX;
-		const dy = e.clientY - dragStartY;
-		setPanX(startPanX + dx);
-		setPanY(startPanY + dy);
-	}
-	function handleEnd() {
-		setDragging(false);
-		document.removeEventListener("mousemove", handleMove);
-		document.removeEventListener("mouseup", handleEnd);
-	}
-}
-
 // ── Session rename (header inline edit) ────────────────────────────────
 function startSessionRename() {
 	const session = activeSessionState?.session;
@@ -1827,7 +1840,7 @@ onDestroy(() => {
 	if (activeSessionId) sessionChat.captureCurrentScrollAnchor(activeSessionId);
 	sessionChat.flushComposerDraft();
 	sessionChat.dispose();
-	if (previewTabCleanupNoticeTimer) clearTimeout(previewTabCleanupNoticeTimer);
+	if (workspaceNoticeTimer) clearTimeout(workspaceNoticeTimer);
 	spaceBootstrap.resetLoaded();
 });
 
@@ -2194,7 +2207,9 @@ function registerAppSurface(appId: string, host: AppSurfaceHost | null) {
 	if (!host) return;
 	appSurfaceDisposers.set(
 		appId,
-		appPreview.registerSurface(appId, (input) => host.call(input)),
+		appSurfaces.register({ appId, surface: "app" }, (input) =>
+			host.call(input),
+		),
 	);
 }
 async function downloadInlineFile() {
@@ -2239,6 +2254,13 @@ async function handleFileKeyboardSave(event: KeyboardEvent) {
 		event.preventDefault();
 		if (inlinePortPreview) closeInlinePort();
 		else closeInlineFile();
+		return;
+	}
+	// Overlays have no chrome of their own, so Escape is the one host-owned way
+	// to get rid of an App that never calls requestClose().
+	if (event.key === "Escape" && desktopLayers.count > 0) {
+		event.preventDefault();
+		desktopLayers.dismissAll();
 	}
 }
 async function copyInlineFileContent() {
@@ -2454,14 +2476,12 @@ onMount(() => {
 	const handleResourceActionMenuKeydown = (e: KeyboardEvent) => {
 		if (e.key === "Escape") {
 			closeResourceActionMenu();
-			fileWorkspace.fileActionMenuOpenPath = null;
 		}
 	};
 	const handleResourceActionMenuClickOutside = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
 		if (!target.closest("[data-resource-actions]")) {
 			closeResourceActionMenu();
-			fileWorkspace.fileActionMenuOpenPath = null;
 		}
 	};
 	const flushInlineFiles = () => {
@@ -2534,40 +2554,31 @@ onMount(() => {
 					? { toolCallId: context.source.toolCallId }
 					: {}),
 			};
-			const opened = await openResolvedAppNavigation(
-				{
-					protocol: "cohub.app.navigation",
-					version: 1,
-					type: "open",
-					requestId: context.commandId,
-					target: { kind: "app", ref: command.target.appId },
-					...(command.call ? { call: command.call } : {}),
-				},
-				command.target.appId,
-				command.target.label ?? "App",
+
+			// Compact wire form: absent surface already means window.
+			const opened = await openWorkspaceApp({
+				appId: command.target.appId,
+				label: command.target.label,
+				launch: command.target.launch ?? null,
 				openContext,
-				command.target.launch,
-			);
-			if (!command.call) return { status: "applied" };
-			const called = opened.call;
-			if (!called) {
+				surface: command.target.surface === "overlay" ? "overlay" : "window",
+			});
+			if (!opened.ok) {
 				return {
 					status: "rejected",
 					error: {
-						code: "surface_unavailable",
-						message: "The App surface did not return a call result.",
+						code: "overlay_limit",
+						message: OVERLAY_LIMIT_MESSAGE,
 					},
 				};
 			}
-			if (called.ok) return { status: "pending" };
-			return {
-				status:
-					called.code === "surface_not_supported" ||
-					called.code === "method_not_found"
-						? "unsupported"
-						: "rejected",
-				error: { code: called.code, message: called.message },
-			};
+			if (!command.call) return { status: "applied" };
+			return desktopCallOutcome(
+				await callOpenedApp(command.target.appId, opened.surface, {
+					commandId: context.commandId,
+					...command.call,
+				}),
+			);
 		},
 	);
 	return () => {
@@ -2589,6 +2600,8 @@ onMount(() => {
 		for (const dispose of appSurfaceDisposers.values()) dispose();
 		appSurfaceDisposers.clear();
 		appPreview.dispose();
+		desktopLayers.dismissAll();
+		appSurfaces.clear();
 		sessionChat.scroll.stopVimScroll();
 		sessionChat.scroll.clearPendingVimG();
 		sessionChat.persistSessionScrollAnchorsNow();
@@ -2844,7 +2857,6 @@ const spaceFileDomainProps = $derived.by<
 	Omit<
 		SpaceFileDomainProps,
 		| "inlineFileViewMode"
-		| "fileActionMenuOpenPath"
 		| "inlineFileZoom"
 		| "inlineFilePanX"
 		| "inlineFilePanY"
@@ -2884,8 +2896,8 @@ const spaceFileDomainProps = $derived.by<
 	inlinePortPreview,
 	inlinePortTabs,
 	activeInlinePort,
-	inlineAppPreview,
 	inlineAppTabs,
+	retainedAppIds,
 	activeInlineAppId,
 	appShell,
 	activeWindowKind,
@@ -2902,7 +2914,6 @@ const spaceFileDomainProps = $derived.by<
 	inlineFileIsCsv,
 	inlineFileIsHtml,
 	inlineFileCopied,
-	inlineFileExt,
 	inlineFileIsImage,
 	inlineFileIsVideo,
 	inlineFileIsAudio,
@@ -2910,7 +2921,6 @@ const spaceFileDomainProps = $derived.by<
 	inlineFileDataUrl,
 	inlineFileApp,
 	inlineFileDragging: fileWorkspace.inlineFileDragging,
-	inlineFilePanHandlers,
 	uploadPaneVisible: fileWorkspace.uploadPaneVisible,
 	uploadPaneTargetDir: fileWorkspace.uploadPaneTargetDir,
 	pendingUploadFiles: fileWorkspace.pendingUploadFiles,
@@ -2940,7 +2950,6 @@ const spaceFileDomainProps = $derived.by<
 	resolveWorkspaceAsset,
 	onOpenInlineBoard: openInlineBoard,
 	onOpenTask: openTask,
-	onCloseInlineFile: closeInlineFile,
 	onActivateInlineBoard: activateInlineBoardTab,
 	onCloseInlineBoardTab: closeInlineBoardTab,
 	onActivateInlinePort: activateInlinePortTab,
@@ -2981,7 +2990,7 @@ const spaceFileDomainProps = $derived.by<
 	onOpenAppPublish: openAppPublish,
 	onOpenMarketplace: () => {
 		if (!PUBLIC_MARKETPLACE_APP_ID) return;
-		windowManager.openApp({
+		void openWorkspaceApp({
 			appId: PUBLIC_MARKETPLACE_APP_ID,
 			label: "Marketplace",
 			openContext: { source: "user" },
@@ -2992,7 +3001,7 @@ const spaceFileDomainProps = $derived.by<
 			window.open(app.url, "_blank", "noopener,noreferrer");
 			return;
 		}
-		windowManager.openApp({
+		void openWorkspaceApp({
 			appId: app.source.appId,
 			label: app.snapshot.name,
 			openContext: { source: "user" },
@@ -3074,102 +3083,6 @@ const headerActions = {
 	<title>{browserTabTitle}</title>
 </svelte:head>
 
-{#snippet FileHeaderCoreActions(path: string)}
-	<div class="relative shrink-0" data-resource-actions>
-		<button
-			type="button"
-			class="icon-btn"
-			onclick={(event) => {
-				event.stopPropagation();
-				const nextOpen = fileWorkspace.fileActionMenuOpenPath !== path;
-				fileActionMenuAnchorEl = nextOpen ? event.currentTarget : null;
-				fileWorkspace.fileActionMenuOpenPath = nextOpen ? path : null;
-			}}
-			title="More actions"
-			aria-haspopup="menu"
-			aria-expanded={fileWorkspace.fileActionMenuOpenPath === path}
-		>
-			<MoreHorizontal class="w-4 h-4" />
-		</button>
-		{#if fileWorkspace.fileActionMenuOpenPath === path && fileActionMenuAnchorEl}
-			<div
-				class="w-44 overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-1 shadow-lg"
-				role="menu"
-				data-resource-actions
-				use:floatNear={{
-					getAnchor: () => fileActionMenuAnchorEl,
-					placement: "bottom-end",
-					gap: 4,
-					width: 176,
-					zIndex: 120,
-				}}
-			>
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => {
-						void editResourceLabels("file", path, fileActionMenuAnchorEl);
-						fileWorkspace.fileActionMenuOpenPath = null;
-					}}
-					role="menuitem"
-				>
-					<ListTree class="w-3.5 h-3.5" />
-					<span>Label as…</span>
-				</button>
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => {
-						insertFilePathReference(path);
-						fileWorkspace.fileActionMenuOpenPath = null;
-					}}
-					role="menuitem"
-				>
-					<TextCursorInput class="w-3.5 h-3.5" />
-					<span>Insert reference</span>
-				</button>
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => {
-						void handleDownloadNode(getFileActionNode(path));
-						fileWorkspace.fileActionMenuOpenPath = null;
-					}}
-					role="menuitem"
-				>
-					<Download class="w-3.5 h-3.5" />
-					<span>Download</span>
-				</button>
-				{#if canEditFiles && !activeFsReadonly}
-					<button
-						type="button"
-						class="menu-item"
-						onclick={() => {
-							void handleRenameNode(getFileActionNode(path));
-							fileWorkspace.fileActionMenuOpenPath = null;
-						}}
-						role="menuitem"
-					>
-						<Pencil class="w-3.5 h-3.5" />
-						<span>Rename</span>
-					</button>
-					<button
-						type="button"
-						class="menu-item danger"
-						onclick={() => {
-							void handleDeleteNode(getFileActionNode(path));
-							fileWorkspace.fileActionMenuOpenPath = null;
-						}}
-						role="menuitem"
-					>
-						<Trash2 class="w-3.5 h-3.5" />
-						<span>Delete</span>
-					</button>
-				{/if}
-			</div>
-		{/if}
-	</div>
-{/snippet}
 
 {#snippet PanelLoadingState(label: string, compact = false)}
 	<CenteredLoading label={label} size={compact ? "compact" : "panel"} />
@@ -3215,9 +3128,9 @@ const headerActions = {
 		onClose={closePortReadyToast}
 	/>
 {/if}
-{#if previewTabCleanupNotice}
-	<div class="preview-tab-cleanup-toast pointer-events-none">
-		{previewTabCleanupNotice}
+{#if workspaceNotice}
+	<div class="workspace-notice pointer-events-none">
+		{workspaceNotice}
 	</div>
 {/if}
 <div
@@ -3227,6 +3140,12 @@ const headerActions = {
 	style={`--immersive-chat-width: ${uiState.immersiveChatWidth}px; --immersive-chat-edge-gap: ${FLOAT_CHAT_EDGE_GAP}px; --immersive-chat-max-width: calc(100% - ${immersiveFilesInset}px - ${FLOAT_PREVIEW_MIN_WIDTH + FLOAT_PANEL_GAP}px); --preview-safe-left: ${previewImmersiveMode && immersiveChatVisible ? `calc(min(var(--immersive-chat-width), var(--immersive-chat-max-width)) + var(--immersive-chat-edge-gap) + ${FLOAT_PANEL_GAP}px)` : `${FLOAT_PANEL_GAP}px`}; --preview-safe-right: ${immersiveFilesInset}px`}
 >
   <SpaceDanmakuLayer controller={danmakuController} {spaceId} hidden={previewImmersiveMode} />
+  <DesktopLayerHost
+    manager={desktopLayers}
+    surfaces={appSurfaces}
+    shell={appShell}
+    onNavigationOpen={handleAppNavigationOpen}
+  />
   <div
     class="workspace-main flex-1 min-h-0 flex flex-col min-w-0 bg-bg-content"
     class:workspace-main--immersive-hidden={!immersiveChatVisible}
@@ -3256,6 +3175,7 @@ const headerActions = {
         {spaceLoadError}
         {spaceHasMinimalAccess}
         {canEditSpace}
+        {canManageApp}
         {taskRealtimeEvent}
         ownerUsername={spaceOwnerUsername}
         {spaceSlug}
@@ -3263,10 +3183,11 @@ const headerActions = {
           routeDetailHeaderMeta = meta;
         }}
         onPreviewApp={(app) => {
-          windowManager.openApp({
+          void openWorkspaceApp({
             appId: app.id,
             label: appDisplayTitle(app.meta, app.slug),
             openContext: { source: "user" },
+            meta: app.meta,
           });
         }}
       />
@@ -3340,7 +3261,6 @@ const headerActions = {
       <SpaceFileDomain
         {...spaceFileDomainProps}
         bind:inlineFileViewMode={fileWorkspace.inlineFileViewMode}
-        bind:fileActionMenuOpenPath={fileWorkspace.fileActionMenuOpenPath}
         bind:inlineFileZoom={fileWorkspace.inlineFileZoom}
         bind:inlineFilePanX={fileWorkspace.inlineFilePanX}
         bind:inlineFilePanY={fileWorkspace.inlineFilePanY}
@@ -3460,7 +3380,7 @@ const headerActions = {
 
     .workspace-body--preview-immersive .workspace-main {
       position: relative;
-      z-index: 20;
+      z-index: var(--z-workspace-chrome);
       flex: 0 0 min(var(--immersive-chat-width), var(--immersive-chat-max-width));
       max-width: min(var(--immersive-chat-width), var(--immersive-chat-max-width));
       min-width: min(320px, calc(100vw - 96px));
@@ -3482,7 +3402,7 @@ const headerActions = {
     top: 7px;
     right: auto;
     left: 7px;
-    z-index: 20;
+    z-index: var(--z-workspace-chrome);
     display: flex;
     align-items: center;
     gap: 4px;
@@ -3513,7 +3433,7 @@ const headerActions = {
     top: 0;
     right: -4px;
     bottom: 0;
-    z-index: 10;
+    z-index: var(--z-panel-float);
     width: 8px;
     border: 0;
     padding: 0;
@@ -3549,7 +3469,7 @@ const headerActions = {
     cursor: col-resize;
     background: transparent;
     touch-action: none;
-    z-index: 10;
+    z-index: var(--z-panel-float);
   }
   :global(.right-sidebar-resize-handle)::after {
     content: "";
@@ -3576,7 +3496,7 @@ const headerActions = {
     cursor: col-resize;
     background: transparent;
     touch-action: none;
-    z-index: 10;
+    z-index: var(--z-panel-float);
   }
   :global(.inline-panel-resize-handle)::after {
     content: "";
@@ -3592,11 +3512,11 @@ const headerActions = {
   :global(body.sidebar-resizing .inline-panel-resize-handle::after) {
     background: var(--border-subtle);
   }
-  .preview-tab-cleanup-toast {
+  .workspace-notice {
     position: fixed;
     right: 1rem;
     bottom: 1rem;
-    z-index: 70;
+    z-index: var(--z-workspace-toast);
     max-width: min(22rem, calc(100vw - 2rem));
     border: 1px solid var(--color-border-subtle);
     border-radius: 0.75rem;
@@ -3612,7 +3532,7 @@ const headerActions = {
     position: fixed;
     left: 50%;
     top: 58px;
-    z-index: 80;
+    z-index: var(--z-fullscreen);
     display: flex;
     max-width: min(680px, calc(100vw - 24px));
     min-width: min(520px, calc(100vw - 24px));

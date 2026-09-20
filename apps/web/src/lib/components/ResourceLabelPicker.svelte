@@ -10,7 +10,7 @@ import { floatNear, portal } from "$lib/actions/portal";
 import LabelCreateForm from "$lib/components/LabelCreateForm.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
-import { COMPACT_SHELL_MAX_WIDTH_PX } from "$lib/layout/breakpoints";
+import { useCompactShell } from "$lib/layout/compact-shell.svelte";
 import {
 	DURATION_MODAL_IN,
 	DURATION_MODAL_OUT,
@@ -63,11 +63,7 @@ let initialLoadSettled = $state(false);
 let loading = $state(false);
 let loadVersion = 0;
 let userLabelProfileVersion = $state(0);
-let isCompact = $state(
-	typeof window !== "undefined"
-		? window.matchMedia(`(max-width: ${COMPACT_SHELL_MAX_WIDTH_PX}px)`).matches
-		: false,
-);
+const isCompact = $derived(useCompactShell());
 
 const flatLabels = $derived(flattenLabels(labels));
 const labelOptions = $derived(flattenLabelsWithRefs(labels));
@@ -274,17 +270,6 @@ $effect(() => {
 	});
 	hydrateLabelUserProfiles();
 	return unsubscribe;
-});
-
-$effect(() => {
-	if (typeof window === "undefined") return;
-	const mql = window.matchMedia(`(max-width: ${COMPACT_SHELL_MAX_WIDTH_PX}px)`);
-	const onChange = (event: MediaQueryListEvent) => {
-		isCompact = event.matches;
-	};
-	isCompact = mql.matches;
-	mql.addEventListener("change", onChange);
-	return () => mql.removeEventListener("change", onChange);
 });
 </script>
 

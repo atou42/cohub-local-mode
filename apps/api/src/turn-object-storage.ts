@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalize } from "node:path";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "./config.js";
 
 const CDN_BASE_URL = config.turnObjectCdnBaseUrl;
@@ -32,6 +32,11 @@ const getS3Client = () => {
   });
   return s3Client;
 };
+
+export const headTurnObject = (objectKey: string) => getS3Client().send(
+  new HeadObjectCommand({ Bucket: config.turnObjectS3Bucket, Key: objectKey }),
+  { abortSignal: AbortSignal.timeout(10_000) },
+);
 
 export const sanitizeTurnObjectKey = (objectKey: string) => {
   const raw = objectKey.trim().replace(/^\/+/, "");

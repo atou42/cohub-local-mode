@@ -1,0 +1,119 @@
+name: Search Binary Release
+
+# Always build and attach cohub-search on version tags, even when the tag
+# commit did not touch apps/search. Daily CI stays on search-build.yml with
+# path filters so unrelated PRs never start a Rust job.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/search-build.yml
+
+  publish:
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cohub-search-linux-amd64
+          path: artifacts
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          BINARY=$(find artifacts -type f -name 'cohub-search-linux-amd64' | head -n 1)
+          if [[ -z "${BINARY}" ]]; then
+            echo "cohub-search-linux-amd64 artifact file not found" >&2
+            find artifacts -type f
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME}"
+          cp "${BINARY}" "release/cohub-search-linux-amd64-${VERSION}"
+          (cd release && sha256sum "cohub-search-linux-amd64-${VERSION}" > "cohub-search-linux-amd64-${VERSION}.sha256")
+          ls -la release
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/cohub-search-linux-amd64-${{ github.ref_name }}
+            release/cohub-search-linux-amd64-${{ github.ref_name }}.sha256
+          fail_on_unmatched_files: true
+
+  publish-cdn:
+    needs: build
+    # The repo is private, so GitHub Release assets are not publicly
+    # downloadable. Mirror the musl binary to the cohub-public OSS bucket
+    # under search/<version>/, same pattern as sandboxd.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    env:
+      OSS_BUCKET: cohub-public
+      OSS_ENDPOINT: https://oss-us-west-1.aliyuncs.com
+      OSS_REGION: us-west-1
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cohub-search-linux-amd64
+          path: artifacts
+
+      - name: Stage upload
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          BINARY=$(find artifacts -type f -name 'cohub-search-linux-amd64' | head -n 1)
+          if [[ -z "${BINARY}" ]]; then
+            echo "cohub-search-linux-amd64 artifact file not found" >&2
+            find artifacts -type f
+            exit 1
+          fi
+          cp "${BINARY}" upload/cohub-search-linux-amd64
+          (cd upload && sha256sum cohub-search-linux-amd64 > cohub-search-linux-amd64.sha256)
+          ls -la upload
+
+      - name: Configure AWS CLI for Alibaba Cloud OSS
+        # OSS (us-west-1, a non-mainland-China region) is incompatible with
+        # two aws-cli v2 defaults that break PutObject:
+        #   1. Path-style addressing for custom endpoints -> OSS rejects with
+        #      SecondLevelDomainForbidden; force virtual-hosted style.
+        #   2. CRC64NVME flexible checksum + aws-chunked STREAMING-UNSIGNED-
+        #      PAYLOAD-TRAILER encoding -> OSS rejects with NotImplemented;
+        #      disable via request_checksum_calculation=when_required.
+        # NOTE: request_checksum_calculation / response_checksum_validation
+        # are top-level botocore Config options, NOT under the [s3] section.
+        run: |
+          mkdir -p ~/.aws
+          printf '[default]\nrequest_checksum_calculation = when_required\nresponse_checksum_validation = when_required\ns3 =\n    addressing_style = virtual\n' > ~/.aws/config
+          cat ~/.aws/config
+
+      - name: Upload to public CDN (OSS, S3-compatible)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PUBLIC_ASSET_OSS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.OSS_REGION }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "Missing PUBLIC_ASSET_OSS_ACCESS_KEY_ID / PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY secrets"
+            exit 1
+          fi
+          aws s3 cp upload "s3://${OSS_BUCKET}/search/${VERSION}/" \
+            --endpoint-url "${OSS_ENDPOINT}" \
+            --recursive \
+            --cache-control "public, max-age=31536000, immutable"
+          echo "Published cohub-search ${VERSION} to https://public.cohub.live/search/${VERSION}/"

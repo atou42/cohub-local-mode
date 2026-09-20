@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { hasPermission } from "../permissions.js";
 import { getOptionalAuth, useAuth, requireValidId, authzDenied } from "../lib/middleware.js";
 import {
+  attachActiveTurns,
   getSpaceById,
   getSpaceSessionById,
   getSessionMessageById,
@@ -52,7 +53,7 @@ router.post("/:id/turns/:turnId/fork", async (c) => {
 
   const sourceTurn = await getSessionTurnById(session.id, turnId);
   if (!sourceTurn) return c.json({ message: "turn not found" }, 404);
-  if (!["completed", "failed", "interrupted", "cancelled"].includes(sourceTurn.status)) {
+  if ((sourceTurn.executionKind === "direct_generation" || session.agentHarness !== "pi") && !["completed", "failed", "interrupted", "cancelled"].includes(sourceTurn.status)) {
     return c.json({ message: "cannot fork a running turn" }, 400);
   }
   const sourceTurnId = sourceTurn.sourceTurnId ?? sourceTurn.id;
@@ -62,8 +63,8 @@ router.post("/:id/turns/:turnId/fork", async (c) => {
   const anchorEntryId = session.agentHarness === "pi"
     ? await findLatestVisibleAgentEntryId(session.id, sourceTurn.sequence)
     : null;
-  if (session.agentHarness === "pi" && !anchorEntryId && sourceTurn.executionKind !== "direct_generation") {
-    return c.json({ message: "session checkpoint missing" }, 400);
+  if (!anchorEntryId && !["completed", "failed", "interrupted", "cancelled", "merged"].includes(sourceTurn.status)) {
+    return c.json({ message: "cannot fork an unfinished turn without a durable context boundary" }, 400);
   }
 
   const sourceMeta = record(sourceTurn.meta);
@@ -160,7 +161,8 @@ router.get("/:id", async (c) => {
   if (!space) return c.json({ message: "session not found" }, 404);
 
   const [hydratedSession] = await hydrateSessionParticipantProfiles([session]);
-  return c.json({ space, session: hydratedSession ?? session, user });
+  const [sessionWithActiveTurn] = await attachActiveTurns([hydratedSession ?? session]);
+  return c.json({ space, session: sessionWithActiveTurn ?? hydratedSession ?? session, user });
 });
 
 // ── PATCH /api/sessions/:id (rename) ─────────────────────────────────────────
@@ -184,7 +186,8 @@ router.patch("/:id", async (c) => {
 
   const refreshed = await getSpaceSessionById(sessionId);
   const [hydratedSession] = await hydrateSessionParticipantProfiles([refreshed ?? session]);
-  return c.json({ session: hydratedSession ?? refreshed ?? session });
+  const [sessionWithActiveTurn] = await attachActiveTurns([hydratedSession ?? refreshed ?? session]);
+  return c.json({ session: sessionWithActiveTurn ?? hydratedSession ?? refreshed ?? session });
 });
 
 router.get("/:id/turns", async (c) => {
@@ -290,7 +293,7 @@ router.get("/:id/turns/stream-snapshot", async (c) => {
   if (snapshot?.turnId) {
     const turn = await getSessionTurnById(session.id, snapshot.turnId);
     if (!turn || (turn.status !== "running" && turn.status !== "abort_requested")) {
-      await clearSessionStreamSnapshot({ spaceId: session.spaceId, sessionId: session.id });
+      await clearSessionStreamSnapshot({ spaceId: session.spaceId, sessionId: session.id, turnId: snapshot.turnId });
       return c.json({ snapshot: null });
     }
   }

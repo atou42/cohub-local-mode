@@ -2,7 +2,10 @@ import type {
 	SpaceFsFileResponse,
 	SpaceFsPreparingFile,
 } from "@neta-art/cohub";
-import { normalizeWorkspaceFileLink } from "$lib/workspace-file-links";
+import {
+	normalizeWorkspaceFileLink,
+	parsePublicFileHref,
+} from "$lib/workspace-file-links";
 
 export type WorkspaceAsset = {
 	src: string;
@@ -13,6 +16,23 @@ export type ResolveWorkspaceAsset = (
 	path: string,
 	options: { signal: AbortSignal },
 ) => Promise<WorkspaceAsset>;
+
+/**
+ * Raised when the viewer cannot read workspace files at all, e.g. a shared
+ * session viewed with minimal access. Surfaces render a lightweight placeholder
+ * instead of a broken asset, and no request is issued.
+ */
+export class WorkspaceAssetAccessError extends Error {
+	override name = "WorkspaceAssetAccessError";
+
+	constructor(message = "No access to workspace files") {
+		super(message);
+	}
+}
+
+/** Resolver for surfaces where the viewer has no workspace file access. */
+export const denyWorkspaceAsset: ResolveWorkspaceAsset = () =>
+	Promise.reject(new WorkspaceAssetAccessError());
 
 type ReadWorkspaceAssetFile = (
 	path: string,
@@ -98,7 +118,7 @@ export async function resolveWorkspaceFileAsset(
 	}
 }
 
-function resolveWorkspaceAssetPath(reference: string, basePath: string) {
+function resolveWorkspaceAssetPath(reference: string, basePath: string | null) {
 	return normalizeWorkspaceFileLink(reference, { basePath });
 }
 
@@ -128,10 +148,48 @@ export function fileResponseAsset(file: SpaceFsFileResponse): WorkspaceAsset {
 	};
 }
 
-export function prepareWorkspaceAssetHtml(html: string, basePath: string) {
+export function prepareMarkdownAssetHtml(
+	html: string,
+	options: {
+		basePath?: string | null;
+		/** Only extract workspace assets when a resolver will load them. */
+		extractWorkspaceAssets?: boolean;
+		/** Builds an absolute URL for `/p/{spaceId}/{path}` public files. */
+		publicFileUrl?: (spaceId: string, path: string) => string | null;
+	} = {},
+) {
 	if (typeof document === "undefined") return html;
+	const {
+		basePath = null,
+		extractWorkspaceAssets = false,
+		publicFileUrl,
+	} = options;
+	if (!extractWorkspaceAssets && !html.includes("/p/")) return html;
+
 	const template = document.createElement("template");
 	template.innerHTML = html;
+
+	// Explicit `/p/{spaceId}/{path}` references point straight at the public CDN;
+	// they are never read from the workspace and keep the referenced Space. This
+	// runs regardless of whether a workspace resolver is available.
+	if (publicFileUrl) {
+		for (const anchor of template.content.querySelectorAll<HTMLAnchorElement>(
+			"a[href]",
+		)) {
+			const reference = anchor.getAttribute("href")?.trim();
+			if (!reference) continue;
+			const publicFile = parsePublicFileHref(reference);
+			if (!publicFile) continue;
+			const url = publicFileUrl(publicFile.spaceId, publicFile.path);
+			if (!url) continue;
+			anchor.setAttribute("href", url);
+			if (!anchor.hasAttribute("target")) {
+				anchor.dataset.cohubAutoTarget = "blank";
+				anchor.setAttribute("target", "_blank");
+			}
+			anchor.setAttribute("rel", "noopener noreferrer");
+		}
+	}
 
 	for (const [selector, attribute] of WORKSPACE_ASSET_SELECTORS) {
 		for (const element of template.content.querySelectorAll<HTMLElement>(
@@ -139,6 +197,13 @@ export function prepareWorkspaceAssetHtml(html: string, basePath: string) {
 		)) {
 			const reference = element.getAttribute(attribute)?.trim();
 			if (!reference) continue;
+			const publicFile = publicFileUrl ? parsePublicFileHref(reference) : null;
+			if (publicFile) {
+				const url = publicFileUrl?.(publicFile.spaceId, publicFile.path);
+				if (url) element.setAttribute(attribute, url);
+				continue;
+			}
+			if (!extractWorkspaceAssets) continue;
 			const path = resolveWorkspaceAssetPath(reference, basePath);
 			if (!path) continue;
 			if (attribute === "src") element.dataset.workspaceAssetSrc = path;

@@ -23,6 +23,10 @@ const packagesRoot = resolvePath(here, "..", "..", "..", "packages");
  */
 const PACKAGE_SOURCES = [
 	[
+		"@neta-art/cohub/space-picker",
+		`${packagesRoot}/sdk/src/space-picker.ts`,
+	],
+	[
 		"@neta-art/cohub/board/headless",
 		`${packagesRoot}/sdk/src/board/headless/index.ts`,
 	],
@@ -46,6 +50,10 @@ const PACKAGE_SOURCES = [
 	[
 		"@cohub/protocol/board-constants",
 		`${packagesRoot}/protocol/src/board-constants.ts`,
+	],
+	[
+		"@cohub/protocol/desktop-command",
+		`${packagesRoot}/protocol/src/desktop-command.ts`,
 	],
 	["@cohub/protocol", `${packagesRoot}/protocol/src/index.ts`],
 ];
