@@ -1,6 +1,7 @@
 <script lang="ts">
-import type { UserSessionListItem } from "@neta-art/cohub";
+import type { SessionRecord, UserSessionListItem } from "@neta-art/cohub";
 import { Plus } from "lucide-svelte";
+import { onDestroy } from "svelte";
 import { goto } from "$app/navigation";
 import ListRowSkeleton from "$lib/components/list-page/ListRowSkeleton.svelte";
 import {
@@ -19,6 +20,7 @@ import { getLocale } from "$lib/i18n/locale.svelte";
 import { scrollListToTop } from "$lib/layout/list-scroll-top";
 import { scrollMemory } from "$lib/layout/scroll-memory";
 import { m } from "$lib/paraglide/messages.js";
+import { sdk } from "$lib/sdk";
 import {
 	buildSessionForkTree,
 	getSessionTreeTitle,
@@ -28,6 +30,7 @@ import {
 	buildUserSessionRoute,
 } from "$lib/space-routes";
 import { type ChatsFilter, chatsFilterScope } from "$lib/stores/chats-filter";
+import { sessionStore } from "$lib/stores/session-store";
 
 const {
 	view,
@@ -68,6 +71,21 @@ const rows = $derived.by(() => {
 	}));
 });
 let scroller = $state<HTMLDivElement | null>(null);
+let renamingId = $state<string | null>(null);
+let renameValue = $state("");
+let renameSaving = $state(false);
+let renameError = $state("");
+let navigateTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingNavigation() {
+	if (navigateTimer) clearTimeout(navigateTimer);
+	navigateTimer = null;
+}
+
+onDestroy(cancelPendingNavigation);
+$effect(() => {
+	if (!active) cancelPendingNavigation();
+});
 
 export function scrollToTop() {
 	scrollListToTop(scroller);
@@ -100,6 +118,19 @@ function open(event: MouseEvent, session: UserSessionListItem) {
 	if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)
 		return;
 	event.preventDefault();
+	cancelPendingNavigation();
+	if (isPage || event.detail === 0) {
+		navigate(session);
+		return;
+	}
+	// Let a double click enter rename before opening another Space.
+	navigateTimer = setTimeout(() => {
+		navigateTimer = null;
+		navigate(session);
+	}, 250);
+}
+
+function navigate(session: UserSessionListItem) {
 	onNavigate?.();
 	if (isPage) {
 		void goto(hrefFor(session));
@@ -113,6 +144,43 @@ function open(event: MouseEvent, session: UserSessionListItem) {
 		keepFocus: true,
 		noScroll: true,
 	});
+}
+
+function startRename(session: SessionRecord, title: string) {
+	cancelPendingNavigation();
+	if (renameSaving) return;
+	renamingId = session.id;
+	renameValue = session.title ?? title;
+	renameError = "";
+}
+
+function cancelRename() {
+	renamingId = null;
+	renameValue = "";
+	renameError = "";
+}
+
+async function submitRename(session: SessionRecord, title: string) {
+	if (renameSaving) return;
+	const trimmed = renameValue.trim();
+	if (!trimmed || trimmed === (session.title ?? title)) {
+		cancelRename();
+		return;
+	}
+	renameSaving = true;
+	renameError = "";
+	try {
+		const result = await sdk
+			.space(session.spaceId)
+			.session(session.id)
+			.rename(trimmed);
+		sessionStore.merge(result.session);
+		cancelRename();
+	} catch (error) {
+		renameError = error instanceof Error ? error.message : String(error);
+	} finally {
+		renameSaving = false;
+	}
 }
 
 function onScroll(event: Event) {
@@ -185,13 +253,29 @@ function onScroll(event: Event) {
 						tree={row.tree}
 						tooltip={tooltipFor(row)}
 						showInsert={false}
-						showRename={false}
+						showRename={!isPage}
+						renaming={renamingId === session.id}
+						{renameValue}
+						{renameSaving}
 						onNavigate={open}
+						onDoubleClick={isPage ? undefined : (event, target) => {
+							if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+							event.preventDefault();
+							event.stopPropagation();
+							startRename(target, title);
+						}}
+						onRename={(target) => startRename(target, title)}
+						onRenameValueChange={(value) => renameValue = value}
+						onSubmitRename={(target) => void submitRename(target, title)}
+						onCancelRename={cancelRename}
 					>
 						{#snippet avatar()}
 							<SpaceAvatar name={spaceName(session)} profile={session.space?.publicProfile ?? null} seed={session.spaceId} size={LIST_ROW_AVATAR[density]} />
 						{/snippet}
 					</SessionRow>
+					{#if renamingId === session.id && renameError}
+						<p role="alert" class="px-3 py-1 text-[12px] text-error-soft">{renameError}</p>
+					{/if}
 				</li>
 			{/each}
 		</ul>
