@@ -4,7 +4,7 @@ import { serializeDiagnosticError, type RuntimeDiagnostics } from "../diagnostic
 import type { HarnessOptions } from "../harness.js";
 import { record } from "../json-rpc.js";
 import type { SessionTurnProjectionClient } from "../turn-projection.js";
-import { readTranscript, type Harness } from "./adapters.js";
+import { readTranscript, type Harness, type NativeTranscriptTurn } from "./adapters.js";
 import { CodexShared, type CodexChannel, type CodexEvent } from "./codex-link.js";
 import { readNativeConfig, type NativeConfig } from "./config.js";
 import type { Executor } from "./execution.js";
@@ -104,7 +104,7 @@ export class NativeRuntime {
             : state.runningTurnKey ? this.codex.interrupt(state.nativeSessionId, state.runningTurnKey) : Promise.resolve(false);
           void stop.catch((error: unknown) => options.diagnostics.log("warn", "native.stop_failed", { error: serializeDiagnosticError(error) }, { harness: state.harness, sessionId: state.sessionId ?? undefined }));
         },
-        onGrowth: (state) => this.onGrowth(state),
+        onGrowth: (state, snapshot) => this.onGrowth(state, snapshot),
         onRunning: (state, turnId) => this.onRunning(state, turnId),
         onError: (error, context) => options.diagnostics.log("warn", "native.sync_pending", { path: context.path, error: serializeDiagnosticError(error) }, { component: "native", harness: context.harness }),
       },
@@ -151,6 +151,7 @@ export class NativeRuntime {
   }
 
   connect(send: ((event: NativeRuntimeEvent) => Promise<unknown>) | null): void {
+    if (this.send !== send) for (const path of this.filePreviews.keys()) this.endFilePreview(path);
     this.send = send;
     this.ingest.connect(send ? nativeWebSocketTransport(send) : null);
   }
@@ -215,7 +216,7 @@ export class NativeRuntime {
     return (progress: NativeTurnProgress) => {
       const running = this.ingest.running(harness, nativeSessionId);
       if (!running?.sessionId || !running.runningTurnId || !this.send) return null;
-      return this.send({ type: "progress", sessionId: running.sessionId, turnId: running.runningTurnId, progress }).catch(() => ({ accepted: false }));
+      return this.send({ type: "progress", sessionId: running.sessionId, turnId: running.runningTurnId, progress });
     };
   }
 
@@ -240,7 +241,7 @@ export class NativeRuntime {
   private stream(key: string, harness: Harness, nativeSessionId: string): Stream {
     let stream = this.streams.get(key);
     if (!stream) {
-      const progress = new LiveProgress(this.sink(harness, nativeSessionId), STREAM_INTERVAL_MS);
+      const progress = new LiveProgress(this.sink(harness, nativeSessionId), STREAM_INTERVAL_MS, (error) => this.options.diagnostics.log("warn", "native.preview_failed", { nativeSessionId, error: serializeDiagnosticError(error) }, { harness }));
       const emit = (update: Parameters<LiveProgress["apply"]>[0]) => progress.apply(update);
       stream = { progress, translator: harness === "pi" ? piTranslator(emit) : codexTranslator(emit, { provider: null, model: null }) };
       this.streams.set(key, stream);
@@ -331,26 +332,32 @@ export class NativeRuntime {
    * A running Turn's file grew. A connected client streams it already; otherwise the preview is
    * read from the file, at a pace set by a timer, not by every write.
    */
-  private onGrowth(state: TranscriptState): void {
+  private onGrowth(state: TranscriptState, snapshot?: NativeTranscriptTurn): void {
     this.ingest.alive(state.harness, state.nativeSessionId);
     if (state.harness === "codex" && this.codex.enabled && !this.watched.has(state.nativeSessionId)) void this.codex.get();
     const streamed = state.harness === "pi" ? this.pi.find(state.nativeSessionId) !== null : this.watched.has(state.nativeSessionId);
     if (streamed) return;
     let preview = this.filePreviews.get(state.path);
     if (!preview) {
-      preview = { progress: new LiveProgress(this.sink(state.harness, state.nativeSessionId), 0), timer: null, readMs: 0 };
+      preview = { progress: new LiveProgress(this.sink(state.harness, state.nativeSessionId), 0, (error) => this.options.diagnostics.log("warn", "native.preview_failed", { path: state.path, error: serializeDiagnosticError(error) }, { harness: state.harness, sessionId: state.sessionId ?? undefined })), timer: null, readMs: 0 };
       this.filePreviews.set(state.path, preview);
     }
     const entry = preview;
+    if (snapshot) {
+      entry.progress.replace(snapshot.messages.map((message) => ({ content: message.content, provider: message.provider ?? null, model: message.model ?? null })));
+      return;
+    }
     // A preview re-reads the file; a long transcript is previewed less often, so it costs a bounded share of time.
     entry.timer ??= setTimeout(() => {
       if (!state.runningTurnId) { this.endFilePreview(state.path); return; }
+      const turnId = state.runningTurnId;
       const startedAt = performance.now();
       void readTranscript(state.path, state.harness).then((transcript) => {
-        if (!state.runningTurnId) { this.endFilePreview(state.path); return; }
+        if (this.filePreviews.get(state.path) !== entry || state.runningTurnId !== turnId) return;
         const tail = transcript.turns.at(-1);
-        entry.progress.replace((tail?.messages ?? []).map((message) => ({ content: message.content, provider: message.provider ?? null, model: message.model ?? null })));
-      }).catch(() => undefined).finally(() => {
+        if (tail?.key !== state.runningTurnKey || (state.harness === "codex" && tail.result)) return;
+        entry.progress.replace(tail.messages.map((message) => ({ content: message.content, provider: message.provider ?? null, model: message.model ?? null })));
+      }).catch((error) => this.options.diagnostics.log("warn", "native.preview_failed", { path: state.path, error: serializeDiagnosticError(error) }, { harness: state.harness, sessionId: state.sessionId ?? undefined })).finally(() => {
         entry.readMs = performance.now() - startedAt;
         // Growth during the read schedules the next one only now: reads never overlap.
         entry.timer = null;

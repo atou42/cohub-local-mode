@@ -97,7 +97,7 @@ export type IngestHooks = {
   piSettled?: (nativeSessionId: string, mtimeMs: number) => boolean | null;
   controllable?: (state: TranscriptState) => boolean;
   abortTurn?: (state: TranscriptState) => void;
-  onGrowth?: (state: TranscriptState) => void;
+  onGrowth?: (state: TranscriptState, snapshot?: NativeTranscriptTurn) => void;
   onRunning?: (state: TranscriptState, turnId: string | null) => void;
   onError?: (error: unknown, context: { path: string; harness: Harness }) => void;
 };
@@ -263,6 +263,8 @@ export class NativeIngest {
     this.transport = transport;
     if (!transport) return;
     this.scheduleTitles();
+    // A restored running Turn may already contain progress and need no further file writes.
+    for (const path of this.runningPaths) this.touch(path);
     void this.scan().then(() => this.resync()).catch((error) => this.report(this.options.cwd, error));
   }
 
@@ -576,6 +578,8 @@ export class NativeIngest {
     this.states.set(path, state);
     // The file counts as read only once the server confirmed it; a failed send is retried.
     await this.apply(state, transcript.turns, lane, info.mtimeMs);
+    const tail = transcript.turns.at(-1);
+    if (tail && tail.key === state.runningTurnKey && (state.harness !== "codex" || !tail.result)) this.options.hooks?.onGrowth?.(state, tail);
     this.scheduleTitles();
     Object.assign(state, { size: info.size, mtimeMs: info.mtimeMs, ino: info.ino, scannedBytes: info.size });
     this.markDirty(path);
