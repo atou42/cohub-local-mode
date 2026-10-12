@@ -36,7 +36,7 @@ const INGEST_BATCH_TURNS = Math.min(50, NATIVE_INGEST_MAX_TURNS);
  * the transcript is parsed and sent when one appears.
  */
 const BOUNDARIES: Record<Harness, string[]> = {
-  codex: ['"UserMessage"', '"user_message"', '"turn_complete"', '"task_complete"', '"turn_aborted"'],
+  codex: ['"UserMessage"', '"user_message"', '"app_update_resume"', '"turn_complete"', '"task_complete"', '"turn_aborted"'],
   pi: ['"role":"user"', ...PI_ENDED.map((reason) => `"stopReason":"${reason}"`)],
 };
 const BOUNDARY_OVERLAP = Math.max(...Object.values(BOUNDARIES).flat().map((token) => token.length));

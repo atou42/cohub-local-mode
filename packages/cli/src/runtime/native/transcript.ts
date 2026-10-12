@@ -395,6 +395,8 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
       if (current) turns.push(current);
       current = { key: text(payload.turn_id), parentKey: turns.at(-1)?.key ?? null, userContent: [], messages: [], startedAt: iso(entry.timestamp), startBytes: line.startBytes, endBytes: line.endBytes, contentEndBytes: line.endBytes, boundaries: {}, sha256: line.sha256, result: null, path: segment.path, rolloutId: segment.rolloutId };
       if (!current.key) throw new Error("Codex Turn identity is missing");
+      // An app update resumes execution without a new user prompt; its empty input is final.
+      if (record(payload.turn_attribution).turn_trigger === "app_update_resume") current.userFinal = true;
       messages = current.messages; userFromResponse = false; calls.clear();
     }
     if (entry.type === "token_usage_record") {
@@ -473,7 +475,7 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
     }
   }
   const settled = current === null;
-  if (current && userFromResponse) turns.push(current);
+  if (current && (userFromResponse || current.userFinal)) turns.push(current);
   for (const turn of turns) {
     const last = turn.result?.messages.at(-1);
     if (last && usageByTurn.has(turn.key)) last.usage = usageByTurn.get(turn.key);
