@@ -7,3 +7,5 @@ Keep a Codex turn's original prompt and client identity stable when the user ste
 Restore in-progress file previews after reconnects and steering updates, and retry rejected or failed progress snapshots without requiring another local event.
 
 Recognize Codex app-update resume turns with no new user prompt, so their progress and completion continue syncing with a stable identity.
+
+Watch writes directly for tracked active conversations so progress and subsequent turns sync on macOS while Codex keeps the transcript open. Retain directory watching for file replacement and release conversation watchers when sync is paused or stopped.

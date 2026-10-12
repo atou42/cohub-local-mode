@@ -1,4 +1,5 @@
 import { appendFile, mkdir, open, readFile, readdir, rename, stat } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, type NativeIngestResult, type NativeRuntimeEvent, type NativeTurnComplete, type NativeTurnMessage } from "@neta-art/cohub";
 import { acceptsDirectory, acceptsTranscript, readSessionHeader, readTranscript, transcriptRoots, type Harness, type NativeTranscriptTurn } from "./adapters.js";
@@ -193,6 +194,7 @@ export class NativeIngest {
   private journalLines = 0;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watchers: Array<{ close(): void }> = [];
+  private readonly sessionWatchers = new Map<string, { close(): void }>();
   private transport: IngestTransport | null = null;
   private harnesses: Harness[];
   private enabledAt: string;
@@ -229,12 +231,17 @@ export class NativeIngest {
     const paused = this.harnesses.filter((harness) => !harnesses.includes(harness));
     this.harnesses = [...harnesses];
     this.enabledAt = enabledAt;
+    for (const path of this.sessionWatchers.keys()) {
+      const state = this.states.get(path);
+      if (state && paused.includes(state.harness)) this.unwatchSession(path);
+    }
     if (this.watching) for (const harness of added) void this.watchHarness(harness, this.watching);
     // A paused harness's running Turn is no longer followed: the server treats it as one Cohub
     // cannot stop, so a silence it never reports the end of asks the user.
     for (const path of this.runningPaths) {
       const state = this.states.get(path);
       if (state && paused.includes(state.harness)) void this.reportControl(state);
+      else if (state) this.watchActiveSession(state);
     }
     if (this.transport) void this.scan().catch((error) => this.report(this.options.cwd, error));
     this.scheduleTitles();
@@ -403,10 +410,10 @@ export class NativeIngest {
   async watch(signal: AbortSignal): Promise<void> {
     this.watching = signal;
     for (const harness of this.harnesses) await this.watchHarness(harness, signal);
+    for (const path of this.runningPaths) { const state = this.states.get(path); if (state) this.watchActiveSession(state); }
   }
 
   private async watchHarness(harness: Harness, signal: AbortSignal): Promise<void> {
-    const { watch } = await import("node:fs");
     for (const root of transcriptRoots(harness)) {
       await mkdir(root, { recursive: true, mode: 0o700 }).catch(() => undefined);
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -470,6 +477,7 @@ export class NativeIngest {
 
   async close(signal: AbortSignal): Promise<void> {
     this.stopped = true;
+    for (const path of this.sessionWatchers.keys()) this.unwatchSession(path);
     if (this.titleTimer) clearTimeout(this.titleTimer);
     if (this.writeTimer) clearTimeout(this.writeTimer);
     for (const timer of this.timers.values()) clearTimeout(timer);
@@ -736,6 +744,7 @@ export class NativeIngest {
     state.runningTurnId = item.turnId;
     state.runningTurnKey = item.turn.key;
     this.runningPaths.add(state.path);
+    this.watchActiveSession(state);
     if (!changed) return;
     this.options.hooks?.onRunning?.(state, item.turnId);
     // Ask once: a stop may have reached the server before this Runtime knew the Turn.
@@ -750,6 +759,46 @@ export class NativeIngest {
     state.controllable = undefined;
     this.runningPaths.delete(state.path);
     this.options.hooks?.onRunning?.(state, null);
+  }
+
+  /** Follow only sessions observed running in this process, including their subsequent Turns. */
+  private watchActiveSession(state: TranscriptState): void {
+    if (!this.watching || this.watching.aborted || this.stopped || !this.harnesses.includes(state.harness) || this.sessionWatchers.has(state.path)) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let fileWatcher: FSWatcher | null = null;
+    const queue = () => {
+      if (!this.live.has(state.path)) this.live.set(state.path, false);
+      timer ??= setTimeout(() => { timer = null; this.drainLive(); }, WATCH_DEBOUNCE_MS);
+      timer.unref?.();
+    };
+    const bindFile = () => {
+      fileWatcher?.close();
+      fileWatcher = null;
+      try {
+        // On macOS, a directory event may wait for close(); Codex keeps its writer open.
+        fileWatcher = watch(state.path, { signal: this.watching as AbortSignal }, queue);
+        fileWatcher.on("error", (error) => this.report(state.path, error));
+      } catch (error) {
+        // Atomic replacement can briefly remove the path; its parent notifies when it returns.
+        if (!missing(error)) this.report(state.path, error);
+      }
+    };
+    try {
+      // The parent watches names only, so replacing the file rebinds the direct write watcher.
+      const watcher = watch(dirname(state.path), { signal: this.watching }, (_event, name) => {
+        if (_event !== "rename" || (name && name.toString() !== basename(state.path))) return;
+        bindFile();
+        queue();
+      });
+      watcher.on("error", (error) => this.report(state.path, error));
+      bindFile();
+      this.sessionWatchers.set(state.path, { close: () => { if (timer) clearTimeout(timer); fileWatcher?.close(); watcher.close(); } });
+    } catch (error) { this.report(state.path, error); }
+  }
+
+  private unwatchSession(path: string): void {
+    this.sessionWatchers.get(path)?.close();
+    this.sessionWatchers.delete(path);
   }
 
   private cutOff(item: Candidate, pending: NativeTranscriptTurn[]): NonNullable<NativeTranscriptTurn["result"]> {
