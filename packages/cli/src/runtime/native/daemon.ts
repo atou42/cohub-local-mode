@@ -65,6 +65,7 @@ export class NativeRuntime {
     archives: RuntimeArchiveStore;
     projectionSource: SessionTurnProjectionClient;
     diagnostics: RuntimeDiagnostics;
+    renameSession?: (sessionId: string, title: string) => Promise<void>;
   }) {
     this.pi = new PiLink({
       socketPath: controlSocketPath(options.root), owns: (cwd) => this.ingest.owns(cwd),
@@ -86,6 +87,7 @@ export class NativeRuntime {
       root: options.stateRoot,
       archives: options.archives,
       hooks: {
+        renameSession: options.renameSession,
         piSettled: (nativeSessionId, mtimeMs) => {
           const link = this.pi.find(nativeSessionId);
           if (!link) return null;

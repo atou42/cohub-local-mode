@@ -59,6 +59,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
     spaceId: config.spaceId, root: config.root, stateRoot, harnesses: config.harnesses, executables: config.executables,
     identity: config.identity, config: await readNativeConfig(stateRoot, config.identity).catch(() => null),
     archives, projectionSource: space, diagnostics,
+    renameSession: async (sessionId, title) => { await space.session(sessionId).rename(title); },
   });
   let status: RuntimeSummary = {
     spaceId: config.spaceId, root: config.root, runtimeId: diagnostics.runtimeId,

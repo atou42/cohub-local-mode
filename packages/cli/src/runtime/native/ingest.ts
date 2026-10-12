@@ -1,10 +1,11 @@
 import { appendFile, mkdir, open, readFile, readdir, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, type NativeIngestResult, type NativeRuntimeEvent, type NativeTurnComplete, type NativeTurnMessage } from "@neta-art/cohub";
 import { acceptsDirectory, acceptsTranscript, readSessionHeader, readTranscript, transcriptRoots, type Harness, type NativeTranscriptTurn } from "./adapters.js";
 import { nativeTurnId } from "./identity.js";
 import type { RuntimeArchiveStore } from "../archive-store.js";
 import { ensurePlainCodexRollout } from "./transcript.js";
+import { codexTitleIndex, readCodexTitles } from "./codex-titles.js";
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
 
@@ -58,6 +59,7 @@ export type TranscriptState = {
   headTurnId: string | null;
   origin: "cohub" | "native";
   controllable?: boolean;
+  titleSync?: { sessionId: string; title: string };
 };
 
 export type ImportFilter = { harnesses?: Harness[]; nativeSessionId?: string };
@@ -86,6 +88,7 @@ export type IngestTransport = {
 };
 
 export type IngestHooks = {
+  renameSession?: (sessionId: string, title: string) => Promise<void>;
   /**
    * Control-plane certainty about a Pi session's file as last written at `mtimeMs`: `true` when the
    * agent settled after that write, `false` while it runs, `null` when the control plane cannot
@@ -195,6 +198,10 @@ export class NativeIngest {
   private enabledAt: string;
   private watching: AbortSignal | null = null;
   private nested: string[] = [];
+  private titleTimer: ReturnType<typeof setTimeout> | null = null;
+  private titleTask: Promise<void> | null = null;
+  private titlesPending = false;
+  private titleFailures = 0;
 
   constructor(private readonly options: {
     spaceId: string;
@@ -230,6 +237,7 @@ export class NativeIngest {
       if (state && paused.includes(state.harness)) void this.reportControl(state);
     }
     if (this.transport) void this.scan().catch((error) => this.report(this.options.cwd, error));
+    this.scheduleTitles();
   }
 
   private get ledgerPath() { return join(this.options.root, "native", "ledger.jsonl"); }
@@ -254,6 +262,7 @@ export class NativeIngest {
   connect(transport: IngestTransport | null): void {
     this.transport = transport;
     if (!transport) return;
+    this.scheduleTitles();
     void this.scan().then(() => this.resync()).catch((error) => this.report(this.options.cwd, error));
   }
 
@@ -267,6 +276,7 @@ export class NativeIngest {
     if (!this.states.has(session.path)) state.origin = "cohub";
     this.states.set(session.path, state);
     this.markDirty(session.path);
+    this.scheduleTitles();
   }
 
   advance(path: string, turnId: string): void {
@@ -416,6 +426,18 @@ export class NativeIngest {
         this.options.hooks?.onError?.(error, { path: root, harness });
       }
     }
+    // The transcript roots above also create CODEX_HOME on a first installation.
+    if (harness === "codex" && this.options.hooks?.renameSession) {
+      const index = codexTitleIndex();
+      try {
+        const watcher = watch(dirname(index), (_event, name) => {
+          if (!name || name.toString() === basename(index)) this.scheduleTitles();
+        });
+        watcher.on("error", (error) => this.report(index, error));
+        signal.addEventListener("abort", () => watcher.close(), { once: true });
+        this.watchers.push(watcher);
+      } catch (error) { this.report(index, error); }
+    }
   }
 
   private async resync(): Promise<void> {
@@ -446,12 +468,14 @@ export class NativeIngest {
 
   async close(signal: AbortSignal): Promise<void> {
     this.stopped = true;
+    if (this.titleTimer) clearTimeout(this.titleTimer);
     if (this.writeTimer) clearTimeout(this.writeTimer);
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const watcher of this.watchers) watcher.close();
     this.watchers.length = 0;
     await Promise.allSettled(this.reads);
+    await this.titleTask;
     await this.write();
     await this.options.archives.flush(signal).catch(() => undefined);
   }
@@ -552,6 +576,7 @@ export class NativeIngest {
     this.states.set(path, state);
     // The file counts as read only once the server confirmed it; a failed send is retried.
     await this.apply(state, transcript.turns, lane, info.mtimeMs);
+    this.scheduleTitles();
     Object.assign(state, { size: info.size, mtimeMs: info.mtimeMs, ino: info.ino, scannedBytes: info.size });
     this.markDirty(path);
   }
@@ -769,6 +794,47 @@ export class NativeIngest {
   private markDirty(path: string): void {
     this.dirty.add(path);
     this.scheduleWrite();
+  }
+
+  /** Names are independent of transcript writes and never hold up message ingest. */
+  private scheduleTitles(delay = WATCH_DEBOUNCE_MS): void {
+    if (this.stopped || !this.transport || !this.harnesses.includes("codex") || !this.options.hooks?.renameSession) return;
+    this.titlesPending = true;
+    if (this.titleTask || this.titleTimer) return;
+    this.titleTimer = setTimeout(() => {
+      this.titleTimer = null;
+      this.titlesPending = false;
+      this.titleTask = this.syncTitles().then(() => { this.titleFailures = 0; }, (error) => {
+        this.report(codexTitleIndex(), error);
+        this.titleFailures += 1;
+      }).finally(() => {
+        this.titleTask = null;
+        if (this.titlesPending || (this.titleFailures > 0 && this.titleFailures <= RETRY_ATTEMPTS)) {
+          this.scheduleTitles(this.titleFailures ? Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (this.titleFailures - 1)) : WATCH_DEBOUNCE_MS);
+        }
+      });
+    }, delay);
+    this.titleTimer.unref?.();
+  }
+
+  private async syncTitles(): Promise<void> {
+    const renameSession = this.options.hooks?.renameSession;
+    if (!renameSession || !this.transport || !this.harnesses.includes("codex")) return;
+    const titles = await readCodexTitles();
+    const failures: unknown[] = [];
+    for (const state of this.states.values()) {
+      if (this.stopped || !this.transport || !this.harnesses.includes("codex")) break;
+      if (state.harness !== "codex" || state.threadKind !== "user" || !state.sessionId || !this.owns(state.cwd)) continue;
+      const title = titles.get(state.nativeSessionId);
+      if (!title || (state.titleSync?.sessionId === state.sessionId && state.titleSync.title === title)) continue;
+      const sessionId = state.sessionId;
+      try {
+        await renameSession(sessionId, title);
+        state.titleSync = { sessionId, title };
+        this.markDirty(state.path);
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, `Codex title sync failed: ${failures.map(String).join("; ")}`);
   }
 
   private markJobDirty(): void {

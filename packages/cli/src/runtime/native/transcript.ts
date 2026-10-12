@@ -18,7 +18,8 @@ export type NativeTranscriptTurn = {
   userContent: ContentBlock[];
   /**
    * Codex records a prompt in several steps and the final form last; until this is set the user
-   * content may still change.
+   * content may still change. Once final, later steering or question replies must not replace
+   * the original prompt or cloud Turn identity used when this Turn was registered.
    */
   userFinal?: boolean;
   messages: NativeTurnMessage[];
@@ -415,7 +416,7 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
         current.cloudTurnId = cohub.turnId;
         if (!text(record(metadata.cohub).sessionId)) cloudSessionId = text(cohub.sessionId) || cloudSessionId;
       }
-      if (payload.type === "message" && payload.role === "user") {
+      if (payload.type === "message" && payload.role === "user" && !current.userFinal) {
         if (!userFromResponse) current.userContent = [];
         current.userContent.push(...codexContent(payload.content)); userFromResponse = true;
       } else if (payload.type === "message" && payload.role === "assistant") {
@@ -443,7 +444,7 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
       // Cohub tags a Turn it starts with its own cloud Turn id, so the file itself records which
       // Turns already belong to a cloud Turn (and must not be ingested twice).
       const item = record(payload.item);
-      if (item.type === "UserMessage") {
+      if (item.type === "UserMessage" && !current.userFinal) {
         const clientId = text(item.client_id);
         if (clientId) current.cloudTurnId = clientId;
         // The typed input, without the environment context Codex injects as a user item.
@@ -452,7 +453,9 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
         current.userFinal = true;
       }
     }
-    if (entry.type === "event_msg" && payload.type === "user_message") {
+    if (entry.type === "event_msg" && payload.type === "user_message" && !current.userFinal) {
+      const clientId = text(payload.client_id);
+      if (clientId) current.cloudTurnId = clientId;
       if (!userFromResponse) current.userContent = [{ type: "text", text: text(payload.message) }];
       userFromResponse = true;
       current.userFinal = true;
