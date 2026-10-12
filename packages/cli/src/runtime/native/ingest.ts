@@ -37,6 +37,9 @@ const INGEST_BATCH_TURNS = Math.min(50, NATIVE_INGEST_MAX_TURNS);
 const BOUNDARIES: Record<Harness, string[]> = {
   codex: ['"UserMessage"', '"user_message"', '"turn_complete"', '"task_complete"', '"turn_aborted"'],
   pi: ['"role":"user"', ...PI_ENDED.map((reason) => `"stopReason":"${reason}"`)],
+  // WorkBuddy rewrites messages by appending records and has no durable Turn-end event. A final
+  // newline also retries a record whose boundary token arrived in an earlier partial write.
+  workbuddy: ["\n"],
 };
 const BOUNDARY_OVERLAP = Math.max(...Object.values(BOUNDARIES).flat().map((token) => token.length));
 
@@ -589,6 +592,13 @@ export class NativeIngest {
 
   private tailSettled(state: TranscriptState, tail: NativeTranscriptTurn, mtimeMs: number): boolean {
     if (state.harness === "codex") return tail.result !== null;
+    if (state.harness === "workbuddy") {
+      if (!tail.result || !["completed", "failed"].includes(tail.result.status) || !["stop", "error"].includes(tail.messages.at(-1)?.stopReason ?? "")) return false;
+      const idleMs = Date.now() - mtimeMs;
+      if (idleMs >= PI_QUIET_SETTLE_MS) return true;
+      this.recheck(state.path, PI_QUIET_SETTLE_MS - idleMs);
+      return false;
+    }
     const certain = this.options.hooks?.piSettled?.(state.nativeSessionId, mtimeMs);
     if (certain != null) return certain;
     if (!PI_ENDED.includes(tail.messages.at(-1)?.stopReason ?? "")) return false;
@@ -619,8 +629,19 @@ export class NativeIngest {
     const derived = (turn: NativeTranscriptTurn) => nativeTurnId(this.options.spaceId, state.harness, state.nativeSessionId, turn.key);
     const from = state.throughTurnKey ? turns.findIndex((turn) => turn.key === state.throughTurnKey) + 1 : 0;
     const pending = turns.slice(from);
+    const turnByKey = new Map(turns.map((turn) => [turn.key, turn]));
+    const workbuddyParent = (turn: NativeTranscriptTurn): NativeTranscriptTurn | null => {
+      if (turn.parentKey == null) return null;
+      const parent = turnByKey.get(turn.parentKey);
+      if (!parent) throw new Error("WorkBuddy Turn parent is absent from the retained history");
+      return parent;
+    };
+    const referencedParents = state.harness === "workbuddy" ? pending.flatMap((turn) => {
+      const parent = workbuddyParent(turn);
+      return parent ? [parent] : [];
+    }) : [];
     // One question to the server replaces every local receipt: which of these do you have?
-    const known = pending.length ? await this.known(transport, pending.flatMap((turn) => turn.cloudTurnId ? [turn.cloudTurnId, derived(turn)] : [derived(turn)])) : new Map();
+    const known = pending.length ? await this.known(transport, [...pending, ...referencedParents].flatMap((turn) => turn.cloudTurnId ? [turn.cloudTurnId, derived(turn)] : [derived(turn)])) : new Map();
     const cohub = (turn: NativeTranscriptTurn) => turn.cloudTurnId && known.has(turn.cloudTurnId) ? turn.cloudTurnId : null;
     const tail = turns.at(-1);
     const head = !tail ? null : pending.length ? cohub(tail) ?? derived(tail) : state.throughTurnId;
@@ -632,6 +653,7 @@ export class NativeIngest {
         // Cohub started this Turn, so the server already has it; the marker exists only so the
         // native conversation can be resumed.
         parentTurnId = marked;
+        state.sessionId ??= known.get(marked)?.sessionId ?? null;
         if (!candidates.length) { state.throughTurnKey = turn.key; state.throughTurnId = marked; }
         continue;
       }
@@ -641,7 +663,10 @@ export class NativeIngest {
       // A prompt still being recorded would change the Turn's identity; it is sent once complete.
       if (!settled && state.harness === "codex" && !turn.userFinal) break;
       const turnId = derived(turn);
-      candidates.push({ turn, turnId, parentTurnId, settled });
+      const parent = state.harness === "workbuddy" ? workbuddyParent(turn) : null;
+      const candidateParent = state.harness !== "workbuddy" ? parentTurnId : !parent ? null
+        : parent.key === state.throughTurnKey ? state.throughTurnId : cohub(parent) ?? derived(parent);
+      candidates.push({ turn, turnId, parentTurnId: candidateParent, settled });
       parentTurnId = turnId;
     }
     if (!candidates.length) { state.headTurnId = head; return; }

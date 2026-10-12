@@ -22,7 +22,7 @@ export type RuntimeLaunch = {
   spaceId: string;
   root: string;
   identity: string;
-  harnesses: ("pi" | "codex")[];
+  harnesses: ("pi" | "codex" | "workbuddy")[];
   executables: HarnessOptions;
   capabilities?: RuntimeCapabilities;
   background: boolean;

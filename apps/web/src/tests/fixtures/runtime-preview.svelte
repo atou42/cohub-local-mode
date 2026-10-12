@@ -17,6 +17,13 @@ import { sdk } from "$lib/sdk";
 const spaceId = "11111111-1111-4111-8111-111111111111";
 const models = [
 	{
+		harness: "workbuddy" as const,
+		provider: "workbuddy",
+		id: "auto",
+		name: "Auto",
+		isDefault: true,
+	},
+	{
 		harness: "pi" as const,
 		provider: "anthropic",
 		id: "claude-opus-4-6",
@@ -56,7 +63,7 @@ const models = [
 type PreviewState = "ready" | "limited" | "offline" | "unknown";
 let previewState = $state<PreviewState>("ready");
 let input = $state("");
-let harness = $state<"cohub" | "pi" | "codex">("pi");
+let harness = $state<"cohub" | "pi" | "codex" | "workbuddy">("pi");
 let model = $state<LocalModelSelection | null>(null);
 const localModels = $derived(models.filter((item) => item.harness === harness));
 // Mirrors the session host: the composer always shows a resolved model and level.
@@ -67,7 +74,7 @@ function makeStatus(): RuntimeStatus {
 		kind: "local",
 		online: previewState !== "offline",
 		runtimeId: "22222222-2222-4222-8222-222222222222",
-		capabilities: { harnesses: ["pi", "codex"], models },
+		capabilities: { harnesses: ["pi", "codex", "workbuddy"], models },
 		workspace: {
 			online: previewState === "ready",
 			observedAt: new Date().toISOString(),
@@ -130,6 +137,6 @@ const noop = () => {};
 		</div>
 		<div class="flex-1 text-sm text-text-tertiary">Isolated fixtures · no account or model requests</div>
 		<output aria-label="Model selection">{JSON.stringify(localModel)}</output>
-		<SessionComposer bind:value={input} {harness} harnesses={["cohub", "pi", "codex"]} localRuntime runtimeOnline={status.online} onharnesschange={(next) => { harness = next; model = null; }} {localModels} {localModel} onlocalmodelchange={(next) => { model = next; }} onsubmit={noop} onpickattachment={noop} />
+		<SessionComposer bind:value={input} {harness} harnesses={["cohub", "pi", "codex", "workbuddy"]} localRuntime runtimeOnline={status.online} onharnesschange={(next) => { harness = next; model = null; }} {localModels} {localModel} onlocalmodelchange={(next) => { model = next; }} onsubmit={noop} onpickattachment={noop} />
 	</main>
 </div>

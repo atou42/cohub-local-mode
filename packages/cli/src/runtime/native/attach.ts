@@ -16,7 +16,7 @@ export type NativeSyncReport = {
   note?: string;
 };
 
-type Input = { root: string; spaceId: string; identity: string; harnesses: Harness[]; yes?: boolean; executables?: { pi?: string; codex?: string } };
+type Input = { root: string; spaceId: string; identity: string; harnesses: Harness[]; yes?: boolean; executables?: { pi?: string; codex?: string; workbuddy?: string } };
 type Ask = (question: string) => Promise<boolean>;
 
 /** Whether this directory already syncs every requested harness. */
@@ -46,7 +46,7 @@ export async function ensureNativeSync(input: Input, log: (line: string) => void
     log("Native sync off · rerun interactively or with --yes to enable\n");
     return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "non-interactive" };
   }
-  const names = input.harnesses.map((harness) => harness === "pi" ? "Pi" : "Codex").join(" and ");
+  const names = input.harnesses.map((harness) => ({ pi: "Pi", codex: "Codex", workbuddy: "WorkBuddy" })[harness]).join(" and ");
   if (!await confirm(`Sync ${names} chats in this folder to this Space so they continue on the web? Their history may contain secrets. [Y/n] `)) {
     return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "declined" };
   }
