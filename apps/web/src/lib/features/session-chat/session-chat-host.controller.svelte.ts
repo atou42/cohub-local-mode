@@ -52,6 +52,7 @@ import { extractSpaceMentionsFromText } from "$lib/mentions/space";
 import {
 	formatThinkingLevelShort,
 	getRequestedThinkingLevel,
+	isLocalServiceTierUnavailable,
 	type LocalModelSelection,
 	type ModelThinkingLevel,
 	resolveLocalModel,
@@ -2993,8 +2994,20 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			setComposerError(m.runtime_harness_unavailable());
 			return;
 		}
+		if (
+			harness === "codex" &&
+			isLocalServiceTierUnavailable(
+				runtimeCatalog?.capabilities?.models ?? [],
+				localModel,
+			)
+		) {
+			setComposerError(m.model_selector_fast_unavailable());
+			return;
+		}
 		composer.sending = true;
 		const model = harness === "cohub" ? activeSessionModel : localModel;
+		const serviceTier =
+			harness === "codex" ? localModel?.serviceTier : undefined;
 		const thinkingLevel =
 			harness === "cohub"
 				? activeSessionThinkingLevel
@@ -3219,6 +3232,9 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						// Mirrors the server's request meta, which local model restore reads.
 						...(model ? { model: model.id, provider: model.provider } : {}),
 						...(thinkingLevel ? { requestedThinkingLevel: thinkingLevel } : {}),
+						...(serviceTier !== undefined
+							? { requestedServiceTier: serviceTier }
+							: {}),
 						userId: currentUser.uuid,
 						clientMessageId,
 					},
@@ -3257,6 +3273,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				provider: model?.provider,
 				harness,
 				...(thinkingLevel ? { thinkingLevel } : {}),
+				...(serviceTier !== undefined ? { serviceTier } : {}),
 				clientMessageId,
 				...(harness === "cohub"
 					? { generationPolicy: buildTurnGenerationPolicy() }
