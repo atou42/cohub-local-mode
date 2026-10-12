@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isNativeClientTurn, nativeMessageRole } from "@cohub/protocol";
 import type {
 	MessageToolCallsFile,
 	SessionTurnIntermediateSummary,
@@ -90,6 +91,12 @@ const effectiveMessages = $derived(
 		: (readyMessages ?? []),
 );
 const expandedMessages = $derived(effectiveMessages);
+const userMessages = $derived(
+	effectiveMessages.filter(
+		(message) =>
+			message.role === "user" || nativeMessageRole(message.content) === "user",
+	),
+);
 const hasLiveMessages = $derived(liveMessages.length > 0);
 const hasPersistedMessages = $derived(
 	summary?.messageCount != null && summary.messageCount > 0,
@@ -188,6 +195,17 @@ async function toggle() {
 	expanded = !expanded;
 }
 
+$effect(() => {
+	const needsUserMessages =
+		(summary?.userMessageCount ?? 0) > 0 ||
+		(summary?.userMessageCount == null &&
+			isNativeClientTurn(turn.meta) &&
+			hasPersistedMessages);
+	if (!streaming && needsUserMessages && loadState.status === "idle") {
+		void ensureLoaded();
+	}
+});
+
 const toolCallCount = $derived(summary?.toolCallCount ?? 0);
 const useLiveMetrics = $derived(streaming && effectiveMessages.length > 0);
 const messageCount = $derived(
@@ -205,7 +223,14 @@ const compactionCount = $derived(
 		? liveCompactionMessages.length
 		: Math.max(summary?.compaction?.count ?? 0, liveCompactionMessages.length),
 );
-const stepCount = $derived(Math.max(0, messageCount - compactionCount));
+const userMessageCount = $derived(
+	useLiveMetrics
+		? userMessages.length
+		: Math.max(summary?.userMessageCount ?? 0, userMessages.length),
+);
+const stepCount = $derived(
+	Math.max(0, messageCount - compactionCount - userMessageCount),
+);
 const compactionUsage = $derived.by(() => {
 	if (useLiveMetrics)
 		return liveCompactionMessages.length > 0
@@ -365,6 +390,14 @@ const sentSessions = $derived(
 			<SentTurnsChip count={sentSessions.length} />
 		{/if}
 	</button>
+	{#if loadError}
+		<button type="button" class="mx-[var(--chat-msg-inset)] rounded-md border border-status-error/30 bg-status-error/5 px-3 py-2 text-left text-[12px] text-status-error hover:bg-status-error/10" onclick={() => void ensureLoaded()}>
+			{loadError} · {m.process_click_retry({}, { locale })}
+		</button>
+	{/if}
+	{#each userMessages as msg (msg.id)}
+		<IntermediateMessageBubble message={msg} streaming={streaming} {modelsCatalog} {onOpenFile} {onOpenUrl} />
+	{/each}
 {:else}
 	<div class="flex flex-col gap-0">
 		<button type="button" class="flex w-full items-center gap-2 px-[var(--chat-msg-inset)] py-2 text-left transition-colors hover:bg-bg-hover/50 cursor-pointer rounded-md" onclick={() => void toggle()} title={usageTitle || undefined}>

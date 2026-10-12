@@ -75,7 +75,9 @@ test("a new Codex update resume syncs progress and completion with one stable id
     assert.deepEqual(versions.map((turn) => turn.userContent), [[], []]);
     assert.deepEqual(versions.map((turn) => turn.result?.status ?? null), [null, "completed"]);
     assert.deepEqual(versions.at(-1)?.result?.messages.flatMap((message) => message.content), [
-      { type: "text", text: "Work continued after the update" }, { type: "text", text: "Using the additional instructions" },
+      { type: "text", text: "Work continued after the update" },
+      { type: "text", text: "Additional instructions", _meta: { nativeUserMessage: true } },
+      { type: "text", text: "Using the additional instructions" },
     ]);
   } finally {
     await runtime.close();

@@ -1,6 +1,8 @@
 import { appendFile, mkdir, open, readFile, readdir, rename, stat } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
+import { execFile } from "node:child_process";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, type NativeIngestResult, type NativeRuntimeEvent, type NativeTurnComplete, type NativeTurnMessage } from "@neta-art/cohub";
 import { acceptsDirectory, acceptsTranscript, readSessionHeader, readTranscript, transcriptRoots, type Harness, type NativeTranscriptTurn } from "./adapters.js";
 import { nativeTurnId } from "./identity.js";
@@ -61,6 +63,8 @@ export type TranscriptState = {
   origin: "cohub" | "native";
   controllable?: boolean;
   titleSync?: { sessionId: string; title: string };
+  /** A legacy prompt's rich content can arrive without another user-message boundary. */
+  pendingInput?: boolean;
 };
 
 export type ImportFilter = { harnesses?: Harness[]; nativeSessionId?: string };
@@ -89,7 +93,7 @@ export type IngestTransport = {
 };
 
 export type IngestHooks = {
-  renameSession?: (sessionId: string, title: string) => Promise<void>;
+  renameSession?: (sessionId: string, title: string, signal: AbortSignal) => Promise<void>;
   /**
    * Control-plane certainty about a Pi session's file as last written at `mtimeMs`: `true` when the
    * agent settled after that write, `false` while it runs, `null` when the control plane cannot
@@ -194,7 +198,10 @@ export class NativeIngest {
   private journalLines = 0;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watchers: Array<{ close(): void }> = [];
-  private readonly sessionWatchers = new Map<string, { close(): void }>();
+  private readonly sessionWatchers = new Map<string, { harness: Harness; close(): void }>();
+  private openSessionsTask: Promise<void> | null = null;
+  private openSessionsTimer: ReturnType<typeof setTimeout> | null = null;
+  private openSessionsController: AbortController | null = null;
   private transport: IngestTransport | null = null;
   private harnesses: Harness[];
   private enabledAt: string;
@@ -204,6 +211,7 @@ export class NativeIngest {
   private titleTask: Promise<void> | null = null;
   private titlesPending = false;
   private titleFailures = 0;
+  private readonly shutdownController = new AbortController();
 
   constructor(private readonly options: {
     spaceId: string;
@@ -231,9 +239,9 @@ export class NativeIngest {
     const paused = this.harnesses.filter((harness) => !harnesses.includes(harness));
     this.harnesses = [...harnesses];
     this.enabledAt = enabledAt;
-    for (const path of this.sessionWatchers.keys()) {
-      const state = this.states.get(path);
-      if (state && paused.includes(state.harness)) this.unwatchSession(path);
+    if (paused.includes("codex")) this.stopOpenSessionDiscovery();
+    for (const [path, watcher] of this.sessionWatchers) {
+      if (paused.includes(watcher.harness)) this.unwatchSession(path);
     }
     if (this.watching) for (const harness of added) void this.watchHarness(harness, this.watching);
     // A paused harness's running Turn is no longer followed: the server treats it as one Cohub
@@ -243,7 +251,7 @@ export class NativeIngest {
       if (state && paused.includes(state.harness)) void this.reportControl(state);
       else if (state) this.watchActiveSession(state);
     }
-    if (this.transport) void this.scan().catch((error) => this.report(this.options.cwd, error));
+    if (this.transport) void this.watchOpenCodexSessions().then(() => this.scan()).catch((error) => this.report(this.options.cwd, error));
     this.scheduleTitles();
   }
 
@@ -268,11 +276,11 @@ export class NativeIngest {
 
   connect(transport: IngestTransport | null): void {
     this.transport = transport;
-    if (!transport) return;
+    if (!transport) { this.stopOpenSessionDiscovery(); return; }
     this.scheduleTitles();
     // A restored running Turn may already contain progress and need no further file writes.
     for (const path of this.runningPaths) this.touch(path);
-    void this.scan().then(() => this.resync()).catch((error) => this.report(this.options.cwd, error));
+    void this.watchOpenCodexSessions().then(() => this.scan()).then(() => this.resync()).catch((error) => this.report(this.options.cwd, error));
   }
 
   /**
@@ -422,6 +430,9 @@ export class NativeIngest {
           if (!name) return;
           const path = join(root, name.toString());
           if (this.foreign.has(path) || !acceptsTranscript(path, harness, this.options.cwd)) return;
+          // A newly created file may not yet contain the finalized prompt. Its writer can stay
+          // open, so follow writes immediately; read() still checks project and thread ownership.
+          this.watchActiveSession({ path, harness });
           if (!this.live.has(path)) this.live.set(path, false);
           timer ??= setTimeout(() => { timer = null; this.drainLive(); }, WATCH_DEBOUNCE_MS);
           timer.unref?.();
@@ -447,6 +458,55 @@ export class NativeIngest {
         this.watchers.push(watcher);
       } catch (error) { this.report(index, error); }
     }
+  }
+
+  private async watchOpenCodexSessions(): Promise<void> {
+    if (process.platform !== "darwin" || !this.transport || !this.watching || this.watching.aborted || this.stopped || !this.harnesses.includes("codex")) return;
+    if (this.openSessionsTask) return this.openSessionsTask;
+    if (this.openSessionsTimer) clearTimeout(this.openSessionsTimer);
+    this.openSessionsTimer = null;
+    const controller = new AbortController();
+    this.openSessionsController = controller;
+    this.openSessionsTask = (async () => {
+      // FSEvents can withhold changes until close(). Inspect open descriptors, not historical
+      // transcripts, to discover idle conversations and previously closed files reopened later.
+      const { stdout } = await promisify(execFile)("/usr/sbin/lsof", ["-n", "-P", "-Ffan", "-u", String(process.getuid!())], {
+        maxBuffer: 16 * 1024 * 1024, timeout: 10_000, signal: AbortSignal.any([this.watching!, this.shutdownController.signal, controller.signal]),
+      });
+      const paths = new Set<string>();
+      let writable = false;
+      for (const line of stdout.split("\n")) {
+        if (line.startsWith("f")) writable = false;
+        else if (line.startsWith("a")) writable = line === "aw" || line === "au";
+        else if (writable && line.startsWith("n")) {
+          const path = line.slice(1);
+          if (transcriptRoots("codex").some((root) => within(root, path)) && acceptsTranscript(path, "codex", this.options.cwd)) paths.add(path);
+        }
+      }
+      for (const path of paths) {
+        if (this.stopped || this.watching?.aborted || controller.signal.aborted) return;
+        if (this.sessionWatchers.has(path) || this.foreign.has(path)) continue;
+        const header = await readSessionHeader(path, "codex");
+        if (!header || header.thread !== "user" || !this.owns(header.cwd)) continue;
+        this.watchActiveSession({ path, harness: "codex" });
+        this.live.set(path, this.live.get(path) ?? false);
+      }
+      this.drainLive();
+    })().catch((error) => { if (!this.stopped && !controller.signal.aborted) this.report(this.options.cwd, error); }).finally(() => {
+      this.openSessionsTask = null;
+      this.openSessionsController = null;
+      if (!this.stopped && this.transport && this.watching && !this.watching.aborted && this.harnesses.includes("codex")) {
+        this.openSessionsTimer = setTimeout(() => { this.openSessionsTimer = null; void this.watchOpenCodexSessions(); }, 15_000);
+        this.openSessionsTimer.unref?.();
+      }
+    });
+    return this.openSessionsTask;
+  }
+
+  private stopOpenSessionDiscovery(): void {
+    if (this.openSessionsTimer) clearTimeout(this.openSessionsTimer);
+    this.openSessionsTimer = null;
+    this.openSessionsController?.abort();
   }
 
   private async resync(): Promise<void> {
@@ -477,6 +537,8 @@ export class NativeIngest {
 
   async close(signal: AbortSignal): Promise<void> {
     this.stopped = true;
+    this.shutdownController.abort();
+    this.stopOpenSessionDiscovery();
     for (const path of this.sessionWatchers.keys()) this.unwatchSession(path);
     if (this.titleTimer) clearTimeout(this.titleTimer);
     if (this.writeTimer) clearTimeout(this.writeTimer);
@@ -559,20 +621,21 @@ export class NativeIngest {
     const harness = previous?.harness ?? this.harnessFor(path);
     // A paused harness uploads nothing, not even for transcripts it already tracks.
     if (!harness || !this.harnesses.includes(harness)) return;
-    if (previous && (previous.threadKind !== "user" || !this.owns(previous.cwd))) return;
+    if (previous && (previous.threadKind !== "user" || !this.owns(previous.cwd))) { this.unwatchSession(path); return; }
     if (!previous) {
       // A header is read once per file: it names the project and the thread's purpose.
       const header = await readSessionHeader(path, harness);
       if (!header) return;
-      if (!this.owns(header.cwd)) { this.foreign.add(path); return; }
+      if (!this.owns(header.cwd)) { this.foreign.add(path); this.unwatchSession(path); return; }
       if (header.thread !== "user") {
+        this.unwatchSession(path);
         // Codex's own reviews, compaction runs and spawned agents are not chats; remember and skip them.
         this.states.set(path, this.blank(path, header.nativeSessionId, header.cwd, harness, header.thread, info));
         this.markDirty(path);
         return;
       }
     }
-    if (previous && !force && previous.ino === info.ino && previous.size >= 0 && info.size >= previous.scannedBytes) {
+    if (previous && !force && !previous.pendingInput && previous.ino === info.ino && previous.size >= 0 && info.size >= previous.scannedBytes) {
       // Nothing new since the last search (a repeated event), or new bytes without a boundary.
       if (info.size === previous.scannedBytes) return;
       if (!await this.crossesBoundary(path, harness, previous.scannedBytes, info.size)) {
@@ -587,6 +650,7 @@ export class NativeIngest {
     // The file counts as read only once the server confirmed it; a failed send is retried.
     await this.apply(state, transcript.turns, lane, info.mtimeMs);
     const tail = transcript.turns.at(-1);
+    state.pendingInput = state.harness === "codex" && Boolean(tail && !tail.userFinal && !tail.result);
     if (tail && tail.key === state.runningTurnKey && (state.harness !== "codex" || !tail.result)) this.options.hooks?.onGrowth?.(state, tail);
     this.scheduleTitles();
     Object.assign(state, { size: info.size, mtimeMs: info.mtimeMs, ino: info.ino, scannedBytes: info.size });
@@ -761,8 +825,8 @@ export class NativeIngest {
     this.options.hooks?.onRunning?.(state, null);
   }
 
-  /** Follow only sessions observed running in this process, including their subsequent Turns. */
-  private watchActiveSession(state: TranscriptState): void {
+  /** Follow open or newly discovered sessions, including their subsequent Turns. */
+  private watchActiveSession(state: Pick<TranscriptState, "path" | "harness">): void {
     if (!this.watching || this.watching.aborted || this.stopped || !this.harnesses.includes(state.harness) || this.sessionWatchers.has(state.path)) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let fileWatcher: FSWatcher | null = null;
@@ -792,7 +856,7 @@ export class NativeIngest {
       });
       watcher.on("error", (error) => this.report(state.path, error));
       bindFile();
-      this.sessionWatchers.set(state.path, { close: () => { if (timer) clearTimeout(timer); fileWatcher?.close(); watcher.close(); } });
+      this.sessionWatchers.set(state.path, { harness: state.harness, close: () => { if (timer) clearTimeout(timer); fileWatcher?.close(); watcher.close(); } });
     } catch (error) { this.report(state.path, error); }
   }
 
@@ -858,6 +922,7 @@ export class NativeIngest {
       this.titleTimer = null;
       this.titlesPending = false;
       this.titleTask = this.syncTitles().then(() => { this.titleFailures = 0; }, (error) => {
+        if (this.shutdownController.signal.aborted) return;
         this.report(codexTitleIndex(), error);
         this.titleFailures += 1;
       }).finally(() => {
@@ -882,7 +947,7 @@ export class NativeIngest {
       if (!title || (state.titleSync?.sessionId === state.sessionId && state.titleSync.title === title)) continue;
       const sessionId = state.sessionId;
       try {
-        await renameSession(sessionId, title);
+        await renameSession(sessionId, title, AbortSignal.any([this.shutdownController.signal, AbortSignal.timeout(10_000)]));
         state.titleSync = { sessionId, title };
         this.markDirty(state.path);
       } catch (error) { failures.push(error); }

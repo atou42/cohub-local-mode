@@ -18,7 +18,7 @@ async function until(check: () => boolean) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
-async function fixture(renameSession?: (id: string, title: string) => Promise<void>) {
+async function fixture(renameSession?: (id: string, title: string, signal: AbortSignal) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "cohub-titles-"));
   const oldHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = join(root, "codex");
@@ -30,7 +30,7 @@ async function fixture(renameSession?: (id: string, title: string) => Promise<vo
   const server = fakeNativeServer();
   const controller = new AbortController();
   const hooks: IngestHooks = {
-    renameSession: async (id, title) => { await renameSession?.(id, title); calls.push({ id, title }); },
+    renameSession: async (id, title, signal) => { await renameSession?.(id, title, signal); calls.push({ id, title }); },
     onError: (error) => { errors.push(error); },
   };
   const make = () => new NativeIngest({ spaceId: SPACE, cwd: root, harnesses: ["codex"], enabledAt: new Date(0).toISOString(), root: join(root, "state"), archives: new RuntimeArchiveStore(join(root, "archives"), null), hooks });
@@ -142,4 +142,51 @@ test("an outstanding rename never holds up transcript ingest", async () => {
     assert.equal([...w.server.turns.values()][0]?.settled, true);
     assert.equal(w.calls.length, 0, "Content completed before the blocked title request returned");
   } finally { release(); await w.cleanup(); }
+});
+
+test("shutdown cancels an outstanding title request before flushing the ledger", async () => {
+  let started = false;
+  let requestSignal: AbortSignal | undefined;
+  let release!: () => void;
+  const w = await fixture(async (_id, _title, signal?: AbortSignal) => {
+    started = true;
+    requestSignal = signal;
+    await new Promise<void>((resolve, reject) => {
+      release = resolve;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  try {
+    await writeFile(w.index, line("Pending rename"));
+    w.ingest.connect(w.server.transport);
+    await until(() => started);
+    let closed = false;
+    const closing = w.ingest.close(AbortSignal.timeout(100)).then(() => { closed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+      assert.equal(requestSignal?.aborted, true, "Shutdown must cancel the in-flight request");
+      assert.equal(closed, true, "An unresponsive title request must not hold the shutdown open");
+      assert.equal(w.calls.length, 0, "An aborted rename is not persisted as successful");
+      assert.equal(w.errors.length, 0, "Expected shutdown cancellation is not reported as a sync fault");
+    } finally { release(); await closing; }
+  } finally { await w.cleanup(); }
+});
+
+test("an unresponsive title request expires and retries without another file event", async (context) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  context.mock.method(AbortSignal, "timeout", (milliseconds: number) => timeout(milliseconds === 10_000 ? 30 : milliseconds));
+  let attempts = 0;
+  const w = await fixture(async (_id, _title, signal) => {
+    if (++attempts > 1) return;
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  });
+  try {
+    await writeFile(w.index, line("Retry after deadline"));
+    w.ingest.connect(w.server.transport);
+    await until(() => w.calls.length === 1);
+    assert.equal(attempts, 2);
+    assert.equal(w.errors.length, 1);
+    assert.match(String(w.errors[0]), /TimeoutError/);
+    assert.deepEqual(w.calls, [{ id: SESSION, title: "Retry after deadline" }]);
+  } finally { await w.cleanup(); }
 });

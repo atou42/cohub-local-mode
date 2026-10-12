@@ -1,4 +1,5 @@
 import type { NativeRuntimeEvent, NativeTurnProgress } from "@neta-art/cohub";
+import { nativeMessageRole } from "@neta-art/cohub";
 import type { RuntimeArchiveStore } from "../archive-store.js";
 import { serializeDiagnosticError, type RuntimeDiagnostics } from "../diagnostics.js";
 import type { HarnessOptions } from "../harness.js";
@@ -48,7 +49,7 @@ export class NativeRuntime {
   private readonly pi: PiLink;
   private readonly codex: CodexShared;
   private readonly streams = new Map<string, Stream>();
-  private readonly filePreviews = new Map<string, { progress: LiveProgress; timer: ReturnType<typeof setTimeout> | null; readMs: number }>();
+  private readonly filePreviews = new Map<string, { progress: LiveProgress; timer: ReturnType<typeof setTimeout> | null; readMs: number; snapshotRevision: number; needsRead: boolean }>();
   private readonly watched = new Map<string, { path: string | null }>();
   private readonly active = new Set<string>();
   private send: ((event: NativeRuntimeEvent) => Promise<unknown>) | null = null;
@@ -65,7 +66,7 @@ export class NativeRuntime {
     archives: RuntimeArchiveStore;
     projectionSource: SessionTurnProjectionClient;
     diagnostics: RuntimeDiagnostics;
-    renameSession?: (sessionId: string, title: string) => Promise<void>;
+    renameSession?: (sessionId: string, title: string, signal: AbortSignal) => Promise<void>;
   }) {
     this.pi = new PiLink({
       socketPath: controlSocketPath(options.root), owns: (cwd) => this.ingest.owns(cwd),
@@ -309,12 +310,18 @@ export class NativeRuntime {
     if (!watched || this.codex.driving.has(threadId)) return;
     this.ingest.alive("codex", threadId);
     const key = `codex:${threadId}`;
-    if (event.method === "turn/started") this.endStream(key);
+    if (event.method === "turn/started") {
+      this.endStream(key);
+      if (watched.path) this.endFilePreview(watched.path);
+    }
     if (event.method === "turn/completed") {
       this.endStream(key);
       if (watched.path) this.ingest.touch(watched.path);
       return;
     }
+    // Once steering appears, the transcript supplies the whole ordered conversation; the
+    // app-server translator only has assistant items and must not overwrite that snapshot.
+    if (watched.path && this.filePreviews.has(watched.path)) return;
     this.stream(key, "codex", threadId).translator.push(event);
   }
 
@@ -329,31 +336,38 @@ export class NativeRuntime {
   }
 
   /**
-   * A running Turn's file grew. A connected client streams it already; otherwise the preview is
-   * read from the file, at a pace set by a timer, not by every write.
+   * A running Turn's file grew. Connected clients stream assistant progress; Codex steering
+   * switches to the complete file timeline. File reads are paced, not repeated for every write.
    */
   private onGrowth(state: TranscriptState, snapshot?: NativeTranscriptTurn): void {
     this.ingest.alive(state.harness, state.nativeSessionId);
     if (state.harness === "codex" && this.codex.enabled && !this.watched.has(state.nativeSessionId)) void this.codex.get();
     const streamed = state.harness === "pi" ? this.pi.find(state.nativeSessionId) !== null : this.watched.has(state.nativeSessionId);
-    if (streamed) return;
+    const userTimeline = state.harness === "codex" && snapshot?.messages.some((message) => nativeMessageRole(message.content) === "user");
+    if (streamed && !this.filePreviews.has(state.path) && !userTimeline) return;
+    if (state.harness === "codex" && streamed) this.endStream(`codex:${state.nativeSessionId}`);
     let preview = this.filePreviews.get(state.path);
     if (!preview) {
-      preview = { progress: new LiveProgress(this.sink(state.harness, state.nativeSessionId), 0, (error) => this.options.diagnostics.log("warn", "native.preview_failed", { path: state.path, error: serializeDiagnosticError(error) }, { harness: state.harness, sessionId: state.sessionId ?? undefined })), timer: null, readMs: 0 };
+      preview = { progress: new LiveProgress(this.sink(state.harness, state.nativeSessionId), 0, (error) => this.options.diagnostics.log("warn", "native.preview_failed", { path: state.path, error: serializeDiagnosticError(error) }, { harness: state.harness, sessionId: state.sessionId ?? undefined })), timer: null, readMs: 0, snapshotRevision: 0, needsRead: false };
       this.filePreviews.set(state.path, preview);
     }
     const entry = preview;
+    entry.needsRead = !snapshot;
     if (snapshot) {
+      entry.snapshotRevision += 1;
       entry.progress.replace(snapshot.messages.map((message) => ({ content: message.content, provider: message.provider ?? null, model: message.model ?? null })));
       return;
     }
     // A preview re-reads the file; a long transcript is previewed less often, so it costs a bounded share of time.
     entry.timer ??= setTimeout(() => {
+      if (!entry.needsRead) { entry.timer = null; return; }
       if (!state.runningTurnId) { this.endFilePreview(state.path); return; }
+      entry.needsRead = false;
+      const snapshotRevision = entry.snapshotRevision;
       const turnId = state.runningTurnId;
       const startedAt = performance.now();
       void readTranscript(state.path, state.harness).then((transcript) => {
-        if (this.filePreviews.get(state.path) !== entry || state.runningTurnId !== turnId) return;
+        if (this.filePreviews.get(state.path) !== entry || state.runningTurnId !== turnId || entry.snapshotRevision !== snapshotRevision) return;
         const tail = transcript.turns.at(-1);
         if (tail?.key !== state.runningTurnKey || (state.harness === "codex" && tail.result)) return;
         entry.progress.replace(tail.messages.map((message) => ({ content: message.content, provider: message.provider ?? null, model: message.model ?? null })));
@@ -361,6 +375,7 @@ export class NativeRuntime {
         entry.readMs = performance.now() - startedAt;
         // Growth during the read schedules the next one only now: reads never overlap.
         entry.timer = null;
+        if (this.filePreviews.get(state.path) === entry && entry.needsRead) this.onGrowth(state);
       });
     }, Math.max(FILE_PREVIEW_INTERVAL_MS, FILE_PREVIEW_COST_FACTOR * entry.readMs));
     entry.timer.unref?.();
