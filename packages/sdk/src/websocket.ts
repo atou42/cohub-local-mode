@@ -1,3 +1,4 @@
+import type { CodexApprovalMode } from "@cohub/protocol/runtime";
 import {
   getRealtimeSpaceRoom,
   getSessionTurnPatchStreamKey,
@@ -581,6 +582,8 @@ export class WebsocketClient {
     requestId?: string;
     model?: string;
     provider?: string;
+    harness?: "cohub" | "pi" | "codex";
+    codexApprovalMode?: CodexApprovalMode;
     thinkingLevel?: ModelThinkingLevel;
   }) {
     await this.ensureOpen();
@@ -594,6 +597,8 @@ export class WebsocketClient {
         clientMessageId: input.clientMessageId,
         model: input.model,
         provider: input.provider,
+        harness: input.harness,
+        codexApprovalMode: input.codexApprovalMode,
         thinkingLevel: input.thinkingLevel,
       },
     });
