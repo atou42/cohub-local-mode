@@ -91,6 +91,11 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # These synthetic fixtures exercise real local process/IPC boundaries.
+      # Keep the network-disabled unit runner unchanged; no app login is needed.
+      - name: Test WorkBuddy runtime integration
+        run: pnpm --filter @neta-art/cohub-cli test:runtime:workbuddy:integration
+
   go-checks:
     name: Format, vet, test (sandbox)
     runs-on: ubuntu-latest
