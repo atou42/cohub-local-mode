@@ -25,6 +25,7 @@
     "test": "node ../../scripts/test/run.mjs 'tests/**/*.test.ts'",
     "test:runtime": "node --import tsx --test tests/runtime-*.integration.ts",
     "test:runtime:native": "node --import tsx tests/runtime-native.smoke.ts",
+    "test:runtime:workbuddy": "node --import tsx tests/runtime-workbuddy.smoke.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

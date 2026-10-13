@@ -119,6 +119,7 @@ export async function readWorkBuddyTranscript(path: string, options: { settled?:
   const origin = options.workbuddyOrigin && parseWorkBuddyOrigin(options.workbuddyOrigin);
   if (origin && (origin.nativeSessionId !== header.nativeSessionId || (origin.prefixBytes === 0 ? createHash("sha256").digest("hex") : read.prefixes.get(origin.prefixBytes)) !== origin.prefixSha256)) throw new Error("WorkBuddy origin prefix or identity mismatch");
   const entries = new Map<string, Line>();
+  const nativeParents = new Map<string, unknown>();
   for (const line of read.lines) {
     const row = line.value;
     if (META_TYPES.has(String(row.type))) continue;
@@ -127,9 +128,15 @@ export async function readWorkBuddyTranscript(path: string, options: { settled?:
     if (identity.nativeSessionId !== header.nativeSessionId || identity.cwd !== header.cwd) throw new Error("WorkBuddy transcript crosses session identities or projects");
     const id = required(row.id, "message identity");
     if (row.parentId != null && typeof row.parentId !== "string") throw new Error("Invalid WorkBuddy parent identity");
-    const previous = entries.get(id);
-    if (previous && (previous.value.type !== row.type || previous.value.parentId !== row.parentId || previous.value.role !== row.role)) throw new Error("WorkBuddy message update changes its identity");
-    entries.set(id, previous ? { ...line, startBytes: previous.startBytes } : line);
+    if (nativeParents.has(id) && nativeParents.get(id) !== row.parentId) throw new Error("WorkBuddy message update changes its parent identity");
+    nativeParents.set(id, row.parentId);
+    // One model response can persist text and several calls with the same native id. Only an
+    // update of that same event replaces content; sibling calls must retain their own results.
+    const callId = row.type === "function_call" || row.type === "function_call_result" ? required(row.callId, "tool call identity") : null;
+    const eventKey = JSON.stringify([row.type, id, callId]);
+    const previous = entries.get(eventKey);
+    if (previous && previous.value.role !== row.role) throw new Error("WorkBuddy message update changes its role identity");
+    entries.set(eventKey, previous ? { ...line, startBytes: previous.startBytes } : line);
   }
   const turns: NativeTranscriptTurn[] = [], owner = new Map<string, NativeTranscriptTurn | undefined>();
   const calls = new Map<NativeTranscriptTurn, Map<string, NativeTurnMessage>>();
@@ -137,9 +144,9 @@ export async function readWorkBuddyTranscript(path: string, options: { settled?:
   const completed = new Map<NativeTranscriptTurn, string>();
   let cloudSessionId: string | undefined;
   let prelude: ContentBlock[] = [];
-  for (const [id, line] of entries) {
+  for (const line of entries.values()) {
     options.signal?.throwIfAborted();
-    const row = line.value, at = timestamp(row.timestamp);
+    const row = line.value, id = required(row.id, "message identity"), at = timestamp(row.timestamp);
     const parent = row.parentId ? owner.get(String(row.parentId)) : undefined;
     if (row.parentId && !owner.has(String(row.parentId))) throw new Error("WorkBuddy parent history is missing or cyclic");
     if (row.type === "message" && row.role === "system") {

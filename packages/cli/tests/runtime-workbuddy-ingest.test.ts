@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -57,6 +57,27 @@ test("WorkBuddy discovery reads project identity and excludes unrelated and nest
     await w.write(nested, w.turn(nested, 1, null, join(w.project, "private")), join(w.project, "private"));
     const found = await discoverTranscripts(w.project, ["workbuddy"], { headers: true, nested: [join(w.project, "private")] });
     assert.deepEqual(new Set(found.map((item) => item.nativeSessionId)), new Set([id, sub]));
+  } finally { await w.cleanup(); }
+});
+
+test("WorkBuddy import planning exposes a corrupt header instead of silently hiding the transcript", async () => {
+  const w = await workspace();
+  try {
+    await w.write(randomUUID(), '{"type": malformed}\n');
+    await assert.rejects(discoverTranscripts(w.project, ["workbuddy"], { headers: true }), /JSON|Unexpected/);
+    const ingest = w.ingest();
+    await assert.rejects(ingest.plan(), /JSON|Unexpected/);
+  } finally { await w.cleanup(); }
+});
+
+test("WorkBuddy discovery does not read broken history folders belonging to unrelated projects", async () => {
+  const w = await workspace();
+  try {
+    const id = randomUUID();
+    await w.write(id, w.turn(id, 1, null));
+    await w.write(randomUUID(), '{"type": malformed}\n', join(w.root, "unrelated"));
+    const found = await discoverTranscripts(w.project, ["workbuddy"], { headers: true });
+    assert.deepEqual(found.map((item) => item.nativeSessionId), [id]);
   } finally { await w.cleanup(); }
 });
 
@@ -170,5 +191,53 @@ test("WorkBuddy ingestion preserves the parent of a native conversation branch",
     const ingest = w.ingest(); await ingest.load(); ingest.connect(server.transport); await w.drain(ingest);
     assert.equal(server.turns.get(turnIdOf(id, "u2"))?.parentTurnId, turnIdOf(id, "u1"));
     assert.equal(server.turns.get(turnIdOf(id, "u3"))?.parentTurnId, turnIdOf(id, "u1"));
+  } finally { await w.cleanup(); }
+});
+
+test("WorkBuddy completed JSONL records trigger realtime previews for an already running Turn", async () => {
+  const w = await workspace();
+  try {
+    const server = fakeNativeServer(), id = randomUUID(), growth: string[] = [];
+    const path = await w.write(id, line(w.row(id, "u1", null, "user")));
+    const ingest = w.ingest({ hooks: { onGrowth: (state) => { if (state.runningTurnKey) growth.push(state.runningTurnKey); } } });
+    await ingest.load(); ingest.connect(server.transport); await w.drain(ingest);
+    const registered = server.batches.length;
+    assert.equal(server.turns.get(turnIdOf(id, "u1"))?.settled, false);
+    await appendFile(path, line({ ...w.row(id, "a1", "u1", "assistant"), status: "completed" }));
+    await w.drain(ingest);
+    assert.deepEqual(growth, ["u1"], "a complete native reply must schedule the file preview before quiet settlement");
+    assert.equal(server.batches.length, registered, "running progress must not upload another persistence batch");
+    assert.equal(server.turns.get(turnIdOf(id, "u1"))?.settled, false);
+  } finally { await w.cleanup(); }
+});
+
+test("WorkBuddy history import reports unfinished tails while retaining completed Turns and source bytes", async () => {
+  const w = await workspace();
+  try {
+    const server = fakeNativeServer(), id = randomUUID(), onlyPending = randomUUID(), errors: unknown[] = [];
+    const raw = w.turn(id, 1, null) + line(w.row(id, "u2", "a1", "user"));
+    const path = await w.write(id, raw);
+    const pendingPath = await w.write(onlyPending, line(w.row(onlyPending, "u1", null, "user")));
+    const ingest = w.ingest({ enabledAt: new Date().toISOString(), hooks: { onError: (error) => errors.push(error) } });
+    await ingest.load(); ingest.connect(server.transport); await w.drain(ingest);
+    await ingest.startImport({}, 1); await until(() => ingest.status().import.state === "done");
+    assert.equal(ingest.status().import.turns, 1);
+    assert.equal(server.turns.size, 1);
+    assert.equal(server.turns.get(turnIdOf(id, "u1"))?.settled, true);
+    assert.equal(server.turns.has(turnIdOf(id, "u2")), false);
+    assert.equal(server.turns.has(turnIdOf(onlyPending, "u1")), false);
+    assert.deepEqual(new Set(ingest.status().import.failed.map((failure) => failure.path)), new Set([path, pendingPath]));
+    assert(ingest.status().import.failed.every((failure) => /unfinished Turn/.test(failure.message)));
+    assert.equal(errors.length, 2);
+    assert.equal(await readFile(path, "utf8"), raw);
+    await w.drain(ingest);
+    assert.equal(server.turns.size, 1, "a later live scan must not upload unchanged unfinished old history as running");
+    await appendFile(path, line(w.row(id, "a2", "u2", "assistant"))); await w.quiet(path);
+    await appendFile(pendingPath, line(w.row(onlyPending, "a1", "u1", "assistant"))); await w.quiet(pendingPath);
+    await ingest.startImport({}, 1); await until(() => ingest.status().import.state === "done");
+    assert.deepEqual(ingest.status().import.failed, []);
+    assert.equal(server.turns.size, 3);
+    assert.equal(server.batches.flatMap((batch) => batch.turns).filter((turn) => turn.turnId === turnIdOf(id, "u1")).length, 1);
+    assert.equal(server.turns.get(turnIdOf(id, "u2"))?.parentTurnId, turnIdOf(id, "u1"));
   } finally { await w.cleanup(); }
 });

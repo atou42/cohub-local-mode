@@ -1,18 +1,17 @@
 # Add WorkBuddy history sync and continuation to Cohub Local
 
-Cohub Local can now discover WorkBuddy, display/import project conversations, and continue them from Cohub using WorkBuddy's bundled CLI and model catalog. The protocol, server validation, SDK, CLI and web selector/status display recognize WorkBuddy consistently.
+Cohub Local discovers the installed WorkBuddy application, imports project conversations, and lets users choose WorkBuddy and its native models to continue from Cohub. Protocol, server validation, SDK, CLI and desktop/mobile web controls recognize it consistently.
 
-Each Cohub turn uses a private native history copy while retaining the same cloud conversation. Original desktop histories remain unchanged. Desktop-owned or unsynchronized source histories block continuation; verified prefix markers prevent restored history from being ingested twice. Malformed records, missing attachments, unsupported controls, execution failures and uncertain crash outcomes remain explicit.
+Each Cohub turn runs in a private native history copy while retaining the same cloud conversation. Original desktop histories remain unchanged. Busy or unsynchronized sources block continuation; replayed prefixes are not imported twice. Text and parallel tool events sharing a native ID are preserved. Corrupt records, unfinished history, unsupported controls and uncertain cleanup remain explicit errors.
+
+Adding WorkBuddy to existing Pi/Codex sync asks only about newly added history, and honors WorkBuddy's explicit direct-connection setting without changing the Runtime's own network settings.
 
 ## Validation
 
-- 54 CLI WorkBuddy/lifecycle tests and 33 existing native history/archive/projection tests pass.
-- 16 existing execution/recovery/batch tests and all 10 native-ingestion tests pass with the canonical macOS temporary path (`TMPDIR=/private/tmp`).
-- Protocol 189, SDK runtime 2, core prompt model 3, queue 4 and web model/status 14 tests pass.
-- CLI build; CLI/protocol/SDK/infrastructure/web typechecks; changed-file lint pass.
-- Real WorkBuddy 5.1.3 / CLI 2.103.3 initializes and replays synthetic text/image/reasoning/tool history without changing the source. No model prompt was sent.
-- Full server checks remain blocked by missing local dependencies/build exports. Browser visual verification was blocked by tool connection-policy errors. Environment details are recorded in `docs/workbuddy-local-validation.md`.
+- 65 focused CLI regressions, including the new fixes reproduced before implementation.
+- Real WorkBuddy 5.3.14 / CLI 2.115.0: native history import, streamed reply, remembered-context continuation, cancellation with preserved partial text, source integrity and no duplicate import all passed with synthetic prompts.
+- Desktop and mobile component previews: WorkBuddy selection and model picker verified.
+- Protocol 189, SDK runtime 2, core model 3, queue 4 and web model/status 14 tests passed; CLI build and applicable typechecks/lint passed on the implementation base.
+- Full server checks require private dependencies unavailable locally. See `docs/workbuddy-local-validation.md` for evidence and boundaries.
 
-## Acceptance boundaries
-
-Keep as a draft until live account execution, continuation, cancellation and sync are accepted. No deployment, paid model use or user-history upload has occurred. Desktop and Cohub do not jointly control an open WorkBuddy conversation. Only macOS automatic discovery has been validated.
+No production history upload or deployment occurred. Real-Space and cross-device acceptance remains pending deployment. Desktop and Cohub do not jointly control an open WorkBuddy conversation.

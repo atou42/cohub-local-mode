@@ -21,6 +21,25 @@ export type WorkBuddyProcessOptions = {
 };
 const validSessionId = (id: string) => /^[a-zA-Z0-9][a-zA-Z0-9_:-]*$/.test(id);
 
+async function workbuddyNetworkEnvironment(home: string): Promise<NodeJS.ProcessEnv> {
+  let source: string;
+  try { source = await readFile(join(home, "settings.json"), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw error; }
+  const settings: unknown = JSON.parse(source);
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Invalid WorkBuddy settings");
+  const support = (settings as JsonRecord)["http.proxySupport"];
+  if (support !== undefined && (typeof support !== "string" || !["off", "on", "override", "fallback"].includes(support))) throw new Error("Invalid WorkBuddy proxy support setting");
+  if (support !== "off") return {};
+  // Apply the desktop's explicit direct mode before Node can capture proxyEnv
+  // in its global HTTP agents. Do not change the parent Runtime's connection.
+  return {
+    HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined,
+    http_proxy: undefined, https_proxy: undefined, all_proxy: undefined,
+    GLOBAL_AGENT_HTTP_PROXY: undefined, GLOBAL_AGENT_HTTPS_PROXY: undefined,
+    NODE_USE_ENV_PROXY: undefined, NO_PROXY: "*", no_proxy: "*", GLOBAL_AGENT_NO_PROXY: "*",
+  };
+}
+
 /** Use WorkBuddy's installed product and login identity, never the independent CodeBuddy CLI. */
 export async function resolveWorkBuddyLaunch(cwd: string, binary?: string, home = workbuddyHomeDirectory()): Promise<WorkBuddyLaunch> {
   if (!isAbsolute(home)) throw new Error("WORKBUDDY_HOME must be an absolute path");
@@ -44,6 +63,7 @@ export async function resolveWorkBuddyLaunch(cwd: string, binary?: string, home 
     args: script ? [path] : [],
     home,
     env: {
+      ...await workbuddyNetworkEnvironment(home),
       CODEBUDDY_CONFIG_DIR: home, WORKBUDDY_CONFIG_DIR: home, CODEBUDDY_HOST: "workbuddy-desktop",
       DISABLE_AUTOUPDATER: "1", CODEBUDDY_DISABLE_CRON: "1", CODEBUDDY_DISABLE_SESSION_HISTORY_CLEANUP: "1",
       CODEBUDDY_CODE_DISABLE_SESSION_TITLE_REFRESH: "1", CODEBUDDY_CODE_DISABLE_SESSION_SUMMARY: "1",

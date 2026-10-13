@@ -29,6 +29,7 @@ export type RuntimeLaunch = {
   verbose?: boolean;
   /** Start importing earlier conversations as soon as the Runtime is connected. */
   importHistory?: boolean;
+  importHarnesses?: RuntimeLaunch["harnesses"];
   display?: string;
 };
 
@@ -220,7 +221,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
         native.connect(send);
         if (!importRequested) return;
         importRequested = false;
-        void native.control("import", { command: "start" }).catch((error: unknown) => diagnostics.log("warn", "native.import_failed", { error: serializeDiagnosticError(error) }));
+        void native.control("import", { command: "start", harnesses: config.importHarnesses ?? config.harnesses }).catch((error: unknown) => diagnostics.log("warn", "native.import_failed", { error: serializeDiagnosticError(error) }));
       },
     });
   } catch (error) {

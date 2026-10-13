@@ -9,6 +9,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode === 'malformed') return process.stdout.write('{broken}\n');
     send({ type: 'control_response', response: { subtype: 'success', request_id: value.request_id, response: { models: mode === 'bad-catalog' ? [{}] : [{ id: 'model-1', name: 'Model One', description: 'A model', apiKey: 'secret' }], currentModelId: 'model-1', account: { token: 'secret' } } } });
   } else if (value.type === 'user') {
+    if (mode === 'network-environment') return send({ type: 'result', subtype: 'success', is_error: false, session_id: 'session-1', result: 'done', environment: Object.fromEntries(['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','GLOBAL_AGENT_HTTP_PROXY','GLOBAL_AGENT_HTTPS_PROXY','NODE_USE_ENV_PROXY','NO_PROXY','no_proxy'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) });
     if (mode === 'top-level-error') return send({type:'error',error:'Authentication required'});
     if (mode === 'exit') { process.stderr.write('private-secret'); return process.exit(7); }
     if (mode === 'permission') return send({ type: 'control_request', request_id: 'perm-test', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo fixture' }, tool_use_id: 'tool-1' } });

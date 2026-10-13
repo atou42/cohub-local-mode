@@ -114,9 +114,15 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
       const native = await ensureNativeSync({ root, spaceId: existing.spaceId, identity, harnesses: options.harness.length ? harnesses : parseRuntimeHarnesses(existing.harnesses), yes: options.yes, executables: { pi: options.pi, codex: options.codex, workbuddy: options.workbuddy } });
       // The running Runtime applies consent given now without restarting.
       const directory = runtimeInstanceDirectory(identity, existing.spaceId);
-      await controlRuntimeInstance(directory, "reload").catch(() => undefined);
-      if (native.importHistory) await controlRuntimeInstance(directory, "import", { command: "start" }, 60_000).catch(() => undefined);
-      printRuntimeSummary(existing, options.json, true);
+      const reloaded = await controlRuntimeInstance(directory, "reload");
+      if (!reloaded) throw new Error("Runtime stopped before native sync could reload");
+      let current = reloaded.status;
+      if (native.importHistory) {
+        const imported = await controlRuntimeInstance(directory, "import", { command: "start", harnesses: native.importHarnesses }, 60_000);
+        if (!imported) throw new Error("Runtime stopped before history import could start");
+        current = imported.status;
+      }
+      printRuntimeSummary(current, options.json, true);
       return;
     }
   }
@@ -168,7 +174,7 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
   });
   // Consent (or --yes) precedes any user-level integration install; failure never blocks startup.
   const native = await ensureNativeSync({ root, spaceId, identity, harnesses, yes: options.yes, executables: { pi: options.pi, codex: options.codex, workbuddy: options.workbuddy } });
-  const config: RuntimeLaunch = { spaceId, root, identity, harnesses, capabilities, executables: { pi: options.pi, codex: options.codex, workbuddy: options.workbuddy }, background: Boolean(options.detach), verbose: options.verbose, importHistory: native.importHistory, display };
+  const config: RuntimeLaunch = { spaceId, root, identity, harnesses, capabilities, executables: { pi: options.pi, codex: options.codex, workbuddy: options.workbuddy }, background: Boolean(options.detach), verbose: options.verbose, importHistory: native.importHistory, importHarnesses: native.importHarnesses, display };
   const existing = await requestRuntimeInstance(runtimeInstanceDirectory(identity, spaceId));
   if (existing) {
     if (existing.root !== root) throw new Error("This Space is running in another directory");

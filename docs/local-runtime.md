@@ -58,13 +58,20 @@ with WorkBuddy's product environment and existing login. It does not substitute 
 CodeBuddy installation. `--workbuddy <path>` selects a different WorkBuddy CLI entry;
 other platforms require that explicit path and have not been validated. `WORKBUDDY_HOME`
 overrides the default `~/.workbuddy` data directory. The verified local versions are
-WorkBuddy 5.1.3 and its bundled CLI 2.103.3.
+WorkBuddy 5.3.14 and its bundled CLI 2.115.0. Native reply, continuation and
+cancellation have also been exercised against the installed, signed-in application.
+When WorkBuddy's saved proxy setting is explicitly off, its Cohub child processes
+also connect directly; the parent Runtime's network configuration is unchanged.
 
 After the existing folder consent, WorkBuddy histories in the bound project and its
 subdirectories sync to Cohub, excluding separately bound projects. Earlier histories use
 the existing import command. Text, reasoning, tool calls/results, supported images,
 branches, and original timestamps retain their native relationships. Missing attachments
 and malformed records produce explicit errors instead of incomplete successful imports.
+If an earlier conversation ends with an unfinished turn, import retains its completed
+turns and reports the unfinished turn in the import failures. It does not invent an end
+state or upload unfinished old history as a running task. Complete the turn in WorkBuddy
+and retry the import; already imported turns are not duplicated.
 
 Selecting WorkBuddy in Cohub supports creating and continuing conversations, model
 selection, streamed responses, and stopping Cohub's own execution. Every turn resumes a

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { codexArchivedSessionsDirectory, codexRolloutBytes, codexRolloutIdOf, codexSessionsDirectory, readNativeTranscript,
   type NativeTranscript, type NativeTranscriptTurn } from "./transcript.js";
-import { parseWorkBuddyOrigin, workbuddyHeader, workbuddyHomeDirectory } from "./workbuddy-transcript.js";
+import { parseWorkBuddyOrigin, workbuddyHeader, workbuddyHomeDirectory, workbuddySessionDirectoryName } from "./workbuddy-transcript.js";
 
 export type { NativeTranscript, NativeTranscriptTurn };
 export type Harness = "pi" | "codex" | "workbuddy";
@@ -43,6 +43,10 @@ function piProjectFolderMatches(folder: string, cwd: string): boolean {
 
 /** Whether a directory found under a root can hold transcripts of `cwd`. */
 export function acceptsDirectory(path: string, root: string, harness: Harness, cwd: string): boolean {
+  if (harness === "workbuddy" && dirname(path) === root) {
+    const project = workbuddySessionDirectoryName(cwd), folder = basename(path);
+    return !project || folder === project || folder.startsWith(`${project}-`);
+  }
   if (harness !== "pi" || process.env.PI_CODING_AGENT_SESSION_DIR?.trim() || dirname(path) !== root) return true;
   return piProjectFolderMatches(path, cwd);
 }

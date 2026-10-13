@@ -143,7 +143,10 @@ export async function discoverTranscripts(cwd: string, harnesses: Harness[], opt
     while (next < found.length) {
       const index = next++;
       const candidate = found[index] as NativeCandidate;
-      const header = await readSessionHeader(candidate.path, candidate.harness, options.signal).catch(() => null);
+      const header = await readSessionHeader(candidate.path, candidate.harness, options.signal).catch((error) => {
+        if (candidate.harness === "workbuddy") throw error;
+        return null;
+      });
       if (header?.thread === "user" && owns(cwd, header.cwd, options.nested)) kept[index] = { ...candidate, nativeSessionId: header.nativeSessionId };
     }
   }));
@@ -347,6 +350,9 @@ export class NativeIngest {
     const enabledAt = Date.parse(this.enabledAt);
     for (const candidate of await discoverTranscripts(this.options.cwd, this.harnesses)) {
       const state = this.states.get(candidate.path);
+      // An unfinished/failed WorkBuddy import remains eligible for explicit retry. Merely seeing
+      // its in-memory state again must not promote unchanged old history into a live task.
+      if (candidate.harness === "workbuddy" && (state?.size ?? -1) < 0 && candidate.mtimeMs < enabledAt) continue;
       if (state ? !this.unchanged(state, candidate) : candidate.mtimeMs >= enabledAt) this.live.set(candidate.path, this.live.get(candidate.path) ?? false);
     }
     this.drainLive();
@@ -555,7 +561,9 @@ export class NativeIngest {
     this.states.set(path, state);
     // The file counts as read only once the server confirmed it; a failed send is retried.
     await this.apply(state, transcript.turns, lane, info.mtimeMs);
+    const previewGrowth = harness === "workbuddy" && previous && info.size > previous.scannedBytes && state.runningTurnId;
     Object.assign(state, { size: info.size, mtimeMs: info.mtimeMs, ino: info.ino, scannedBytes: info.size });
+    if (previewGrowth) this.options.hooks?.onGrowth?.(state);
     this.markDirty(path);
   }
 
@@ -646,6 +654,7 @@ export class NativeIngest {
     const tail = turns.at(-1);
     const head = !tail ? null : pending.length ? cohub(tail) ?? derived(tail) : state.throughTurnId;
     const candidates: Candidate[] = [];
+    let unfinishedImportError: Error | null = null;
     let parentTurnId = from > 0 ? state.throughTurnId : null;
     for (const [offset, turn] of pending.entries()) {
       const marked = cohub(turn);
@@ -659,7 +668,10 @@ export class NativeIngest {
       }
       const settled = offset < pending.length - 1 || this.tailSettled(state, turn, mtimeMs);
       // History that never ended is left to the live lane; its transcript reports it again.
-      if (!settled && lane === "import") break;
+      if (!settled && lane === "import") {
+        if (state.harness === "workbuddy") unfinishedImportError = new Error(`WorkBuddy history has an unfinished Turn (${turn.key}); completed Turns were retained, unfinished history was not imported`);
+        break;
+      }
       // A prompt still being recorded would change the Turn's identity; it is sent once complete.
       if (!settled && state.harness === "codex" && !turn.userFinal) break;
       const turnId = derived(turn);
@@ -669,7 +681,11 @@ export class NativeIngest {
       candidates.push({ turn, turnId, parentTurnId: candidateParent, settled });
       parentTurnId = turnId;
     }
-    if (!candidates.length) { state.headTurnId = head; return; }
+    if (!candidates.length) {
+      state.headTurnId = head;
+      if (unfinishedImportError) throw unfinishedImportError;
+      return;
+    }
     let prefix = 0;
     for (const item of candidates) {
       const recorded = known.get(item.turnId);
@@ -724,6 +740,7 @@ export class NativeIngest {
     // Only the newest settled state needs raw bytes: every older version is a prefix of it.
     state.headTurnId = head;
     if (lastSettled) await this.archive(state, lastSettled.turn, lastSettled.turnId);
+    if (unfinishedImportError) throw unfinishedImportError;
   }
 
   private markRunning(state: TranscriptState, sessionId: string, item: Candidate): void {

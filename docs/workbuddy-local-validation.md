@@ -1,24 +1,40 @@
-# WorkBuddy Local validation — 2026-10-12
+# WorkBuddy Local validation — 2026-10-13
 
-## Verified
+## Verified against the installed application
 
-- WorkBuddy 5.1.3 / bundled CodeBuddy CLI 2.103.3 initializes with the WorkBuddy product environment and returns its native model catalog without sending a model prompt.
-- A synthetic projected history containing a system message, user text/image, reasoning, a tool call/result and an assistant response is accepted and replayed by the installed CLI. The current stream translator accepts that real replay, and the original file remains byte-identical. No user history was uploaded.
-- 54 CLI tests pass across WorkBuddy execution, process protocol, translation, transcripts, archive restoration, ownership, ingestion, discovery and existing runtime lifecycle behavior. They cover explicit errors, cancellation, interrupted recovery, immutable sources, prefix validation, branch preservation, stale-history rejection and deduplication.
-- Protocol: 189 tests. SDK runtime: 2. Core prompt model validation: 3. Background queue: 4. Web model selection/status: 14. All pass.
-- 33 existing native transcript, translation, archive, installation and projection tests pass alongside the new implementation.
-- 16 existing execution, recovery and batching tests pass using `TMPDIR=/private/tmp`. On macOS, `/tmp` aliases `/private/tmp`; older Pi fixtures hash those differently and time out. The same failure/pass pair was reproduced at base commit `4d30d49`, without product changes.
-- All 10 existing native-ingestion tests also pass with `TMPDIR=/private/tmp`, including the previously timed-out Codex file watcher.
-- CLI production build and full web typecheck pass; the latter reports zero errors and warnings.
-- Protocol, SDK and infrastructure typechecks pass. Lint passes on all 62 changed code/test files without warnings.
+WorkBuddy 5.3.14 / bundled CLI 2.115.0 is installed and signed in. The explicit real-account smoke passed using synthetic prompts only:
 
-## Remaining acceptance
+- Discovers 18 native models and the native default.
+- Creates a native conversation, reads its saved history, and delivers the exact reply to the local in-memory ingestion receiver. A separate completed-job recheck imports one batch initially and zero on repeat; source bytes remain unchanged.
+- Executes a new Cohub turn with streamed text and a durable native receipt.
+- Continues the same Cohub conversation in a private native copy and recalls the exact random token from the previous turn. The source transcript remains byte-identical.
+- Stops after the first visible text delta, preserves the received partial text, and confirms its child process group has exited.
+- Real synthetic histories also pass discovery, parsing, replay deduplication and a later desktop-turn synchronization with the correct session and parent.
+- Desktop and 390-pixel mobile component previews both expose WorkBuddy, select its default model and open its model picker. The previews use fixture status, not a production connection.
 
-- No authenticated model turn, paid generation, live Cohub sync, real-account continuation/cancellation, deployment or cross-device acceptance was performed.
-- A system message is accepted by native resume but not replayed. Its effect on actual model context is not established without a model turn.
-- Desktop and mobile visual inspection was blocked by browser tool connection-policy errors. Component syntax and complete web typechecking pass.
-- Automatic app discovery was verified on macOS only. Explicit executable paths are supported elsewhere but not validated on another operating system.
-- Broader server typechecks cannot complete in this checkout: the private billing SDK and several server dependencies/build exports are unavailable, with duplicate dependency types also affecting the agent. These checks must run in a fully provisioned CI environment.
-- The repository pins pnpm 12.10.1; the installed launcher cannot execute that managed binary. Checks above ran directly through the existing local tools. No dependency or package-manager configuration was changed.
+Run the opt-in real-account smoke from `packages/cli` with `COHUB_NATIVE_WORKBUDDY_SMOKE=1 node --import tsx tests/runtime-workbuddy.smoke.ts`. It sends four synthetic prompts through the existing WorkBuddy account, may consume that account's allowance, does not upload to Cohub cloud, and preserves its report and native test histories.
 
-WorkBuddy desktop-held conversations are intentionally not controlled concurrently. Cohub continues in private native copies, retains the same cloud conversation, and does not promise automatic listing of those copies in the WorkBuddy desktop UI.
+## Regressions and compatibility
+
+- 65 focused CLI tests cover WorkBuddy, lifecycle, new-harness import consent and reattachment errors. New fixes were reproduced by failing tests before implementation.
+- Real WorkBuddy records may reuse one native ID for assistant text and multiple tool calls. All events and their results are retained, while genuine updates replace only the matching event.
+- Appended complete records trigger live previews. Corrupt headers and unfinished historical tails report explicit errors; finished turns remain imported and retries do not duplicate them.
+- Adding WorkBuddy to existing Pi/Codex sync asks about only newly added history. Existing consent is preserved; corrupt configuration and reattachment failures are not replaced or hidden.
+- Saved explicit direct mode is applied before starting WorkBuddy, so inherited stale proxy settings cannot become Node's startup proxy snapshot. Parent Runtime settings remain unchanged. Missing settings use the existing environment; corrupt settings fail explicitly.
+- Protocol: 189 tests. SDK runtime: 2. Core prompt model validation: 3. Background queue: 4. Web model selection/status: 14. All passed on the implementation base.
+- 33 existing native transcript/archive/projection tests, 16 execution/recovery/batching tests, and 10 native ingestion tests passed on the implementation base with `TMPDIR=/private/tmp`.
+- CLI build and CLI/protocol/SDK/infrastructure/web typechecks passed on the implementation base. Web reported zero errors and warnings. Changed-code lint passed.
+
+The existing Pi smoke requires the canonical macOS temporary path. `/tmp` and long temporary socket paths caused Pi attachment failures independently of this feature; the failure/pass pair was also reproduced at base commit `4d30d49`.
+
+## Network acceptance
+
+The original desktop report failed against unavailable inherited proxy `127.0.0.1:7890`. Setting direct mode alone left a startup proxy snapshot active. A clean launch and scoped VPN direct rules resolved it. WorkBuddy's own 12:00:30 network report passed all checks: No Proxy, HTTP OK in 127 ms, TCP in 8 ms and zero packet loss. The subsequent real-account smoke passed through Cohub's launch implementation without an external proxy-cleaning wrapper.
+
+## Remaining boundaries
+
+- No production Cohub history upload, cloud deployment or real-Space cross-device acceptance was performed. Synchronization was verified against the local in-memory receiver using actual synthetic native records.
+- WorkBuddy desktop-held conversations are not controlled concurrently. Cohub continues through private copies, retains the same cloud conversation, and does not promise those copies appear automatically in the desktop list.
+- Native incomplete/error records alone cannot establish a whole turn's terminal state because WorkBuddy may retry. Unfinished historical tails fail explicitly instead of being silently omitted or uploaded as running tasks.
+- System-message projection is accepted by native resume; its model-context effect has not been separately measured. macOS automatic discovery is verified; other systems require explicit executable paths and were not exercised.
+- Broader server checks remain blocked by unavailable private dependencies/build exports in this checkout. Fully provisioned CI must run them.

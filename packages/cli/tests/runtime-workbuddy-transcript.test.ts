@@ -72,6 +72,30 @@ test("WorkBuddy applies persisted message updates exactly once and retains the l
   } finally { await f.cleanup(); }
 });
 
+test("WorkBuddy preserves text and parallel tool calls that share one native message id", async () => {
+  const f = await fixture();
+  try {
+    const raw = jsonl([
+      f.row("u1", null, "message", { role: "user", content: [{ type: "input_text", text: "inspect" }] }),
+      f.row("shared", "u1", "message", { role: "assistant", status: "completed", content: [{ type: "output_text", text: "Checking both" }] }),
+      f.row("shared", "u1", "function_call", { name: "Read", arguments: '{"path":"first"}', callId: "first-call" }),
+      f.row("shared", "u1", "function_call", { name: "Read", arguments: '{"path":"second"}', callId: "second-call" }),
+      f.row("r1", "shared", "function_call_result", { name: "Read", output: { type: "text", text: "first result" }, callId: "first-call", status: "completed" }),
+      f.row("r2", "r1", "function_call_result", { name: "Read", output: { type: "text", text: "second result" }, callId: "second-call", status: "completed" }),
+      f.row("final", "r2", "message", { role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done" }] }),
+    ]);
+    await writeFile(f.path, raw);
+    const turn = (await readNativeTranscript(f.path, "workbuddy", { settled: true })).turns[0];
+    assert(turn);
+    const blocks = turn.messages.flatMap((message) => message.content);
+    assert.deepEqual(blocks.filter((block) => block.type === "text").map((block) => block.text), ["Checking both", "Done"]);
+    assert.deepEqual(blocks.filter((block) => block.type === "tool_use").map((block) => block.id), ["first-call", "second-call"]);
+    assert.deepEqual(blocks.filter((block) => block.type === "tool_result").map((block) => block.tool_use_id), ["first-call", "second-call"]);
+    assert.equal(turn.result?.status, "completed");
+    assert.equal(turn.endBytes, Buffer.byteLength(raw));
+  } finally { await f.cleanup(); }
+});
+
 test("WorkBuddy resolves images only inside its blob root and rejects missing or escaping attachments", async () => {
   const f = await fixture();
   const previous = process.env.WORKBUDDY_HOME;
