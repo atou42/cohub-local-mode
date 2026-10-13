@@ -3,7 +3,7 @@ import type { BoardShapeItem } from "@cohub/protocol";
 import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { SceneItem } from "../../model/scene.js";
 import { type WorldPoint, worldPoint } from "../../model/geometry.js";
-import { dashPattern, tracePolyline, trimPolyline } from "../stroke.js";
+import { dashPattern, roundRectPoints, tracePolyline, trimPolyline } from "../stroke.js";
 import { itemAlpha, itemColor } from "../palette.js";
 import { syncTextResolution, syncTextWrapWidth, textResolutionForZoom } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
@@ -88,22 +88,8 @@ function outlinePoints(geometry: BoardShapeItem["props"]["geometry"], width: num
 			return [p(width / 2, 0), p(width, height / 2), p(width / 2, height), p(0, height / 2), p(width / 2, 0)];
 		case "triangle":
 			return [p(width / 2, 0), p(width, height), p(0, height), p(width / 2, 0)];
-		default: {
-			const r = Math.min(radius, width / 2, height / 2);
-			if (r <= 0) return [p(0, 0), p(width, 0), p(width, height), p(0, height), p(0, 0)];
-			const corner = (cx: number, cy: number, from: number) =>
-				Array.from({ length: 9 }, (_, index) => {
-					const angle = from + (index / 8) * (Math.PI / 2);
-					return p(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
-				});
-			return [
-				...corner(width - r, r, -Math.PI / 2),
-				...corner(width - r, height - r, 0),
-				...corner(r, height - r, Math.PI / 2),
-				...corner(r, r, Math.PI),
-				p(width - r, 0),
-			];
-		}
+		default:
+			return roundRectPoints(width, height, radius);
 	}
 }
 

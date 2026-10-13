@@ -45,6 +45,7 @@ type CardEntry = {
 	hovered: boolean;
 	resizing: boolean;
 	globalSig: string;
+	scriptRevision: number;
 };
 
 const FAR_LAYER_ENTER = 450;
@@ -293,6 +294,7 @@ export function createBoardScene(options: {
 			hovered: context.hoveredId === item.id,
 			resizing: context.resizingIds.has(item.id),
 			globalSig,
+			scriptRevision: context.scripts?.revision?.(item.id) ?? 0,
 		};
 		cards.set(item.id, entry);
 		setHeldKey(context, item.id, context.assetKey(item));
@@ -575,13 +577,16 @@ export function createBoardScene(options: {
 			const selected = context.selectedIds.has(id);
 			const hovered = context.hoveredId === id;
 			const resizing = context.resizingIds.has(id);
+			const scriptRevision = context.scripts?.revision?.(id) ?? 0;
 			const changed =
+				scriptRevision !== entry.scriptRevision ||
 				item !== entry.item ||
 				entry.renderer.animated ||
 				selected !== entry.selected ||
 				hovered !== entry.hovered ||
 				resizing !== entry.resizing ||
 				globalSig !== entry.globalSig;
+			entry.scriptRevision = scriptRevision;
 			entry.item = item;
 			entry.selected = selected;
 			entry.hovered = hovered;

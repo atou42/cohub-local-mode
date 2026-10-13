@@ -80,6 +80,7 @@ export const unknownCardRenderer: BoardCardRenderer = {
 	create: (item, context) => {
 		const root = new Container();
 		const box = new Graphics();
+		box.context.batchMode = "batch";
 		const resolution = textResolutionForZoom(context.zoom);
 		const label = new Text({
 			text: "",

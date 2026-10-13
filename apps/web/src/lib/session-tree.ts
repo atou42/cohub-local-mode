@@ -73,6 +73,12 @@ export type TimelineItem =
 	  }
 	| {
 			id: string;
+			kind: "sent";
+			turnId: string;
+			streaming?: boolean;
+	  }
+	| {
+			id: string;
 			kind: "turn_footer";
 			phase: TurnFooterPhase;
 			runtimeProvider?: string | null;

@@ -1,4 +1,8 @@
 import type { BoardTaskSnapshot } from "@neta-art/cohub/board";
+import {
+	normalizeBoardRemoteUrl,
+	parseBoardMediaSource,
+} from "@neta-art/cohub/board";
 import type { BoardAppMetadata } from "@neta-art/cohub/board/editor";
 import type { BoardDropItem } from "$lib/drag/pointer-drag-core";
 
@@ -6,6 +10,7 @@ export type BoardResourceDrop = {
 	files: BoardDropItem[];
 	tasks: Array<{ taskRunId: string; snapshot: BoardTaskSnapshot }>;
 	apps: BoardAppMetadata[];
+	urls: string[];
 };
 
 type DroppedResource = {
@@ -16,6 +21,7 @@ type DroppedResource = {
 	appId?: string;
 	icon?: string;
 	href?: string;
+	url?: string;
 	mimeType?: string;
 	size?: number;
 	mtimeMs?: number;
@@ -26,7 +32,7 @@ type DroppedResource = {
 export function readBoardResourceDrop(
 	data: Pick<DataTransfer, "getData"> | null | undefined,
 ): BoardResourceDrop {
-	const drop: BoardResourceDrop = { files: [], tasks: [], apps: [] };
+	const drop: BoardResourceDrop = { files: [], tasks: [], apps: [], urls: [] };
 	const raw = data?.getData("application/x-cohub-resource");
 	if (raw) {
 		try {
@@ -60,8 +66,10 @@ export function readBoardResourceDrop(
 					continue;
 				}
 				if (resource.type && resource.type !== "file") continue;
-				const path = (resource.path ?? resource.ref ?? "").replace(/\/$/, "");
-				if (!path) continue;
+				const path =
+					normalizeBoardRemoteUrl(resource.url) ??
+					(resource.path ?? resource.ref ?? "").replace(/\/$/, "");
+				if (!parseBoardMediaSource(path)) continue;
 				drop.files.push({
 					path,
 					snapshot: {
@@ -76,7 +84,20 @@ export function readBoardResourceDrop(
 	}
 	if (drop.files.length === 0 && drop.tasks.length === 0) {
 		const path = data?.getData("text/cohub-path")?.replace(/\/$/, "");
-		if (path && !path.startsWith("cohub://tasks/")) drop.files.push({ path });
+		if (path && parseBoardMediaSource(path)) drop.files.push({ path });
+	}
+	if (!drop.files.length && !drop.tasks.length && !drop.apps.length) {
+		const text =
+			data?.getData("text/uri-list") || data?.getData("text/plain") || "";
+		drop.urls = [
+			...new Set(
+				text.split(/\r?\n/).flatMap((line) => {
+					if (line.startsWith("#")) return [];
+					const url = normalizeBoardRemoteUrl(line);
+					return url ? [url] : [];
+				}),
+			),
+		];
 	}
 	return drop;
 }

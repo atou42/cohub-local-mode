@@ -5,9 +5,12 @@ import {
 	readTaskRunDetail,
 	writeTaskRunDetail,
 } from "$lib/cache/repositories/task-runs-repo";
+import {
+	displaySafeJson,
+	mergeTaskRunRecord,
+} from "$lib/resource-kit/task-run";
 import { sdk } from "$lib/sdk";
 import { createKeyedRouteRequestGuard } from "./route-request-guard";
-import { displaySafeJson, mergeTaskRunRecord } from "./task-run-utils";
 
 export type TaskRealtimeEvent = {
 	spaceId: string;

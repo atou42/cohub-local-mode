@@ -131,7 +131,7 @@ The editor has no framework. Read state through its getters and listen with
 change, so they work directly with `useSyncExternalStore`:
 
 ```ts
-import { createBoardRegistry, defineBoardItem } from "@neta-art/cohub/board";
+import { createBoardRegistry, defineBoardItem, worldPoint } from "@neta-art/cohub/board";
 import { createBoardEditor } from "@neta-art/cohub/board/editor";
 import { createBoardReplica } from "@neta-art/cohub/board/replica";
 import { createBoardAssetManager, mountBoardStage } from "@neta-art/cohub/board/stage";
@@ -157,7 +157,16 @@ const editor = createBoardEditor({
 });
 replica.subscribe((state) => state.document && editor.loadDocument(state.document, boardId));
 
-// Where Space file paths resolve; a published copy could resolve elsewhere.
+// Prefer stable media URLs. Existing Space paths remain supported by addFile.
+editor.addMedia("https://cdn.example.com/cover.webp", worldPoint(0, 0));
+// Supply a kind for sources without a file extension.
+editor.addMedia("https://cdn.example.com/media?id=42", worldPoint(400, 0), {
+  kind: "video",
+  snapshot: { title: "Launch", naturalWidth: 1920, naturalHeight: 1080 },
+});
+
+// Media URLs load directly; these callbacks only receive Space paths.
+// A published copy can resolve paths against captured artifacts instead.
 const source = {
   resolveFileUrl: (path: string) => space.files.resolveUrl(path, { purpose: "preview" }),
   resolvePlaybackUrl: (path: string) => space.files.resolveUrl(path, { purpose: "playback" }),

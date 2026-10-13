@@ -38,6 +38,22 @@ const options = {
   withImages: false,
 };
 
+test("native animated exports do not read disabled script modules", async (t) => {
+  const document = parseBoardDocument({
+    ...options.document,
+    items: { shape: { ...options.document.items.shape, script: { src: "scripts/disabled.js", enabled: false } } },
+  });
+  assert.ok(document.ok);
+  const download = t.mock.method(Object.getPrototypeOf(createClient().space("unused").files), "download", async () => {
+    assert.fail("Native export must not load script modules.");
+  });
+  const result = await runBoardExport({ ...options, document: document.document });
+  assert.equal(download.mock.callCount(), 0);
+  assert.equal(result?.frames.length, 3);
+  assert.deepEqual(result?.warnings, []);
+  assert.ok(result?.frames.every((frame) => frame.bytes.length > 0));
+});
+
 test("camera sequences load visible images and evict textures as the camera moves", async (t) => {
   const { createCanvas, loadImage } = await import("@napi-rs/canvas");
   const canvas = createCanvas(32, 32);

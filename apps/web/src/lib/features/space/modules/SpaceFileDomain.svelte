@@ -20,10 +20,10 @@ import type {
 	BoardCollaboratorProfile,
 } from "$lib/board/board-activity";
 import AppPublishDialog from "$lib/components/AppPublishDialog.svelte";
-import type { FileViewMode } from "$lib/components/file-diff-view";
 import WorkspaceWindowsPane from "$lib/components/WorkspaceWindowsPane.svelte";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
 import { DURATION_PANEL, svelteEaseIn } from "$lib/motion.svelte";
+import type { FileViewMode } from "$lib/resource-kit/diff";
 import type { SpaceFsNode } from "$lib/space-fs";
 import { patchCachedSpaceList } from "$lib/stores/space-list-cache";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
@@ -572,7 +572,7 @@ function previewContentOut(node: Element) {
 	</div>
 {/each}
 
-{#if inlineBoard}
+{#each inlineBoard ? [inlineBoard] : [] as board (board.path)}
 	<div
 		class="h-full min-h-0"
 		hidden={activeWindowKind !== "board"}
@@ -580,7 +580,7 @@ function previewContentOut(node: Element) {
 		aria-hidden={activeWindowKind !== "board"}
 	>
 		<BoardWindow
-		board={inlineBoard}
+		board={board}
 		windows={windows}
 		spaceId={spaceId}
 		shell={appShell}
@@ -601,7 +601,7 @@ function previewContentOut(node: Element) {
 		onOpenTask={onOpenTask}
 		/>
 	</div>
-{/if}
+{/each}
 
 {#if inlinePortPreview}
 	<div

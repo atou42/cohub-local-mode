@@ -9,6 +9,7 @@ import ChatMessageBubble from "$lib/components/ChatMessageBubble.svelte";
 import CompactionDivider from "$lib/components/CompactionDivider.svelte";
 import GenerationRuntimeStatusRow from "$lib/components/GenerationRuntimeStatusRow.svelte";
 import ProcessCard from "$lib/components/ProcessCard.svelte";
+import SentTurnsSummary from "$lib/components/SentTurnsSummary.svelte";
 import ToolExecutionCard from "$lib/components/ToolExecutionCard.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { getModelDisplayName, type ModelCatalogItem } from "$lib/model-catalog";
@@ -79,7 +80,8 @@ type TimelineScrollAnchor = {
 };
 
 function shouldFollowSessionTail(item: TimelineItem) {
-	if (item.kind === "process") return item.streaming === true;
+	if (item.kind === "process" || item.kind === "sent")
+		return item.streaming === true;
 	if (item.kind === "turn_footer") return true;
 	return (
 		item.kind === "message" &&
@@ -230,6 +232,8 @@ $effect(() => {
 					/>
 				{:else if item.kind === 'process' && item.turn}
 						<ProcessCard turn={item.turn} summary={item.summary} intermediateMessages={item.intermediateMessages} streaming={item.streaming} {modelsCatalog} {onLoadIntermediate} {onRequestIntermediateSync} {onLoadToolCalls} {onOpenFile} {onOpenUrl} />
+				{:else if item.kind === 'sent'}
+					<SentTurnsSummary turnId={item.turnId} />
 				{:else if item.kind === 'turn_footer'}
 					{@const modelName = getModelDisplayName(modelsCatalog, {
 						provider: item.runtimeProvider,

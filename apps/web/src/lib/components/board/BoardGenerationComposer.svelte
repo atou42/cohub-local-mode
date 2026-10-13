@@ -1,7 +1,12 @@
 <script lang="ts">
 import type { PublicGenerationDeclaration } from "@cohub/protocol/generation";
 import type { BoardSceneItem } from "@neta-art/cohub/board";
-import { featuredTaskArtifact, worldPoint } from "@neta-art/cohub/board";
+import {
+	featuredTaskArtifact,
+	getMediaResourceTitle,
+	resolveBoardMediaUrl,
+	worldPoint,
+} from "@neta-art/cohub/board";
 import {
 	AudioLines,
 	Image,
@@ -170,9 +175,7 @@ function itemLabel(item: BoardSceneItem): string {
 		item.type === "audio" ||
 		item.type === "file"
 	) {
-		return (
-			item.props.snapshot?.title ?? item.props.src.split("/").pop() ?? item.props.src
-		);
+		return item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
 	}
 	if (item.type === "task") return item.props.snapshot.title;
 	return m.board_reference({}, { locale });
@@ -190,7 +193,7 @@ async function resolveItemReference(
 		item.type === "audio" ||
 		item.type === "file"
 	) {
-		rawUrl = await assetSource.resolveFileUrl(item.props.src);
+		rawUrl = await resolveBoardMediaUrl(item.props.src, assetSource);
 	} else if (item.type === "task") {
 		const artifact = featuredTaskArtifact(item.props.snapshot.artifacts);
 		rawUrl = artifact?.type === "text" ? null : artifact?.url;

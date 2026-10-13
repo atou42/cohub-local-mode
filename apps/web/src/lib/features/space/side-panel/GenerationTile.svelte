@@ -14,10 +14,10 @@ import {
 	Play,
 } from "lucide-svelte";
 import { clock } from "$lib/clock.svelte";
-import MediaImage from "$lib/components/MediaImage.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { cachedMediaInfo, loadMediaInfo } from "$lib/media/media-info";
 import { m } from "$lib/paraglide/messages.js";
+import MediaImage from "$lib/resource-kit/MediaImage.svelte";
 import { formatElapsed } from "./side-panel-data";
 
 type Props = {

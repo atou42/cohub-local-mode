@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebSettings
@@ -25,6 +26,8 @@ interface SurfaceListener {
     fun onNavigated(url: String)
     fun onRenderProcessGone(crashed: Boolean)
     fun onShowFileChooser(callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean
+    fun onPermissionRequest(request: PermissionRequest)
+    fun onPermissionRequestCanceled(request: PermissionRequest)
     fun onDownload(url: String, contentDisposition: String?, mimeType: String?)
 }
 

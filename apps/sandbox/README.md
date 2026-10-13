@@ -61,6 +61,26 @@ apps/sandbox/
   ws/
 ```
 
+## RPC 鉴权
+
+云端 WebSocket 握手要求 `Authorization: Bearer <SANDBOX_RPC_TOKEN>`；
+凭据缺失或错误返回 401，服务端未配置 token 则拒绝启动。健康检查不需要鉴权。
+
+创建实例时生成随机 `rpcTokenNonce`，使用平台密钥、空间 ID 和
+`sandbox-rpc-v1` 域标识派生 RPC token。数据库只保存 nonce，平台密钥不会进入
+sandbox。Agent/API 派生相同 token，重建时轮换。RPC 和上报凭据互相独立；
+启动时保存到 Config 后从环境移除，避免 setup.sh 和工具进程直接继承。
+云端上报地址以 Kubernetes Pod 为准，本地拨出模式继续使用已认证的 relay。
+
+旧实例没有 nonce（或为 null）时，客户端不发送认证头；只有 podIp 时仍会推导地址。
+nonce 格式错误仍报错，401 不触发匿名降级，新版服务端始终强制鉴权。
+旧镜像在重建前可继续使用，但仍没有安全保护。所有旧实例替换完毕、回滚窗口结束后，
+应移除这项客户端兼容逻辑。
+
+详见[发布、回滚及密钥轮换说明](../../docs/sandbox-rpc-auth-rollout.md)。
+本次不需要数据库迁移；token 授权一个实例的控制能力，不区分 RPC 方法。
+现有 ws:// 传输和同 UID 执行模型不变，不能将环境清理当作 /proc 隔离。
+
 ## 本地开发与验证
 
 ### 本地检查
@@ -77,7 +97,8 @@ go build ./...
 
 ```bash
 cd apps/sandbox
-SPACE_ID=00000000-0000-0000-0000-000000000001 \
+export SANDBOX_RPC_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+COHUB_SPACE_ID=00000000-0000-0000-0000-000000000001 \
 WORKSPACE_DIR=/tmp/cohub-sandbox-workspace \
 PLATFORM_AGENTS_DIR=/configs/platform/.agents \
 go run .
@@ -86,6 +107,8 @@ go run .
 默认监听：`ws://0.0.0.0:8788/sandbox`
 
 ### 2. 启动 agent
+
+在 Agent 终端设置相同的 `SANDBOX_RPC_TOKEN` 后再启动。
 
 ```bash
 cd apps/agent

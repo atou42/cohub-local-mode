@@ -1,0 +1,177 @@
+import { isSafeBoardSourcePath } from "./board-model.js";
+
+export const BOARD_SCRIPT_MAX_BYTES = 2_000_000;
+
+export type BoardScriptSource = {
+  code: string;
+  imports: Array<{
+    start: number;
+    end: number;
+    path: string;
+    dynamic: boolean;
+  }>;
+};
+export type BoardScriptSources = Record<string, BoardScriptSource>;
+
+export function createBoardScriptModuleReader(
+  read: (path: string) => Promise<string>,
+  timeoutMs = 15_000,
+) {
+  const cache = new Map<string, Promise<string>>();
+  const queue: Array<() => void> = [];
+  let active = 0;
+  let disposed = false;
+  function pump() {
+    while (active < 4 && queue.length) queue.shift()?.();
+  }
+  return {
+    read(path: string): Promise<string> {
+      if (disposed)
+        return Promise.reject(new Error("Module reader is disposed."));
+      const cached = cache.get(path);
+      if (cached) return cached;
+      const promise = new Promise<string>((resolve, reject) => {
+        queue.push(() => {
+          if (disposed) {
+            reject(new Error("Module reader is disposed."));
+            return;
+          }
+          active++;
+          let timer: ReturnType<typeof setTimeout>;
+          const timeout = new Promise<never>((_resolve, rejectRead) => {
+            timer = setTimeout(
+              () => rejectRead(new Error(`Module read timed out: ${path}`)),
+              timeoutMs,
+            );
+          });
+          void Promise.race([Promise.resolve().then(() => read(path)), timeout])
+            .then(resolve, reject)
+            .finally(() => {
+              clearTimeout(timer);
+              active--;
+              pump();
+            });
+        });
+        pump();
+      });
+      cache.set(path, promise);
+      void promise.catch(() => {
+        if (cache.get(path) === promise) cache.delete(path);
+      });
+      return promise;
+    },
+    invalidate(path?: string) {
+      if (path) cache.delete(path);
+      else cache.clear();
+    },
+    destroy() {
+      disposed = true;
+      cache.clear();
+      for (const job of queue.splice(0)) job();
+    },
+  };
+}
+
+export function resolveScriptImport(from: string, specifier: string): string {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../"))
+    throw new Error(`Only relative module imports are supported: ${specifier}`);
+  const parts = from.split("/").slice(0, -1);
+  for (const part of specifier.split("/")) {
+    if (part === ".") continue;
+    if (part === "..") {
+      if (!parts.length) throw new Error("Module import leaves the Space.");
+      parts.pop();
+    } else parts.push(part);
+  }
+  const path = parts.join("/");
+  if (!isSafeBoardSourcePath(path) || !/\.m?js$/.test(path))
+    throw new Error(`Invalid module path: ${path}`);
+  return path;
+}
+
+export async function loadBoardScriptSources(
+  src: string,
+  read: (path: string) => Promise<string>,
+  timeoutMs = 15_000,
+): Promise<BoardScriptSources> {
+  if (!isSafeBoardSourcePath(src) || !/\.m?js$/.test(src))
+    throw new Error("Invalid script entry path.");
+  const { init, parse } = await import("es-module-lexer");
+  await init;
+  const sources: BoardScriptSources = {};
+  const visiting = new Set<string>();
+  let bytes = 0;
+  async function visit(path: string): Promise<void> {
+    if (visiting.has(path))
+      throw new Error(`Circular module dependency: ${path}`);
+    if (sources[path]) return;
+    if (Object.keys(sources).length + visiting.size >= 64)
+      throw new Error("A script may load at most 64 modules.");
+    visiting.add(path);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const code = await Promise.race([
+      Promise.resolve().then(() => read(path)),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Module read timed out: ${path}`)),
+          timeoutMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timer));
+    bytes += new TextEncoder().encode(code).byteLength;
+    if (bytes > BOARD_SCRIPT_MAX_BYTES)
+      throw new Error("Script modules exceed the 2 MB limit.");
+    const [imports] = parse(code, path);
+    const resolved: BoardScriptSource["imports"] = [];
+    for (const entry of imports) {
+      if (entry.d === -2)
+        throw new Error("import.meta is not available in Board scripts.");
+      if (entry.n === undefined)
+        throw new Error("Dynamic imports must use a literal relative path.");
+      const dependency = resolveScriptImport(path, entry.n);
+      await visit(dependency);
+      resolved.push({
+        start: entry.s,
+        end: entry.e,
+        path: dependency,
+        dynamic: entry.d >= 0,
+      });
+    }
+    sources[path] = { code, imports: resolved };
+    visiting.delete(path);
+  }
+  await visit(src);
+  return sources;
+}
+
+export function scriptModuleUrls(sources: BoardScriptSources): {
+  urls: Record<string, string>;
+  dispose(): void;
+} {
+  const urls: Record<string, string> = {};
+  for (const [path, source] of Object.entries(sources)) {
+    let code = source.code;
+    for (const entry of [...source.imports].reverse()) {
+      const url = urls[entry.path];
+      if (!url) throw new Error(`Unresolved module: ${entry.path}`);
+      code =
+        code.slice(0, entry.start) +
+        (entry.dynamic ? JSON.stringify(url) : url) +
+        code.slice(entry.end);
+    }
+    urls[path] = URL.createObjectURL(
+      new Blob(
+        [
+          `${code}\n//# sourceURL=cohub-script/${path.split("/").map(encodeURIComponent).join("/")}`,
+        ],
+        { type: "text/javascript" },
+      ),
+    );
+  }
+  return {
+    urls,
+    dispose: () => {
+      for (const url of Object.values(urls)) URL.revokeObjectURL(url);
+    },
+  };
+}

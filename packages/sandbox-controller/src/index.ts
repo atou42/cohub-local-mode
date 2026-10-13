@@ -242,6 +242,8 @@ export function sandboxEndpointInvalidationPatch(reason: string, at = new Date()
     // Drop report credentials so a dying pod cannot re-publish stale coordinates.
     reportTokenHash: null,
     reportTokenIssuedAt: null,
+    rpcTokenNonce: null,
+    provisioningGeneration: null,
   };
 }
 

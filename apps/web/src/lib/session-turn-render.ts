@@ -4,6 +4,7 @@ import type {
 	SessionTurnRecord,
 	StoredIntermediateMessage,
 } from "@cohub/protocol/model";
+import { hasSentTurns } from "./sent-turns";
 import { getStreamingRenderKey } from "./session-streaming";
 import type {
 	ChatMessage,
@@ -263,6 +264,15 @@ function resolveStreamingPreviewCreatedAt(
 	return fallback;
 }
 
+function sentItem(turn: SessionTurnRecord, streaming = false): TimelineItem {
+	return {
+		id: `${getTurnRenderKey(turn)}:sent`,
+		kind: "sent",
+		turnId: turn.id,
+		...(streaming ? { streaming } : {}),
+	};
+}
+
 export function buildTurnTimelineItems(input: {
 	sessionId: string | null;
 	turns: SessionTurnRecord[];
@@ -294,6 +304,7 @@ export function buildTurnTimelineItems(input: {
 				input.streaming.status === "streaming"),
 	);
 	let streamingProcessInserted = false;
+	let streamingSentTurn: SessionTurnRecord | null = null;
 	for (const turn of dedupeRenderableTurnsByClientMessageId(input.turns)) {
 		const turnRenderKey = getTurnRenderKey(turn);
 		// Keep the active turn visible while the server-side queued record is
@@ -377,9 +388,10 @@ export function buildTurnTimelineItems(input: {
 				});
 			}
 		}
+		const isLiveTurn = hasStreamingState && streamingTurnId === turn.id;
 		const assistant = turnToAssistantMessage(turn);
 		if (assistant) {
-			if (hasStreamingState && streamingTurnId === turn.id) {
+			if (isLiveTurn) {
 				// Keep the live streaming preview as the visual source of truth until
 				// generation is marked terminal. Finalized / reconciled turn patches can
 				// arrive before the full persisted turn is available, and temporarily
@@ -392,6 +404,10 @@ export function buildTurnTimelineItems(input: {
 					message: assistant,
 				});
 			}
+		}
+		if (hasSentTurns(turn)) {
+			if (isLiveTurn) streamingSentTurn = turn;
+			else items.push(sentItem(turn));
 		}
 	}
 	const fallbackSequence = (input.turns.at(-1)?.sequence ?? 0) * 10 + 10;
@@ -481,6 +497,7 @@ export function buildTurnTimelineItems(input: {
 			});
 		}
 	}
+	if (streamingSentTurn) items.push(sentItem(streamingSentTurn, true));
 	// Turn footer sits at the very end of the active turn — a tail status for
 	// "still waiting / starting", not a mid-timeline process card.
 	if (hasStreamingState && input.streaming) {

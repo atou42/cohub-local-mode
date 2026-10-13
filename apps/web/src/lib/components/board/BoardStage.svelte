@@ -9,6 +9,8 @@ import type {
 	WorldPoint,
 } from "@neta-art/cohub/board";
 import {
+	createMediaBoardItem,
+	parseBoardMediaSource,
 	sceneItemToItem,
 	taskRunToBoardTaskSnapshot as taskBoardSnapshot,
 	worldPoint,
@@ -86,8 +88,10 @@ const {
 	onPointerPresence,
 	onSurfaceChange,
 	onOpenFile,
+	onAddLinks,
 	onPlayMedia,
 	onExportReady,
+	onStageReady,
 	onBackgroundLoadStateChange,
 	onLongPress,
 	highlightedIds,
@@ -111,8 +115,10 @@ const {
 	) => void;
 	onSurfaceChange?: (size: { width: number; height: number }) => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
+	onAddLinks?: (urls: string[], at: WorldPoint) => void;
 	onPlayMedia?: (itemId: string) => void;
 	onExportReady?: (bridge: BoardStageExportBridge | null) => void;
+	onStageReady?: (stage: BoardStage | null) => void;
 	onBackgroundLoadStateChange?: (
 		state: BoardBackgroundLoadState | null,
 	) => void;
@@ -202,6 +208,7 @@ const unsubscribePreviews = subscribeFilePreviews((event) => {
 	previewVersion = filePreviewVersion();
 	if (readonly || !event || event.spaceId !== spaceId) return;
 	assets.invalidatePath(event.path);
+	stage?.invalidateScript(event.path);
 	editor.applyMediaFileChange(event.path, event.meta);
 });
 
@@ -213,6 +220,7 @@ $effect(() => {
 		const item = untrack(() => editor.itemById(id));
 		if (item?.type !== "file") continue;
 		const path = item.props.src;
+		if (parseBoardMediaSource(path)?.kind !== "file") continue;
 		const stale = isFilePreviewStale(spaceId, path);
 		const unenriched = item.props.snapshot?.mtimeMs === undefined;
 		if (stale || unenriched) targets.push({ id: item.id, path });
@@ -224,7 +232,12 @@ async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
 	const resolved = await Promise.all(
 		targets.map(async ({ id, path }) => {
 			const item = editor.itemById(id);
-			if (item?.type !== "file") return null;
+			if (
+				item?.type !== "file" ||
+				item.props.src !== path ||
+				parseBoardMediaSource(path)?.kind !== "file"
+			)
+				return null;
 			const snapshot = (item.props as { snapshot?: BoardFileSnapshotFacts })
 				.snapshot;
 			const result = await loadFilePreview(spaceId, {
@@ -233,6 +246,8 @@ async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
 				size: snapshot?.size,
 				mtimeMs: snapshot?.mtimeMs,
 			});
+			const current = editor.itemById(id);
+			if (current?.type !== "file" || current.props.src !== path) return null;
 			return { id, snapshot: result.facts, replace: result.complete };
 		}),
 	);
@@ -417,17 +432,17 @@ function spread(clientX: number, clientY: number, index: number): WorldPoint {
 }
 
 function dropFiles(clientX: number, clientY: number, files: BoardDropItem[]) {
-	const created = files.map((entry, index) => ({
-		id: editor.addFile(
-			entry.path,
-			spread(clientX, clientY, index),
-			entry.snapshot,
-		),
-		path: entry.path,
-	}));
+	const created = files.map((entry, index) => {
+		const at = spread(clientX, clientY, index);
+		return createMediaBoardItem(entry.path, at.x, at.y, entry.snapshot);
+	});
 	if (created.length === 0) return;
-	editor.setSelection(created.map((entry) => entry.id));
-	void enrichFileCards(created);
+	editor.addItems(created, { select: true });
+	void enrichFileCards(
+		created.flatMap(({ id, item }) =>
+			item.type === "file" ? [{ id, path: item.props.src }] : [],
+		),
+	);
 }
 
 function dropApps(
@@ -447,7 +462,9 @@ function handleDrop(event: DragEvent) {
 	event.preventDefault();
 	dropActive = false;
 	if (readonly) return;
-	const { files, tasks, apps } = readBoardResourceDrop(event.dataTransfer);
+	const { files, tasks, apps, urls } = readBoardResourceDrop(
+		event.dataTransfer,
+	);
 	const { clientX, clientY } = event;
 	if (tasks.length > 0)
 		editor.setSelection(
@@ -461,6 +478,7 @@ function handleDrop(event: DragEvent) {
 		);
 	dropFiles(clientX, clientY, files);
 	dropApps(clientX, clientY, apps);
+	if (urls.length) onAddLinks?.(urls, spread(clientX, clientY, 0));
 }
 
 onMount(() => {
@@ -499,9 +517,20 @@ onMount(() => {
 		},
 	});
 	stage = mounted;
+	onStageReady?.(mounted);
 	void mounted.ready.then((ready) => {
 		if (!ready || stage !== mounted) return;
 		onExportReady?.({
+			snapshotScripts: () => mounted.snapshotScripts(),
+			readModule: async (path) => {
+				const url = await assetSource.resolveFileUrl(path);
+				if (!url) throw new Error("Script module is unavailable.");
+				const response = await fetch(url, {
+					signal: AbortSignal.timeout(15_000),
+				});
+				if (!response.ok) throw new Error(`Could not read ${path}.`);
+				return response.text();
+			},
 			renderer: () => mounted.renderer,
 			theme: () => {
 				const { palette, colors, colorScheme } = mounted.theme;
@@ -574,6 +603,7 @@ onDestroy(() => {
 	unsubscribePreviews();
 	stage?.destroy();
 	stage = null;
+	onStageReady?.(null);
 	onExportReady?.(null);
 	onBackgroundLoadStateChange?.(null);
 });
@@ -630,7 +660,7 @@ function backgroundCssColor(): string | undefined {
 		if (readonly) return;
 		const types = event.dataTransfer?.types;
 		if (!types) return;
-		if (types.includes("text/cohub-path") || types.includes("application/x-cohub-resource")) {
+		if (types.includes("text/cohub-path") || types.includes("application/x-cohub-resource") || types.includes("text/uri-list") || types.includes("text/plain")) {
 			event.preventDefault();
 			dropActive = true;
 		}

@@ -24,7 +24,7 @@ import {
   type BoardExportResult,
   renderBoardExport,
 } from "../index.js";
-import type { BoardSketchHost } from "../../render/renderers/board-renderer-registry.js";
+import type { BoardScriptHost } from "../../render/renderers/board-renderer-registry.js";
 
 export type NodeCanvasModule = {
   createCanvas: (width: number, height: number) => unknown;
@@ -226,7 +226,7 @@ export type BoardNodeExportOptions = Omit<BoardExportOptions, "textures" | "back
     position: "center" | "top" | "bottom" | "left" | "right";
     opacity: number;
   };
-  sketches?: BoardSketchHost;
+  scripts?: BoardScriptHost;
   format?: BoardNodeExportFormat;
   quality?: number;
 };
@@ -242,7 +242,7 @@ const MIME: Record<BoardNodeExportFormat, string> = {
   webp: "image/webp",
 };
 
-export { createNodeBoardSketchHost } from "./sketch.js";
+export { createNodeBoardScriptHost } from "./scripts.js";
 
 export function boardImageMimeType(format: BoardNodeExportFormat): string {
   return MIME[format];
@@ -253,10 +253,10 @@ export function exportBoardImageBytes(
   document: BoardDocument,
   options: BoardNodeExportOptions = {},
 ): BoardNodeExportResult | null {
-  const { format = "png", quality = 0.92, textures, sketches, backgroundImage, ...rest } = options;
+  const { format = "png", quality = 0.92, textures, scripts, backgroundImage, ...rest } = options;
   const result = renderBoardExport(renderer.renderer, document, {
     ...rest,
-    ...(sketches ? { sketches } : {}),
+    ...(scripts ? { scripts } : {}),
     ...(textures ? { textures: textures as unknown as Map<string, Texture> } : {}),
     ...(backgroundImage
       ? {

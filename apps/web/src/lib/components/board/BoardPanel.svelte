@@ -4,14 +4,24 @@ import type {
 	BoardPlaybackSnapshot,
 } from "@cohub/protocol";
 import {
+	type BoardMediaItemKind,
+	createMediaBoardItem,
+	featuredTaskArtifact,
+	inferBoardMediaKind,
+	normalizeBoardRemoteUrl,
 	parseBoardDocument,
+	parseBoardMediaSource,
 	screenToWorld,
 	taskRunToBoardTaskSnapshot as taskBoardSnapshot,
+	type WorldPoint,
 	worldPoint,
 } from "@neta-art/cohub/board";
 import { defaultBoardTool } from "@neta-art/cohub/board/editor";
 import { nextLocalPlayback } from "@neta-art/cohub/board/player";
-import { createBoardAssetManager } from "@neta-art/cohub/board/stage";
+import {
+	type BoardStage as BoardStageController,
+	createBoardAssetManager,
+} from "@neta-art/cohub/board/stage";
 import { onDestroy, onMount, untrack } from "svelte";
 import { createBoardAppItemView } from "$lib/board/board-app-view.svelte";
 import { createSpaceBoardAssetSource } from "$lib/board/board-asset-source";
@@ -54,8 +64,10 @@ import BoardEmptyState from "$lib/components/board/BoardEmptyState.svelte";
 import BoardExportDialog from "$lib/components/board/BoardExportDialog.svelte";
 import BoardFloatingToolbar from "$lib/components/board/BoardFloatingToolbar.svelte";
 import BoardGenerationComposer from "$lib/components/board/BoardGenerationComposer.svelte";
+import BoardLinkPopover from "$lib/components/board/BoardLinkPopover.svelte";
 import BoardMediaPlayer from "$lib/components/board/BoardMediaPlayer.svelte";
 import BoardMobileChrome from "$lib/components/board/BoardMobileChrome.svelte";
+import BoardScripts from "$lib/components/board/BoardScripts.svelte";
 import BoardSelectionToolbar from "$lib/components/board/BoardSelectionToolbar.svelte";
 import BoardStage from "$lib/components/board/BoardStage.svelte";
 import BoardTextEditor from "$lib/components/board/BoardTextEditor.svelte";
@@ -99,6 +111,7 @@ const {
 
 const locale = $derived(getLocale());
 
+let scriptStage = $state.raw<BoardStageController | null>(null);
 const readonly = $derived(mode === "view");
 const resolvedAssetSource = $derived(
 	assetSource ?? createSpaceBoardAssetSource(spaceId),
@@ -125,6 +138,112 @@ let exportBridge = $state<BoardStageExportBridge | null>(null);
 let exportOpen = $state(false);
 let generationOpen = $state(false);
 let appearanceOpen = $state(false);
+let linkRequest = $state<{ url: string; at: WorldPoint } | null>(null);
+
+function openLink(url = "", at = editor.viewCenter()) {
+	contextMenu = null;
+	generationOpen = false;
+	appearanceOpen = false;
+	linkRequest = { url, at };
+}
+
+function toggleGeneration() {
+	linkRequest = null;
+	generationOpen = !generationOpen;
+	appearanceOpen = false;
+}
+
+function toggleAppearance() {
+	linkRequest = null;
+	appearanceOpen = !appearanceOpen;
+	generationOpen = false;
+}
+
+function toggleTimeline() {
+	linkRequest = null;
+	timelineOpen = !timelineOpen;
+	if (!timelineOpen) editor.setPlayhead(null);
+}
+
+function addLink(url: string, kind: BoardMediaItemKind) {
+	const at = linkRequest?.at ?? editor.viewCenter();
+	editor.setSelection([editor.addMedia(url, at, { kind })]);
+	linkRequest = null;
+}
+
+function addLinks(urls: string[], at = editor.viewCenter()) {
+	if (urls.length === 1) {
+		const url = urls[0] as string;
+		const kind = inferBoardMediaKind(url);
+		if (kind === "file" || kind === "text") {
+			openLink(url, at);
+			return;
+		}
+	}
+	editor.addItems(
+		urls.map((url, index) =>
+			createMediaBoardItem(url, at.x + index * 36, at.y),
+		),
+		{ select: true },
+	);
+}
+
+function pasteText(text: string) {
+	const url = normalizeBoardRemoteUrl(text);
+	if (url) addLinks([url]);
+	else editor.pasteClipboard(text);
+}
+
+function handlePaste(event: ClipboardEvent) {
+	if (
+		!active ||
+		readonly ||
+		generationOpen ||
+		replayOpen ||
+		linkRequest ||
+		editor.editingId ||
+		isEditableTarget(event.target)
+	)
+		return;
+	const text = event.clipboardData?.getData("text/plain");
+	if (!text) return;
+	event.preventDefault();
+	pasteText(text);
+}
+
+function addTaskMedia(itemId: string) {
+	const item = editor.itemById(itemId);
+	if (item?.type !== "task") return;
+	const artifact = featuredTaskArtifact(item.props.snapshot.artifacts);
+	if (!artifact || artifact.type === "text") return;
+	const src = normalizeBoardRemoteUrl(artifact.url);
+	if (!src) return;
+	const snapshot = {
+		title: artifact.title,
+		mimeType: artifact.mimeType,
+		...(artifact.type !== "audio"
+			? {
+					naturalWidth: artifact.naturalWidth,
+					naturalHeight: artifact.naturalHeight,
+				}
+			: {}),
+		...(artifact.type !== "image" ? { durationMs: artifact.durationMs } : {}),
+	};
+	const at = worldPoint(
+		item.frame.x + item.frame.width + 180,
+		item.frame.y + item.frame.height / 2,
+	);
+	const id = editor.addMedia(src, at, { kind: artifact.type, snapshot });
+	editor.setSelection([id]);
+	editor.focusItems([id]);
+}
+
+function openMediaSource(src: string) {
+	const source = parseBoardMediaSource(src);
+	if (source?.kind === "url")
+		window.open(source.value, "_blank", "noopener,noreferrer");
+	else if (source?.kind === "file") void onOpenFile?.(source.value);
+}
 let replayOpen = $state(false);
 let timelineOpen = $state(false);
 let localPlayback = $state<BoardPlaybackSnapshot | null>(null);
@@ -460,7 +579,7 @@ function handleReadonlyKeydown(
 			}
 			if (single.type !== "file") return;
 			event.preventDefault();
-			void onOpenFile?.((single.props as { src: string }).src);
+			openMediaSource(single.props.src);
 			return;
 		}
 		case "Escape":
@@ -479,6 +598,13 @@ function handleReadonlyKeydown(
 
 function handleKeydown(event: KeyboardEvent) {
 	if (!active || generationOpen || replayOpen) return;
+	if (linkRequest) {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			linkRequest = null;
+		}
+		return;
+	}
 	if (event.key === "Escape" && playingId) {
 		event.preventDefault();
 		closeMedia();
@@ -541,7 +667,7 @@ function handleKeydown(event: KeyboardEvent) {
 		void (async () => {
 			const text = await readClipboardText();
 			if (text) {
-				editor.pasteClipboard(text);
+				pasteText(text);
 				return;
 			}
 			editor.pasteClipboard();
@@ -575,7 +701,7 @@ function handleKeydown(event: KeyboardEvent) {
 				return;
 			}
 			if (single.type === "file") {
-				void onOpenFile?.((single.props as { src: string }).src);
+				openMediaSource(single.props.src);
 				return;
 			}
 			if (single.type === "task") {
@@ -759,6 +885,7 @@ onMount(() => {
 		);
 		editor.applyTaskSnapshots(snapshots);
 	});
+	window.addEventListener("paste", handlePaste);
 	window.addEventListener("keydown", handleKeydown);
 	window.addEventListener("keyup", handleKeyup);
 	window.addEventListener("blur", clearSpaceHeld);
@@ -766,6 +893,7 @@ onMount(() => {
 	document.addEventListener("visibilitychange", handleVisibilityChange);
 	return () => {
 		unsubscribeTaskCache();
+		window.removeEventListener("paste", handlePaste);
 		window.removeEventListener("keydown", handleKeydown);
 		window.removeEventListener("keyup", handleKeyup);
 		window.removeEventListener("blur", clearSpaceHeld);
@@ -784,12 +912,14 @@ $effect(() => {
 	exportOpen = false;
 	generationOpen = false;
 	replayOpen = false;
+	linkRequest = null;
 	clearSpaceHeld();
 });
 
 onDestroy(() => {
 	if (regenerationErrorTimer) clearTimeout(regenerationErrorTimer);
 	flushViewPreference();
+	window.removeEventListener("paste", handlePaste);
 	window.removeEventListener("keydown", handleKeydown);
 	window.removeEventListener("keyup", handleKeyup);
 	window.removeEventListener("blur", clearSpaceHeld);
@@ -844,6 +974,7 @@ onDestroy(() => {
 		{/if}
 
 		<BoardStage
+			onStageReady={(stage) => { scriptStage = stage; }}
 			{editor}
 			playback={activePlayback}
 			{assets}
@@ -853,7 +984,8 @@ onDestroy(() => {
 			{spaceId}
 			{readonly}
 			assetSource={resolvedAssetSource}
-			{onOpenFile}
+			onOpenFile={openMediaSource}
+			onAddLinks={addLinks}
 			onPlayMedia={playMedia}
 			onPointerPresence={(cursor) => { if (!readonly) awareness.setCursor(cursor); }}
 			views={itemViews}
@@ -863,6 +995,8 @@ onDestroy(() => {
 			onLongPress={isMobile ? handleLongPress : undefined}
 			highlightedIds={changedIds}
 		/>
+
+		<BoardScripts {editor} {readonly} stage={scriptStage} />
 
 		{#if !readonly}
 			<BoardCollaboratorOverlay
@@ -904,36 +1038,37 @@ onDestroy(() => {
 			/>
 			<BoardArrowToolbar {editor} />
 			<BoardFloatingToolbar
+				onAddLink={() => openLink()}
 				{editor}
 				{immersive}
 				{generationOpen}
 				{appearanceOpen}
 				{timelineOpen}
-				onToggleGeneration={() => { generationOpen = !generationOpen; appearanceOpen = false; }}
-				onToggleAppearance={() => { appearanceOpen = !appearanceOpen; generationOpen = false; }}
-				onToggleTimeline={() => {
-					timelineOpen = !timelineOpen;
-					if (!timelineOpen) editor.setPlayhead(null);
-				}}
+				onToggleGeneration={toggleGeneration}
+				onToggleAppearance={toggleAppearance}
+				onToggleTimeline={toggleTimeline}
 			/>
 		{/if}
 		{#if isMobile}
 			<BoardMobileChrome
+				onAddLink={() => openLink()}
 				{editor}
 				{readonly}
 				{appearanceOpen}
 				{generationOpen}
 				{timelineOpen}
-				onToggleAppearance={() => { appearanceOpen = !appearanceOpen; generationOpen = false; }}
-				onToggleGeneration={() => { generationOpen = !generationOpen; appearanceOpen = false; }}
-				onToggleTimeline={() => {
-					timelineOpen = !timelineOpen;
-					if (!timelineOpen) editor.setPlayhead(null);
-				}}
+				onToggleAppearance={toggleAppearance}
+				onToggleGeneration={toggleGeneration}
+				onToggleTimeline={toggleTimeline}
 				onExport={exportBridge ? openExport : undefined}
 				onReplay={() => { replayOpen = true; }}
 				contextMenuOpen={contextMenu !== null}
 			/>
+		{/if}
+		{#if !readonly && linkRequest}
+			{#key linkRequest}
+				<BoardLinkPopover initialUrl={linkRequest.url} onAdd={addLink} onClose={() => { linkRequest = null; }} />
+			{/key}
 		{/if}
 		{#if !readonly && generationOpen}
 			<BoardGenerationComposer
@@ -999,7 +1134,9 @@ onDestroy(() => {
 		{#if contextMenu}
 			<BoardContextMenu
 				{editor}
-				{onOpenFile}
+				onOpenFile={openMediaSource}
+				onAddLink={!readonly ? () => openLink() : undefined}
+				onAddTaskMedia={!readonly ? addTaskMedia : undefined}
 				{onOpenTask}
 				onRegenerateTask={regenerateTask}
 				{regeneratingItemId}

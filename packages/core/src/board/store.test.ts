@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { drizzle } from "drizzle-orm/pglite";
-import { parseBoardDocument } from "@cohub/protocol";
+import { BoardScriptSchema, parseBoardDocument } from "@cohub/protocol";
 import {
 	applyBoard,
 	applyBoardPlayback,
@@ -40,6 +40,21 @@ async function board(document = {}) {
 	const { boardId } = await createBoard(db, { spaceId, title: "Test", actorId, document });
 	return { db, boardId };
 }
+
+test("script attachments and custom content survive storage, patches and history", async () => {
+	const { db, boardId } = await board({ items: {
+		image: { type: "image", props: { src: "asset.png" }, script: { src: "scripts/move.js", params: { speed: 40 } } },
+		custom: { type: "custom", script: { src: "scripts/chart.js", targets: { image: "image" } } },
+	} });
+	const initial = await readBoard(db, { spaceId, boardId });
+	assert.equal(BoardScriptSchema.parse(initial.items?.image?.script).params.speed, 40);
+	assert.equal(initial.items?.custom?.type, "custom");
+	assert.equal(BoardScriptSchema.parse(initial.items?.custom?.script).targets.image, "image");
+	await applyBoard(db, { spaceId, boardId, actorId, apply: { patch: { items: { image: { script: { params: { speed: 60 } } } } } } });
+	assert.equal(BoardScriptSchema.parse((await readBoard(db, { spaceId, boardId })).items?.image?.script).params.speed, 60);
+	await restoreBoardVersion(db, { spaceId, boardId, actorId, version: initial.version });
+	assert.equal(BoardScriptSchema.parse((await readBoard(db, { spaceId, boardId })).items?.image?.script).params.speed, 40);
+});
 
 test("create, read and merge-patch items with derived bounds", async () => {
 	const { db, boardId } = await board({

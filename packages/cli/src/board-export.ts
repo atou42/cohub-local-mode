@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const execFile = promisify(execFileCallback);
+import { parseBoardMediaSource } from "@neta-art/cohub/board";
 import type { BoardDocument, BoardExportRegion, BoardSceneItem } from "@neta-art/cohub/board";
 import type {
   BoardNodeExportFormat,
@@ -19,12 +20,13 @@ import type {
   BoardNodeTexture,
 } from "@neta-art/cohub/board/export/node";
 import {
+  hasBoardScripts,
   boardDocumentAt,
   createBoardRenderSampler,
   boardImageKeySource,
   buildBoardScene,
   createNodeBoardRenderer,
-  createNodeBoardSketchHost,
+  createNodeBoardScriptHost,
   exportBoardImageBytes,
   imageAssetKey,
   parseBoardDocument,
@@ -35,7 +37,7 @@ import {
 import { resolveBoardId } from "./board-command-support.js";
 import { BOARD_EXPORT_FONTS, type BoardExportFont } from "./board-fonts.js";
 import { createClient } from "./client.js";
-import { downloadPublicImage } from "./safe-remote-image.js";
+import { downloadPublicAudio, downloadPublicImage } from "./safe-remote-image.js";
 
 export function resolveBundledFonts(): BoardNodeFont[] {
   const require = createRequire(import.meta.url);
@@ -210,8 +212,12 @@ export async function runBoardVideoExport(options: BoardVideoExportOptions): Pro
     const audio = Object.values(audioDocument.items).filter((item) => item.type === "audio");
     const audioInputs: Array<{ path: string; offset: number }> = [];
     for (const [index, item] of audio.entries()) {
-      const { bytes } = await readSpaceFileBytes(createClient(), options.spaceId, item.props.src);
-      const path = join(tempDir, `audio-${index}-${item.props.src.split("/").pop() ?? "track"}`);
+      const source = parseBoardMediaSource(item.props.src);
+      if (!source) throw new Error("Invalid board audio source");
+      const { bytes } = source.kind === "url"
+        ? await downloadPublicAudio(source.value)
+        : await readSpaceFileBytes(createClient(), options.spaceId, source.value);
+      const path = join(tempDir, `audio-${index}`);
       await writeFile(path, bytes);
       audioInputs.push({ path, offset: Math.max(0, item.props.time ?? 0) / 1000 });
     }
@@ -263,7 +269,7 @@ export async function runBoardExport(
   }
   const times: Array<number | null> = options.times?.length ? options.times : [null];
   const renderer = await createNodeBoardRenderer({ fonts: resolveBundledFonts() });
-  let sketchHost: ReturnType<typeof createNodeBoardSketchHost> | null = null;
+  let scriptHost: ReturnType<typeof createNodeBoardScriptHost> | null = null;
   const textureCache: BoardExportTextureCache = { textures: new Map(), failed: new Set() };
   let backgroundTexture: BoardNodeTexture | undefined;
   try {
@@ -299,15 +305,14 @@ export async function runBoardExport(
     }
 
     const videoCount = plan.items.filter((item) => item.type === "video").length;
-    sketchHost = createNodeBoardSketchHost(renderer, {
+    if (hasBoardScripts(document)) scriptHost = createNodeBoardScriptHost(renderer, {
       readModule: async (src) => {
         const { bytes } = await readSpaceFileBytes(createClient(), options.spaceId, src);
         return new TextDecoder().decode(bytes);
       },
     });
     const region: BoardExportRegion = times.length > 1 && !options.camera ? { kind: "rect", rect: plan.world } : options.region;
-    const host = sketchHost;
-    if (!host) throw new Error("Node sketch host could not be created.");
+    const host = scriptHost;
     if (videoCount > 0) {
       warnings.push(
         `${videoCount} video preview${videoCount === 1 ? " was" : "s were"} drawn as placeholders; video decoding is unavailable in Node.`,
@@ -328,10 +333,21 @@ export async function runBoardExport(
     let completed = 0;
     for (const time of times) {
       options.signal?.throwIfAborted();
-      host.clearFrames();
+      host?.clearFrames();
       const frameOptions = { sampler, camera: options.camera, ...(time === null ? {} : { at: { animation: options.animation, time } }), region, scale: options.scale, padding: times.length > 1 ? 0 : options.padding };
-      const prepared = prepareBoardExport(document, frameOptions);
-      if (!prepared) continue;
+      const initial = prepareBoardExport(document, frameOptions);
+      if (!initial) continue;
+      let prepared = initial;
+      if (host) {
+        await host.prepare(initial.scene.items, [time ?? 0], initial.plan.scale);
+        for (const item of initial.scene.items) {
+          const error = host.error(item.id);
+          if (error) throw new Error(`${item.script?.src ?? item.id}: ${error}`);
+        }
+        const scripted = prepareBoardExport(document, { ...frameOptions, scripts: host });
+        if (!scripted) continue;
+        prepared = scripted;
+      }
       if (options.withImages) {
         const loaded = await loadBoardTextures(renderer, options.spaceId, prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0), { cache: textureCache });
         omittedKeys = new Set(loaded.omitted);
@@ -344,14 +360,13 @@ export async function runBoardExport(
           reported.add(warning);
         }
       }
-      const sketches = prepared.plan.items.filter((item): item is Extract<BoardSceneItem, { type: "sketch" }> => item.type === "sketch");
-      await host.prepare(sketches, [time ?? 0], prepared.plan.scale);
+
       const result = exportBoardImageBytes(renderer, document, {
         ...frameOptions,
         colorScheme: options.colorScheme,
         background: options.background,
         textures,
-        sketches: sketchHost ?? undefined,
+        scripts: scriptHost ?? undefined,
         backgroundImage,
         ...(assetKey ? { assetKey } : {}),
         format: options.format,
@@ -380,7 +395,7 @@ export async function runBoardExport(
     }
     return completed ? { frames, warnings } : null;
   } finally {
-    sketchHost?.destroy();
+    scriptHost?.destroy();
     for (const texture of textureCache.textures.values()) texture.destroy(true);
     backgroundTexture?.destroy(true);
     renderer.destroy();

@@ -21,12 +21,12 @@ import {
 } from "lucide-svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 import FileContentPreview from "$lib/components/FileContentPreview.svelte";
-import type { FileViewMode } from "$lib/components/file-diff-view";
 import type { PreviewCaptureTarget } from "$lib/features/preview-mark";
 import PreviewMarkHost from "$lib/features/preview-mark/ui/PreviewMarkHost.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { createLazyModuleLoader } from "$lib/lazy-module";
 import { m } from "$lib/paraglide/messages.js";
+import type { FileViewMode } from "$lib/resource-kit/diff";
 import type { ResolveWorkspaceAsset } from "$lib/workspace-assets";
 import type {
 	OpenWorkspaceFileTarget,

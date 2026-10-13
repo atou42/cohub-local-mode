@@ -120,7 +120,8 @@ The public tokens are `bg-primary`, `bg-content`, `bg-surface`, `bg-elevated`,
 `bg-input`, `bg-hover`, `bg-active`, `text-primary`, `text-secondary`,
 `text-tertiary`, `text-placeholder`, `text-disabled`, `border-primary`,
 `border-subtle`, `brand`, `brand-hover`, `brand-soft`, `brand-muted`,
-`brand-border`, `brand-ring`, `brand-contrast-fg`, `error-fg`, `selection-bg`,
+`brand-border`, `brand-ring`, `brand-contrast-fg`, `error-fg`, `success`,
+`warning`, `error`, `info`, `status-running`, `selection-bg`,
 `overlay-scrim`, `shadow-subtle`, `shadow-medium`, `shadow-strong`,
 `font-sans`, and `font-mono`. Always keep a fallback: outside a Cohub host they
 are absent.
@@ -541,8 +542,9 @@ debugging runtime integration.
 
 ## Realtime rooms
 
-Multiplayer state, presence, and generic JSON events between viewers of the
-same App. Runtime-native — no scope or consent needed.
+Shared state, presence, and JSON events between everyone in a room: the App's
+viewers, and anyone it invites from outside — a person in a terminal, or an
+Agent. Runtime-native — no scope or consent needed.
 
 ```ts
 const room = await client.app.realtime.createRoom({ code: "TEAM-ALPHA" });
@@ -550,12 +552,136 @@ const stop = room.subscribe("shared.state.updated", ({ data }) => render(data));
 await room.publish("shared.state.updated", { value: 42 });
 ```
 
-- Events are ordered while connected but **not replayed** — re-fetch
-  authoritative state after reconnecting.
-- `room.send()` for high-rate traffic (no ACK); `publish()` when delivery
-  must be confirmed. `seatPerUser: true` gives each viewer one seat.
-- Rooms live minutes to 24 h, are scoped to one App, and cannot be created
-  outside the App runtime.
+- Every event takes one room-wide sequence. `publish()` events are kept in the
+  room history (the latest 1,000, up to 512 KB, for the room's life); `room.send()` is for
+  high-rate traffic with no ack, and is never kept.
+- A reconnect replays what `publish()` sent meanwhile. `onOutOfSync` fires only
+  when more was missed than the history holds — then resync your own state.
+- `room.history({ after })` reads what happened before you joined.
+- `seatPerUser: true` gives each viewer one seat across tabs.
+- Rooms live a minute to 24 h and belong to one App. Inside the App, create
+  and join them by code; open a room from a link with `ctx.app.url + "?room=" + code`.
+
+### Members
+
+`room.members` lists each member's `participantId`, `presence`, and `kind`:
+`user` for a viewer in the App, `agent` or `cli` for a seat taken through the
+CLI. An `agent` carries the `model` it runs on. Members acting for the same
+person share a `userKey`, so an App can show "Alice's Agent" without seeing
+an account id. Names are yours to choose: put them in `presence`.
+
+### Agents and the CLI
+
+`room.invite()` returns an invite that admits whoever holds it until it
+expires (10 minutes by default). Hand it to an Agent — for example in a
+prompt — and it joins as a member:
+
+```ts
+const { invite } = await room.invite();
+await space.prompt({ content: [{ type: "text", text: `Join our room: cohub rooms join ${invite}` }] });
+```
+
+```bash
+cohub rooms join <invite> --presence '{"name":"Guide"}'
+cohub rooms events <room> --type 'chat.*' --wait 10m   # an Agent runs this in the background and wakes on new events
+cohub rooms publish <room> chat.message '{"text":"Hello"}'
+```
+
+The CLI holds its seat without a connection: every call keeps it, and it
+lapses after `--idle` (30 minutes by default) without one. Someone who
+manages the App can also create a room from the CLI with
+`cohub rooms create --app <app>`, which prints an invite and the link that
+opens the room. Node scripts use the same seat through `client.rooms`.
+
+### Peer channels (WebRTC)
+
+`room.rtc()` adds a WebRTC connection relayed between the room's viewers. Use
+it when room events are too slow, too small, or too ordered:
+
+| | `room.publish()` | `room.rtc()` |
+| --- | --- | --- |
+| Order | One sequence for the whole room | Per sender and channel |
+| Delivery | Reliable while connected | `reliable`, or `latest` (skip stale) |
+| Payload | JSON, ≤ 16 KB | JSON or binary, ≤ 64 KB |
+| Path | Through Cohub servers | Through the relay, never stored |
+| Kept | The latest 1,000 (≤ 512 KB), replayed on reconnect | Never |
+| Works in | Browser, Node, CLI | Browser |
+
+```ts
+const rtc = await room.rtc();
+
+// Every viewer that opens `cursor` receives what the others send on it.
+const cursor = rtc.channel("cursor", { delivery: "latest" });
+cursor.send({ x, y });
+cursor.onMessage(({ from, data }) => moveCursor(from, data));
+
+// Media: publish tracks together; each reaches every viewer who receives it.
+const { mic, cam } = await rtc.publish({ mic: audioTrack, cam: { track: videoTrack, simulcast: true } });
+rtc.onTracksChanged((tracks) => render(tracks));
+await cam.replace(otherCamera);   // switch devices without renegotiating
+await mic.stop();
+```
+
+- Opening a channel publishes it, so peers subscribe right away. A message
+  reaches the members subscribed at that moment and is **never replayed**.
+  `channel.onPeer(({ participantId, open }) => …)` reports when this client
+  starts or stops receiving a peer's channel; it does not confirm that the peer
+  can receive your messages. Use room events for initial state synchronization.
+- `reliable` (default) keeps every message in order. `latest` never
+  retransmits and never delivers a message older than one already received —
+  cursors, positions, input snapshots. Both carry JSON or binary; binary
+  arrives as an `ArrayBuffer`.
+- A track whose source ends — an unplugged camera — stops publishing on its
+  own; `onEnded()` tells you. To mute, set `track.enabled = false` instead.
+- The connection reconnects on its own, and `rtc.onStateChange()` reports it.
+  Closing it, or leaving the room, ends its channels and tracks.
+- Every failure is an `AppRtcError` with a `code`. `RTC_UNSUPPORTED` means no
+  WebRTC here (Node, the CLI, an older Gateway) and `RTC_UNAVAILABLE` that the
+  server has no relay: fall back to room events.
+
+#### Choosing whose media to receive
+
+A viewer receives at most 16 media tracks at once. `rtc.candidates` lists
+every track in the room and whether you receive it; `rtc.select()` chooses:
+
+```ts
+rtc.select((candidate) => nearby.has(candidate.participantId)); // null receives everyone
+```
+
+Call `select()` again whenever the answer changes — someone walks closer, the
+speaker changes. Switching between tracks of the same kind reuses the
+receiver, so it is fast and needs no renegotiation. Video published with
+`simulcast: true` is sent in three qualities; each viewer picks one with
+`remote.setQuality("low" | "medium" | "high")`, e.g. low for thumbnails.
+
+### Camera, microphone, and screen
+
+An App that needs a device declares it in the page head:
+
+```html
+<meta name="cohub:devices" content="camera microphone screen" />
+```
+
+```ts
+const status = await client.app.devices.request(["camera", "microphone"]);
+if (status !== "granted") return showNotice(status);
+const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+```
+
+Cohub asks before the browser does for the camera and microphone, because a
+frame cannot tell one App from another: the browser's own prompt would let any
+App reuse another's grant. Allow the first time and Cohub loads the App again
+so its frame can use the devices — call `request()` again after loading and it
+resolves at once. The viewer can turn each device off from the Cohub bar,
+which loads the App again without it.
+
+`screen` needs no such step: the browser asks the viewer what to share on
+every `getDisplayMedia()` call, so a declared screen is ready at once, without
+a reload. An App that declares devices may also play sound without a click.
+
+`unavailable` means the App did not declare the device, or the surface or
+host cannot use it — screen sharing needs a desktop browser. Overlays and
+background surfaces never get devices.
 
 ## Commerce
 

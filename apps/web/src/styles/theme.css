@@ -24,6 +24,7 @@
 	--list-gutter-x: 8px;
 	--list-row-pad-x: 8px;
 	--list-content-x: calc(var(--list-gutter-x) + var(--list-row-pad-x));
+	--list-chip-inset: var(--list-row-pad-x);
 	--list-row-radius: var(--sidebar-item-radius);
 	--list-row-gap: 12px;
 	--list-row-hover-bg: var(--sidebar-item-hover-bg);
@@ -88,6 +89,7 @@
 		--list-gutter-x: 6px;
 		--list-row-pad-x: 6px;
 		--list-content-x: 12px;
+		--list-chip-inset: 0px;
 		--list-row-gap: 10px;
 	}
 }
@@ -96,6 +98,7 @@
 	--list-gutter-x: 6px;
 	--list-row-pad-x: 6px;
 	--list-content-x: 12px;
+	--list-chip-inset: 0px;
 	--list-row-gap: 10px;
 }
 

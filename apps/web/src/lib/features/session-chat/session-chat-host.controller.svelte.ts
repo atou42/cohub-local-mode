@@ -45,7 +45,6 @@ import {
 	refreshRuntimeStatus,
 } from "$lib/features/space/runtime-status.svelte";
 import { isStale } from "$lib/features/space/runtime-status-view";
-import { asRecord } from "$lib/features/space/space-utils";
 import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
 import { extractSpaceMentionsFromText } from "$lib/mentions/space";
@@ -63,6 +62,7 @@ import {
 	uploadChatAttachmentImage,
 } from "$lib/public-asset-images";
 import { createRelatedSessions } from "$lib/related-sessions";
+import { asRecord } from "$lib/resource-kit/core";
 import { sdk } from "$lib/sdk";
 import {
 	buildSentTurnIndex,

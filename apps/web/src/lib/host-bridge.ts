@@ -1,8 +1,9 @@
-import type {
-	HostBridgeCapability,
-	HostBridgeEvent,
-	HostBridgeMethod,
-	HostShortcut,
+import {
+	HOST_BRIDGE_GLOBAL,
+	type HostBridgeCapability,
+	type HostBridgeEvent,
+	type HostBridgeMethod,
+	type HostShortcut,
 } from "@cohub/protocol/host-bridge";
 import {
 	createHostBridge,
@@ -57,6 +58,11 @@ export function supportsHostCapability(
 	capability: HostBridgeCapability,
 ): boolean {
 	return ensureBridge().supports(capability);
+}
+
+export function hostAllowsMediaCapture(): boolean {
+	const hosted = typeof window !== "undefined" && HOST_BRIDGE_GLOBAL in window;
+	return !hosted || supportsHostCapability("media.capture");
 }
 
 /**

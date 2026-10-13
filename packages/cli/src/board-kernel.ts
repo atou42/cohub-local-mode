@@ -1,5 +1,7 @@
 
 export {
+  BOARD_SCRIPT_DRAWING_EXAMPLE,
+  hasBoardScripts,
   boardDocumentAt,
   createBoardAnimationSampler,
   boardSequence,
@@ -14,4 +16,4 @@ export {
 } from "@neta-art/cohub/board";
 export { prepareBoardExport } from "@neta-art/cohub/board/export";
 export { createBoardRenderSampler, inspectBoardScene, measureBoardText } from "@neta-art/cohub/board/render";
-export { createNodeBoardRenderer, createNodeBoardSketchHost, exportBoardImageBytes } from "@neta-art/cohub/board/export/node";
+export { createNodeBoardRenderer, createNodeBoardScriptHost, exportBoardImageBytes } from "@neta-art/cohub/board/export/node";

@@ -1,3 +1,4 @@
+import { getMediaResourceTitle } from "../../model/media.js";
 import type { BoardSceneItem, SceneItem } from "../../model/scene.js";
 import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { BoardVideoItem } from "@cohub/protocol";
@@ -52,7 +53,7 @@ function sync(
 	const hovered = context.hoveredId === item.id;
 	const resizing = context.resizingIds.has(item.id);
 	const title =
-		item.props.snapshot?.title ?? item.props.src.split("/").pop() ?? "Video";
+		item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
 	const key = context.assetKey(item);
 	const texture = key ? context.getTexture(key) : null;
 	const failed = Boolean(key && !texture && context.hasError(key));

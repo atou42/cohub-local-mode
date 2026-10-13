@@ -1,12 +1,16 @@
+import { parseBoardMediaSource } from "@cohub/protocol/board-model";
 import type { BoardSceneItem, } from "./scene.js";
 import { featuredTaskArtifact, taskArtifactPreviewUrl } from "./task.js";
 
 export function imageAssetKey(item: BoardSceneItem): string | null {
-  if (item.type === "image") return `file:${item.props.src}`;
+  if (item.type === "image") {
+    const source = parseBoardMediaSource(item.props.src);
+    return source ? `${source.kind}:${source.value}` : null;
+  }
   if (item.type === "file") {
     const snapshot = item.props.snapshot;
-    if (snapshot?.coverPath) return `file:${snapshot.coverPath}`;
     if (snapshot?.coverUrl) return `url:${snapshot.coverUrl}`;
+    if (snapshot?.coverPath) return `file:${snapshot.coverPath}`;
     return null;
   }
   if (item.type === "task") {

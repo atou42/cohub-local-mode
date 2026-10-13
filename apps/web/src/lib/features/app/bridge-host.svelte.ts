@@ -57,6 +57,7 @@ export type AppBridgeHostConfig = {
 	getWindow?: () => { visible: boolean };
 	/** Sends an unsolicited event to the app runtime. */
 	notify?: (payload: Record<string, unknown>) => void;
+	devices?: boolean;
 	/** Sends a reply payload back to the app runtime. */
 	reply: (requestId: string, payload: Record<string, unknown>) => void;
 	/** Reads the current checkout state (typically derived from the page URL). */
@@ -98,6 +99,7 @@ export function createAppBridgeHost(
 
 	const core = createAppBridgeCore({
 		app: config.app,
+		devices: config.devices,
 		authorizationContext: config.authorizationContext,
 		invocation: config.invocation,
 		getInvocation: config.getInvocation,

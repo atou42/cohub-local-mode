@@ -126,8 +126,24 @@ cohub -s <spaceId> apps ls --json
 cohub apps stats <workId|url|username/space/work>
 ```
 
-Realtime rooms 使用已发布 App 的 runtime 身份。请在 App 内使用
-`client.app.realtime`；CLI 不提供房间命令。
+### 房间
+
+像其他成员一样参与已发布 App 的实时房间：读取和发布事件，设置别人看到的你的状态。用 App 给的邀请（`room.invite()`）加入，或者为你管理的 App 开一个房间。
+
+```bash
+cohub rooms create --app <app>                      # 打印邀请和打开房间的链接
+cohub rooms join <invite> --presence '{"name":"向导"}'
+cohub rooms get <room>                              # 成员、成员类型和 presence、最新 sequence
+cohub rooms events <room> --after 42 --type 'chat.*'
+cohub rooms events <room> --wait 10m                # 有其他人发布事件时返回
+cohub rooms events <room> --follow
+cohub rooms publish <room> chat.message '{"text":"你好"}'
+cohub rooms presence <room> '{"status":"away"}'
+cohub rooms invite <room>
+cohub rooms leave <room>
+```
+
+座位不需要保持连接：每次调用都会续期，超过 `--idle`（默认 30 分钟）没有调用就会释放。Agent 每个对话占一个座位，显示为 `agent` 并带上模型；人显示为 `cli`。事件保存在房间历史里（最近发布的 1,000 条，不超过 512 KB），用 `--after` 可以从上次读到的位置继续。
 
 ### 操作 Cohub 界面
 

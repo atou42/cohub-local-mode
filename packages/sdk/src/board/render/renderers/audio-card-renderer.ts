@@ -1,3 +1,4 @@
+import { getMediaResourceTitle } from "../../model/media.js";
 import type { SceneItem } from "../../model/scene.js";
 import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { BoardAudioItem } from "@cohub/protocol";
@@ -42,7 +43,7 @@ function sync(
 	const { width, height } = item.frame;
 	const selected = context.selectedIds.has(item.id);
 	const hovered = context.hoveredId === item.id;
-	const title = item.props.snapshot?.title ?? item.props.src.split("/").pop() ?? "Audio";
+	const title = item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
 
 	syncTextResolution(parts.label, parts, context.zoom);
 	if (parts.label.text !== title) parts.label.text = title;

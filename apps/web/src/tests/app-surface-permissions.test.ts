@@ -68,7 +68,7 @@ test("frame messages require a resolved embedded origin", () => {
 test("all App frames delegate low-risk user-activated capabilities", () => {
 	assert.match(
 		source,
-		/const framePermissions\s*=\s*"clipboard-read; clipboard-write; fullscreen; web-share"/,
+		/const BASE_FRAME_PERMISSIONS\s*=\s*"clipboard-read; clipboard-write; fullscreen; web-share"/,
 	);
 	assert.match(source, /<iframe[\s\S]*?allow=\{framePermissions\}/);
 });

@@ -1,5 +1,6 @@
 import type { GlobalSearchResult } from "@neta-art/cohub";
 import { mergeCommandResults } from "$lib/command-palette/merge-results";
+import { textMatchScore } from "$lib/command-palette/score";
 import type { CommandPaletteItem } from "$lib/command-palette/types";
 import { normalizeSpacePublicProfile } from "$lib/space-profile";
 import {
@@ -100,6 +101,20 @@ function excludeCurrent(
 	return items.filter((item) => item.spaceId !== currentSpaceId);
 }
 
+function pinOfficial(
+	items: SpaceMentionSuggestion[],
+	official: SpaceMentionSuggestion | null | undefined,
+	query: string,
+	currentSpaceId: string | null | undefined,
+) {
+	if (!official || official.spaceId === currentSpaceId) return items;
+	if (query && textMatchScore(official.name, query) <= 0) return items;
+	return [
+		official,
+		...items.filter((item) => item.spaceId !== official.spaceId),
+	];
+}
+
 /**
  * Same merge as the command-palette Recent space list:
  * empty query keeps the Recent default order; typed queries go through
@@ -108,20 +123,27 @@ function excludeCurrent(
 export function mergeSpaceMentionSuggestions(input: {
 	local: SpaceMentionSuggestion[];
 	remote: SpaceMentionSuggestion[];
+	official?: SpaceMentionSuggestion | null;
 	query?: string;
 	currentSpaceId?: string | null;
 	limit?: number;
 }): SpaceMentionSuggestion[] {
 	const query = input.query?.trim() ?? "";
+	const limit = input.limit ?? 50;
 	const local = excludeCurrent(input.local, input.currentSpaceId);
 	const remote = excludeCurrent(input.remote, input.currentSpaceId);
-	if (!query) return local.slice(0, input.limit ?? 50);
-	return mergeCommandResults({
-		local: local.map(mentionToPaletteItem),
-		remote: remote.map(mentionToSearchResult),
-		limit: input.limit ?? 50,
-		longQuery: query.length >= 12,
-	})
-		.map(commandSpaceToMentionSuggestion)
-		.filter((item): item is SpaceMentionSuggestion => Boolean(item));
+	const merged = query
+		? mergeCommandResults({
+				local: local.map(mentionToPaletteItem),
+				remote: remote.map(mentionToSearchResult),
+				limit,
+				longQuery: query.length >= 12,
+			})
+				.map(commandSpaceToMentionSuggestion)
+				.filter((item): item is SpaceMentionSuggestion => Boolean(item))
+		: local;
+	return pinOfficial(merged, input.official, query, input.currentSpaceId).slice(
+		0,
+		limit,
+	);
 }

@@ -1,3 +1,4 @@
+import { readResourceAppTarget, writeResourceAppTarget } from "@cohub/protocol";
 import { DISPLAY_ID_PATTERN } from "@cohub/protocol/display";
 import { buildSpaceRootRoute } from "$lib/space-routes";
 import { parseAppWindowKey } from "./app-window-key";
@@ -93,6 +94,11 @@ export function resolveRouteWindow(
 	return parseWindowParam(shallowValue);
 }
 
+export function readAppHash(search: URLSearchParams): string | null {
+	const hash = search.get("appHash");
+	return hash?.startsWith("#") && hash.length <= 2048 ? hash : null;
+}
+
 export function withWindowParam(
 	pathname: string,
 	search: string | URLSearchParams | null | undefined,
@@ -102,6 +108,7 @@ export function withWindowParam(
 		typeof search === "string"
 			? new URLSearchParams(search.startsWith("?") ? search.slice(1) : search)
 			: new URLSearchParams(search ?? undefined);
+	if (ref?.kind !== "app") params.delete("appHash");
 	if (ref) params.set(WINDOW_QUERY_KEY, encodeWindowParam(ref));
 	else {
 		params.delete(WINDOW_QUERY_KEY);
@@ -125,7 +132,14 @@ export function withCurrentWindow(
 		(typeof window !== "undefined" ? window.location.search : null);
 	const ref = readWindowFromSearch(search);
 	if (!ref) return pathname;
-	return withWindowParam(pathname, null, ref);
+	const params = new URLSearchParams();
+	if (ref.kind === "app") {
+		const currentParams = new URLSearchParams(search ?? undefined);
+		writeResourceAppTarget(params, readResourceAppTarget(currentParams));
+		const hash = readAppHash(currentParams);
+		if (hash) params.set("appHash", hash);
+	}
+	return withWindowParam(pathname, params, ref);
 }
 
 /**

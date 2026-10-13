@@ -22,6 +22,7 @@ const PACKAGES: Record<string, Layer[]> = {
   "pixi.js": ["render", "export", "export/node", "stage"],
   "@napi-rs/canvas": ["export/node"],
   "perfect-freehand": ["model"],
+  "es-module-lexer": ["render"],
   zod: ["model", "editor"],
 };
 

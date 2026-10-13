@@ -7,6 +7,7 @@ import {
 	type BoardItem,
 	type BoardItemEntry,
 	type BoardItemInput,
+	type BoardMediaItemKind,
 	type BoardMediaSnapshot,
 	type BoardTaskSnapshot,
 	buildBoardScene,
@@ -15,6 +16,7 @@ import {
 	createBoardItemId,
 	createDrawBoardItem,
 	createFileNodeForPath,
+	createMediaBoardItem,
 	createFrameBoardItem,
 	createShapeBoardItem,
 	createTaskBoardItem,
@@ -241,6 +243,8 @@ export function createCreationModule(ctx: EditorContext) {
 		add,
 		addItem,
 		addApp: (app: BoardAppMetadata, at: WorldPoint) => addOne(createAppBoardItem(app, at.x, at.y)),
+		addMedia: (src: string, at: WorldPoint, options: { kind?: BoardMediaItemKind; snapshot?: BoardMediaSnapshot } = {}) =>
+			addOne(createMediaBoardItem(src, at.x, at.y, options.snapshot, undefined, options.kind)),
 		addFile: (path: string, at: WorldPoint, snapshot?: BoardMediaSnapshot & BoardFileSnapshotFacts) =>
 			addOne(createFileNodeForPath(path, at.x, at.y, snapshot)),
 		addTask: (taskRunId: string, snapshot: BoardTaskSnapshot, at: WorldPoint, metadata?: Record<string, unknown>) =>

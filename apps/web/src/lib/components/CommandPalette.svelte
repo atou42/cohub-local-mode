@@ -1390,6 +1390,7 @@ onMount(() => {
 	.command-palette {
 		--palette-x: 16px;
 		--list-gutter-x: calc(var(--palette-x) - var(--list-row-pad-x));
+		--list-chip-inset: 0px;
 		--palette-bg: color-mix(in oklch, var(--bg-surface) 94%, var(--brand-900) 6%);
 		width: min(720px, calc(100vw - 32px));
 		max-height: min(640px, calc(100vh - 96px));

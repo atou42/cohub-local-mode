@@ -62,6 +62,10 @@
           }
         }
       }
+    },
+    {
+      "includes": ["cohub-apps/shared/**/*.css"],
+      "css": { "parser": { "tailwindDirectives": true } }
     }
   ]
 }

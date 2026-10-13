@@ -1,3 +1,5 @@
+import { parseBoardMediaSource } from "@cohub/protocol/board-model";
+import { getMediaResourceTitle } from "./media.js";
 import type { BoardSceneItem, } from "./scene.js";
 import { rankedTaskArtifacts } from "./task.js";
 
@@ -5,6 +7,21 @@ export type BoardAssetSource = {
 	resolveFileUrl: (path: string) => Promise<string | null>;
 	resolvePlaybackUrl?: (path: string) => Promise<string | null>;
 };
+
+export function resolveBoardMediaUrl(
+	src: string,
+	source: BoardAssetSource,
+	purpose: "preview" | "playback" = "preview",
+): Promise<string | null> {
+	const parsed = parseBoardMediaSource(src);
+	if (!parsed) return Promise.resolve(null);
+	if (parsed.kind === "url") {
+		return Promise.resolve(parsed.value);
+	}
+	return purpose === "playback" && source.resolvePlaybackUrl
+		? source.resolvePlaybackUrl(parsed.value)
+		: source.resolveFileUrl(parsed.value);
+}
 
 export type BoardPlayableMedia = {
 	id: string;
@@ -58,18 +75,20 @@ export function playableBoardMediaList(
 ): BoardPlayableMedia[] {
 	if (item?.type === "video" || item?.type === "audio") {
 		const path = item.props.src;
+		const source = parseBoardMediaSource(path);
+		if (!source) return [];
 		const version = item.props.snapshot?.mtimeMs ?? "unknown";
-		const cacheKey = `${sourceId(assetSource)}:${item.type}:file:${path}:${version}`;
+		const cacheKey = `${sourceId(assetSource)}:${item.type}:${source.kind}:${path}:${version}`;
 		const durationMs = item.type === "audio" ? item.props.snapshot?.durationMs : undefined;
 		return [
 			{
 				id: item.id,
 				kind: item.type,
-				title: item.props.snapshot?.title ?? path.split("/").pop() ?? item.type,
+				title: item.props.snapshot?.title ?? getMediaResourceTitle(path),
 				...(durationMs ? { durationMs } : {}),
 				resolveUrl: () =>
 					cachedUrl(cacheKey, () =>
-						(assetSource.resolvePlaybackUrl ?? assetSource.resolveFileUrl)(path),
+						resolveBoardMediaUrl(path, assetSource, "playback"),
 					),
 				invalidateUrl: () => invalidateCachedUrl(cacheKey),
 			},

@@ -27,7 +27,7 @@ export type BoardExportSceneInput = {
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
   textures?: Map<string, Texture>;
-  sketches?: BoardRenderContext["sketches"];
+  scripts?: BoardRenderContext["scripts"];
   assetKey?: (item: BoardSceneItem) => string | null;
   /** Renderers for item types beyond the built-ins. */
   renderers?: BoardCardRendererResolver;
@@ -65,7 +65,7 @@ function buildContext(input: BoardExportSceneInput): {
     colorScheme: input.colorScheme,
     rendererType: "canvas",
     zoom: input.scale,
-    sketches: input.sketches,
+    scripts: input.scripts,
     assetKey: input.assetKey ?? imageAssetKey,
     getTexture: (key) => textures.get(key) ?? null,
     hasError: (key) => {

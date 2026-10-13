@@ -7,6 +7,7 @@ import {
 	HANDLE_HIT_RADIUS,
 	type Rect,
 	rectContainsPoint,
+	parseBoardMediaSource,
 	resolveSceneArrow,
 	type SceneItem,
 	unionRects,
@@ -66,9 +67,9 @@ export function createQueryModule(ctx: EditorContext) {
 		spatial.upsert(upserts);
 	}
 
-	function boundsOf(item: BoardSceneItem): Rect {
+	function boundsOf(item: BoardSceneItem, scene = state.scene): Rect {
 		if (item.type === "arrow")
-			return arrowPathBounds(resolveSceneArrow(item as SceneItem<BoardArrowItem>, state.scene), item.style.strokeWidth);
+			return arrowPathBounds(resolveSceneArrow(item as SceneItem<BoardArrowItem>, scene), item.style.strokeWidth);
 		return registry.bounds(item);
 	}
 
@@ -106,7 +107,7 @@ export function createQueryModule(ctx: EditorContext) {
 		const result = new Set<string>();
 		for (const id of ids) {
 			result.add(id);
-			for (const child of state.scene.descendants(id)) result.add(child);
+			for (const child of state.scene.descendants(id)) if (state.base.items[child]) result.add(child);
 		}
 		return result;
 	}
@@ -117,6 +118,7 @@ export function createQueryModule(ctx: EditorContext) {
 			for (const item of state.scene.items) {
 				if (item.type !== "image" && item.type !== "video" && item.type !== "audio") continue;
 				const src = (item.props as { src: string }).src;
+				if (parseBoardMediaSource(src)?.kind !== "file") continue;
 				const ids = mediaIdsByPath.get(src) ?? new Set<string>();
 				ids.add(item.id);
 				mediaIdsByPath.set(src, ids);
@@ -125,22 +127,22 @@ export function createQueryModule(ctx: EditorContext) {
 		return mediaIdsByPath.get(path) ?? NO_IDS;
 	}
 
-	function contentBounds(ids?: Iterable<string>): Rect | null {
-		const scene = state.scene;
+	function contentBounds(ids?: Iterable<string>, scene = state.scene): Rect | null {
 		const list = ids ? [...ids].flatMap((id) => (scene.get(id) ? [scene.get(id) as BoardSceneItem] : [])) : scene.items;
-		return unionRects(list.map(boundsOf));
+		return unionRects((ctx.document.hasScriptItems ? list.filter((item) => Boolean(state.base.items[item.id])) : list).map((item) => boundsOf(item, scene)));
 	}
 
-	function idsInRect(rect: Rect): string[] {
+	function idsInRect(rect: Rect, includeTemporary = false): string[] {
 		ensureSpatial();
-		return spatial.idsInRect(rect);
+		const ids = spatial.idsInRect(rect);
+		return includeTemporary || !ctx.document.hasScriptItems ? ids : ids.filter((id) => Boolean(state.base.items[id]));
 	}
 
 	function frameAt(point: WorldPoint, exclude?: ReadonlySet<string>): BoardSceneItem | null {
 		ensureSpatial();
 		for (const id of spatial.idsAtPoint(point)) {
 			const item = state.scene.get(id);
-			if (item?.type !== "frame" || exclude?.has(id)) continue;
+			if (!state.base.items[id] || item?.type !== "frame" || exclude?.has(id)) continue;
 			if (registry.hitTest(item, point)) return item;
 		}
 		return null;
@@ -154,11 +156,11 @@ export function createQueryModule(ctx: EditorContext) {
 		return registry.hitTest(item, point);
 	}
 
-	function itemAt(point: WorldPoint, exclude?: ReadonlySet<string>): BoardSceneItem | null {
+	function itemAt(point: WorldPoint, exclude?: ReadonlySet<string>, includeTemporary = false): BoardSceneItem | null {
 		ensureSpatial();
 		for (const id of spatial.idsAtPoint(point)) {
 			const item = state.scene.get(id);
-			if (item && !exclude?.has(id) && hitsItem(item, point)) return item;
+			if (item && (includeTemporary || state.base.items[id]) && !exclude?.has(id) && hitsItem(item, point)) return item;
 		}
 		return null;
 	}
@@ -170,7 +172,7 @@ export function createQueryModule(ctx: EditorContext) {
 		const candidates = selection.length === 1 ? [...selection, ...nearby] : nearby;
 		for (const id of new Set(candidates)) {
 			const item = scene.get(id);
-			if (!item || isLocked(item)) continue;
+			if (!item || !state.base.items[id] || isLocked(item)) continue;
 			if (
 				item.type === "frame" &&
 				rectContainsPoint(

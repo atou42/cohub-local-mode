@@ -5,12 +5,12 @@ import type {
 	SpaceRecord,
 	TaskRunRecord,
 } from "@neta-art/cohub";
+import { taskTypeLabel } from "$lib/resource-kit/task-run";
 import AppView from "./AppView.svelte";
 import CheckpointView from "./CheckpointView.svelte";
 import CronjobView from "./CronjobView.svelte";
 import TaskRunView from "./TaskRunView.svelte";
 import type { TaskRealtimeEvent } from "./task-run-detail-controller.svelte";
-import { taskTypeLabel } from "./task-run-utils";
 
 type RouteDetailHeaderMeta = {
 	view: "checkpoint" | "cronjob" | "app" | "task";

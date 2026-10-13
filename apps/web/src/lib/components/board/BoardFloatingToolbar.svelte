@@ -16,6 +16,7 @@ import {
 	Frame,
 	GanttChart,
 	Hand,
+	Link,
 	MousePointer2,
 	Pencil,
 	Redo2,
@@ -40,6 +41,7 @@ const {
 	onToggleAppearance,
 	timelineOpen = false,
 	onToggleTimeline,
+	onAddLink,
 }: {
 	editor: BoardEditor;
 	immersive?: boolean;
@@ -49,6 +51,7 @@ const {
 	onToggleAppearance?: () => void;
 	timelineOpen?: boolean;
 	onToggleTimeline?: () => void;
+	onAddLink?: () => void;
 } = $props();
 
 const locale = $derived(getLocale());
@@ -231,6 +234,10 @@ function toolTitle(tool: ToolDef) {
 				<tool.icon class="h-4 w-4" />
 			</button>
 		{/each}
+
+		{#if onAddLink}
+			<button type="button" class="tool-btn" title={m.board_add_link({}, { locale })} aria-label={m.board_add_link({}, { locale })} onclick={onAddLink}><Link class="h-4 w-4" /></button>
+		{/if}
 
 		<div class="divider"></div>
 

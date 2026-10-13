@@ -1,5 +1,23 @@
 [
 	{
+		"version": "2.64",
+		"date": "2026-10-13",
+		"tags": ["v2.64.0"],
+		"highlights": [
+			"**Unified Board scripts**: replaced the standalone Sketch item with shared script attachments and a `custom` content container, backed by one isolated module runtime and ESM loading contract shared across the browser, CLI and exports, with native scene effects, Canvas drawing, local input and explicit document commits.",
+			"**App room RTC and device access**: `room.rtc()` adds WebRTC data channels and media tracks relayed through a Cloudflare Realtime SFU (with simulcast, device switching via `replace()`, receiver reuse and per-peer events), plus per-App camera, microphone and screen grants declared with `<meta name=\"cohub:devices\">`.",
+			"**App rooms beyond the App**: rooms now retain the latest 1,000 published events (up to 512 KB) for replay and `room.history()`, members carry their `kind` and Agent model, `room.invite()` brings in Agents or terminal users, and new `cohub rooms` commands let an Agent hold a seat and await events in the background.",
+			"**Resource Apps and shared resource-kit**: task inspector, checkpoint explorer, schedule manager and App manager open in dedicated App tabs, rebuilt on a shared `resource-kit` with a matching UI kit, host appearance tokens, cache-first lists, realtime updates and protected drafts.",
+			"**Board performance and URL-first media**: isolated card rendering, batched placeholder graphics and eliminated idle frame loops and redundant awareness redraws, while Board media sources accept stable public HTTP(S) URLs alongside relative Space paths."
+		],
+		"fixes": [
+			"Render image `crop` on Boards and draw frame borders in their authored color with `dash` and `trim`, matching shapes.",
+			"Keep local Board script effects out of copied, cut and duplicated items, and publish script entry modules with their transitive ESM dependencies.",
+			"Keep concurrently created Boards intact when a create request fails alongside another request sharing the same mutation id.",
+			"Retry incomplete RTC subscriptions and respect room event limits."
+		]
+	},
+	{
 		"version": "2.63",
 		"date": "2026-10-10",
 		"tags": ["v2.63.0"],

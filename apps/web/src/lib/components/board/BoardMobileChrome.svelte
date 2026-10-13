@@ -18,6 +18,7 @@ import {
 	History,
 	ImageDown,
 	Layers,
+	Link,
 	LocateFixed,
 	Lock,
 	LockOpen,
@@ -47,6 +48,7 @@ const {
 	onToggleTimeline,
 	onExport,
 	onReplay,
+	onAddLink,
 	contextMenuOpen = false,
 }: {
 	editor: BoardEditor;
@@ -59,6 +61,7 @@ const {
 	onToggleTimeline?: () => void;
 	onExport?: () => void;
 	onReplay?: () => void;
+	onAddLink?: () => void;
 	contextMenuOpen?: boolean;
 } = $props();
 
@@ -134,6 +137,9 @@ function focusContent() {
 				</button>
 			</div>
 			<div class="sheet-row">
+				{#if onAddLink}
+					<button type="button" class="sheet-item" onclick={() => { insertOpen = false; onAddLink(); }}><Link class="h-4 w-4" /><span>{m.board_add_link({}, { locale })}</span></button>
+				{/if}
 				<button type="button" class="sheet-item" class:sheet-item--on={editor.tool === "draw"} onclick={() => setTool("draw")}>
 					<Pencil class="h-4 w-4" />
 					<span>{m.board_draw({}, { locale })}</span>

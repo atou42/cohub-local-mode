@@ -34,6 +34,26 @@
 					}
 				}
 			}
+		},
+		{
+			"includes": ["src/lib/resource-kit/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"patterns": [
+									{
+										"group": ["$lib/**", "$app/**", "$env/**"],
+										"message": "resource-kit is shared with the resource Apps: use relative, $messages or package imports."
+									}
+								]
+							}
+						}
+					}
+				}
+			}
 		}
 	]
 }

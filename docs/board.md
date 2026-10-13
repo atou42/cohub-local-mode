@@ -1,8 +1,9 @@
 # Board
 
-A Board is one document with three collections. Everything visible is an **item**,
-everything that moves is an **animation**, and a keyframe names the property it
-drives by its JSON path inside the item.
+A Board is one document with three collections: settings, items and animations.
+Items can attach scripts for local interaction and procedural content; animations
+drive properties by their JSON paths. See [Board scripts](board-scripts.md) for the
+shared runtime used by native items and custom content.
 
 ```json
 {
@@ -28,7 +29,7 @@ drives by its JSON path inside the item.
 
 Common fields: `type`, `parent`, `z`, `position`, `size`, `rotation` (degrees),
 `scale`, `origin` (normalized transform origin, default center), `opacity`,
-`style`, `props`, `locked`, `metadata`.
+`style`, `props`, `locked`, `metadata`, optional `script` (`src`, `params`, `targets`, `seed`, `enabled`).
 
 - `position` is relative to `parent`; a root item is in world space.
 - Children inherit the parent's transform and opacity. Only `frame` items can be parents.
@@ -36,12 +37,15 @@ Common fields: `type`, `parent`, `z`, `position`, `size`, `rotation` (degrees),
   by the item's position and parent frame. Bound endpoints follow the referenced item.
   Shape paths are fitted to the shape's size.
 - `z` orders siblings; a new item without `z` goes on top.
-- `size` is authored for boxes (`frame`, `shape`, media, `task`, `effect`, `sketch`)
+- `size` is authored for boxes (`frame`, `shape`, media, `task`, `effect`, `custom`)
   and derived for `text` (from `fontSize`, optional `props.width` wraps), `draw`
   (from points) and `arrow` (from endpoints).
 - `style`: `fill`, `fillOpacity`, `stroke`, `strokeWidth`, `dash`, `radius`, `trim`.
   A color is a palette token (`brand`, `neutral`, `blue`, …, follows the theme),
   any CSS color, or `{ "light": …, "dark": … }`.
+- An image is drawn whole inside its box; `crop` picks the region to show, so a crop
+  matching the box's aspect ratio fills it. A frame border follows `stroke`, `dash` and
+  `trim`; without `stroke` it stays a quiet neutral outline.
 
 | type | props |
 |---|---|
@@ -50,10 +54,10 @@ Common fields: `type`, `parent`, `z`, `position`, `size`, `rotation` (degrees),
 | `shape` | `geometry` (`rectangle` `rounded` `ellipse` `diamond` `triangle` `path`), `path`, `text`, `fontSize`, `align` |
 | `draw` | `points` (`{x, y, p}` relative to `position`) |
 | `arrow` | `start`, `end` (a point, or `{ "item": id, "anchor"?, "port"? }`), `route`, `bend`, `waypoints`, `arrowStart`, `arrowEnd`, `label`, `fontSize`, `relation` |
-| `image` `video` `audio` `file` | `src` (Space file path), `crop` (image), `snapshot` (cached file facts) |
+| `image` `video` `audio` `file` | `src` (public HTTP(S) URL or relative Space file path), `crop` (image: `{x, y, w, h}` as 0–1 fractions of the source), `snapshot` (cached media facts) |
 | `task` | `taskRunId`, `snapshot` |
 | `effect` | `kind` (`particles` `trail` `impact` `flash` `glow`) and its parameters |
-| `sketch` | `src` (a JS module in the Space), `params` |
+| `custom` | empty; the common `script` attachment supplies drawing or native scene content |
 | `vendor.kind` | any; an extension type, namespaced like `acme.order` |
 
 An extension type is stored as written. A client that registers it (see
@@ -64,9 +68,40 @@ Background pattern lives in `board.background.kind` (`dots` or `grid`); `board.g
 
 Deleting an item that is still referenced fails and lists the references; `cascade`
 also deletes children and the tracks that target it. Arrows bound to a deleted item
-keep their place and fall back to a point. A media item whose `src` is not a usable
-Space path is a `legacy.<type>` item: it keeps its place, its snapshot and whatever
-else it carried, and it is not edited or exported as media.
+keep their place and fall back to a point. Media sources must be a public HTTP(S)
+URL without credentials or a relative Space path. Sketches only accept Space paths.
+
+### Media sources
+
+Prefer an existing stable URL when adding media, including generation results:
+
+```json
+{ "items": { "cover": { "type": "image", "props": { "src": "https://cdn.example.com/cover.webp" } } } }
+```
+
+The same patch works through the API, SDK and `cohub boards patch`. For a URL
+without an extension, set the item `type` explicitly. Optional `snapshot` facts
+(title, MIME type, natural dimensions and duration) give an immediate preview.
+The Web editor supports pasting media URLs, dropping links, and **Add from link**
+on desktop and mobile. Task cards offer **Add result to board** for their featured
+media artifact; the new item keeps its URL.
+
+A URL loads directly, without importing it into the Space. A Space path retains
+live file updates and resolves through the Space file API. Existing paths are not
+rewritten; temporary signed download URLs must not replace persistent paths.
+Query parameters are part of the source and are retained.
+
+Remote images and video thumbnails must support anonymous CORS for canvas
+rendering and export. A load failure preserves the source and cached facts; use
+**Open source** to inspect it. CLI image and audio downloads validate public DNS
+addresses and redirects and enforce transfer limits. Existing export format
+limitations still apply (including video-frame support).
+
+Publishing captures Space file dependencies and lists remote references in
+`externalUrls` in the artifact manifest. Remote media remains live and can change
+or disappear; it is not an immutable captured asset. A published Board never
+needs access to the original Space to resolve a URL. Automatic remote capture
+and proxying are not part of this behavior.
 
 ### Plain containers
 
@@ -152,7 +187,7 @@ cohub boards path ship -i boards/path.json > boards/path-track.json
 
 `boardPathTrack` / `boards path` returns a standard position track sampled by polyline
 distance. Original vertices are retained so interpolation does not cut corners.
-It creates no live dependency on another item. Use sketch/scripts for procedural
+It creates no live dependency on another item. Use scripts for procedural
 meshes, physics and specialized drawings.
 
 ## Writing

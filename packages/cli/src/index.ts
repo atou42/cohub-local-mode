@@ -21,6 +21,7 @@ import { registerRuntime } from "./commands/runtime.js";
 import { registerTasks } from "./commands/tasks.js";
 import { registerDesktop, registerLegacyUi } from "./commands/desktop.js";
 import { registerApps } from "./commands/apps.js";
+import { registerRooms } from "./commands/rooms.js";
 import { formatUnknownCommandError, resolveHelpPath } from "./help-path.js";
 
 const VERSION = (() => {
@@ -65,6 +66,7 @@ Common commands:
   cohub -s <space-id> public upload ./dist demo
   cohub -s <space-id> apps publish demo --file dist/index.html
   cohub desktop open <app-id> --call selection.get
+  cohub rooms join <invite>
   cohub -s <space-id> spaces commerce products list
   cohub models ls
   cohub models ls --model-type multimodal
@@ -103,6 +105,7 @@ registerReferrals(program);
 registerTasks(program);
 registerCronJobs(program);
 registerApps(program);
+registerRooms(program);
 registerDesktop(program);
 registerLegacyUi(program);
 

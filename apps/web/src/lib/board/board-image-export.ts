@@ -1,12 +1,14 @@
 
 import type {
 	BoardDocument,
+	BoardScriptSnapshot,
 	BoardSceneItem,
 	BoardShapeColors,
 } from "@neta-art/cohub/board";
 import {
 	type BoardExportRegion,
 	selectBoardExportAssets,
+	hasBoardScripts,
 } from "@neta-art/cohub/board";
 import {
 	type BoardExportOptions,
@@ -15,7 +17,7 @@ import {
 	prepareBoardExport,
 	renderBoardExport,
 } from "@neta-art/cohub/board/export";
-import { createBoardRenderSampler, type BoardRenderPalette } from "@neta-art/cohub/board/render";
+import { createBoardRenderSampler, prepareBrowserBoardScripts, type BoardRenderPalette } from "@neta-art/cohub/board/render";
 import { type Renderer, Texture } from "pixi.js";
 
 export type BoardImageFormat = "png" | "jpeg" | "webp";
@@ -128,6 +130,8 @@ const EXTENSION: Record<BoardImageFormat, string> = {
 };
 
 export type BoardStageExportBridge = {
+	snapshotScripts?: () => Promise<Record<string, BoardScriptSnapshot>>;
+	readModule?: (path: string) => Promise<string>;
 	renderer: () => Renderer | null;
 	assetKey: (item: BoardSceneItem) => string | null;
 	theme: () => {
@@ -180,80 +184,87 @@ export async function exportBoardImage(
 	const region: BoardExportRegion = exportOptions.region ?? { kind: "all" };
 	const theme = bridge.theme();
 	const sampler = exportOptions.at ? createBoardRenderSampler(document, exportOptions.at.animation ?? null, theme) : undefined;
-	const prepared = prepareBoardExport(document, { ...exportOptions, sampler, region });
-	if (!prepared) return null;
-
-	const assets = selectBoardExportAssets(prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0), bridge.assetKey);
-	const omittedKeys = new Set(assets.omittedKeys);
-	const cappedAssetKey = (item: BoardSceneItem) => {
-		const key = bridge.assetKey(item);
-		return key && omittedKeys.has(key) ? null : key;
-	};
-	const declaredBackground = document.board.background;
-	const backgroundUrl =
-		exportOptions.background !== "transparent" &&
-		declaredBackground.kind === "image"
-			? declaredBackground.imageUrl
-			: undefined;
-	let backgroundTexture: ExportBackgroundTexture | null = null;
-	let backgroundWarning: string | null = null;
-	if (backgroundUrl) {
-		try {
-			backgroundTexture = await loadExportBackgroundTexture(backgroundUrl);
-		} catch {
-			backgroundWarning =
-				"The board background image could not be loaded; the fallback color was exported.";
-		}
-	}
-
+	const hasScripts = hasBoardScripts(document);
+	if (hasScripts && !bridge.readModule) throw new Error("Script export needs a module reader.");
+	const sample = sampler && exportOptions.at ? sampler.at(exportOptions.at.time).document : document;
+	const scripts = hasScripts && bridge.readModule ? await prepareBrowserBoardScripts(sample, exportOptions.at?.time ?? 0, bridge.readModule, exportOptions.at ? undefined : await bridge.snapshotScripts?.()) : null;
 	try {
-		return await bridge.withTextures(assets.items, async (textures) => {
-			const result = renderBoardExport(renderer, document, {
-				palette: theme.palette,
-				colors: theme.colors,
-				colorScheme: theme.colorScheme,
-				...exportOptions,
-				sampler,
-				region,
-				textures,
-				assetKey: cappedAssetKey,
-				backgroundImage: backgroundTexture
-					? {
-							texture: backgroundTexture.texture,
-							fit: declaredBackground.fit ?? "cover",
-							position: "center",
-							opacity: declaredBackground.opacity ?? 1,
-						}
-					: undefined,
-			});
-			if (!result) return null;
+		const prepared = prepareBoardExport(document, { ...exportOptions, sampler, region, scripts: scripts?.host });
+		if (!prepared) return null;
 
-			const canvas = result.canvas as unknown as HTMLCanvasElement;
-			const blob = await canvasToBlob(
-				canvas,
-				MIME[format],
-				format === "png" ? undefined : quality,
-			);
-			if (!blob) throw new Error("This browser could not encode the export.");
-			const warnings = describe(result.warnings);
-			if (backgroundWarning) warnings.push(backgroundWarning);
-			if (assets.omittedKeys.length > 0) {
-				warnings.push(
-					`${assets.omittedKeys.length} previews were drawn as placeholders to stay within the export texture limit.`,
-				);
+		const assets = selectBoardExportAssets(prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0), bridge.assetKey);
+		const omittedKeys = new Set(assets.omittedKeys);
+		const cappedAssetKey = (item: BoardSceneItem) => {
+			const key = bridge.assetKey(item);
+			return key && omittedKeys.has(key) ? null : key;
+		};
+		const declaredBackground = document.board.background;
+		const backgroundUrl =
+			exportOptions.background !== "transparent" &&
+			declaredBackground.kind === "image"
+				? declaredBackground.imageUrl
+				: undefined;
+		let backgroundTexture: ExportBackgroundTexture | null = null;
+		let backgroundWarning: string | null = null;
+		if (backgroundUrl) {
+			try {
+				backgroundTexture = await loadExportBackgroundTexture(backgroundUrl);
+			} catch {
+				backgroundWarning =
+					"The board background image could not be loaded; the fallback color was exported.";
 			}
-			return {
-				blob,
-				width: result.plan.width,
-				height: result.plan.height,
-				scale: result.plan.scale,
-				format,
-				warnings,
-			};
-		});
-	} finally {
-		backgroundTexture?.dispose();
-	}
+		}
+
+		try {
+			return await bridge.withTextures(assets.items, async (textures) => {
+				const result = renderBoardExport(renderer, document, {
+					palette: theme.palette,
+					colors: theme.colors,
+					colorScheme: theme.colorScheme,
+					...exportOptions,
+					scripts: scripts?.host,
+					sampler,
+					region,
+					textures,
+					assetKey: cappedAssetKey,
+					backgroundImage: backgroundTexture
+						? {
+								texture: backgroundTexture.texture,
+								fit: declaredBackground.fit ?? "cover",
+								position: "center",
+								opacity: declaredBackground.opacity ?? 1,
+							}
+						: undefined,
+				});
+				if (!result) return null;
+
+				const canvas = result.canvas as unknown as HTMLCanvasElement;
+				const blob = await canvasToBlob(
+					canvas,
+					MIME[format],
+					format === "png" ? undefined : quality,
+				);
+				if (!blob) throw new Error("This browser could not encode the export.");
+				const warnings = describe(result.warnings);
+				if (backgroundWarning) warnings.push(backgroundWarning);
+				if (assets.omittedKeys.length > 0) {
+					warnings.push(
+						`${assets.omittedKeys.length} previews were drawn as placeholders to stay within the export texture limit.`,
+					);
+				}
+				return {
+					blob,
+					width: result.plan.width,
+					height: result.plan.height,
+					scale: result.plan.scale,
+					format,
+					warnings,
+				};
+			});
+		} finally {
+			backgroundTexture?.dispose();
+		}
+	} finally { scripts?.dispose(); }
 }
 
 export function boardExportFilename(

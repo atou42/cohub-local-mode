@@ -1,5 +1,5 @@
 import type { Container, Graphics, Texture } from "pixi.js";
-import type { BoardSettings, BoardSketchItem, BoardFrame } from "@cohub/protocol";
+import type { BoardSettings, BoardCustomItem, BoardFrame, BoardDocument } from "@cohub/protocol";
 import type { BoardShapeColors } from "../../model/palette.js";
 import type { BoardScene, BoardSceneItem, SceneItem } from "../../model/scene.js";
 import { ensureBoardTextMeasurement } from "../text-measurement.js";
@@ -10,7 +10,7 @@ import { effectCardRenderer } from "./effect-card-renderer.js";
 import { fileCardRenderer } from "./file-card-renderer.js";
 import { frameCardRenderer } from "./frame-card-renderer.js";
 import { shapeCardRenderer } from "./shape-card-renderer.js";
-import { sketchCardRenderer } from "./sketch-card-renderer.js";
+import { customCardRenderer } from "./custom-card-renderer.js";
 import { imageCardRenderer } from "./image-card-renderer.js";
 import { taskCardRenderer } from "./task-card-renderer.js";
 import { textCardRenderer } from "./text-card-renderer.js";
@@ -30,8 +30,11 @@ export type BoardRenderPalette = {
 	legendary: number;
 };
 
-export type BoardSketchHost = {
-	frame: (item: SceneItem<BoardSketchItem>, time: number, resolution: number) => Texture | null;
+export type BoardScriptHost = {
+	document?: (document: BoardDocument, time: number) => BoardDocument;
+	ready?: (id: string) => boolean;
+	revision?: (id: string) => number;
+	frame: (item: SceneItem<BoardCustomItem>, time: number, resolution: number) => Texture | null;
 	error: (id: string) => string | null;
 	release: (id: string) => void;
 };
@@ -49,7 +52,7 @@ export type BoardRenderContext = {
 	zoom: number;
 	time: number;
 	frameAt?: (id: string, time: number) => BoardFrame | undefined;
-	sketches?: BoardSketchHost;
+	scripts?: BoardScriptHost;
 	assetKey: (item: BoardSceneItem) => string | null;
 	getTexture: (key: string) => Texture | null;
 	hasError: (key: string) => boolean;
@@ -93,7 +96,7 @@ const builtinCardRenderers: readonly BoardCardRenderer[] = [
 	arrowCardRenderer,
 	frameCardRenderer,
 	effectCardRenderer,
-	sketchCardRenderer,
+	customCardRenderer,
 ];
 
 /**

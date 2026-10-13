@@ -57,7 +57,7 @@ import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js"
 import { enqueueSandboxUploadFilesJob } from "../../sandbox-bash-queue.js";
 import { db } from "../../db/index.js";
 import { eq } from "drizzle-orm";
-import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket } from "../../app-realtime-rooms.js";
+import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket } from "../../app-rooms.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const tracer = getTracer("cohub-api");
@@ -158,7 +158,7 @@ router.post("/authorize-realtime-rooms", async (c) => {
     }
 
     if (parsed.kind === "room") {
-      rejected.push({ room, code: "FORBIDDEN", message: "Work rooms require room admission" });
+      rejected.push({ room, code: "FORBIDDEN", message: "App rooms require room admission" });
       continue;
     }
 
@@ -193,12 +193,12 @@ router.post("/authorize-realtime-rooms", async (c) => {
   return c.json({ ok: true, rooms: accepted, rejected });
 });
 
-router.post("/authorize-work-room", async (c) => {
+router.post("/authorize-app-room", async (c) => {
   const forbidden = ensureInternalRequest(c);
   if (forbidden) return forbidden;
 
   const principal = getAppSessionPrincipal(c);
-  if (!principal) return c.json({ ok: false, message: "a Work session is required" }, 403);
+  if (!principal) return c.json({ ok: false, message: "an App session is required" }, 403);
   const body = await c.req.json<{ roomId?: string; ticket?: string }>().catch(() => null);
   const roomId = typeof body?.roomId === "string" ? body.roomId.trim() : "";
   const ticket = typeof body?.ticket === "string" ? body.ticket.trim() : "";
@@ -216,12 +216,12 @@ router.post("/authorize-work-room", async (c) => {
   if (!room || room.appId !== principal.appId) {
     return c.json({ ok: false, message: "room not found" }, 404);
   }
-  const [work] = await db.select({ status: apps.status, spaceId: apps.spaceId })
+  const [app] = await db.select({ status: apps.status, spaceId: apps.spaceId })
     .from(apps)
     .where(eq(apps.id, principal.appId))
     .limit(1);
-  if (work?.status !== "published" || work.spaceId !== principal.spaceId) {
-    return c.json({ ok: false, message: "work is unavailable" }, 403);
+  if (app?.status !== "published" || app.spaceId !== principal.spaceId) {
+    return c.json({ ok: false, message: "app is unavailable" }, 403);
   }
 
   return c.json({

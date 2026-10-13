@@ -12,6 +12,8 @@ export type CohubDragResource = {
 	title?: string;
 	subtitle?: string | null;
 	href?: string;
+	/** Stable media source; href may point to a resource's UI instead. */
+	url?: string;
 	appId?: string;
 	path?: string;
 	mimeType?: string | null;

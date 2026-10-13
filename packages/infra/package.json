@@ -16,6 +16,10 @@
       "types": "./src/agent-queue/index.ts",
       "default": "./dist/agent-queue/index.js"
     },
+    "./app-room": {
+      "types": "./dist/app-room/index.d.ts",
+      "default": "./dist/app-room/index.js"
+    },
     "./config-runtime": {
       "types": "./dist/config-runtime/index.d.ts",
       "default": "./dist/config-runtime/index.js"

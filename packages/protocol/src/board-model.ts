@@ -6,6 +6,7 @@ import {
 	BOARD_TEXT_MIN_FONT_SIZE,
 } from "./board-constants.js";
 
+import { normalizeBoardRemoteUrl } from "./board-url.js";
 
 export const BOARD_ID_MAX_LENGTH = 160;
 export const BOARD_CAMERA_TARGET = "camera" as const;
@@ -93,6 +94,7 @@ export function isSafeBoardSourcePath(value: string): boolean {
 		value.length > 0 &&
 		value.length <= 4096 &&
 		!value.startsWith("/") &&
+		!/^[a-z][a-z\d+.-]*:/i.test(value.trimStart()) &&
 		!value.includes("\\") &&
 		value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
 	);
@@ -102,7 +104,29 @@ const srcSchema = z
 	.string()
 	.refine(isSafeBoardSourcePath, "src must be a relative Space file path");
 
+export type BoardMediaSource = { kind: "url" | "file"; value: string };
+
+export function parseBoardMediaSource(src: string): BoardMediaSource | null {
+	if (isSafeBoardSourcePath(src)) return { kind: "file", value: src };
+	return normalizeBoardRemoteUrl(src) ? { kind: "url", value: src } : null;
+}
+
+export const BoardMediaSourceSchema = z.string().max(4096).refine(
+	(src) => parseBoardMediaSource(src) !== null,
+	"src must be a public HTTP(S) URL or relative Space file path",
+).describe("Prefer a stable public HTTP(S) URL; relative Space file paths remain supported.");
+
+export const BoardScriptSchema = z.object({
+	src: srcSchema.refine((path) => /\.m?js$/.test(path), "script src must be a .js or .mjs module"),
+	params: z.record(z.string(), z.json()).default({}),
+	targets: z.record(z.string().min(1).max(80), BoardIdSchema).default({}),
+	seed: z.string().min(1).max(160).optional(),
+	enabled: z.boolean().default(true),
+}).strict();
+export type BoardScript = z.infer<typeof BoardScriptSchema>;
+
 const itemEnvelope = {
+	script: BoardScriptSchema.optional(),
 	parent: BoardIdSchema.optional(),
 	z: finite.optional(),
 	position: BoardVec2Schema.default({ x: 0, y: 0 }),
@@ -270,7 +294,7 @@ export const BoardMediaSnapshotSchema = z
 export type BoardMediaSnapshot = z.infer<typeof BoardMediaSnapshotSchema>;
 
 const fileProps = {
-	src: srcSchema,
+	src: BoardMediaSourceSchema,
 	snapshot: BoardMediaSnapshotSchema.optional(),
 };
 const timedFileProps = {
@@ -418,17 +442,12 @@ export const BoardEffectItemSchema = z
 	})
 	.strict();
 
-export const BoardSketchItemSchema = z
+export const BoardCustomItemSchema = z
 	.object({
 		...boxed(480, 320),
-		type: z.literal("sketch"),
-		props: z
-			.object({
-				src: srcSchema.refine((path) => /\.m?js$/.test(path), "sketch src must be a .js or .mjs module"),
-				params: z.record(z.string(), z.unknown()).default({}),
-				seed: z.string().min(1).max(160).optional(),
-			})
-			.strict(),
+		type: z.literal("custom"),
+		script: BoardScriptSchema,
+		props: z.object({}).strict().default({}),
 	})
 	.strict();
 
@@ -454,7 +473,7 @@ export const BOARD_ITEM_SCHEMAS = {
 	file: BoardFileItemSchema,
 	task: BoardTaskItemSchema,
 	effect: BoardEffectItemSchema,
-	sketch: BoardSketchItemSchema,
+	custom: BoardCustomItemSchema,
 } as const;
 export type BoardBuiltinItemType = keyof typeof BOARD_ITEM_SCHEMAS;
 export const BOARD_ITEM_TYPES = Object.keys(BOARD_ITEM_SCHEMAS) as BoardBuiltinItemType[];
@@ -470,7 +489,7 @@ export type BoardAudioItem = z.infer<typeof BoardAudioItemSchema>;
 export type BoardFileItem = z.infer<typeof BoardFileItemSchema>;
 export type BoardTaskItem = z.infer<typeof BoardTaskItemSchema>;
 export type BoardEffectItem = z.infer<typeof BoardEffectItemSchema>;
-export type BoardSketchItem = z.infer<typeof BoardSketchItemSchema>;
+export type BoardCustomItem = z.infer<typeof BoardCustomItemSchema>;
 export type BoardExtensionItem = Omit<z.infer<typeof BoardExtensionItemSchema>, "type"> & { type: `${string}.${string}` };
 export type BoardBuiltinItem =
 	| BoardFrameItem
@@ -484,7 +503,7 @@ export type BoardBuiltinItem =
 	| BoardFileItem
 	| BoardTaskItem
 	| BoardEffectItem
-	| BoardSketchItem;
+	| BoardCustomItem;
 export type BoardItem = BoardBuiltinItem | BoardExtensionItem;
 export type BoardItemType = BoardItem["type"];
 export type BoardFileBackedItem =

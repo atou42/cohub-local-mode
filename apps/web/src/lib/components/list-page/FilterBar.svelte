@@ -56,8 +56,12 @@ function revealActive(smooth: boolean) {
 	if (!el || activeKey == null) return;
 	const chip = el.querySelector<HTMLElement>("[data-active='true']");
 	if (!chip) return;
-	const start = chip.offsetLeft - KEEP_IN_VIEW_PX;
-	const end = chip.offsetLeft + chip.offsetWidth + KEEP_IN_VIEW_PX;
+	const left =
+		chip.getBoundingClientRect().left -
+		el.getBoundingClientRect().left +
+		el.scrollLeft;
+	const start = left - KEEP_IN_VIEW_PX;
+	const end = left + chip.offsetWidth + KEEP_IN_VIEW_PX;
 	let next = el.scrollLeft;
 	if (start < el.scrollLeft) next = start;
 	else if (end > el.scrollLeft + el.clientWidth) next = end - el.clientWidth;
@@ -160,7 +164,7 @@ $effect(() => {
 </script>
 
 <div
-	class="flex h-11 shrink-0 items-center gap-1.5 px-[var(--list-gutter-x)] lg:h-9"
+	class="filter-bar flex h-11 shrink-0 items-center gap-1.5 lg:h-9"
 	bind:clientWidth={barWidth}
 >
 	{#if leading && pinLeading}
@@ -171,6 +175,8 @@ $effect(() => {
 		bind:this={scroller}
 		use:scrollInput
 		class="filter-scroll relative min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
+		class:bleed-start={!(leading && pinLeading)}
+		class:bleed-end={!trailing}
 		style:--fade-start={fadeStart ? `${EDGE_PX}px` : "0px"}
 		style:--fade-end={fadeEnd ? `${EDGE_PX}px` : "0px"}
 		onscroll={updateEdges}
@@ -205,6 +211,27 @@ $effect(() => {
 </div>
 
 <style>
+	.filter-bar {
+		--filter-x: calc(var(--list-gutter-x) + var(--list-chip-inset));
+		padding-inline: var(--filter-x);
+	}
+
+	.bleed-start {
+		margin-left: calc(-1 * var(--filter-x));
+	}
+
+	.bleed-start > div {
+		padding-left: var(--filter-x);
+	}
+
+	.bleed-end {
+		margin-right: calc(-1 * var(--filter-x));
+	}
+
+	.bleed-end > div {
+		padding-right: var(--filter-x);
+	}
+
 	.filter-scroll {
 		scrollbar-width: none;
 		mask-image: linear-gradient(

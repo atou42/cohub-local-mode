@@ -1,9 +1,18 @@
-# Sample Apps
+# Cohub Apps
 
-Runnable examples of Cohub App patterns. Each one is small enough to read in
-one sitting and demonstrates a deliberate set of capabilities. The deep
+First-party Apps and runnable examples of Cohub App patterns. The deep
 reference for everything used here is
 [App development](https://cohub.live/docs/developers/apps).
+
+First-party Apps are flat, independently built projects in the root pnpm workspace:
+
+- [`task-inspector`](./task-inspector/): task details, progress and outputs.
+- [`checkpoint-explorer`](./checkpoint-explorer/): snapshot diffs and read-only files.
+- [`schedule-manager`](./schedule-manager/): scheduled prompts and run history.
+- [`app-manager`](./app-manager/): App settings, publishing and versions.
+- [`shared`](./shared/): shared authorization, caching, drafts, theme and build defaults; not a published App.
+
+The examples below remain independently installable.
 
 | App | Scenario | Demonstrates |
 | --- | --- | --- |

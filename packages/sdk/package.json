@@ -1,6 +1,6 @@
 {
   "name": "@neta-art/cohub",
-  "version": "10.0.0",
+  "version": "11.0.0",
   "description": "Cohub SDK for spaces, sessions, boards, and realtime agent collaboration.",
   "license": "Apache-2.0",
   "private": false,
@@ -172,6 +172,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "es-module-lexer": "2.3.2",
     "perfect-freehand": "1.2.3",
     "zod": "^4.6.5"
   },

@@ -19,7 +19,6 @@ import { innerHeight, innerWidth } from "svelte/reactivity/window";
 import { dismissOnBack } from "$lib/back-layers.svelte";
 import AudioPlayer from "$lib/components/AudioPlayer.svelte";
 import ImageViewer from "$lib/components/ImageViewer.svelte";
-import MediaImage from "$lib/components/MediaImage.svelte";
 import {
 	type MediaItem,
 	mediaLightbox,
@@ -39,6 +38,7 @@ import { screenVariantSize } from "$lib/media/media-info";
 import { downloadMedia } from "$lib/media-download";
 import { EASE_OUT } from "$lib/motion.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import MediaImage from "$lib/resource-kit/MediaImage.svelte";
 
 const SLIDE_GAP_PX = 16;
 const SETTLE_MS = 220;

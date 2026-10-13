@@ -1,5 +1,9 @@
 <script lang="ts">
 import {
+	featuredTaskArtifact,
+	parseBoardMediaSource,
+} from "@neta-art/cohub/board";
+import {
 	ArrowDownToLine,
 	ArrowUpToLine,
 	BoxSelect,
@@ -9,6 +13,7 @@ import {
 	History,
 	ImageDown,
 	LayoutDashboard,
+	Link,
 	LocateFixed,
 	Pencil,
 	RefreshCw,
@@ -26,6 +31,8 @@ const {
 	position,
 	onClose,
 	onOpenFile,
+	onAddLink,
+	onAddTaskMedia,
 	onOpenTask,
 	onRegenerateTask,
 	onAddToGeneration,
@@ -39,6 +46,8 @@ const {
 	position: { x: number; y: number };
 	onClose: () => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
+	onAddLink?: () => void;
+	onAddTaskMedia?: (itemId: string) => void;
 	onOpenTask?: (taskRunId: string) => void;
 	onRegenerateTask?: (itemId: string) => void;
 	onAddToGeneration?: () => void;
@@ -68,18 +77,22 @@ const singleText = $derived(
 const singleFile = $derived.by(() => {
 	if (editor.selectedItems.length !== 1) return null;
 	const item = editor.selectedItems[0];
-	return item?.type === "file" ? (item.props as { src: string }) : null;
+	return item && ["file", "image", "video", "audio"].includes(item.type)
+		? (item.props as { src: string })
+		: null;
 });
 
 const singleTask = $derived.by(() => {
 	if (editor.selectedItems.length !== 1) return null;
 	const item = editor.selectedItems[0];
 	if (item?.type !== "task") return null;
-	const props = item.props as {
-		taskRunId: string;
-		snapshot: { taskType: string };
-	};
+	const props = item.props;
+	const artifact = featuredTaskArtifact(props.snapshot.artifacts);
 	return {
+		canAddMedia:
+			artifact &&
+			artifact.type !== "text" &&
+			parseBoardMediaSource(artifact.url)?.kind === "url",
 		id: item.id,
 		taskRunId: props.taskRunId,
 		taskType: props.snapshot.taskType,
@@ -98,11 +111,23 @@ const actions = $derived.by<MenuAction[]>(() => {
 	const list: MenuAction[] = [];
 	const file = singleFile;
 	const task = singleTask;
+	if (onAddLink)
+		list.push({
+			label: m.board_add_link({}, { locale }),
+			icon: Link,
+			run: onAddLink,
+		});
 	if (canGenerate && onAddToGeneration)
 		list.push({
 			label: m.board_add_to_generation({}, { locale }),
 			icon: Sparkles,
 			run: onAddToGeneration,
+		});
+	if (task?.canAddMedia && onAddTaskMedia)
+		list.push({
+			label: m.board_add_result({}, { locale }),
+			icon: Copy,
+			run: () => onAddTaskMedia(task.id),
 		});
 	if (task && onOpenTask)
 		list.push({
@@ -122,7 +147,10 @@ const actions = $derived.by<MenuAction[]>(() => {
 		});
 	if (file && onOpenFile)
 		list.push({
-			label: m.board_open_file({}, { locale }),
+			label:
+				parseBoardMediaSource(file.src)?.kind === "url"
+					? m.board_open_source({}, { locale })
+					: m.board_open_file({}, { locale }),
 			icon: ExternalLink,
 			run: () => {
 				void onOpenFile(file.src);

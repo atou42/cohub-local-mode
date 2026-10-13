@@ -126,7 +126,7 @@ export type BoardPropertySpec = {
 	multiplicative?: boolean;
 };
 
-const NOT_ANIMATABLE = new Set(["type", "parent", "z", "locked", "metadata"]);
+const NOT_ANIMATABLE = new Set(["type", "parent", "z", "locked", "metadata", "script"]);
 
 const CAMERA_PROPERTIES: Record<string, BoardPropertySpec> = {
 	focus: {

@@ -10,12 +10,9 @@ import {
 import { Check, Copy, ExternalLink, Loader2, Rocket } from "lucide-svelte";
 import Dialog from "$lib/components/Dialog.svelte";
 import { dispatchAppsChanged } from "$lib/features/app/app-realtime";
-import {
-	APP_SCOPE_GROUPS,
-	APP_SCOPE_OPTIONS,
-} from "$lib/features/space/modules/app-utils";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import { APP_SCOPE_GROUPS, APP_SCOPE_OPTIONS } from "$lib/resource-kit/app";
 import { sdk } from "$lib/sdk";
 import {
 	normalizePublicSlugInput,
@@ -321,13 +318,13 @@ async function copyUrl() {
 			<section class="permissions-section">
 				<div class="section-label">{m.app_publish_app_can({}, { locale })}</div>
 				<div class="permissions-grid">
-					{#each APP_SCOPE_GROUPS as group (group.title)}
+					{#each APP_SCOPE_GROUPS as group (group.scopes.join())}
 						<div class="permission-group">
-							<div class="group-title">{group.title}</div>
+							<div class="group-title">{group.title({}, { locale })}</div>
 							{#each APP_SCOPE_OPTIONS.filter((option) => group.scopes.includes(option.scope)) as option (option.scope)}
-								<label class="permission-row" title={option.description}>
+								<label class="permission-row" title={option.description({}, { locale })}>
 									<input type="checkbox" bind:checked={appScopes[option.scope]} />
-									{option.label}
+									{option.label({}, { locale })}
 								</label>
 							{/each}
 						</div>

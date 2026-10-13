@@ -40,7 +40,7 @@ in `apps/web` and talks to these layers through their public entries.
 
 | Module | Concern |
 |---|---|
-| `document` | Base document → animation overlay → gesture draft → scene; commit, undo |
+| `document` | Base document → animation → local script effects → gesture draft → scene; commit, undo |
 | `query` | Hit tests, bounds, spatial index, tree walks |
 | `camera` | Viewport, zoom, focus, wheel |
 | `selection` | Selection and edits applied to it |
@@ -55,6 +55,43 @@ State lives in `state` fields grouped into channels (`STATE_CHANNELS`).
 Assigning a field announces its channel; never mutate a value in place —
 replace it, so views can compare by identity. Derived values use `memo` for the
 same reason.
+
+## Scripts
+
+The public authoring contract is in [`docs/board-scripts.md`](../../../../docs/board-scripts.md).
+`model/script.ts` defines the module context; `model/script-scene.ts` validates scope
+and composes local effects. `render/script-runtime.ts` is a self-contained kernel,
+serialized into browser workers and Node VM workers so execution semantics do not
+drift. Keep it free of imported runtime values and bundler-only helpers.
+
+`render/script-modules.ts` resolves the ESM graph before code enters an isolated
+realm. Browser hosting lives in `render/script-host.ts`; the stage
+routes local input and adopts temporary output. Node export is a separate adapter
+in `export/node/scripts.ts`. Script subscriptions, source loading, errors and
+lifecycle belong to the host, not item renderers: culling a renderer must not reset
+an instance. Static scripts schedule no idle animation frames. One opaque broker
+iframe routes messages to per-instance workers and never executes user modules.
+DOM `mount()` exports are rejected. The broker stamps routing tokens after worker data so scripts
+cannot impersonate another instance. Output validation compiles only changed
+instances; the stage composes them once per frame. Texture revisions invalidate
+only their own card. Offscreen draws are omitted while simulation continues.
+
+Boards without enabled scripts do not create a script host, message listener, DOM
+layer, iframe or worker. The stage bypasses script clocks, composition and hit tests;
+CLI exports reuse the native export preparation. `model/script-index.ts` shares a
+single discovery scan per immutable item collection across editor, UI and hosts.
+The module parser loads only when a script is actually read. Removing the last
+enabled script destroys its host and clears local output without interrupting an
+editor-owned pointer gesture.
+
+Node export uses at most four persistent workers, with a separate module graph and
+VM context per instance. Sequential samples advance the same state, while backwards
+seeks recreate the affected instance. Clearing output textures does not reset the
+simulation or reload modules.
+
+Temporary items are absent from editor selection, clipboard subtrees and writes.
+Explicit commits reuse the normal transaction and undo path. Future host capabilities
+extend the context without adding business-specific fields to Board items.
 
 ## Adding an item type
 

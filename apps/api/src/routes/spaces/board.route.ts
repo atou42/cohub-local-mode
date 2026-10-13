@@ -31,6 +31,7 @@ import { dispatchBoardChanged, dispatchBoardPlaybackChanged } from "../../board-
 import { db } from "../../db/index.js";
 import { authzDenied, getOptionalAuth, requireValidId, useAuth } from "../../lib/middleware.js";
 import { getRequestSource } from "../../lib/request-source.js";
+import { resolveRequestActor } from "../../lib/request-actor.js";
 import { hasPermission } from "../../permissions.js";
 import {
   assertSafeRelativePath,
@@ -96,12 +97,13 @@ function boardParams(c: { req: { param: (name: string) => string | undefined } }
   return spaceId && boardId && requireValidId(spaceId) && requireValidId(boardId) ? { spaceId, boardId } : null;
 }
 
-async function announce(spaceId: string, boardId: string, actorId: string, outcome: BoardApplyOutcome, source: ReturnType<typeof getRequestSource>) {
+async function announce(c: Context, spaceId: string, boardId: string, actorId: string, outcome: BoardApplyOutcome, source: ReturnType<typeof getRequestSource>) {
   if (!outcome.written) return;
   await dispatchBoardChanged({
     spaceId,
     boardId,
     actorId,
+    actor: await resolveRequestActor(c),
     mutationId: outcome.result.mutationId,
     baseVersion: outcome.written.baseVersion,
     version: outcome.result.version,
@@ -216,7 +218,7 @@ router.post("/:boardId/apply", writeBodyLimit, async (c) => {
   const source = getRequestSource(c);
   try {
     const outcome = await applyBoard(db, { ...params, actorId: user.uuid, apply: parsed.data, source });
-    await announce(params.spaceId, params.boardId, user.uuid, outcome, source);
+    await announce(c, params.spaceId, params.boardId, user.uuid, outcome, source);
     return c.json(outcome.result);
   } catch (error) {
     return fail(c, error);
@@ -253,7 +255,7 @@ router.post("/:boardId/restore", async (c) => {
   const source = getRequestSource(c);
   try {
     const outcome = await restoreBoardVersion(db, { ...params, actorId: user.uuid, version, source });
-    await announce(params.spaceId, params.boardId, user.uuid, outcome, source);
+    await announce(c, params.spaceId, params.boardId, user.uuid, outcome, source);
     return c.json(outcome.result);
   } catch (error) {
     return fail(c, error);

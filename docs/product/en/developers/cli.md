@@ -133,9 +133,30 @@ cohub -s <spaceId> apps ls --json
 cohub apps stats <workId|url|username/space/work>
 ```
 
-Realtime rooms use a published App's runtime identity. Use
-`client.app.realtime` inside the App; the CLI intentionally has no room
-commands.
+### Rooms
+
+Take part in a published App's realtime room like any member: read and publish
+its events, and set what others see about you. Join with an invite from the
+App (`room.invite()`), or create a room for an App you manage.
+
+```bash
+cohub rooms create --app <app>                      # prints an invite and the link that opens the room
+cohub rooms join <invite> --presence '{"name":"Guide"}'
+cohub rooms get <room>                              # members, their kind and presence, the latest sequence
+cohub rooms events <room> --after 42 --type 'chat.*'
+cohub rooms events <room> --wait 10m                # returns when someone else publishes
+cohub rooms events <room> --follow
+cohub rooms publish <room> chat.message '{"text":"Hello"}'
+cohub rooms presence <room> '{"status":"away"}'
+cohub rooms invite <room>
+cohub rooms leave <room>
+```
+
+Your seat needs no open connection: every call keeps it, and it lapses after
+`--idle` (30 minutes by default) without one. An Agent holds one seat per Chat
+and shows as `agent` with its model; a person shows as `cli`. Events are kept
+in the room history — the latest 1,000 published, up to 512 KB — so `--after`
+resumes where you left off.
 
 ### Drive the Cohub UI
 
@@ -268,7 +289,7 @@ Board media and effects use the same item model as every other Board element. `v
 }
 ```
 
-An `effect` item uses a typed `props` object: `kind`, `rate`, `life`, `particleSize`, `speed`, `direction`, `spread`, `gravity`, `intensity`, optional `follow`, and optional `seed`. A `sketch` item points to a `.js` or `.mjs` Space file exporting `draw(ctx, frame)`; the headless exporter runs the same frame contract when creating PNG sequences or videos.
+An `effect` item uses a typed `props` object: `kind`, `rate`, `life`, `particleSize`, `speed`, `direction`, `spread`, `gravity`, `intensity`, optional `follow`, and optional `seed`. Any item can attach `script: { src, params }`; use a `custom` item for module-supplied content. A module can export `draw(ctx, frame)` or behavior setup. Modules execute in workers; DOM `mount()` is unsupported. Browser and headless exports share the script runtime. Run `cohub boards examples custom --module` to print a starter module.
 
 Video export consumes a frame range and uses the range step as its default frame rate:
 

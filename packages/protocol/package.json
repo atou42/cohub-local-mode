@@ -19,6 +19,10 @@
       "types": "./dist/board-constants.d.ts",
       "default": "./dist/board-constants.js"
     },
+    "./board-script-modules": {
+      "types": "./dist/board-script-modules.d.ts",
+      "default": "./dist/board-script-modules.js"
+    },
     "./board-model": {
       "types": "./dist/board-model.d.ts",
       "default": "./dist/board-model.js"
@@ -62,6 +66,10 @@
     "./display": {
       "types": "./dist/display/index.d.ts",
       "default": "./dist/display/index.js"
+    },
+    "./rtc": {
+      "types": "./dist/rtc/index.d.ts",
+      "default": "./dist/rtc/index.js"
     },
     "./search": {
       "types": "./dist/search/index.d.ts",
@@ -127,6 +135,10 @@
       "types": "./dist/app-navigation.d.ts",
       "default": "./dist/app-navigation.js"
     },
+    "./app-devices": {
+      "types": "./dist/app-devices.d.ts",
+      "default": "./dist/app-devices.js"
+    },
     "./app-embed": {
       "types": "./dist/app-embed.d.ts",
       "default": "./dist/app-embed.js"
@@ -155,6 +167,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "es-module-lexer": "2.3.2",
     "@neta-art/generation": "^0.1.33",
     "zod": "^4.6.5"
   },

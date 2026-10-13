@@ -1,6 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "cohub-apps/shared"
+  - "cohub-apps/task-inspector"
+  - "cohub-apps/checkpoint-explorer"
+  - "cohub-apps/schedule-manager"
+  - "cohub-apps/app-manager"
 
 injectWorkspacePackages: true
 syncInjectedDepsAfterScripts:

@@ -6,19 +6,10 @@ import { onDestroy } from "svelte";
 import { goto } from "$app/navigation";
 import AudioPlayer from "$lib/components/AudioPlayer.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
-import MediaImage from "$lib/components/MediaImage.svelte";
 import MessageContentFlow from "$lib/components/MessageContentFlow.svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox";
 import UserIdentity from "$lib/components/UserIdentity.svelte";
-import {
-	buildSpaceCheckpointRoute,
-	buildSpaceCronjobRoute,
-} from "$lib/space-routes";
-import { displayUserName, formatDateTime } from "../space-utils";
-import {
-	createTaskRunDetailController,
-	type TaskRealtimeEvent,
-} from "./task-run-detail-controller.svelte";
+import MediaImage from "$lib/resource-kit/MediaImage.svelte";
 import {
 	appActionInput,
 	appActionName,
@@ -41,7 +32,17 @@ import {
 	taskRunDuration,
 	taskRunStatusBadge,
 	taskTypeLabel,
-} from "./task-run-utils";
+} from "$lib/resource-kit/task-run";
+import { formatDateTime } from "$lib/resource-kit/time";
+import {
+	buildSpaceCheckpointRoute,
+	buildSpaceCronjobRoute,
+} from "$lib/space-routes";
+import { displayUserName } from "../space-utils";
+import {
+	createTaskRunDetailController,
+	type TaskRealtimeEvent,
+} from "./task-run-detail-controller.svelte";
 import { withCurrentWindow } from "./window-route";
 
 type Props = {

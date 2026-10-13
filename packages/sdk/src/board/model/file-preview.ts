@@ -30,7 +30,7 @@ export {
 	type ResolvedCover,
 } from "./file-snapshot.js";
 
-import type { BoardFileSnapshotFacts, FileCategory } from "./file-snapshot.js";
+import { fileBaseName, type BoardFileSnapshotFacts, type FileCategory } from "./file-snapshot.js";
 
 export type FilePreviewKind = "cover" | "text" | "blank";
 
@@ -50,7 +50,7 @@ export function filePreviewKind(
 
 /** Short uppercase type label for a file card (`MD`, `JSON`, `FILE`). */
 export function fileTypeLabel(path: string): string {
-	const name = path.split("/").filter(Boolean).pop() ?? path;
+	const name = fileBaseName(path);
 	const dot = name.lastIndexOf(".");
 	if (dot <= 0) return (name.replace(/^\./, "") || "file").toUpperCase();
 	return name.slice(dot + 1).toUpperCase();

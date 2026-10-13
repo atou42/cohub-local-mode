@@ -3,6 +3,7 @@ import type { BoardFrameItem } from "@cohub/protocol";
 import { Container, Graphics, type Text } from "pixi.js";
 import type { SceneItem } from "../../model/scene.js";
 import { itemAlpha, itemColor } from "../palette.js";
+import { dashPattern, roundRectPoints, tracePolyline, trimPolyline } from "../stroke.js";
 import { syncTextResolution } from "../text-resolution.js";
 import { createLabel, positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
@@ -33,22 +34,28 @@ function sync(container: Container, item: SceneItem<BoardFrameItem>, context: Bo
 	const fill = itemColor(context, style.fill ?? style.stroke, "neutral", "fill");
 	const fillAlpha = (style.fillOpacity ?? (style.fill ? 1 : DEFAULT_WASH)) * itemAlpha(context, style.fill ?? style.stroke);
 	const baseStroke = itemColor(context, style.stroke, "neutral");
-	const stroke = selected ? context.palette.brand : baseStroke;
-	const alpha = (selected ? 1 : hovered ? 0.85 : 0.55) * itemAlpha(context, style.stroke);
+	const stroke = selected ? context.palette.brand : hovered && style.stroke ? context.palette.muted : baseStroke;
+	const alpha = (selected || style.stroke ? 1 : hovered ? 0.85 : 0.55) * itemAlpha(context, style.stroke);
 	const radius = style.radius ?? 4;
 	const strokeWidth = style.strokeWidth ?? 1.5;
-	const visualSig = [props.decoration, frame.width, frame.height, selected, hovered, fill, fillAlpha, stroke, alpha, radius, strokeWidth].join("|");
+	const decorated = props.decoration !== "none";
+	const visualSig = [props.decoration, frame.width, frame.height, selected, hovered, fill, fillAlpha, stroke, alpha, radius, strokeWidth, style.dash, style.trim].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 		parts.box.clear();
-		if (props.decoration !== "none") parts.box.roundRect(0, 0, frame.width, frame.height, radius).fill({ color: fill, alpha: fillAlpha });
-		if ((props.decoration !== "none" && strokeWidth > 0) || selected || hovered) {
-			parts.box.roundRect(0, 0, frame.width, frame.height, radius).stroke({ color: stroke, width: selected ? Math.max(2, strokeWidth) : strokeWidth, alpha });
+		if (decorated) parts.box.roundRect(0, 0, frame.width, frame.height, radius).fill({ color: fill, alpha: fillAlpha });
+		const width = selected ? Math.max(2, strokeWidth) : strokeWidth;
+		const pattern = decorated ? dashPattern(style.dash, width) : null;
+		const trim = decorated ? (style.trim ?? 1) : 1;
+		if (((decorated && strokeWidth > 0) || selected || hovered) && trim > 0) {
+			if (pattern || trim < 1) tracePolyline(parts.box, trimPolyline(roundRectPoints(frame.width, frame.height, radius), trim), pattern);
+			else parts.box.roundRect(0, 0, frame.width, frame.height, radius);
+			parts.box.stroke({ color: stroke, width, alpha, cap: pattern || trim < 1 ? "round" : "butt", join: "round" });
 		}
 	}
 
-	parts.label.visible = props.decoration !== "none";
-	const title = locked ? `🔒 ${props.label || "Frame"}` : props.label || "Frame";
+	parts.label.visible = decorated;
+	const title = locked ? `🔒 ${props.label}`.trim() : props.label;
 	const labelColor = style.stroke ? baseStroke : context.palette.muted;
 	const textSig = [title, labelColor].join("|");
 	if (textSig !== parts.textSig) {

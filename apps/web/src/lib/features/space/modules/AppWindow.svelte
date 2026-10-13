@@ -4,6 +4,7 @@ import type { AppWindowState } from "@cohub/protocol/app-runtime";
 import type { AppComposerChip } from "@cohub/protocol/app-surface";
 import type { AppRuntimeShellContext } from "@neta-art/cohub";
 import { ExternalLink, Loader2, RefreshCw } from "lucide-svelte";
+import { buildAppIframeUrl } from "$lib/app-url";
 import AppSurface from "$lib/components/app/AppSurface.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
@@ -117,7 +118,7 @@ const headerActions = $derived.by((): PreviewHeaderAction[] => {
 			icon: ExternalLink,
 			primary: true,
 			run: () => {
-				window.open(publicUrl, "_blank", "noopener");
+				window.open(buildAppIframeUrl(publicUrl, launchState), "_blank", "noopener");
 			},
 		});
 	}

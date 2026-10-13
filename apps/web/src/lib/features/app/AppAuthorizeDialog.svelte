@@ -16,9 +16,9 @@ import {
 } from "lucide-svelte";
 import { tick, untrack } from "svelte";
 import Dialog from "$lib/components/Dialog.svelte";
-import { APP_SCOPE_OPTIONS } from "$lib/features/space/modules/app-utils";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import { APP_SCOPE_OPTIONS } from "$lib/resource-kit/app";
 import { sdk } from "$lib/sdk";
 import type { SpacePickerFilter } from "$lib/space-picker-model";
 import { authStore } from "$lib/stores/auth.svelte";
@@ -420,7 +420,10 @@ function createSpaceSourceLabel(
 
 // Human label for scopes outside the predefined operation groups.
 const scopeLabel = (scope: string) =>
-	APP_SCOPE_OPTIONS.find((option) => option.scope === scope)?.label ?? scope;
+	APP_SCOPE_OPTIONS.find((option) => option.scope === scope)?.label(
+		{},
+		{ locale },
+	) ?? scope;
 </script>
 
 <Dialog {open} onClose={onCancel} maxWidth="440px" maxHeight="90vh">

@@ -37,6 +37,8 @@ export type AppConfig = {
   platformConfigRoot: string;
   rtcTurnKeyId?: string;
   rtcTurnKeyApiToken?: string;
+  rtcSfuAppId?: string;
+  rtcSfuAppSecret?: string;
   turnObjectS3Endpoint?: string;
   turnObjectS3PublicEndpoint?: string;
   turnObjectS3Region: string;
@@ -216,6 +218,8 @@ export const config: AppConfig = {
   platformConfigRoot: process.env.PLATFORM_CONFIG_ROOT ?? "/configs",
   rtcTurnKeyId: process.env.RTC_TURN_KEY_ID?.trim() || undefined,
   rtcTurnKeyApiToken: process.env.RTC_TURN_KEY_API_TOKEN?.trim() || undefined,
+  rtcSfuAppId: process.env.RTC_SFU_APP_ID?.trim() || undefined,
+  rtcSfuAppSecret: process.env.RTC_SFU_APP_SECRET?.trim() || undefined,
   turnObjectS3Endpoint: process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
   turnObjectS3PublicEndpoint: process.env.TURN_OBJECT_S3_PUBLIC_ENDPOINT,
   turnObjectS3Region: process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",

@@ -92,7 +92,6 @@ import {
 import ChatsPane from "$lib/features/sessions/ChatsPane.svelte";
 import { chatsInbox } from "$lib/features/sessions/chats-inbox.svelte";
 import { clearAccountSnapshots } from "$lib/features/settings/account-snapshots";
-import { appActionName } from "$lib/features/space/modules/task-run-utils";
 import { withSidebarMainWindow } from "$lib/features/space/modules/window-route";
 import SpacesViewsNav from "$lib/features/spaces/SpacesViewsNav.svelte";
 import { extractGenerationPromptPreview } from "$lib/generation-task-media";
@@ -116,6 +115,7 @@ import {
 } from "$lib/mobile-nav";
 import { m } from "$lib/paraglide/messages.js";
 import { createRefreshCoordinator } from "$lib/refresh-coordinator";
+import { appActionName } from "$lib/resource-kit/task-run";
 import { sdk } from "$lib/sdk";
 import {
 	buildSessionForkTree,

@@ -4,6 +4,7 @@ import {
 	boardImageKeySource,
 	featuredTaskArtifact,
 	imageAssetKey,
+	parseBoardMediaSource,
 } from "../model/index.js";
 import { mediaPreviewCandidates } from "../../media.js";
 import type { Texture } from "pixi.js";
@@ -44,7 +45,13 @@ function taskPreviewKey(artifact: BoardTaskArtifact | undefined) {
 
 export function boardAssetKey(item: BoardSceneItem): string | null {
 	if (item.type === "task") return taskPreviewKey(featuredTaskArtifact(item.props.snapshot.artifacts));
-	if (item.type === "video") return `video:${encodeURIComponent(item.props.src)}:${item.props.snapshot?.mtimeMs ?? "unknown"}`;
+	if (item.type === "video") {
+		const source = parseBoardMediaSource(item.props.src);
+		if (!source) return null;
+		return source.kind === "url"
+			? `video-url:${encodeURIComponent(source.value)}`
+			: `video:${encodeURIComponent(source.value)}:${item.props.snapshot?.mtimeMs ?? "unknown"}`;
+	}
 	return imageAssetKey(item);
 }
 

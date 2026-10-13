@@ -92,3 +92,19 @@ test("typed @ query keeps subsequence matches instead of requiring a substring",
 		["mine"],
 	);
 });
+
+test("official space is pinned only when it matches and is not current", () => {
+	const official = suggestion("cohub", "Cohub", { official: true });
+	const ids = (query: string, currentSpaceId = "current") =>
+		mergeSpaceMentionSuggestions({
+			local: [suggestion("cohub-notes", "cohub-notes", { textScore: 0.92 })],
+			remote: [],
+			official,
+			query,
+			currentSpaceId,
+		}).map((item) => item.spaceId);
+	assert.deepEqual(ids(""), ["cohub", "cohub-notes"]);
+	assert.deepEqual(ids("cohub"), ["cohub", "cohub-notes"]);
+	assert.deepEqual(ids("notes"), ["cohub-notes"]);
+	assert.deepEqual(ids("", "cohub"), ["cohub-notes"]);
+});

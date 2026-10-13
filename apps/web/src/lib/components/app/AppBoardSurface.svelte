@@ -2,6 +2,7 @@
 import { boardSnapshotPatch } from "@cohub/protocol";
 import type { AppBoardArtifactManifest, WorkContent } from "@neta-art/cohub";
 import { parseBoardDocument } from "@neta-art/cohub/board";
+import { Info } from "lucide-svelte";
 import { createAppBoardAssetSource } from "$lib/board/board-asset-source";
 import { cohubPixiRuntime } from "$lib/board/runtime/board-runtime";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -85,6 +86,12 @@ $effect(() => {
 		{:then module}
 			{@const BoardRuntime = module.default}
 			{#key content.url}
+				{#if manifest?.externalUrls?.length}
+					<details class="absolute right-3 top-3 z-10 text-text-tertiary">
+						<summary class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded bg-bg-primary" aria-label={m.board_external_media({}, { locale })} title={m.board_external_media({}, { locale })}><Info class="h-4 w-4" /></summary>
+						<p class="absolute right-0 mt-1 w-60 rounded border border-border-primary bg-bg-primary p-3 text-xs text-text-secondary shadow-lg">{m.board_external_media({}, { locale })}</p>
+					</details>
+				{/if}
 				<BoardRuntime
 					mode="view"
 					path={content.path}
@@ -104,6 +111,7 @@ $effect(() => {
 
 <style>
 	.work-board-surface {
+		position: relative;
 		height: 100%;
 		min-height: 0;
 		background: var(--bg-primary);

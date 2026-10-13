@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  Actor,
   BoardChangeSummary,
   BoardPlaybackSnapshot,
   BoardDelta,
@@ -12,6 +13,7 @@ export async function dispatchBoardChanged(input: {
   spaceId: string;
   boardId: string;
   actorId: string;
+  actor: Actor;
   mutationId: string;
   baseVersion: number;
   version: number;
@@ -30,6 +32,7 @@ export async function dispatchBoardChanged(input: {
     payload: {
       boardId: input.boardId,
       actorId: input.actorId,
+      actor: input.actor,
       mutationId: input.mutationId,
       baseVersion: input.baseVersion,
       version: input.version,

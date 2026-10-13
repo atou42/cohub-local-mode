@@ -18,6 +18,7 @@ import { ReferralsApi } from "./apis/referrals.js";
 import { AppsApi } from "./apis/apps.js";
 import { DesktopCommandsApi } from "./apis/desktop-commands.js";
 import { AppCommerceApi } from "./apis/app-commerce.js";
+import { RoomsApi } from "./apis/rooms.js";
 import { HttpTransport, HttpError, type CohubClientOptions, type Fetch } from "./transport.js";
 import { resolveApiBaseUrl, resolveExecutionToken } from "./environment.js";
 
@@ -40,6 +41,7 @@ export class CohubHttpClient {
   readonly referrals: ReferralsApi;
   readonly apps: AppsApi;
   readonly appCommerce: AppCommerceApi;
+  readonly rooms: RoomsApi;
 
   /** @deprecated Use `apps`. */
   get works(): AppsApi {
@@ -88,6 +90,7 @@ export class CohubHttpClient {
     this.referrals = new ReferralsApi(this.transport);
     this.apps = new AppsApi(this.transport);
     this.appCommerce = new AppCommerceApi(this.transport);
+    this.rooms = new RoomsApi(this.transport);
     this.desktop = new DesktopCommandsApi(this.transport);
   }
 
