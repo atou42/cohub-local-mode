@@ -21,9 +21,9 @@ Run the opt-in real-account smoke from `packages/cli` with `COHUB_NATIVE_WORKBUD
 - Appended complete records trigger live previews. Corrupt headers and unfinished historical tails report explicit errors; finished turns remain imported and retries do not duplicate them.
 - Adding WorkBuddy to existing Pi/Codex sync asks about only newly added history. Existing consent is preserved; corrupt configuration and reattachment failures are not replaced or hidden.
 - Saved explicit direct mode is applied before starting WorkBuddy, so inherited stale proxy settings cannot become Node's startup proxy snapshot. Parent Runtime settings remain unchanged. Missing settings use the existing environment; corrupt settings fail explicitly.
-- Protocol: 189 tests. SDK runtime: 2. Core prompt model validation: 3. Background queue: 4. Web model selection/status: 14. All passed on the implementation base.
+- Protocol: 192 tests. SDK runtime: 2. Core prompt model validation: 3. Background queue: 4. Web model selection/status: 14. All passed after rebasing onto current main (`63c6fcc`); the queue check passed on the implementation base.
 - 33 existing native transcript/archive/projection tests, 16 execution/recovery/batching tests, and 10 native ingestion tests passed on the implementation base with `TMPDIR=/private/tmp`.
-- CLI build and CLI/protocol/SDK/infrastructure/web typechecks passed on the implementation base. Web reported zero errors and warnings. Changed-code lint passed.
+- Protocol/SDK/CLI builds and CLI/protocol/SDK/web typechecks passed after rebasing onto current main. Web reported zero errors and warnings. Infrastructure typechecking passed on the implementation base. Changed-code lint passed.
 
 The existing Pi smoke requires the canonical macOS temporary path. `/tmp` and long temporary socket paths caused Pi attachment failures independently of this feature; the failure/pass pair was also reproduced at base commit `4d30d49`.
 

@@ -11,7 +11,7 @@ Adding WorkBuddy to existing Pi/Codex sync asks only about newly added history, 
 - 65 focused CLI regressions, including the new fixes reproduced before implementation.
 - Real WorkBuddy 5.3.14 / CLI 2.115.0: native history import, streamed reply, remembered-context continuation, cancellation with preserved partial text, source integrity and no duplicate import all passed with synthetic prompts.
 - Desktop and mobile component previews: WorkBuddy selection and model picker verified.
-- Protocol 189, SDK runtime 2, core model 3, queue 4 and web model/status 14 tests passed; CLI build and applicable typechecks/lint passed on the implementation base.
+- After rebasing onto main `63c6fcc`: CLI 65, protocol 192, SDK runtime 2, core model 3 and web model/status 14 tests pass. Protocol/SDK/CLI builds and applicable typechecks/lint pass; web has zero errors and warnings. The queue check passed on the implementation base.
 - Full server checks require private dependencies unavailable locally. See `docs/workbuddy-local-validation.md` for evidence and boundaries.
 
 No production history upload or deployment occurred. Real-Space and cross-device acceptance remains pending deployment. Desktop and Cohub do not jointly control an open WorkBuddy conversation.
