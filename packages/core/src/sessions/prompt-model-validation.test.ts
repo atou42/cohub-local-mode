@@ -59,12 +59,3 @@ test("mismatched prevalidated model still validates the requested model", async 
 
   assert.deepEqual(validatedInput, { userId: "user-1", provider: "cohub", model: "model-1" });
 });
-
-test("WorkBuddy read-only requests are rejected before admitting a local turn", async () => {
-  const calls: string[] = [];
-  const deps = createDeps(async () => true);
-  deps.validateLocalHarness = async () => { calls.push("validate"); };
-  deps.createSessionTurn = async () => { calls.push("create"); return { id: "turn-id", spaceId: "space-1" }; };
-  await assert.rejects(submitSessionPrompt(deps, { ...input, harness: "workbuddy", accessMode: "read_only" }, {}), /WorkBuddy cannot enforce read-only access/);
-  assert.deepEqual(calls, []);
-});

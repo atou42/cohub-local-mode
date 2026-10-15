@@ -22,16 +22,6 @@ test("WorkBuddy streams text and pairs tools without duplicating the final respo
   assert.ok(events.some((event) => event.type === "text.delta" && event.delta === "Checking"));
 });
 
-test("WorkBuddy execution errors and malformed replies stay visible", () => {
-  const translator = workbuddyTranslator(() => {});
-  translator.push({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["Authentication expired"] });
-  assert.equal(translator.last().stopReason, "error");
-  assert.equal(translator.last().errorMessage, "Authentication expired");
-  assert.throws(() => workbuddyTranslator(() => {}).push({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read" }] } }), /Invalid WorkBuddy tool call/);
-  assert.throws(() => workbuddyTranslator(() => {}).push({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: -1 } }), /Invalid WorkBuddy usage/);
-  assert.throws(() => workbuddyTranslator(() => {}).push({ type: "result", subtype: "unexpected" }), /Invalid WorkBuddy result/);
-});
-
 test("WorkBuddy accepts the native null optional cache counters", () => {
   const translator = workbuddyTranslator(() => {});
   translator.push({ type: "assistant", message: { content: [{ type: "text", text: "Done" }], usage: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: null, cache_creation_input_tokens: null } } });

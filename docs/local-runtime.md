@@ -90,7 +90,7 @@ The bridge preserves WorkBuddy's normal permission checks and refuses approval r
 it cannot present. Read-only execution and a separate reasoning-level setting are not
 supported and are rejected explicitly. An execution with no durable final result receipt
 remains unresolved after a crash; a completed message alone is not treated as proof of
-success. See [validation](workbuddy-local-validation.md) for tested and unverified paths.
+success. Deployed-Space and cross-device acceptance remains pending.
 
 ## Native clients / 原生客户端
 

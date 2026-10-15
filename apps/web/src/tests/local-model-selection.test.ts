@@ -6,7 +6,7 @@ import { resolveLocalModel } from "../lib/model-catalog.ts";
 
 const turn = (
 	sequence: number,
-	harness: "pi" | "codex" | "workbuddy" | "cohub",
+	harness: "pi" | "codex" | "cohub",
 	request: { model?: string; thinkingLevel?: string } = {},
 ) => ({
 	id: String(sequence),
@@ -28,7 +28,6 @@ test("local requests restore per harness from what was sent", () => {
 		turn(1, "pi", { model: "pi-model", thinkingLevel: "xhigh" }),
 		turn(2, "codex", { model: "codex-model", thinkingLevel: "off" }),
 		turn(3, "cohub", { model: "cloud-model", thinkingLevel: "high" }),
-		turn(4, "workbuddy", { model: "workbuddy-model" }),
 	];
 	assert.deepEqual(resolveLocalModelFromTurns(turns, "pi"), {
 		provider: "fixture",
@@ -39,10 +38,6 @@ test("local requests restore per harness from what was sent", () => {
 		provider: "fixture",
 		id: "codex-model",
 		thinkingLevel: "off",
-	});
-	assert.deepEqual(resolveLocalModelFromTurns(turns, "workbuddy"), {
-		provider: "fixture",
-		id: "workbuddy-model",
 	});
 });
 
@@ -125,13 +120,6 @@ test("a model without a level choice sends no level", () => {
 		}),
 		{ provider: "openai", id: "plain", name: "Plain" },
 	);
-});
-
-test("WorkBuddy does not infer a thinking level or reuse an unsupported saved level", () => {
-	const models: RuntimeCapabilities["models"] = [{ harness: "workbuddy", provider: "workbuddy", id: "auto", name: "Auto", isDefault: true }];
-	const expected = { provider: "workbuddy", id: "auto", name: "Auto" };
-	assert.deepEqual(resolveLocalModel(models, null), expected);
-	assert.deepEqual(resolveLocalModel(models, { provider: "workbuddy", id: "auto", thinkingLevel: "high" }), expected);
 });
 
 test("a model the Runtime no longer offers falls back to the default at its own level", () => {

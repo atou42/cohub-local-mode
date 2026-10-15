@@ -117,16 +117,15 @@ test("model counts are grouped by harness", () => {
 		harnessModelCounts(
 			status({
 				capabilities: {
-					harnesses: ["pi", "codex", "workbuddy"],
+					harnesses: ["pi", "codex"],
 					models: [
 						{ harness: "pi", provider: "p", id: "a", name: "A" },
 						{ harness: "pi", provider: "p", id: "b", name: "B" },
 						{ harness: "codex", provider: "c", id: "d", name: "D" },
-						{ harness: "workbuddy", provider: "workbuddy", id: "auto", name: "Auto" },
 					],
 				},
 			}),
 		),
-		{ pi: 2, codex: 1, workbuddy: 1 },
+		{ pi: 2, codex: 1, workbuddy: 0 },
 	);
 });

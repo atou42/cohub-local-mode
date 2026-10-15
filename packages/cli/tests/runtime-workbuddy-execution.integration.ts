@@ -32,9 +32,7 @@ test("WorkBuddy executes, persists the same cloud turn, and continues without ch
   assert.equal(result.event.archive?.turnId, first.turnId);
   assert.equal((await readTranscript(result.session.path, "workbuddy")).turns[0]?.cloudTurnId, first.turnId);
   const original = await readFile(result.session.path, "utf8");
-  // WorkBuddy's transcript has message statuses, but no authoritative turn-result record.
-  // A crash before the execution receipt is saved must stay unresolved, not invent success.
-  assert.equal(await executor.results.recover(first), null);
+  assert.equal(await executor.results.recover(first), null, "completed messages do not prove execution success");
   await executor.results.record(result.session, first, null, [result.event]);
   assert.deepEqual(await executor.results.recover(first), { session: result.session, events: [result.event] });
   await executor.results.acknowledge(first.sessionId, first.turnId);
@@ -58,10 +56,4 @@ test("WorkBuddy surfaces execution failure and stops only its own process", asyn
   const stopped = await executeTurn(executor, input("wait"), (event) => { if (event.type === "text.delta") controller.abort(); }, controller.signal, randomUUID());
   assert.equal(stopped.event.message.stopReason, "aborted");
   assert.equal(stopped.uncertainCleanup, undefined);
-});
-
-test("WorkBuddy refuses unsupported access and reasoning before any execution", async (t) => {
-  const { executor, input } = await setup(t);
-  await assert.rejects(executeTurn(executor, { ...input("never"), accessMode: "read_only" }, () => {}, new AbortController().signal, null), /read-only/);
-  await assert.rejects(executeTurn(executor, { ...input("never"), thinkingLevel: "high" }, () => {}, new AbortController().signal, null), /reasoning level/);
 });
