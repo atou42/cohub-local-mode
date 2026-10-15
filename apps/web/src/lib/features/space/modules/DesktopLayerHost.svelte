@@ -327,7 +327,7 @@ $effect(() => {
 		max-width: 160px;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 	}
 
 	.overlay-btn {

@@ -80,7 +80,7 @@ $effect(() => {
 	{:else}
 		<div
 			bind:this={panel}
-			class="flex max-h-[min(420px,70vh)] flex-col overflow-y-auto rounded-[8px] border border-border-subtle bg-bg-elevated p-1 shadow-lg"
+			class="menu-surface flex max-h-[min(420px,70vh)] flex-col overflow-y-auto p-1"
 			use:floatNear={{ getAnchor: () => anchor, placement, gap: 6, width, zIndex: 120 }}
 			role="dialog"
 			aria-label={label}

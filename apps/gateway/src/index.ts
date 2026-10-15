@@ -64,9 +64,12 @@ import {
   APP_ROOM_MAX_PENDING_OPS,
   type AppRoomPresenceRate,
   appRoomStore,
+  attachHostedRoomSeat,
   claimAppRoomSeat,
   connectionSeat,
   consumeAppRoomPresenceRate,
+  isHostedRoomTicket,
+  isHostedRoomMembership,
   releaseAppRoomSeat,
   renewAppRoomSeat,
 } from "./app-room.js";
@@ -87,7 +90,7 @@ type WsConnectionContext = {
   boardAwarenessRate: BoardAwarenessRate;
   boardAwarenessPending: number;
   boardAwarenessTail: Promise<void>;
-  appRooms: Map<string, { participantId: string; ticket: string; room: import("@cohub/protocol/realtime").RealtimeRoomDescriptor }>;
+  appRooms: Map<string, { participantId: string; ticket: string; room: import("@cohub/protocol/realtime").RealtimeRoomDescriptor; hosted?: boolean }>;
   appRoomOpsPending: number;
   appRoomOpsTail: Promise<void>;
   appRoomPresenceRate: AppRoomPresenceRate;
@@ -503,7 +506,7 @@ const closeAppRoomMembership = async (
   unsubscribeConnectionFromRoom(ctx, getRealtimeRoom(roomId));
   // Only "revoked" leaves peers with a stale member list: "expired" means the room is
   // gone, "superseded" means the participant is still there on a newer connection.
-  if (status === "revoked") {
+  if (status === "revoked" && !membership.hosted) {
     await appRoomStore.announce({
       roomId,
       type: "realtime.room.member.left",
@@ -720,7 +723,15 @@ async function fanOutBroadcastToLocalSockets(payload: GatewayWsBroadcastPayload)
     const socket = wsSockets.get(connectionId);
     if (!socket) return;
     deliveredConnectionIds.add(connectionId);
-    sendWsRealtime(socket, wsConnections.get(connectionId), envelope);
+    const ctx = wsConnections.get(connectionId);
+    sendWsRealtime(socket, ctx, envelope);
+    if (ctx && envelope.type === "realtime.room.member.left") {
+      const roomId = (envelope.payload as { roomId?: unknown }).roomId;
+      const participantId = (envelope.payload as { member?: { participantId?: unknown } }).member?.participantId;
+      if (typeof roomId === "string" && isHostedRoomMembership(ctx, roomId) && ctx.appRooms.get(roomId)?.participantId === participantId) {
+        void closeAppRoomMembership(ctx, socket, roomId, "revoked");
+      }
+    }
   };
 
   for (const room of resolveRealtimeRoomsForEnvelope(payload)) {
@@ -1194,12 +1205,16 @@ async function main() {
           try {
             // Claim the seat before entering the public routing table, so a connection
             // that never gets a seat (a full room) cannot receive room events meanwhile.
-            const result = await claimAppRoomSeat(ctx, message.payload);
+            const hosted = isHostedRoomTicket(message.payload.ticket);
+            if (ctx.appRooms.has(roomId)) throw new Error("room is already connected");
+            const result = hosted
+              ? await attachHostedRoomSeat(ctx, message.payload)
+              : await claimAppRoomSeat(ctx, message.payload);
             seated = true;
             subscribeConnectionToRoom(ctx, roomRef);
             // A seatPerUser takeover reuses a seat that peers already know about, so
             // announcing it would show a spurious join and burn a sequence number.
-            if (result.isNew || result.droppedPublications) {
+            if (!hosted && (result.isNew || result.droppedPublications)) {
               await appRoomStore.announce({
                 roomId,
                 type: result.isNew ? "realtime.room.member.joined" : "realtime.room.publications.updated",
@@ -1266,7 +1281,7 @@ async function main() {
           const { roomId, after, limit } = message.payload;
           enqueueAppRoomOp(ctx, socket, roomId, requestId, "history", async () => {
             try {
-              if (!connectionSeat(ctx, roomId)) throw new AppRoomSeatLostError("room membership is required", "revoked");
+              if (await renewAppRoomSeat(ctx, roomId) !== "active") throw new AppRoomSeatLostError("room membership is required", "revoked");
               const history = await appRoomStore.history(roomId, { after, limit });
               sendWsEnvelope(socket, buildRealtimeEnvelope({
                 domain: "room",
@@ -1309,10 +1324,13 @@ async function main() {
           return;
         }
 
-        if (message.type === "realtime.room.leave") {
+        if (message.type === "realtime.room.leave" || message.type === "realtime.room.detach") {
           const { roomId } = message.payload;
           try {
-            await releaseAppRoomSeat(ctx, roomId);
+            if (message.type === "realtime.room.detach" && !isHostedRoomMembership(ctx, roomId)) {
+              throw new AppRoomSeatLostError("hosted room membership is required", "revoked");
+            }
+            await releaseAppRoomSeat(ctx, roomId, { releaseHosted: message.type === "realtime.room.leave" });
             unsubscribeConnectionFromRoom(ctx, getRealtimeRoom(roomId));
             await persistWsConnection(ctx);
             sendWsEnvelope(socket, buildRealtimeEnvelope({

@@ -7,6 +7,10 @@ import type { SessionTurnRecord } from "@cohub/protocol/model";
 import type { TaskRunStatus } from "@cohub/protocol/task";
 import { redisCommandClient } from "./redis.js";
 import { enqueueSpaceHookFromEvent } from "./space-hooks.js";
+import { syncFinishedTaskBoards } from "./board-task-sync.js";
+import { createLogger } from "@cohub/infra/logging";
+
+const logger = createLogger({ serviceName: "cohub-worker" });
 
 const toIsoOrNull = (value: Date | string | null | undefined) => {
   if (!value) return null;
@@ -107,9 +111,11 @@ export const dispatchTaskUpdated = async (input: {
   task: Parameters<typeof toRealtimeTaskRecord>[0];
   changed: string[];
 }) => {
-  if (input.task.sessionId && input.task.taskType === "generation" && ["completed", "failed"].includes(input.task.status)) {
+  const finished = input.task.status === "completed" || input.task.status === "failed";
+  if (finished && input.task.sessionId && input.task.taskType === "generation") {
     void scheduleSessionSnapshot(input.task.sessionId);
   }
+  if (finished) void syncFinishedTaskBoards(input.task).catch((error) => logger.warn("[BoardTasks] sync failed", { taskRunId: input.task.id, error }));
   await publishTaskEvent({ type: "task.updated", task: input.task, changed: input.changed });
 };
 

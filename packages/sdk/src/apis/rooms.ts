@@ -4,6 +4,8 @@ import type {
   RealtimeRoomMember,
 } from "@cohub/protocol/realtime";
 import type { HttpTransport } from "../transport.js";
+import type { WebsocketClient } from "../websocket.js";
+import type { AppRoom, AppRoomAdmissionResponse } from "./app-realtime.js";
 
 export type RoomView = {
   room: RealtimeRoomDescriptor;
@@ -38,7 +40,7 @@ export type RoomEventsQuery = {
 const MAX_WAIT_PER_READ_MS = 25_000;
 
 export class RoomsApi {
-  constructor(private readonly transport: HttpTransport) {}
+  constructor(private readonly transport: HttpTransport, private readonly websocket?: WebsocketClient) {}
 
   create(input: { appId: string; code?: string; expiresInSeconds?: number; maxParticipants?: number; seatPerUser?: boolean }) {
     return this.post<RoomCreated>("", input);
@@ -50,6 +52,32 @@ export class RoomsApi {
 
   get(roomId: string) {
     return this.transport.request<RoomView>(this.path(roomId));
+  }
+
+  async connect(roomId: string, options: { after?: number; onRoom?: (room: AppRoom<Record<string, unknown>>) => void } = {}) {
+    if (!this.websocket) throw new Error("Room realtime requires CohubClient; CohubHttpClient supports HTTP only");
+    if (options.after !== undefined && (!Number.isSafeInteger(options.after) || options.after < 0)) throw new Error("after must be a non-negative safe integer");
+    const admission = await this.post<AppRoomAdmissionResponse & { appId: string }>(`/${encodeURIComponent(roomId)}/connect`, {});
+    const { AppRoom } = await import("./app-realtime.js");
+    const room = new AppRoom<Record<string, unknown>>(this.websocket, admission, { transport: this.transport, appId: admission.appId, hosted: true });
+    try {
+      options.onRoom?.(room);
+      return await room.connect({ after: options.after });
+    } catch (error) {
+      await room.disconnect();
+      throw error;
+    }
+  }
+
+  signalRtc<T = unknown>(roomId: string, input: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path?: string; body?: unknown }) {
+    const path = input.path ?? "";
+    if (path && !/^\/[A-Za-z0-9_-]{8,64}(?:\/(?:publish|unpublish|subscribe|unsubscribe|media))?$/.test(path)) {
+      throw new Error("Invalid RTC signaling path");
+    }
+    return this.transport.request<T>(`${this.path(roomId)}/rtc${path}`, {
+      method: input.method,
+      ...(input.body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(input.body) }),
+    });
   }
 
   async events(roomId: string, query: RoomEventsQuery = {}): Promise<RoomEvents> {

@@ -6,6 +6,7 @@ import {
   WS_COMPACT_STREAM_CAPABILITY,
   WS_ROOM_SUBSCRIPTION_CAPABILITY,
   WS_REALTIME_ROOM_CAPABILITY,
+  WS_REALTIME_ROOM_HISTORY_CAPABILITY,
   normalizeRealtimeRooms,
   type ChannelEnvelope,
   type RealtimeCompactFrame,
@@ -569,6 +570,11 @@ export class WebsocketClient {
     });
   }
 
+  async detachRealtimeRoom(input: { roomId: string; requestId?: string }) {
+    await this.ensureOpen();
+    this.send({ type: "realtime.room.detach", requestId: input.requestId, payload: { roomId: input.roomId } });
+  }
+
   async leaveRealtimeRoom(input: { roomId: string; requestId?: string }) {
     await this.ensureOpen();
     this.send({
@@ -703,7 +709,7 @@ export class WebsocketClient {
     const waiter = this.createAuthWaiter();
     this.send({
       type: "auth",
-      payload: { token, capabilities: [WS_COMPACT_STREAM_CAPABILITY, WS_ROOM_SUBSCRIPTION_CAPABILITY, WS_BOARD_AWARENESS_CAPABILITY, WS_REALTIME_ROOM_CAPABILITY] },
+      payload: { token, capabilities: [WS_COMPACT_STREAM_CAPABILITY, WS_ROOM_SUBSCRIPTION_CAPABILITY, WS_BOARD_AWARENESS_CAPABILITY, WS_REALTIME_ROOM_CAPABILITY, WS_REALTIME_ROOM_HISTORY_CAPABILITY] },
     });
     await waiter.promise;
     this.authReconnectAttempted = false;

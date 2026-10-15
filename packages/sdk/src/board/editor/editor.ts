@@ -61,6 +61,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			selection: [],
 			camera: normalizeViewport(options.viewport ?? { x: 0, y: 0, zoom: 1 }),
 			surfaceSize: { width: 0, height: 0 },
+			controlOutset: 0,
 			cameraPolicy: preferences?.cameraPolicy ?? "follow",
 			tool: options.initialTool ?? "select",
 			toolStyles: preferences?.toolStyles ?? createBoardToolStyles(),
@@ -315,6 +316,12 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		set surfaceSize(value: { width: number; height: number }) {
 			state.surfaceSize = value;
 		},
+		get controlOutset() {
+			return read("selection", () => state.controlOutset);
+		},
+		set controlOutset(value: number) {
+			if (value !== state.controlOutset) state.controlOutset = value;
+		},
 
 		loadDocument: remote.loadDocument,
 		undo: document.undo,
@@ -387,7 +394,6 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		applyMediaFileChange: snapshots.applyMediaFileChange,
 		adoptMediaNaturalSizes: snapshots.adoptMediaNaturalSizes,
 		applyFileSnapshots: snapshots.applyFileSnapshots,
-		applyTaskSnapshots: snapshots.applyTaskSnapshots,
 
 		setPlayhead: animation.setPlayhead,
 		setRecording: animation.setRecording,
@@ -402,6 +408,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		pointerMove: interaction.pointerMove,
 		pointerUp: interaction.pointerUp,
 		pointerLeave: interaction.pointerLeave,
+		subscribeTransforms: interaction.subscribeTransforms,
 		cancelPointerInteraction: interaction.cancel,
 
 		destroy() {

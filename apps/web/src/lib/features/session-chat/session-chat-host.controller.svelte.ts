@@ -74,7 +74,7 @@ import {
 } from "$lib/session-fork-tree";
 import type { SessionRelations } from "$lib/session-relations-context";
 import type { TimelineItem } from "$lib/session-tree";
-import { buildTurnTimelineItems } from "$lib/session-turn-render";
+import { createTurnTimelineBuilder } from "$lib/session-turn-render";
 import type { NewChatComposerApplyPayload } from "$lib/space-config";
 import { materializeSpaceEntries } from "$lib/space-upload";
 import { authStore } from "$lib/stores/auth.svelte";
@@ -733,6 +733,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			activeSessionState?.session?.activeTurn,
 		),
 	);
+	const buildTurnTimelineItems = createTurnTimelineBuilder();
 	const timeline = $derived.by<TimelineItem[]>(() => {
 		const state = activeSessionState;
 		if (!state) return EMPTY_TIMELINE;

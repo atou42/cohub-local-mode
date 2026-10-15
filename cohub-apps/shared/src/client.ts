@@ -92,7 +92,7 @@ export async function loadResource(
   let result: ResourceDetail;
   switch (target.kind) {
     case "task":
-      result = { kind: "task", data: await client.tasks.get(target.id) };
+      result = { kind: "task", data: await client.tasks.get(target.id, { include: ["boards"] }) };
       break;
     case "checkpoint":
       result = {

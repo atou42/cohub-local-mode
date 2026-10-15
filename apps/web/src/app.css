@@ -2,7 +2,9 @@
 @import "tw-animate-css";
 @import "@fontsource/geist";
 @import "@fontsource/geist-mono";
+@import "@fontsource-variable/figtree";
 @import "./styles/theme.css";
+@import "./styles/components.css";
 @plugin "@tailwindcss/typography";
 
 /* ============================================================
@@ -149,8 +151,13 @@ body.sidebar-resizing iframe {
 	transition: opacity var(--motion-panel-fade-duration) var(--motion-panel-ease);
 }
 
-.panel-shell--collapsed > .panel-shell-inner > .panel-shell-fade,
-.panel-shell--collapsed > .panel-shell-fade {
+.sidebar-resizing .panel-shell,
+.sidebar-resizing .panel-shell-fade {
+	transition: none;
+}
+
+.panel-shell--collapsed > .panel-shell-fade,
+.panel-shell--collapsed > .panel-shell-inner > .panel-shell-fade {
 	opacity: 0;
 	/* Fade first on collapse so the empty rail then shrinks. */
 	transition-duration: var(--motion-panel-fade-collapse-duration);
@@ -158,10 +165,10 @@ body.sidebar-resizing iframe {
 	transition-delay: 0ms;
 }
 
+.panel-shell:not(.panel-shell--collapsed) > .panel-shell-fade,
 .panel-shell:not(.panel-shell--collapsed)
 	> .panel-shell-inner
-	> .panel-shell-fade,
-.panel-shell:not(.panel-shell--collapsed) > .panel-shell-fade {
+	> .panel-shell-fade {
 	opacity: 1;
 	/* Width expands first; content fades in slightly delayed. */
 	transition-delay: 100ms;
@@ -172,11 +179,6 @@ body.sidebar-resizing iframe {
 	.panel-shell-fade {
 		transition: none;
 	}
-}
-
-body.sidebar-resizing .panel-shell,
-body.sidebar-resizing .panel-shell-fade {
-	transition: none;
 }
 
 /* Touch devices keep their native, auto-hiding scroll indicators. */
@@ -463,8 +465,7 @@ body.pointer-dragging {
 	margin-top: 0;
 }
 
-.markdown-content > :last-child,
-.markdown-content > :last-child > :last-child {
+.markdown-content > :last-child {
 	margin-bottom: 0;
 }
 
@@ -623,8 +624,30 @@ body.pointer-dragging {
 	color: var(--brand);
 }
 
+.markdown-content .markdown-mermaid-source summary {
+	display: inline-flex;
+	min-height: 1.5rem;
+	align-items: center;
+	padding: 0;
+	color: var(--text-tertiary);
+	font-size: 0.88em;
+	font-weight: 500;
+	letter-spacing: 0;
+}
+
+.markdown-content .markdown-cohub-ask-preview summary {
+	min-height: auto;
+	padding: 0;
+	color: var(--text-tertiary);
+	font-size: 0.9em;
+}
+
 .markdown-content details[open] summary {
 	border-bottom: 1px solid var(--border-subtle);
+}
+
+.markdown-content .markdown-mermaid-source[open] summary {
+	border-bottom: 0;
 }
 
 .markdown-content details > :not(summary) {
@@ -634,6 +657,10 @@ body.pointer-dragging {
 
 .markdown-content details > :last-child {
 	margin-bottom: 0.78rem;
+}
+
+.markdown-content > :last-child > :last-child {
+	margin-bottom: 0;
 }
 
 .markdown-content ul,
@@ -654,6 +681,12 @@ body.pointer-dragging {
 	list-style-type: circle;
 }
 
+.markdown-content li > ul,
+.markdown-content li > ol {
+	margin-top: 0.18em;
+	margin-bottom: 0;
+}
+
 .markdown-content ul ul ul {
 	list-style-type: square;
 }
@@ -665,12 +698,6 @@ body.pointer-dragging {
 
 .markdown-content li::marker {
 	color: var(--text-tertiary);
-}
-
-.markdown-content li > ul,
-.markdown-content li > ol {
-	margin-top: 0.18em;
-	margin-bottom: 0;
 }
 
 .markdown-content li > p {
@@ -690,7 +717,6 @@ body.pointer-dragging {
 	height: 0.95em;
 	margin: 0 0.48em 0 0;
 	vertical-align: -0.12em;
-	accent-color: var(--brand);
 }
 
 .markdown-content li:has(> input[type="checkbox"]) {
@@ -727,17 +753,18 @@ body.pointer-dragging {
 }
 
 .streaming-live-markdown > :last-child::after,
-.streaming-live-markdown:empty::after {
+.streaming-live-markdown:empty::after,
+.streaming-caret {
 	content: "";
 	display: inline-block;
 	width: 0.44em;
 	height: 1em;
 	margin-left: 0.08em;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--brand) 72%, var(--text-tertiary));
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 18%, transparent);
+	border-radius: var(--indicator-radius);
+	background: color-mix(in srgb, var(--activity) 72%, var(--text-tertiary));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--activity) 18%, transparent);
 	vertical-align: -0.12em;
-	animation: markdown-stream-caret 1.05s ease-in-out infinite;
+	animation: markdown-stream-caret 1.05s var(--indicator-easing) infinite;
 }
 
 .streaming-live-markdown pre:last-child::after,
@@ -764,18 +791,6 @@ body.pointer-dragging {
 
 .streaming-tail-muted {
 	color: inherit;
-}
-
-.streaming-caret {
-	display: inline-block;
-	width: 0.44em;
-	height: 1em;
-	margin-left: 0.08em;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--brand) 72%, var(--text-tertiary));
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 18%, transparent);
-	vertical-align: -0.12em;
-	animation: markdown-stream-caret 1.05s ease-in-out infinite;
 }
 
 .streaming-words-muted .streaming-caret {
@@ -919,14 +934,14 @@ body.pointer-dragging {
 	max-height: 16rem;
 }
 
-.markdown-content[data-variant="chat"] .markdown-media > video {
-	max-width: 90%;
-}
-
 .markdown-content[data-variant="document"] img,
 .markdown-content[data-variant="document"] video {
 	max-width: 100%;
 	max-height: none;
+}
+
+.markdown-content[data-variant="chat"] .markdown-media > video {
+	max-width: 90%;
 }
 
 .markdown-content p[align]:has(> img[width$="%"]),
@@ -1105,17 +1120,6 @@ body.pointer-dragging {
 	font-size: 0.86em;
 }
 
-.markdown-content .markdown-mermaid-source summary {
-	display: inline-flex;
-	min-height: 1.5rem;
-	align-items: center;
-	padding: 0;
-	color: var(--text-tertiary);
-	font-size: 0.88em;
-	font-weight: 500;
-	letter-spacing: 0;
-}
-
 .markdown-content .markdown-mermaid-source summary::marker {
 	content: "";
 }
@@ -1124,10 +1128,6 @@ body.pointer-dragging {
 	color: var(--text-secondary);
 	text-decoration: underline;
 	text-underline-offset: 0.18em;
-}
-
-.markdown-content .markdown-mermaid-source[open] summary {
-	border-bottom: 0;
 }
 
 .markdown-content .markdown-mermaid-source > :not(summary) {
@@ -1260,13 +1260,6 @@ body.pointer-dragging {
 	border: 0;
 	background: transparent;
 	font-size: 0.78em;
-}
-
-.markdown-content .markdown-cohub-ask-preview summary {
-	min-height: auto;
-	padding: 0;
-	color: var(--text-tertiary);
-	font-size: 0.9em;
 }
 
 .markdown-cohub-ask-preview-source {
@@ -1475,6 +1468,15 @@ body.pointer-dragging {
 	background-color: var(--shiki-neta-studio-bg, var(--bg-code));
 }
 
+[data-theme="neta-pixel-dark"] .markdown-content .shiki,
+[data-theme="neta-pixel-dark"] .markdown-content .shiki span {
+	color: var(--shiki-neta-pixel-dark, var(--shiki-dark));
+}
+
+[data-theme="neta-pixel-dark"] .markdown-content .shiki {
+	background-color: var(--bg-code);
+}
+
 .markdown-code-copy {
 	position: absolute;
 	top: 0.5rem;
@@ -1499,6 +1501,10 @@ body.pointer-dragging {
 		color 140ms ease;
 }
 
+.streaming-live-markdown .markdown-code-copy {
+	display: none;
+}
+
 .markdown-code-block:hover .markdown-code-copy,
 .markdown-code-copy:focus-visible,
 .markdown-code-copy.copied {
@@ -1520,10 +1526,6 @@ body.pointer-dragging {
 	border-color: color-mix(in srgb, var(--brand) 34%, var(--border-subtle));
 	background: color-mix(in srgb, var(--brand) 12%, var(--bg-elevated));
 	color: var(--brand);
-}
-
-.streaming-live-markdown .markdown-code-copy {
-	display: none;
 }
 
 @media (hover: none) {

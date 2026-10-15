@@ -71,6 +71,7 @@ const MEMBER_ERRORS: Record<MemberRtcStatus, [AppRtcErrorCode, string]> = {
   forbidden: ["RTC_FORBIDDEN", "the room seat belongs to another viewer"],
   stale: ["RTC_STALE", "this RTC session was replaced; reconnect"],
   limit: ["RTC_LIMIT_EXCEEDED", "publication limit reached"],
+  busy: ["RTC_LIMIT_EXCEEDED", "this room seat already has an RTC session"],
   name_taken: ["RTC_NAME_TAKEN", "a publication with this name already exists"],
 };
 
@@ -116,7 +117,7 @@ export type AppRtcLogger = {
   warn(message: string, meta?: Record<string, unknown>): void;
 };
 
-export type AppRtcCaller = { appId: string; userUuid: string };
+export type AppRtcCaller = { appId: string; userUuid: string; participantId?: string };
 
 const recordWithout = (next: SessionRecord, previous: SessionRecord): SessionRecord => ({
   ...next,
@@ -160,7 +161,7 @@ export class AppRtcService {
 
   private async authorize(caller: AppRtcCaller, roomId: string, sessionId: string) {
     const session = await this.deps.store.getSession(sessionId);
-    if (!session || session.roomId !== roomId || session.appId !== caller.appId || session.userUuid !== caller.userUuid) {
+    if (!session || session.roomId !== roomId || session.appId !== caller.appId || session.userUuid !== caller.userUuid || (caller.participantId !== undefined && session.participantId !== caller.participantId)) {
       throw new AppRtcError("RTC_SESSION_NOT_FOUND", "RTC session not found");
     }
     await this.limitRate(sessionId);
@@ -201,7 +202,7 @@ export class AppRtcService {
           roomId: input.room.id,
           participantId: input.participantId,
           sessionId,
-          change: { mode: "claim", userKey: input.userKey },
+          change: { mode: "claim", userKey: input.userKey, exclusive: input.caller.participantId !== undefined },
           eventId: randomUUID(),
         }),
       ));
@@ -525,7 +526,7 @@ export class AppRtcService {
   async closeOwned(input: { caller: AppRtcCaller; roomId: string; sessionId: string }) {
     const session = await this.deps.store.getSession(input.sessionId);
     if (!session) return;
-    if (session.roomId !== input.roomId || session.appId !== input.caller.appId || session.userUuid !== input.caller.userUuid) {
+    if (session.roomId !== input.roomId || session.appId !== input.caller.appId || session.userUuid !== input.caller.userUuid || (input.caller.participantId !== undefined && session.participantId !== input.caller.participantId)) {
       throw new AppRtcError("RTC_SESSION_NOT_FOUND", "RTC session not found");
     }
     await this.close(input.sessionId, "closed").catch((error) => {

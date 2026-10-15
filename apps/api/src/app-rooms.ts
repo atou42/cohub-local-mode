@@ -243,6 +243,21 @@ export type AppRoomTicket = TokenBody & {
 };
 
 export type AppRoomInvite = TokenBody & { typ: "app_room_invite"; appId: string; roomId: string };
+export type HostedRoomTicket = TokenBody & {
+  typ: "hosted_room_ticket";
+  appId: string;
+  roomId: string;
+  userUuid: string;
+  participantId: string;
+};
+
+export const createHostedRoomTicket = (input: Omit<HostedRoomTicket, "typ" | "exp">, expiresAtMs: number) =>
+  signToken({ typ: "hosted_room_ticket", ...input, exp: Math.floor(Math.min(expiresAtMs, Date.now() + 60_000) / 1000) } satisfies HostedRoomTicket);
+
+export const verifyHostedRoomTicket = (token: string) => {
+  const ticket = verifyToken<HostedRoomTicket>(token, "hosted_room_ticket");
+  return ticket?.appId && ticket.roomId && ticket.userUuid && ticket.participantId ? ticket : null;
+};
 
 export const verifyAppRoomTicket = (token: string) => {
   // Tickets minted as `work_room_ticket` stay valid until their room expires, 24 hours at most.

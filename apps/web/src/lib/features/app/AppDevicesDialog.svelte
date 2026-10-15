@@ -42,7 +42,7 @@ const locale = $derived(getLocale());
 			</div>
 			<div class="device-actions">
 				<button type="button" class="device-cancel" onclick={onCancel}>{m.common_cancel({}, { locale })}</button>
-				<button type="button" class="device-confirm" onclick={onConfirm}>{m.app_devices_allow({}, { locale })}</button>
+				<button type="button" class="device-confirm primary-key" onclick={onConfirm}>{m.app_devices_allow({}, { locale })}</button>
 			</div>
 		</div>
 	{/if}
@@ -119,17 +119,6 @@ const locale = $derived(getLocale());
 	.device-cancel:hover {
 		background: var(--bg-hover);
 		color: var(--text-primary);
-	}
-
-	.device-confirm {
-		border: 1px solid var(--brand);
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
-	}
-
-	.device-confirm:hover {
-		background: var(--brand-hover);
-		border-color: var(--brand-hover);
 	}
 
 	.device-cancel:focus-visible,

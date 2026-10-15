@@ -1,14 +1,13 @@
-
 import type {
 	BoardDocument,
-	BoardScriptSnapshot,
 	BoardSceneItem,
+	BoardScriptSnapshot,
 	BoardShapeColors,
 } from "@neta-art/cohub/board";
 import {
 	type BoardExportRegion,
-	selectBoardExportAssets,
 	hasBoardScripts,
+	selectBoardExportAssets,
 } from "@neta-art/cohub/board";
 import {
 	type BoardExportOptions,
@@ -17,7 +16,12 @@ import {
 	prepareBoardExport,
 	renderBoardExport,
 } from "@neta-art/cohub/board/export";
-import { createBoardRenderSampler, prepareBrowserBoardScripts, type BoardRenderPalette } from "@neta-art/cohub/board/render";
+import {
+	type BoardRenderPalette,
+	type BoardRenderStyle,
+	createBoardRenderSampler,
+	prepareBrowserBoardScripts,
+} from "@neta-art/cohub/board/render";
 import { type Renderer, Texture } from "pixi.js";
 
 export type BoardImageFormat = "png" | "jpeg" | "webp";
@@ -138,6 +142,7 @@ export type BoardStageExportBridge = {
 		palette: BoardRenderPalette;
 		colors: BoardShapeColors;
 		colorScheme: "dark" | "light";
+		style?: BoardRenderStyle;
 	};
 	withTextures: <T>(
 		items: BoardSceneItem[],
@@ -183,16 +188,42 @@ export async function exportBoardImage(
 
 	const region: BoardExportRegion = exportOptions.region ?? { kind: "all" };
 	const theme = bridge.theme();
-	const sampler = exportOptions.at ? createBoardRenderSampler(document, exportOptions.at.animation ?? null, theme) : undefined;
+	const sampler = exportOptions.at
+		? createBoardRenderSampler(
+				document,
+				exportOptions.at.animation ?? null,
+				theme,
+			)
+		: undefined;
 	const hasScripts = hasBoardScripts(document);
-	if (hasScripts && !bridge.readModule) throw new Error("Script export needs a module reader.");
-	const sample = sampler && exportOptions.at ? sampler.at(exportOptions.at.time).document : document;
-	const scripts = hasScripts && bridge.readModule ? await prepareBrowserBoardScripts(sample, exportOptions.at?.time ?? 0, bridge.readModule, exportOptions.at ? undefined : await bridge.snapshotScripts?.()) : null;
+	if (hasScripts && !bridge.readModule)
+		throw new Error("Script export needs a module reader.");
+	const sample =
+		sampler && exportOptions.at
+			? sampler.at(exportOptions.at.time).document
+			: document;
+	const scripts =
+		hasScripts && bridge.readModule
+			? await prepareBrowserBoardScripts(
+					sample,
+					exportOptions.at?.time ?? 0,
+					bridge.readModule,
+					exportOptions.at ? undefined : await bridge.snapshotScripts?.(),
+				)
+			: null;
 	try {
-		const prepared = prepareBoardExport(document, { ...exportOptions, sampler, region, scripts: scripts?.host });
+		const prepared = prepareBoardExport(document, {
+			...exportOptions,
+			sampler,
+			region,
+			scripts: scripts?.host,
+		});
 		if (!prepared) return null;
 
-		const assets = selectBoardExportAssets(prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0), bridge.assetKey);
+		const assets = selectBoardExportAssets(
+			prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0),
+			bridge.assetKey,
+		);
 		const omittedKeys = new Set(assets.omittedKeys);
 		const cappedAssetKey = (item: BoardSceneItem) => {
 			const key = bridge.assetKey(item);
@@ -221,6 +252,7 @@ export async function exportBoardImage(
 					palette: theme.palette,
 					colors: theme.colors,
 					colorScheme: theme.colorScheme,
+					style: theme.style,
 					...exportOptions,
 					scripts: scripts?.host,
 					sampler,
@@ -264,7 +296,9 @@ export async function exportBoardImage(
 		} finally {
 			backgroundTexture?.dispose();
 		}
-	} finally { scripts?.dispose(); }
+	} finally {
+		scripts?.dispose();
+	}
 }
 
 export function boardExportFilename(

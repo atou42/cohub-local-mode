@@ -42,6 +42,8 @@ import type {
 } from "@cohub/protocol/generation";
 import type { MessageRecord } from "@cohub/protocol/model";
 import type { ModelThinkingLevel, SearchTextRange } from "@cohub/protocol";
+import type { TaskRunBoard } from "@cohub/protocol/task";
+export type { TaskRunBoard } from "@cohub/protocol/task";
 
 export type { SearchTextRange } from "@cohub/protocol";
 
@@ -587,7 +589,7 @@ export type BillingBalanceActivityList = {
 export type UserRulesResponse = {
   content: string;
   updatedAt: string | null;
-  source: "config-space";
+  source: "home-space";
   path: string;
 };
 
@@ -1311,9 +1313,15 @@ export type {
   CompletionThinkingLevel,
   CompletionUsage,
   CreateSpaceCompletionInput,
+  CreateSpaceDecisionInput,
+  DecisionAnswer,
+  DecisionQuestion,
+  DecisionState,
+  DecisionStateImage,
   ModelThinkingLevel,
   SpaceCompletionResult,
   SpaceCompletionStreamEvent,
+  SpaceDecisionResult,
 } from "@cohub/protocol";
 
 export type CronJobPayload = Record<string, unknown>;
@@ -1367,6 +1375,7 @@ export type CronJobRecord<TPayload extends CronJobPayload = CronJobPayload> = {
 export type TaskRunDetailResponse = {
   run: TaskRunRecord;
   progress: unknown;
+  boards?: TaskRunBoard[];
 };
 
 export type TaskRunRecord = {

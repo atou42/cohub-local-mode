@@ -50,8 +50,7 @@ export type AppNavigationTarget =
       kind: "cronjob";
       spaceId: string;
       cronjobId: string;
-    };
-
+    }
 export type AppNavigationCall = NavigationCall;
 
 export type AppNavigationOpenMessage = {

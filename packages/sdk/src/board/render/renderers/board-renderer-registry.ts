@@ -1,7 +1,8 @@
 import type { Container, Graphics, Texture } from "pixi.js";
-import type { BoardSettings, BoardCustomItem, BoardFrame, BoardDocument } from "@cohub/protocol";
+import type { BoardSettings, BoardCustomItem, BoardFrame, BoardDocument, BoardTaskItem } from "@cohub/protocol";
 import type { BoardShapeColors } from "../../model/palette.js";
 import type { BoardScene, BoardSceneItem, SceneItem } from "../../model/scene.js";
+import type { BoardRenderStyle } from "../style.js";
 import { ensureBoardTextMeasurement } from "../text-measurement.js";
 import { arrowCardRenderer } from "./arrow-card-renderer.js";
 import { audioCardRenderer } from "./audio-card-renderer.js";
@@ -39,18 +40,40 @@ export type BoardScriptHost = {
 	release: (id: string) => void;
 };
 
+export type BoardRenderLabels = {
+	queued: string;
+	generating: string;
+	failed: string;
+	previewUnavailable: string;
+	noPreview: string;
+};
+
+export const DEFAULT_BOARD_RENDER_LABELS: BoardRenderLabels = {
+	queued: "Queued",
+	generating: "Generating",
+	failed: "Failed",
+	previewUnavailable: "Preview unavailable",
+	noPreview: "No preview",
+};
+
 export type BoardRenderContext = {
 	settings: BoardSettings;
 	scene: BoardScene;
 	selectedIds: Set<string>;
 	hoveredId: string | null;
 	resizingIds: Set<string>;
+	liftedIds: ReadonlySet<string>;
 	palette: BoardRenderPalette;
 	colors: BoardShapeColors;
 	colorScheme: "dark" | "light";
+	style: BoardRenderStyle;
+	themeKey: string;
 	rendererType: "gpu" | "canvas";
 	zoom: number;
 	time: number;
+	reducedMotion: boolean;
+	labels: BoardRenderLabels;
+	taskRun: (taskRunId: string) => { status: BoardTaskItem["props"]["snapshot"]["status"]; startedAt?: string } | null;
 	frameAt?: (id: string, time: number) => BoardFrame | undefined;
 	scripts?: BoardScriptHost;
 	assetKey: (item: BoardSceneItem) => string | null;
@@ -65,12 +88,17 @@ export type BoardCardRenderer = {
 	id: string;
 	canRender: (item: BoardSceneItem, context: BoardRenderContext) => boolean;
 	animated?: boolean;
+	/** Opt in to updates on selection and hover changes. */
+	observesSelection?: boolean;
+	tick?: (container: Container, clock: number) => number | null;
 	create: (item: BoardSceneItem, context: BoardRenderContext) => Container;
 	update: (
 		container: Container,
 		item: BoardSceneItem,
 		context: BoardRenderContext,
 	) => void;
+	/** Runs on every zoom step; only update transforms and visibility. */
+	zoom?: (container: Container, zoom: number) => void;
 	renderFar?: (
 		graphics: Graphics,
 		item: BoardSceneItem,

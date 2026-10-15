@@ -85,6 +85,11 @@ export const wsClientEventSchema = z.discriminatedUnion("type", [
     payload: z.object({ roomId: z.string().uuid() }),
   }),
   z.object({
+    type: z.literal("realtime.room.detach"),
+    requestId: z.string().optional(),
+    payload: z.object({ roomId: z.string().uuid() }),
+  }),
+  z.object({
     type: z.literal("realtime.room.history"),
     requestId: z.string().optional(),
     payload: z.object({

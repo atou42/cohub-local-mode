@@ -31,20 +31,18 @@ function sync(container: Container, item: SceneItem<BoardCustomItem>, context: B
 	const texture = context.scripts?.frame(item, context.time, resolution) ?? null;
 	const error = context.scripts?.error(item.id) ?? null;
 	parts.sprite.visible = Boolean(texture);
-	if (texture && parts.sprite.texture !== texture) parts.sprite.texture = texture;
+	const display = texture ?? Texture.EMPTY;
+	if (parts.sprite.texture !== display) parts.sprite.texture = display;
 	parts.sprite.width = width;
 	parts.sprite.height = height;
 
-	const selected = context.selectedIds.has(item.id);
 	const ready = Boolean(texture) || context.scripts?.ready?.(item.id) === true;
 	const message = error ? `${item.script.src}\n${error}` : ready ? "" : item.script.src;
-	const sig = [width, height, selected, Boolean(texture), message, context.palette.border, context.palette.muted].join("|");
+	const sig = [width, height, Boolean(texture), message, context.themeKey].join("|");
 	if (sig === parts.sig) return;
 	parts.sig = sig;
 	parts.placeholder.clear();
-	if (!ready || selected || error) {
-		parts.placeholder.rect(0, 0, width, height).stroke({ color: selected ? context.palette.brand : context.palette.border, width: selected ? 2 : 1, alpha: 0.8 });
-	}
+	if (!ready || error) parts.placeholder.rect(0, 0, width, height).stroke({ color: context.palette.border, width: 1, alpha: 0.8 });
 	parts.label.visible = !ready || Boolean(error);
 	parts.label.text = message;
 	parts.label.style.fill = error ? context.colors.rose.stroke : context.palette.muted;

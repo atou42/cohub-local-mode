@@ -54,20 +54,20 @@ function submit(event: SubmitEvent) {
 	<form onsubmit={submit} novalidate class="flex flex-col gap-3">
 		<label class="flex flex-col gap-1 text-xs text-text-secondary">
 			{m.board_media_url({}, { locale })}
-			<input bind:this={input} bind:value={url} type="url" inputmode="url" required maxlength="4096" autocomplete="off" spellcheck="false" placeholder="https://…" aria-invalid={error} aria-describedby={error ? errorId : undefined} oninput={() => { error = false; }} class="h-10 w-full rounded border border-border-primary bg-bg-secondary px-3 text-sm text-text-primary outline-none focus:border-brand" />
+			<input bind:this={input} bind:value={url} type="url" inputmode="url" required maxlength="4096" autocomplete="off" spellcheck="false" placeholder="https://…" aria-invalid={error} aria-describedby={error ? errorId : undefined} oninput={() => { error = false; }} class="h-10 w-full rounded border border-border-primary bg-bg-input px-3 text-sm text-text-primary outline-none focus:border-brand" />
 		</label>
 		{#if error}<p id={errorId} role="alert" class="text-xs text-error-soft">{m.board_media_url_invalid({}, { locale })}</p>{/if}
 		<div class="flex items-end gap-3">
 			<label class="flex flex-1 flex-col gap-1 text-xs text-text-secondary">
 				{m.board_media_type({}, { locale })}
-				<select value={kind} onchange={(event) => { selectedKind = event.currentTarget.value as BoardMediaItemKind; }} class="h-10 rounded border border-border-primary bg-bg-secondary px-2 text-sm text-text-primary outline-none focus:border-brand">
+				<select value={kind} onchange={(event) => { selectedKind = event.currentTarget.value as BoardMediaItemKind; }} class="h-10 rounded border border-border-primary bg-bg-input px-2 text-sm text-text-primary outline-none focus:border-brand">
 					<option value="image">{m.board_media_image({}, { locale })}</option>
 					<option value="video">{m.board_media_video({}, { locale })}</option>
 					<option value="audio">{m.board_media_audio({}, { locale })}</option>
 					<option value="file">{m.board_media_file({}, { locale })}</option>
 				</select>
 			</label>
-			<button type="submit" class="h-10 rounded bg-brand px-4 text-sm font-medium text-brand-contrast-fg focus-visible:outline-brand">{m.board_add({}, { locale })}</button>
+			<button type="submit" class="primary-key h-10 px-4 text-sm">{m.board_add({}, { locale })}</button>
 		</div>
 	</form>
 </div>

@@ -1,118 +1,86 @@
 import { getMediaResourceTitle } from "../../model/media.js";
 import type { SceneItem } from "../../model/scene.js";
-import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { BoardAudioItem } from "@cohub/protocol";
 import { Container, Graphics, Text } from "pixi.js";
 import { drawAudioWaveform } from "../audio-waveform.js";
-import {
-	syncTextResolution,
-	syncTextWrapWidth,
-	textResolutionForZoom,
-} from "../text-resolution.js";
+import { formatBoardDuration } from "../card-tag.js";
+import { cardElevation, drawCardSurface } from "../surface.js";
+import { fitTextToWidth } from "../text-fit.js";
+import { boardCardDetailed, syncTextResolution, textResolutionForZoom } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
-import type {
-	BoardCardRenderer,
-	BoardRenderContext,
-} from "./board-renderer-registry.js";
+import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
+import { drawMediaPlayKey } from "./media-key.js";
 
-const RADIUS = 4;
-const PLAY_RADIUS = 18;
+export const AUDIO_PADDING = 14;
+export const AUDIO_KEY_RADIUS = 16;
+const GAP = 12;
+const WAVE_HEIGHT = 16;
 
 type AudioParts = {
 	root: Container;
 	plate: Graphics;
-	waveform: Graphics;
-	chrome: Graphics;
-	label: Text;
+	wave: Graphics;
+	title: Text;
 	sig: string;
-	wrapWidth: number;
 	resolution: number;
 };
 
 const partsByContainer = new WeakMap<Container, AudioParts>();
 
-function sync(
-	container: Container,
-	item: SceneItem<BoardAudioItem>,
-	context: BoardRenderContext,
-) {
+export function audioKeyCenter(width: number, height: number) {
+	const radius = Math.min(AUDIO_KEY_RADIUS, Math.max(8, height / 2 - 8), width / 4);
+	return { x: AUDIO_PADDING + radius, y: height / 2, radius };
+}
+
+function sync(container: Container, item: SceneItem<BoardAudioItem>, context: BoardRenderContext) {
 	const parts = partsByContainer.get(container);
 	if (!parts) return;
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const title = item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
-
-	syncTextResolution(parts.label, parts, context.zoom);
-	if (parts.label.text !== title) parts.label.text = title;
-	syncTextWrapWidth(parts.label, parts, Math.max(1, width - 24), false);
-	parts.label.position.set(12, Math.max(8, height - parts.label.height - 8));
-
-	const sig = [
-		width,
-		height,
-		selected,
-		hovered,
-		title,
-		parts.label.height,
-		context.palette.surface,
-		context.palette.brand,
-		context.palette.border,
-		context.palette.muted,
-		context.palette.text,
-	].join("|");
+	const durationMs = item.props.snapshot?.durationMs;
+	const detailed = boardCardDetailed(context.zoom);
+	syncTextResolution(parts.title, parts, context.zoom);
+	const elevation = cardElevation(context, item.id);
+	const sig = [width, height, title, durationMs ?? "", detailed, elevation, item.props.src, item.props.snapshot?.mtimeMs ?? "", context.themeKey].join("|");
 	if (sig === parts.sig) return;
 	parts.sig = sig;
 
-	parts.plate
-		.clear()
-		.roundRect(0, 0, width, height, RADIUS)
-		.fill({ color: context.palette.surface, alpha: 0.98 })
-		.roundRect(0, 0, width, height, RADIUS)
-		.stroke({
-			color: selected
-				? context.palette.brand
-				: hovered
-					? context.palette.muted
-					: context.palette.border,
-			width: selected ? 2 : 1,
-			alpha: selected ? 0.96 : 0.84,
-		});
+	drawCardSurface(parts.plate.clear(), { x: 0, y: 0, width, height }, context.style, {
+		fill: context.palette.surface,
+		border: context.palette.border,
+		borderAlpha: 0.85,
+		elevation,
+	});
+	const key = audioKeyCenter(width, height);
+	drawMediaPlayKey(parts.plate, key.x, key.y, key.radius, context, true);
 
-	const labelBand = Math.min(height * 0.38, parts.label.height + 16);
-	const waveformInset = Math.min(24, width * 0.08);
-	parts.waveform.clear();
-	drawAudioWaveform(
-		parts.waveform,
-		`${item.props.src}:${item.props.snapshot?.mtimeMs ?? "unknown"}`,
-		{
-			x: waveformInset,
-			y: 10,
-			width: Math.max(1, width - waveformInset * 2),
-			height: Math.max(8, height - labelBand - 16),
-		},
-		context.palette.brand,
-	);
+	const left = key.x + key.radius + GAP;
+	const right = width - AUDIO_PADDING;
+	const room = right - left;
+	parts.title.visible = detailed && room > 24;
+	parts.wave.clear();
+	if (!parts.title.visible) return;
 
-	const cx = width / 2;
-	const cy = Math.max(PLAY_RADIUS + 6, (height - labelBand) / 2);
-	parts.chrome
-		.clear()
-		.circle(cx, cy, PLAY_RADIUS)
-		.fill({
-			color: selected ? context.palette.brand : context.palette.surface,
-			alpha: 0.92,
-		});
-	const triangle = PLAY_RADIUS * 0.58;
-	parts.chrome
-		.moveTo(cx - triangle * 0.35, cy - triangle * 0.62)
-		.lineTo(cx - triangle * 0.35, cy + triangle * 0.62)
-		.lineTo(cx + triangle * 0.72, cy)
-		.closePath()
-		.fill({ color: context.palette.text, alpha: 0.96 });
-	parts.label.style.fill = context.palette.text;
+	parts.title.style.fontFamily = context.style.font;
+	parts.title.style.fill = context.palette.text;
+	fitTextToWidth(parts.title, durationMs ? `${title} · ${formatBoardDuration(durationMs)}` : title, room);
+
+	const withWave = height >= 56;
+	const block = parts.title.height + (withWave ? 6 + WAVE_HEIGHT : 0);
+	const top = (height - block) / 2;
+	parts.title.position.set(left, top);
+	if (withWave) {
+		drawAudioWaveform(
+			parts.wave,
+			`${item.props.src}:${item.props.snapshot?.mtimeMs ?? "unknown"}`,
+			{ x: left, y: top + parts.title.height + 6, width: room, height: WAVE_HEIGHT },
+			context.palette.muted,
+			0.45,
+			context.style.corner === "pixel",
+		);
+	}
 }
 
 export const audioCardRenderer: BoardCardRenderer = {
@@ -121,32 +89,11 @@ export const audioCardRenderer: BoardCardRenderer = {
 	create: (item, context) => {
 		const root = new Container();
 		const plate = new Graphics();
-		const waveform = new Graphics();
-		const chrome = new Graphics();
+		const wave = new Graphics();
 		const resolution = textResolutionForZoom(context.zoom);
-		const label = new Text({
-			text: "",
-			style: {
-				fill: context.palette.text,
-				fontFamily: BOARD_FONT_STACK,
-				fontSize: 12,
-				fontWeight: "500",
-				wordWrap: true,
-			},
-			resolution,
-			roundPixels: true,
-		});
-		root.addChild(plate, waveform, chrome, label);
-		partsByContainer.set(root, {
-			root,
-			plate,
-			waveform,
-			chrome,
-			label,
-			sig: "",
-			wrapWidth: 0,
-			resolution,
-		});
+		const title = new Text({ text: "", style: { fontSize: 13, fontWeight: "600" }, resolution, roundPixels: true });
+		root.addChild(plate, wave, title);
+		partsByContainer.set(root, { root, plate, wave, title, sig: "", resolution });
 		if (item.type === "audio") sync(root, item, context);
 		return root;
 	},

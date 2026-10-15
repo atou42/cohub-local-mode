@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
 // Pin only after all platform artifacts are published to the public CDN.
-export const SANDBOXD_VERSION = "v2.61.1";
+export const SANDBOXD_VERSION = "v2.67.0";
 
 const BINARY_NAME = "cohub-sandboxd";
 

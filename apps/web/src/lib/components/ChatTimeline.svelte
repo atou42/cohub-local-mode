@@ -269,6 +269,9 @@ $effect(() => {
 
 <style>
 	.chat-timeline-scroll {
+		/* overflow-y alone computes overflow-x to auto; iOS then rubber-bands sideways. */
+		overflow-x: hidden;
+		overscroll-behavior-x: none;
 		scrollbar-width: none;
 		-ms-overflow-style: none;
 		/*

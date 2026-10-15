@@ -12,7 +12,8 @@ import {
   RTC_SDP_MAX,
 } from "@cohub/protocol/rtc";
 import type { z } from "zod";
-import { getAppRoomById, verifyAppRoomTicket } from "../app-rooms.js";
+import { getAppRoomById, verifyAppRoomTicket, deriveAppRoomUserKey } from "../app-rooms.js";
+import { resolveHostedCaller, requireSeat, HostedRoomError } from "../app-room-seats.js";
 import { authzDenied, getAppSessionPrincipal, requireValidId } from "../lib/middleware.js";
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -23,7 +24,8 @@ const rtcBodyLimit = bodyLimit({
 });
 
 type RtcContext = {
-  caller: { appId: string; userUuid: string };
+  caller: { appId: string; userUuid: string; participantId?: string };
+  userKey?: string;
   spaceId: string;
   roomId: string;
 };
@@ -51,14 +53,29 @@ const rtcError = (c: Context, error: unknown) => {
   throw error;
 };
 
-export function createAppRtcRouter(deps: AppRtcRouterDeps): Hono {
+export function createAppRtcRouter(deps: AppRtcRouterDeps, hosted = false): Hono {
   const router = new Hono();
-  const base = "/:id/realtime/rooms/:roomId/rtc";
+  const base = hosted ? "/:roomId/rtc" : "/:id/realtime/rooms/:roomId/rtc";
   const appRtc = deps.service;
 
   async function resolveCaller(c: Context): Promise<RtcContext | Response> {
     const appId = c.req.param("id");
     const roomId = c.req.param("roomId");
+    if (hosted) {
+      if (!roomId || !requireValidId(roomId)) return c.json({ code: "ROOM_NOT_FOUND", message: "room not found" }, 404);
+      const caller = await resolveHostedCaller(c);
+      if (caller instanceof Response) return caller;
+      try {
+        const seat = await requireSeat(roomId, caller);
+        const room = await getAppRoomById(roomId);
+        const app = room ? await deps.loadApp(room.appId) : null;
+        if (!room || app?.status !== "published") return authzDenied(c);
+        return { caller: { appId: room.appId, userUuid: caller.userUuid, participantId: seat.participantId }, userKey: deriveAppRoomUserKey(roomId, caller.userUuid), spaceId: app.spaceId, roomId };
+      } catch (error) {
+        if (!(error instanceof HostedRoomError)) throw error;
+        return c.json({ code: "RTC_FORBIDDEN", message: "an active room seat is required" }, 403);
+      }
+    }
     if (!appId || !roomId || !requireValidId(appId) || !requireValidId(roomId)) return c.json({ message: "not found" }, 404);
     const principal = getAppSessionPrincipal(c);
     if (!principal || principal.appId !== appId) return authzDenied(c);
@@ -72,13 +89,13 @@ export function createAppRtcRouter(deps: AppRtcRouterDeps): Hono {
     if (context instanceof Response) return context;
     const body = await readBody(c, appRtcOpenRequestSchema);
     if (body instanceof Response) return body;
-    const ticket = verifyAppRoomTicket(body.ticket);
-    if (
+    const ticket = hosted ? null : verifyAppRoomTicket(body.ticket);
+    if (!hosted && (
       !ticket ||
       ticket.appId !== context.caller.appId ||
       ticket.roomId !== context.roomId ||
       ticket.userUuid !== context.caller.userUuid
-    ) return c.json({ code: "RTC_FORBIDDEN", message: "invalid room admission" }, 403);
+    )) return c.json({ code: "RTC_FORBIDDEN", message: "invalid room admission" }, 403);
     const room = await getAppRoomById(context.roomId);
     if (!room || room.appId !== context.caller.appId) return c.json({ code: "ROOM_NOT_FOUND", message: "room not found" }, 404);
     try {
@@ -87,8 +104,8 @@ export function createAppRtcRouter(deps: AppRtcRouterDeps): Hono {
         caller: context.caller,
         spaceId: context.spaceId,
         room: { id: room.id, expiresAtMs: room.expiresAtMs },
-        participantId: body.participantId,
-        userKey: ticket.userKey,
+        participantId: context.caller.participantId ?? body.participantId,
+        userKey: context.userKey ?? ticket?.userKey ?? "",
       }), 201);
     } catch (error) {
       return rtcError(c, error);

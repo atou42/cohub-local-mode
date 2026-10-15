@@ -4,22 +4,26 @@ import {
 	BOARD_MONO_FONT_STACK,
 } from "@cohub/protocol/board-constants";
 import {
-	CanvasTextMetrics,
 	Container,
 	Graphics,
 	Sprite,
 	Text,
 	Texture,
 } from "pixi.js";
-import { syncTextResolution } from "../text-resolution.js";
+import { boardCardDetailed, syncTextResolution } from "../text-resolution.js";
 import type { BoardFileItem, } from "@cohub/protocol";
 import {
 	fileCategory,
 	fileCategoryAccent,
+	fileMetaLine,
 	filePreviewKind,
 	fileStem,
 	fileTypeLabel,
 } from "../../model/file-preview.js";
+import { type CardTag, createCardTag, syncCardTag, zoomCardTag } from "../card-tag.js";
+import type { BoardRenderStyle } from "../style.js";
+import { type CardRect, cardElevation, containRect, drawCardSurface, traceCardOutline } from "../surface.js";
+import { fitTextToLines } from "../text-fit.js";
 import { positionShell } from "./base-card-renderer.js";
 import type {
 	BoardCardRenderer,
@@ -27,8 +31,6 @@ import type {
 } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
 
-
-const RADIUS = 4;
 const PADDING = 10;
 const COVER_RATIO = 0.56;
 const MIN_BODY_FOR_COVER = PADDING * 2 + 18;
@@ -42,8 +44,6 @@ const TYPE_MARK_SIZE = 28;
 const GAP = 4;
 const STRIPE = 2;
 
-const LOD_TITLE_ZOOM = 0.35;
-const LOD_BODY_ZOOM = 0.6;
 
 const MAX_DASHES = 40;
 
@@ -55,6 +55,7 @@ type FileParts = {
 	cover: Sprite;
 	coverMask: Graphics;
 	typeMark: Text;
+	tag: CardTag;
 	title: Text;
 	excerpt: Text;
 	visualSig: string;
@@ -66,10 +67,8 @@ type FileParts = {
 
 const partsByContainer = new WeakMap<Container, FileParts>();
 
-function detailFor(zoom: number): "plate" | "title" | "full" {
-	if (zoom < LOD_TITLE_ZOOM) return "plate";
-	if (zoom < LOD_BODY_ZOOM) return "title";
-	return "full";
+function detailFor(zoom: number): "title" | "full" {
+	return boardCardDetailed(zoom) ? "full" : "title";
 }
 
 function coverHeight(item: SceneItem<BoardFileItem>, height: number): number {
@@ -78,104 +77,9 @@ function coverHeight(item: SceneItem<BoardFileItem>, height: number): number {
 	return Math.max(0, Math.min(ideal, height - MIN_BODY_FOR_COVER));
 }
 
-export function ellipsizeWrappedLines(
-	lines: string[],
-	maxLines: number,
-): string {
-	if (maxLines <= 0 || lines.length === 0) return "";
-	if (lines.length <= maxLines) return lines.join("\n");
-	const kept = lines.slice(0, maxLines);
-	const lastIndex = kept.length - 1;
-	const last = (kept[lastIndex] ?? "").replace(/\s+$/u, "");
-	kept[lastIndex] = last ? `${last}…` : "…";
-	return kept.join("\n");
-}
-
-export function fitLineWithEllipsis(
-	line: string,
-	wrapWidth: number,
-	measureWidth: (value: string) => number,
-): string {
-	const trimmed = line.replace(/\s+$/u, "");
-	if (!trimmed) return "…";
-	const full = `${trimmed}…`;
-	if (measureWidth(full) <= wrapWidth) return full;
-
-	let lo = 0;
-	let hi = trimmed.length;
-	let best = "…";
-	while (lo <= hi) {
-		const mid = (lo + hi) >> 1;
-		const candidate = mid > 0 ? `${trimmed.slice(0, mid)}…` : "…";
-		if (measureWidth(candidate) <= wrapWidth) {
-			best = candidate;
-			lo = mid + 1;
-		} else {
-			hi = mid - 1;
-		}
-	}
-	return best;
-}
-
-export function fitTextToLines(
-	text: Text,
-	value: string,
-	maxLines: number,
-	wrapWidth: number,
-): void {
-	const width = Math.max(1, wrapWidth);
-	text.style.wordWrapWidth = width;
-	if (!value || maxLines <= 0) {
-		if (text.text !== "") text.text = "";
-		return;
-	}
-
-	const charCap = Math.max(maxLines * Math.ceil(width), maxLines * 4);
-	const sample = value.length > charCap ? value.slice(0, charCap) : value;
-	const metrics = CanvasTextMetrics.measureText(sample, text.style);
-	const overflowed = metrics.lines.length > maxLines || sample !== value;
-	if (!overflowed) {
-		if (text.text !== value) text.text = value;
-		return;
-	}
-
-	const keptCount = Math.min(maxLines, metrics.lines.length);
-	const kept = metrics.lines.slice(0, keptCount);
-	const lastIndex = kept.length - 1;
-	const probe = text.style.clone();
-	probe.wordWrap = false;
-	kept[lastIndex] = fitLineWithEllipsis(
-		kept[lastIndex] ?? "",
-		width,
-		(candidate) => CanvasTextMetrics.measureText(candidate, probe).width,
-	);
-	const fitted = kept.join("\n");
-	if (text.text !== fitted) text.text = fitted;
-}
-
 function linesInRoom(room: number, lineHeight: number, max: number): number {
 	if (room < lineHeight * 0.85) return 0;
 	return Math.max(0, Math.min(max, Math.floor((room + 0.5) / lineHeight)));
-}
-
-export function containCoverRect(
-	width: number,
-	height: number,
-	imageWidth: number,
-	imageHeight: number,
-): { x: number; y: number; width: number; height: number } {
-	if (width <= 0 || height <= 0 || imageWidth <= 0 || imageHeight <= 0) {
-		return { x: 0, y: 0, width: 0, height: 0 };
-	}
-	const scale = Math.min(width / imageWidth, height / imageHeight);
-	const renderedWidth = imageWidth * scale;
-	const renderedHeight = imageHeight * scale;
-	return {
-		x: (width - renderedWidth) / 2,
-		y: (height - renderedHeight) / 2,
-		width: renderedWidth,
-		height: renderedHeight,
-	};
 }
 
 function layoutCover(
@@ -184,17 +88,14 @@ function layoutCover(
 	height: number,
 	texture: Texture,
 ) {
-	const rect = containCoverRect(width, height, texture.width, texture.height);
+	const rect = containRect(width, height, texture.width, texture.height);
 	sprite.position.set(rect.x, rect.y);
 	sprite.width = rect.width;
 	sprite.height = rect.height;
 }
 
-function syncClip(parts: FileParts, width: number, height: number) {
-	parts.clip
-		.clear()
-		.roundRect(0, 0, Math.max(1, width), Math.max(1, height), RADIUS)
-		.fill({ color: 0xffffff });
+function syncClip(parts: FileParts, rect: CardRect, style: BoardRenderStyle) {
+	traceCardOutline(parts.clip.clear(), rect, style).fill({ color: 0xffffff });
 }
 
 function sync(
@@ -207,9 +108,9 @@ function sync(
 	positionShell(parts.root, item);
 
 	const { width, height } = item.frame;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const detail = detailFor(context.zoom);
+	const elevation = cardElevation(context, item.id);
+	syncCardTag(parts.tag, { glyph: "file", text: fileMetaLine(item.props.src, item.props.snapshot?.size), width }, context);
 	const key = context.assetKey(item);
 	const texture = key ? context.getTexture(key) : null;
 	const coverFailed = Boolean(key && !texture && context.hasError(key));
@@ -227,39 +128,28 @@ function sync(
 		key ?? "",
 		width,
 		height,
-		selected,
-		hovered,
 		detail,
+		elevation,
 		texture ? `${texture.width}x${texture.height}` : "none",
 		coverFailed,
 		fileState,
 		kind,
 		category,
-		context.colorScheme,
-		context.palette.surface,
-		context.palette.hover,
+		context.themeKey,
 		accent,
 	].join("|");
 
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 
-		syncClip(parts, width, height);
-
-		parts.plate.clear();
-		parts.plate
-			.roundRect(0, 0, width, height, RADIUS)
-			.fill({ color: context.palette.surface, alpha: 0.98 })
-			.roundRect(0, 0, width, height, RADIUS)
-			.stroke({
-				color: selected
-					? context.palette.brand
-					: hovered
-						? context.palette.muted
-						: context.palette.border,
-				width: selected ? 2 : 1,
-				alpha: selected ? 0.95 : 0.85,
-			});
+		const rect = { x: 0, y: 0, width, height };
+		syncClip(parts, rect, context.style);
+		drawCardSurface(parts.plate.clear(), rect, context.style, {
+			fill: context.palette.surface,
+			border: context.palette.border,
+			borderAlpha: 0.85,
+			elevation,
+		});
 
 		if (fileState !== "ok") {
 			const dash = Math.max(6, width / MAX_DASHES / 2);
@@ -283,13 +173,7 @@ function sync(
 		if (showCover && texture) {
 			if (parts.cover.texture !== texture) parts.cover.texture = texture;
 			layoutCover(parts.cover, width, band, texture);
-			parts.coverMask
-				.clear()
-				.roundRect(0, 0, width, band, RADIUS)
-				.fill({ color: 0xffffff });
-			parts.coverMask
-				.rect(0, band - RADIUS, width, RADIUS)
-				.fill({ color: 0xffffff });
+			parts.coverMask.clear().rect(0, 0, width, band).fill({ color: 0xffffff });
 		}
 		parts.cover.visible = showCover;
 		parts.coverMask.visible = showCover;
@@ -300,14 +184,8 @@ function sync(
 				.fill({ color: accent, alpha: 0.55 });
 		}
 
-		parts.title.visible = detail !== "plate";
 		parts.excerpt.visible = detail === "full";
-		parts.typeMark.visible = kind === "blank" && detail !== "plate";
-	}
-
-	if (detail === "plate") {
-		parts.typeMark.visible = false;
-		return;
+		parts.typeMark.visible = kind === "blank";
 	}
 
 	const title = item.props.snapshot?.title || fileStem(item.props.src);
@@ -326,10 +204,13 @@ function sync(
 		kind,
 		context.palette.text,
 		context.palette.muted,
+		context.style.font,
 		accent,
 	].join("|");
 	if (textSig === parts.textSig) return;
 	parts.textSig = textSig;
+	parts.title.style.fontFamily = context.style.font;
+	parts.excerpt.style.fontFamily = context.style.font;
 
 	const top = band > 0 ? band + PADDING * 0.8 : PADDING;
 	const contentBottom = height - PADDING;
@@ -431,8 +312,10 @@ export const fileCardRenderer: BoardCardRenderer = {
 		});
 		body.mask = clip;
 		body.addChild(cover, coverMask, typeMark, title, excerpt);
-		root.addChild(plate, body, clip);
+		const tag = createCardTag();
+		root.addChild(plate, body, clip, tag.root);
 		partsByContainer.set(root, {
+			tag,
 			root,
 			plate,
 			body,
@@ -453,6 +336,10 @@ export const fileCardRenderer: BoardCardRenderer = {
 	},
 	update: (container, item, context) => {
 		if (item.type === "file") sync(container, item, context);
+	},
+	zoom: (container, zoom) => {
+		const tag = partsByContainer.get(container)?.tag;
+		if (tag) zoomCardTag(tag, zoom);
 	},
 	renderFar: (graphics, item, context) => {
 		const category = fileCategory(

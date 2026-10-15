@@ -157,6 +157,28 @@ export const authorizeAppRoom = async (input: {
   return { room: data.room, participantId: data.participantId, userKey: data.userKey };
 };
 
+export const authorizeHostedRoom = async (input: {
+  authToken: string;
+  roomId: string;
+  ticket: string;
+}): Promise<{ room: RealtimeRoomDescriptor; participantId: string }> => {
+  const response = await fetch(`${gatewayConfig.apiBaseUrl}/internal/gateway/authorize-hosted-room`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-worker-secret": gatewayConfig.workerSecret,
+      authorization: `Bearer ${input.authToken}`,
+      ...buildTraceHeaders(),
+    },
+    body: JSON.stringify({ roomId: input.roomId, ticket: input.ticket }),
+  });
+  const data = await parseJson<{ ok?: boolean; room?: RealtimeRoomDescriptor; participantId?: string; message?: string }>(response);
+  if (!response.ok || !data?.ok || !data.room || !data.participantId) {
+    throw new Error(data?.message || `Hosted room authorization failed ${response.status}`);
+  }
+  return { room: data.room, participantId: data.participantId };
+};
+
 export const authorizeBoardAwareness = async (input: {
   authToken: string;
   boardId: string;

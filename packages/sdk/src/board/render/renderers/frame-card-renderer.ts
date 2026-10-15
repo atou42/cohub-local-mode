@@ -29,39 +29,36 @@ function sync(container: Container, item: SceneItem<BoardFrameItem>, context: Bo
 	positionShell(parts.root, item);
 	syncTextResolution(parts.label, parts, context.zoom);
 
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const fill = itemColor(context, style.fill ?? style.stroke, "neutral", "fill");
 	const fillAlpha = (style.fillOpacity ?? (style.fill ? 1 : DEFAULT_WASH)) * itemAlpha(context, style.fill ?? style.stroke);
 	const baseStroke = itemColor(context, style.stroke, "neutral");
-	const stroke = selected ? context.palette.brand : hovered && style.stroke ? context.palette.muted : baseStroke;
-	const alpha = (selected || style.stroke ? 1 : hovered ? 0.85 : 0.55) * itemAlpha(context, style.stroke);
+	const alpha = (style.stroke ? 1 : 0.55) * itemAlpha(context, style.stroke);
 	const radius = style.radius ?? 4;
 	const strokeWidth = style.strokeWidth ?? 1.5;
 	const decorated = props.decoration !== "none";
-	const visualSig = [props.decoration, frame.width, frame.height, selected, hovered, fill, fillAlpha, stroke, alpha, radius, strokeWidth, style.dash, style.trim].join("|");
+	const visualSig = [props.decoration, frame.width, frame.height, fill, fillAlpha, baseStroke, alpha, radius, strokeWidth, style.dash, style.trim].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 		parts.box.clear();
 		if (decorated) parts.box.roundRect(0, 0, frame.width, frame.height, radius).fill({ color: fill, alpha: fillAlpha });
-		const width = selected ? Math.max(2, strokeWidth) : strokeWidth;
-		const pattern = decorated ? dashPattern(style.dash, width) : null;
-		const trim = decorated ? (style.trim ?? 1) : 1;
-		if (((decorated && strokeWidth > 0) || selected || hovered) && trim > 0) {
+		const pattern = dashPattern(style.dash, strokeWidth);
+		const trim = style.trim ?? 1;
+		if (decorated && strokeWidth > 0 && trim > 0) {
 			if (pattern || trim < 1) tracePolyline(parts.box, trimPolyline(roundRectPoints(frame.width, frame.height, radius), trim), pattern);
 			else parts.box.roundRect(0, 0, frame.width, frame.height, radius);
-			parts.box.stroke({ color: stroke, width, alpha, cap: pattern || trim < 1 ? "round" : "butt", join: "round" });
+			parts.box.stroke({ color: baseStroke, width: strokeWidth, alpha, cap: pattern || trim < 1 ? "round" : "butt", join: "round" });
 		}
 	}
 
 	parts.label.visible = decorated;
 	const title = locked ? `🔒 ${props.label}`.trim() : props.label;
 	const labelColor = style.stroke ? baseStroke : context.palette.muted;
-	const textSig = [title, labelColor].join("|");
+	const textSig = [title, labelColor, context.style.font].join("|");
 	if (textSig !== parts.textSig) {
 		parts.textSig = textSig;
 		parts.label.text = title;
 		parts.label.style.fill = labelColor;
+		parts.label.style.fontFamily = context.style.font;
 	}
 	parts.label.position.set(4, -18);
 }

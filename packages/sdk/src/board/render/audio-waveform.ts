@@ -26,6 +26,7 @@ export function drawAudioWaveform(
 	rect: { x: number; y: number; width: number; height: number },
 	color: number,
 	alpha = 0.72,
+	square = false,
 ) {
 	const count = Math.max(
 		8,
@@ -38,14 +39,9 @@ export function drawAudioWaveform(
 	const bars = audioWaveformBars(seed, count);
 	for (let index = 0; index < count; index += 1) {
 		const height = Math.max(2, (bars[index] ?? 0.4) * maxHeight);
-		graphics
-			.roundRect(
-				rect.x + index * step,
-				centerY - height / 2,
-				barWidth,
-				height,
-				barWidth / 2,
-			)
-			.fill({ color, alpha });
+		const x = rect.x + index * step;
+		if (square) graphics.rect(x, centerY - height / 2, barWidth, height);
+		else graphics.roundRect(x, centerY - height / 2, barWidth, height, barWidth / 2);
 	}
+	graphics.fill({ color, alpha });
 }

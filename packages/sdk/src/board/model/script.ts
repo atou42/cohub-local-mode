@@ -5,6 +5,23 @@ import type {
   BoardVec2,
 } from "@cohub/protocol";
 
+export type BoardScriptView = {
+  camera: { x: number; y: number; zoom: number };
+  width: number;
+  height: number;
+  safeRect: { x: number; y: number; width: number; height: number };
+};
+
+export type BoardScriptAnchor = {
+  item: string;
+  point?: BoardVec2;
+};
+
+export type BoardScriptSceneOptions = {
+  space?: "world" | "screen";
+  anchor?: BoardScriptAnchor;
+};
+
 export type BoardScriptEvent = {
   type: string;
   target?: string;
@@ -22,6 +39,16 @@ export type BoardScriptEvent = {
   data?: unknown;
 };
 
+export type BoardScriptHostEvents = {
+  viewchange: BoardScriptView;
+  selectionchange: { ids: string[] };
+  transformend: { ids: string[]; operation: "move" | "resize" | "rotate" | "arrow"; cancelled: boolean };
+};
+
+export type BoardScriptEventOf<Type extends string> = BoardScriptEvent & {
+  type: Type;
+} & (Type extends keyof BoardScriptHostEvents ? { data: BoardScriptHostEvents[Type] } : unknown);
+
 export type BoardScriptFrame = {
   t: number;
   dt: number;
@@ -38,11 +65,12 @@ export type BoardScriptItemPatch = Partial<
   size?: { width?: number; height?: number };
   props?: Record<string, unknown>;
 };
-export type BoardScriptHit = {
+export type BoardScriptHit = ({
   x: number;
   y: number;
   width: number;
   height: number;
+} | { target: "self" } | { item: string }) & {
   label?: string;
   cursor?: string;
 };
@@ -51,7 +79,7 @@ export type BoardScriptSnapshot = {
   time: number;
   random: number;
   configuration?: string;
-  effects?: Pick<BoardScriptOutput, "patches" | "items" | "hits" | "space">;
+  effects?: Pick<BoardScriptOutput, "patches" | "items" | "hits" | "space" | "anchor">;
 };
 export type BoardScriptParameter = {
   type: "number" | "boolean" | "string" | "color";
@@ -65,6 +93,7 @@ export type BoardScriptParameter = {
 export type BoardScriptOutput = {
   parameters?: Record<string, BoardScriptParameter>;
   space?: "world" | "screen";
+  anchor?: BoardScriptAnchor;
   patches: Record<string, Record<string, unknown>>;
   items: Record<string, unknown>;
   hits: Record<string, BoardScriptHit>;
@@ -85,8 +114,9 @@ export type BoardScriptContext = {
   emit(target: string, type: string, data?: unknown): Promise<void>;
   readonly state: Record<string, unknown>;
   readonly frame: BoardScriptFrame;
+  readonly view: BoardScriptView | null;
   random(): number;
-  on(type: string, handler: (event: BoardScriptEvent) => void): () => void;
+  on<Type extends string>(type: Type, handler: (event: BoardScriptEventOf<Type>) => void): () => void;
   onFrame(handler: (frame: BoardScriptFrame) => void): () => void;
   onDispose(handler: () => void): void;
   invalidate(): void;
@@ -94,7 +124,7 @@ export type BoardScriptContext = {
   present(id: string, patch: BoardScriptItemPatch | null): void;
   scene(
     items: Record<string, unknown>,
-    options?: { space?: "world" | "screen" },
+    options?: BoardScriptSceneOptions,
   ): void;
   hitRegions(hits: Record<string, BoardScriptHit>): void;
   commit(patch: BoardPatch): Promise<void>;

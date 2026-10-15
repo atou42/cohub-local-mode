@@ -158,7 +158,7 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
   constructor(
     private readonly websocket: WebsocketClient,
     private readonly admission: AppRoomAdmissionResponse,
-    private readonly appContext?: { transport: HttpTransport; appId: string },
+    private readonly appContext?: { transport: HttpTransport; appId: string; hosted?: boolean },
   ) {
     this.id = admission.room.id;
     this.code = admission.room.code;
@@ -210,8 +210,18 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
     return this._members.slice();
   }
 
-  async connect() {
-    await this.joinOverWebsocket(false);
+  get sequence() {
+    return this.lastSequence;
+  }
+
+  async connect(options: { after?: number } = {}) {
+    if (this.explicitLeave || this.state === "closed" || this.state === "expired") throw new Error("room is closed");
+    if (this.hasJoined) return this;
+    if (options.after !== undefined && (!Number.isSafeInteger(options.after) || options.after < 0)) {
+      throw new Error("after must be a non-negative safe integer");
+    }
+    this.lastSequence = options.after ?? 0;
+    await this.joinOverWebsocket(false, options.after);
     return this;
   }
 
@@ -332,7 +342,14 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
   async invite(input: { expiresInSeconds?: number } = {}): Promise<AppRoomInvite> {
     this.assertJoined();
     const context = this.appContext;
-    if (!context) throw new Error("Invites are only available inside a published App");
+    if (!context) throw new Error("Invites are only available inside a published App or hosted Room");
+    if (context.hosted) {
+      return context.transport.request<AppRoomInvite>(`/api/rooms/${encodeURIComponent(this.id)}/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+    }
     return context.transport.request<AppRoomInvite>(
       `/api/apps/${encodeURIComponent(context.appId)}/realtime/rooms/${encodeURIComponent(this.id)}/invites`,
       {
@@ -343,7 +360,9 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
     );
   }
 
-  rtc(): Promise<AppRoomRtc> {
+  private rtcFactory: ((configuration: RTCConfiguration) => RTCPeerConnection) | undefined;
+  rtc(options?: { createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection }): Promise<AppRoomRtc> {
+    if (options?.createPeerConnection) this.rtcFactory = options.createPeerConnection;
     this.assertJoined();
     if (this.rtcConnection) {
       const current = this.rtcConnection;
@@ -359,8 +378,8 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
   private openRtc(): Promise<AppRoomRtc> {
     this.assertJoined();
     const context = this.appContext;
-    if (!context) return Promise.reject(new AppRtcError("RTC_UNSUPPORTED", "RTC is only available inside a published App"));
-    if (typeof RTCPeerConnection === "undefined") return Promise.reject(new AppRtcError("RTC_UNSUPPORTED", "RTC needs a browser with WebRTC"));
+    if (!context) return Promise.reject(new AppRtcError("RTC_UNSUPPORTED", "RTC requires room context"));
+    if (!this.rtcFactory && typeof RTCPeerConnection === "undefined") return Promise.reject(new AppRtcError("RTC_UNSUPPORTED", "RTC needs a WebRTC adapter"));
     if (!this.websocket.supportsCapability(WS_REALTIME_ROOM_RTC_CAPABILITY)) {
       return Promise.reject(new AppRtcError("RTC_UNSUPPORTED", "RTC is not supported by the Gateway"));
     }
@@ -369,6 +388,8 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
       appId: context.appId,
       ticket: this.admission.ticket,
       transport: context.transport,
+      hosted: context.hosted,
+      createPeerConnection: this.rtcFactory,
       participantId: () => this._participantId,
       members: () => this._members,
       onMembersChanged: (handler) => this.onMembersChanged(handler),
@@ -393,14 +414,14 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
     );
   }
 
-  async leave() {
+  async disconnect() {
     if (this.explicitLeave || this._state === "closed" || this._state === "expired") return;
     this.explicitLeave = true;
     try {
       if (this.hasJoined && this.websocket.state === "open") {
         const requestId = randomId();
         await this.request(requestId, new Set(["realtime.room.request.ok"]), () =>
-          this.websocket.leaveRealtimeRoom({ roomId: this.id, requestId }),
+          (this.appContext?.hosted ? this.websocket.detachRealtimeRoom({ roomId: this.id, requestId }) : this.websocket.leaveRealtimeRoom({ roomId: this.id, requestId })),
         );
       }
     } finally {
@@ -408,6 +429,17 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
       this.setState("closed");
       this.dispose();
     }
+  }
+
+  async leave() {
+    if (!this.appContext?.hosted) return this.disconnect();
+    if (this.explicitLeave || this.state === "closed" || this.state === "expired") return;
+    await this.appContext.transport.request(`/api/rooms/${encodeURIComponent(this.id)}/seat`, { method: "DELETE" });
+    this.explicitLeave = true;
+    this.hasJoined = false;
+    this.rejectPending(new Error("room left"));
+    this.setState("closed");
+    this.dispose();
   }
 
   private async rejoin() {
@@ -422,18 +454,25 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
     }
   }
 
-  private async joinOverWebsocket(isReconnect: boolean) {
+  private async joinOverWebsocket(isReconnect: boolean, initialAfter?: number) {
     if (!this.websocket.supportsCapability("realtime.room.v1") && this.websocket.state === "open") {
       throw new Error("Realtime rooms are not supported by the Gateway");
     }
     this.setState(isReconnect ? "reconnecting" : "connecting");
     const requestId = randomId();
-    const after = isReconnect && this.lastSequence > 0 && this.websocket.supportsCapability(WS_REALTIME_ROOM_HISTORY_CAPABILITY)
+    const after = isReconnect && this.websocket.supportsCapability(WS_REALTIME_ROOM_HISTORY_CAPABILITY)
       ? this.lastSequence
-      : undefined;
+      : initialAfter;
     let missed: CatchUp | null = null;
     this.joinBuffer = [];
     try {
+      if (this.appContext?.hosted && isReconnect) {
+        const admission = await this.appContext.transport.request<AppRoomAdmissionResponse>(
+          `/api/rooms/${encodeURIComponent(this.id)}/connect`, { method: "POST" },
+        );
+        if (admission.participantId !== this.participantId) throw new Error("room seat changed during reconnect");
+        this.admission.ticket = admission.ticket;
+      }
       const response = await this.request(requestId, new Set(["realtime.room.joined"]), () =>
         this.websocket.joinRealtimeRoom({ roomId: this.id, ticket: this.admission.ticket, instanceId: this.instanceId, after, requestId }),
       );
@@ -456,6 +495,7 @@ export class AppRoom<Events extends AppRoomEventMap = AppRoomEventMap> {
       this.joinBuffer = null;
       throw error;
     }
+    if (this.explicitLeave || this._state === "closed" || this._state === "expired") throw new Error("room is closed");
     this.hasJoined = true;
     this.setState("joined");
     this.notifyMembers();

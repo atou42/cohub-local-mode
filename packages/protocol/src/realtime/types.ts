@@ -97,6 +97,7 @@ export type WsClientEvent =
   | { type: "realtime.room.join"; requestId?: string; payload: { roomId: string; ticket: string; instanceId?: string; after?: number } }
   | { type: "realtime.room.publish"; requestId?: string; payload: { roomId: string; event: string; data: unknown; clientEventId?: string } }
   | { type: "realtime.room.leave"; requestId?: string; payload: { roomId: string } }
+  | { type: "realtime.room.detach"; requestId?: string; payload: { roomId: string } }
   | { type: "realtime.room.presence.update"; requestId?: string; payload: { roomId: string; presence: Record<string, unknown> | null } }
   | { type: "realtime.room.history"; requestId?: string; payload: { roomId: string; after?: number; limit?: number } }
   | { type: "ping"; requestId?: string; payload?: Record<string, unknown> }

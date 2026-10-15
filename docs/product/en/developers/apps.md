@@ -196,6 +196,7 @@ const space = client.space(result.target.spaceId);
 | Send prompt (full access) | `session.prompt.fullaccess` | app or viewer |
 | Send prompt (read-only) | `session.prompt.readonly` | app or viewer |
 | LLM completion | `session.prompt.readonly` | app or viewer |
+| Decision | `session.prompt.readonly` | app or viewer |
 | Read / stream replies, file tree, file content | `session.view`, `file.view` | app or viewer |
 | Write files | `file.edit` | app or viewer |
 | Run sandbox commands | `command.execute` | app or viewer |
@@ -266,6 +267,34 @@ await space.completion({
   ] }],
 });
 ```
+
+### Decision
+
+Answer structured questions about text, a JSON object, or images with calibrated
+probabilities — for routing, moderation, triage, and scoring. Needs only
+`session.prompt.readonly`.
+
+```ts
+const result = await space.decision({
+  state: { ticket: "I was charged twice. Please refund it." },
+  questions: {
+    refund: { type: "noul", instructions: "Is the customer asking for a refund?" },
+    team: { type: "choice", instructions: "Which team?", criteria: { billing: "Charges", technical: "Bugs" } },
+    urgency: { type: "score", instructions: "How urgent?", criteria: ["Can wait", "Needs attention"] },
+  },
+});
+result.answers.refund.noul;   // 0..1
+result.answers.team.choice;   // "billing", with confidence and probabilities
+result.answers.urgency.score; // 0..1, with confidence, legend and probabilities
+```
+
+- `noul` is yes/no; `choice` picks one key of `criteria`; `score` rates against
+  at least two ordered `criteria`. Up to 200 questions; keys come back in `answers`.
+- Without `model`, selection follows catalog order, preferring visible models, just like LLM completions. Image capability does not change the order.
+- For images, make `state` an array of text and
+  `{ type: "image_url", image_url: { url } }` parts. URLs must be publicly
+  reachable; `data:` URLs (PNG, JPEG or WebP) are sent inline.
+- Usage bills the caller at the cost the model provider reports in `usage.cost`.
 
 ### Generation (image / video / audio)
 
@@ -653,6 +682,11 @@ speaker changes. Switching between tracks of the same kind reuses the
 receiver, so it is fast and needs no renegotiation. Video published with
 `simulcast: true` is sent in three qualities; each viewer picks one with
 `remote.setQuality("low" | "medium" | "high")`, e.g. low for thumbnails.
+
+[Campfire](https://cohub.live/tzwm/cohub-example-apps/w/campfire) puts all of
+this together: poses on a `latest` channel, proximity voices that `select()`
+only the people in earshot, simulcast cameras that sharpen as people walk
+closer, and room history as the state of a game.
 
 ### Camera, microphone, and screen
 

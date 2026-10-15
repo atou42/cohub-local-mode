@@ -101,6 +101,8 @@ export type AppRtcHost = {
   appId: string;
   ticket: string;
   transport: HttpTransport;
+  hosted?: boolean;
+  createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection;
   participantId(): string;
   members(): RealtimeRoomMember[];
   onMembersChanged(handler: (members: RealtimeRoomMember[]) => void): () => void;
@@ -206,6 +208,7 @@ export class AppRtcChannel<T = unknown> {
   private readonly openPeers = new Set<string>();
   private publication: { id: string; channel: RTCDataChannel } | null = null;
   private pending: Uint8Array[] = [];
+  private offFlush: (() => void) | null = null;
   private sequence = 0;
   private closed = false;
 
@@ -224,7 +227,7 @@ export class AppRtcChannel<T = unknown> {
     this.sequence = (this.sequence + 1) >>> 0;
     const frame = encodeAppRtcFrame(data, this.sequence);
     const channel = this.publication?.channel;
-    if (channel?.readyState === "open") return this.write(channel, frame);
+    if (channel?.readyState === "open" && this.pending.length === 0) return this.write(channel, frame);
     if (this.delivery === "latest") this.pending = [frame];
     else if (this.pending.length >= PENDING_RELIABLE_FRAMES) return false;
     else this.pending.push(frame);
@@ -249,6 +252,8 @@ export class AppRtcChannel<T = unknown> {
     this.peerHandlers.clear();
     this.openPeers.clear();
     this.pending = [];
+    this.offFlush?.();
+    this.offFlush = null;
     this.rtc.closeChannel(this as AppRtcChannel<unknown>);
   }
 
@@ -264,19 +269,32 @@ export class AppRtcChannel<T = unknown> {
 
   /** @internal */
   attach(id: string, channel: RTCDataChannel) {
+    this.offFlush?.();
     this.publication = { id, channel };
     channel.binaryType = "arraybuffer";
+    channel.bufferedAmountLowThreshold = LATEST_BACKLOG_BYTES;
     const flush = () => {
-      const frames = this.pending;
-      this.pending = [];
-      for (const frame of frames) this.write(channel, frame);
+      let sent = 0;
+      while (sent < this.pending.length) {
+        const frame = this.pending[sent];
+        if (!frame || !this.write(channel, frame)) break;
+        sent++;
+      }
+      this.pending = this.pending.slice(sent);
+    };
+    channel.addEventListener("open", flush);
+    channel.addEventListener("bufferedamountlow", flush);
+    this.offFlush = () => {
+      channel.removeEventListener("open", flush);
+      channel.removeEventListener("bufferedamountlow", flush);
     };
     if (channel.readyState === "open") flush();
-    else channel.addEventListener("open", flush, { once: true });
   }
 
   /** @internal */
   detach() {
+    this.offFlush?.();
+    this.offFlush = null;
     this.publication = null;
   }
 
@@ -298,7 +316,7 @@ export class AppRtcChannel<T = unknown> {
   }
 
   private write(channel: RTCDataChannel, frame: Uint8Array) {
-    if (this.delivery === "latest" && channel.bufferedAmount > LATEST_BACKLOG_BYTES) return false;
+    if (channel.bufferedAmount > (this.delivery === "latest" ? LATEST_BACKLOG_BYTES : 4 * 1024 * 1024)) return false;
     try {
       channel.send(frame as Uint8Array<ArrayBuffer>);
       return true;
@@ -313,6 +331,7 @@ export class AppRoomRtc {
   private pc: RTCPeerConnection | null = null;
   private sessionId: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private releasePending: Promise<unknown> = Promise.resolve();
   private reconcileQueued = false;
   private reconcileFailures = 0;
   private reconnectAttempt = 0;
@@ -433,6 +452,11 @@ export class AppRoomRtc {
     for (const channel of this.channels.values()) channel.close();
     for (const entry of this.localTracks.values()) entry.track.removeEventListener("ended", entry.onEnded);
     this.teardown(true);
+  }
+
+  async shutdown() {
+    this.close();
+    await this.releasePending;
   }
 
   /** @internal */
@@ -599,9 +623,16 @@ export class AppRoomRtc {
       void this.send("DELETE", `/${opened.sessionId}`).catch(() => undefined);
       return;
     }
-    const pc = new RTCPeerConnection({ iceServers: opened.iceServers, bundlePolicy: "max-bundle" });
-    this.pc = pc;
     this.sessionId = opened.sessionId;
+    const configuration: RTCConfiguration = { iceServers: opened.iceServers, bundlePolicy: "max-bundle" };
+    let pc: RTCPeerConnection;
+    try {
+      pc = this.host.createPeerConnection?.(configuration) ?? new RTCPeerConnection(configuration);
+    } catch (error) {
+      await this.shutdown();
+      throw error;
+    }
+    this.pc = pc;
     pc.addEventListener("connectionstatechange", () => {
       if (this.pc !== pc) return;
       if (pc.connectionState === "connected") {
@@ -696,7 +727,13 @@ export class AppRoomRtc {
     this.pc?.close();
     this.pc = null;
     if (hadTracks) this.notifyTracks();
-    if (release && sessionId) void this.send("DELETE", `/${sessionId}`).catch(() => undefined);
+    if (release && sessionId) {
+      this.releasePending = Promise.allSettled([this.releasePending, this.send("DELETE", `/${sessionId}`)]).then((results) => {
+        const failed = results.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+      });
+      void this.releasePending.catch(() => undefined);
+    }
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -1007,7 +1044,10 @@ export class AppRoomRtc {
   }
 
   private send<T = unknown>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
-    const url = `/api/apps/${encodeURIComponent(this.host.appId)}/realtime/rooms/${encodeURIComponent(this.host.roomId)}/rtc${path}`;
+    const base = this.host.hosted
+      ? `/api/rooms/${encodeURIComponent(this.host.roomId)}/rtc`
+      : `/api/apps/${encodeURIComponent(this.host.appId)}/realtime/rooms/${encodeURIComponent(this.host.roomId)}/rtc`;
+    const url = `${base}${path}`;
     return this.host.transport.request<T>(url, {
       method,
       ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),

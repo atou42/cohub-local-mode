@@ -5,17 +5,19 @@ import type {
 	BoardItem,
 	BoardScene,
 	BoardSceneItem,
-	BoardTaskSnapshot,
 	WorldPoint,
 } from "@neta-art/cohub/board";
 import {
 	createMediaBoardItem,
 	parseBoardMediaSource,
 	sceneItemToItem,
-	taskRunToBoardTaskSnapshot as taskBoardSnapshot,
 	worldPoint,
 } from "@neta-art/cohub/board";
 import type { BoardPointerEvent } from "@neta-art/cohub/board/editor";
+import {
+	type BoardRenderLabels,
+	traceCardOutline,
+} from "@neta-art/cohub/board/render";
 import {
 	type BoardAssetManager,
 	type BoardItemView,
@@ -38,6 +40,7 @@ import {
 	subscribeFilePreviews,
 } from "$lib/board/board-file-preview-source";
 import type { BoardStageExportBridge } from "$lib/board/board-image-export";
+import { createBoardLiveTasks } from "$lib/board/board-live-tasks";
 import {
 	boardMediaActionAt,
 	playableBoardMedia,
@@ -64,14 +67,7 @@ import { withCurrentWindow } from "$lib/features/space/modules/window-route";
 import { haptic } from "$lib/haptics";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
-import { sdk } from "$lib/sdk";
 import { buildSpaceTaskRoute } from "$lib/space-routes";
-import {
-	getCachedTaskRuns,
-	mergeCachedTaskRun,
-	onTaskRunsCacheUpdated,
-	restoreCachedTaskRuns,
-} from "$lib/stores/task-runs-cache";
 import { getResolvedTheme } from "$lib/theme.svelte";
 
 const {
@@ -94,7 +90,7 @@ const {
 	onStageReady,
 	onBackgroundLoadStateChange,
 	onLongPress,
-	highlightedIds,
+	relatedIds,
 }: {
 	editor: BoardEditor;
 	playback?: BoardPlaybackSnapshot | null;
@@ -123,7 +119,7 @@ const {
 		state: BoardBackgroundLoadState | null,
 	) => void;
 	onLongPress?: (point: { x: number; y: number }) => void;
-	highlightedIds?: readonly string[];
+	relatedIds?: readonly string[];
 } = $props();
 
 const locale = $derived(getLocale());
@@ -164,44 +160,31 @@ function handleCustomThemeChanged(event: Event) {
 	themeCache = null;
 }
 
-const taskDetailRefreshes = new Map<string, string>();
-const unsubscribeTaskRuns = onTaskRunsCacheUpdated((event) => {
-	if (readonly || event.spaceId !== spaceId) return;
-	applyTaskRuns(event.runs);
+const liveTasks = createBoardLiveTasks({
+	spaceId: untrack(() => spaceId),
+	onChange: (taskRunIds) => {
+		const items = editor.items.flatMap((item) =>
+			item.type === "task" && taskRunIds.has(item.props.taskRunId)
+				? [item.id]
+				: [],
+		);
+		if (items.length) stage?.invalidate({ items });
+	},
 });
 
-function applyTaskRuns(runs: ReturnType<typeof getCachedTaskRuns>) {
-	const wanted = new Set(
-		editor.items.flatMap((item) =>
-			item.type === "task"
-				? [(item.props as { taskRunId: string }).taskRunId]
-				: [],
-		),
-	);
-	if (wanted.size === 0) return;
-	const snapshots = new Map<string, BoardTaskSnapshot>();
-	for (const run of runs) {
-		if (wanted.has(run.id)) snapshots.set(run.id, taskBoardSnapshot(run));
-	}
-	editor.applyTaskSnapshots(snapshots);
-	for (const run of runs) {
-		if (
-			!wanted.has(run.id) ||
-			run.taskType !== "generation" ||
-			run.status !== "completed" ||
-			(snapshots.get(run.id)?.artifacts.length ?? 0) > 0 ||
-			taskDetailRefreshes.get(run.id) === run.updatedAt
-		)
-			continue;
-		taskDetailRefreshes.set(run.id, run.updatedAt);
-		void sdk.tasks
-			.get(run.id)
-			.then(({ run: detail }) => {
-				if (detail.spaceId !== spaceId) return;
-				mergeCachedTaskRun(spaceId, detail);
-			})
-			.catch(() => undefined);
-	}
+const reducedMotion =
+	typeof window === "undefined"
+		? null
+		: window.matchMedia("(prefers-reduced-motion: reduce)");
+
+function renderLabels(): BoardRenderLabels {
+	return {
+		queued: m.board_task_queued({}, { locale }),
+		generating: m.board_task_generating({}, { locale }),
+		failed: m.board_task_failed({}, { locale }),
+		previewUnavailable: m.board_task_preview_unavailable({}, { locale }),
+		noPreview: m.board_task_no_preview({}, { locale }),
+	};
 }
 
 const unsubscribePreviews = subscribeFilePreviews((event) => {
@@ -297,22 +280,21 @@ function drawOverlay(
 	frame: { zoom: number; scene: BoardScene },
 ) {
 	drawAwarenessOverlay(overlay, awareness.peers, resolveTheme(), frame.zoom);
-	if (!highlightedIds?.length) return;
 	const inv = 1 / Math.max(frame.zoom, 0.0001);
-	const brand = resolveTheme().palette.brand;
-	const seen = new Set<string>();
-	for (const id of highlightedIds) {
-		if (!frame.scene.get(id)) continue;
-		for (const nodeId of [id, ...frame.scene.descendants(id)]) {
-			if (seen.has(nodeId)) continue;
-			seen.add(nodeId);
-			const item = frame.scene.get(nodeId);
-			if (!item) continue;
-			const { x, y, width, height } = item.frame;
-			overlay
-				.roundRect(x, y, width, height, 4 * inv)
-				.stroke({ color: brand, width: 1.5 * inv, alpha: 0.75 });
-		}
+	const { palette, style } = resolveTheme();
+	for (const id of relatedIds ?? []) {
+		const item = frame.scene.get(id);
+		if (!item) continue;
+		traceCardOutline(
+			overlay,
+			item.frame,
+			style,
+			(style.selection.outset + 3) * inv,
+		).stroke({
+			color: palette.muted,
+			width: 1.5 * inv,
+			alpha: 0.55,
+		});
 	}
 }
 
@@ -483,12 +465,6 @@ function handleDrop(event: DragEvent) {
 
 onMount(() => {
 	if (!host) return;
-	if (!readonly) {
-		applyTaskRuns(getCachedTaskRuns(spaceId));
-		void restoreCachedTaskRuns(spaceId)
-			.then(applyTaskRuns)
-			.catch(() => undefined);
-	}
 	const mounted = mountBoardStage(host, {
 		editor,
 		assets,
@@ -501,10 +477,14 @@ onMount(() => {
 				palette: theme.palette,
 				colors: theme.colors,
 				colorScheme: theme.colorScheme,
+				style: theme.style,
 				imageBackground: backdropReady,
 			};
 		},
 		playback: () => playback,
+		labels: renderLabels,
+		taskRun: liveTasks.get,
+		reducedMotion: () => reducedMotion?.matches ?? false,
 		fileState: (path) => fileAvailability(spaceId, path),
 		previews: remotePreviews,
 		strokes: remoteStrokes,
@@ -533,8 +513,8 @@ onMount(() => {
 			},
 			renderer: () => mounted.renderer,
 			theme: () => {
-				const { palette, colors, colorScheme } = mounted.theme;
-				return { palette, colors, colorScheme };
+				const { palette, colors, colorScheme, style } = mounted.theme;
+				return { palette, colors, colorScheme, style };
 			},
 			assetKey: assets.assetKey,
 			withTextures: (items, use) => assets.withTextures(items, use),
@@ -580,7 +560,7 @@ $effect(() => {
 
 $effect(() => {
 	playback;
-	highlightedIds;
+	relatedIds;
 	awarenessVersion;
 	backdropReady;
 	getResolvedTheme();
@@ -590,6 +570,7 @@ $effect(() => {
 
 $effect(() => {
 	previewVersion;
+	locale;
 	untrack(() => stage?.invalidate({ cards: true }));
 });
 
@@ -599,8 +580,8 @@ onDestroy(() => {
 		CUSTOM_THEME_CHANGED_EVENT,
 		handleCustomThemeChanged,
 	);
-	unsubscribeTaskRuns();
 	unsubscribePreviews();
+	liveTasks.destroy();
 	stage?.destroy();
 	stage = null;
 	onStageReady?.(null);
@@ -632,7 +613,7 @@ function backgroundCssColor(): string | undefined {
 <div
 	bind:this={host}
 	class="board-stage-host relative isolate h-full w-full overflow-hidden {dropActive ? 'board-drop-active' : ''}"
-	class:bg-bg-primary={Boolean(boardBackdrop)}
+	class:bg-board-bg={Boolean(boardBackdrop)}
 	role="application"
 	aria-label={m.board_stage_aria({}, { locale })}
 	data-drawer-swipe-ignore

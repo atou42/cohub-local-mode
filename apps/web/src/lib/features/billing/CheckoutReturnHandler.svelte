@@ -223,10 +223,10 @@ onMount(() => {
 		margin-top: 1px;
 	}
 	:global(.toast .is-msg) {
-		color: var(--warning);
+		color: var(--color-warning);
 	}
 	:global(.toast.success .is-msg) {
-		color: var(--success);
+		color: var(--color-success);
 	}
 	:global(.toast.confirming .is-msg) {
 		color: var(--brand-muted-fg);

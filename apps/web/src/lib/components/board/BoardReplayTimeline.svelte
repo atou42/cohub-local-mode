@@ -101,6 +101,7 @@ function relative(at: number): string {
 function actorName(entry: BoardReplayEntry): string {
 	if (entry.kind === "cli") return m.board_replay_actor_cli({}, { locale });
 	if (entry.kind === "agent") return m.board_replay_actor_agent({}, { locale });
+	if (entry.kind === "task") return m.board_replay_actor_task({}, { locale });
 	return profiles.get(entry.actorId)?.displayName ?? entry.actorId.slice(0, 8);
 }
 
@@ -390,7 +391,7 @@ function tickLeft(entryIndex: number): string {
 		text-underline-offset: 2px;
 	}
 	.replay-link:disabled { color: var(--text-tertiary); text-decoration: none; }
-	.replay-link--failed { color: var(--error-soft); }
+	.replay-link--failed { color: var(--color-error-soft); }
 
 	.replay-track {
 		position: relative;

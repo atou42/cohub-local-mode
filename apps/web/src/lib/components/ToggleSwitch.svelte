@@ -19,10 +19,8 @@ const {
 	aria-label={label}
 	title={label}
 	{disabled}
-	class="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center disabled:cursor-default disabled:opacity-40"
+	class="inline-flex h-8 min-w-8 shrink-0 cursor-pointer items-center justify-center disabled:cursor-default"
 	onclick={() => onchange(!checked)}
 >
-	<span class="h-3.5 w-6 rounded-full p-0.5 transition-colors {checked ? 'bg-brand' : 'bg-border-strong'}">
-		<span class="block h-2.5 w-2.5 rounded-full bg-brand-contrast-fg shadow-sm transition-transform {checked ? 'translate-x-2.5' : ''}"></span>
-	</span>
+	<span class="toggle-track"><span class="toggle-thumb"></span></span>
 </button>

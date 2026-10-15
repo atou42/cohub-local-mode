@@ -128,6 +128,6 @@ $effect(() => {
 	}
 
 	.board-message.error {
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 	}
 </style>

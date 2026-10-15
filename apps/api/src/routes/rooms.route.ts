@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { AppRoomError, AppRoomSeatLostError } from "@cohub/infra/app-room";
 import {
+  connectToRoom,
   createRoom,
   getRoom,
   HOSTED_EVENTS_MAX_WAIT_MS,
@@ -20,10 +21,10 @@ import { requireValidId } from "../lib/middleware.js";
 
 const router = new Hono();
 
-router.use("*", bodyLimit({
+const roomBodyLimit = bodyLimit({
   maxSize: 24 * 1024,
   onError: (c) => c.json({ code: "PAYLOAD_TOO_LARGE", message: "request body is too large" }, 413),
-}));
+});
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -68,7 +69,7 @@ const handle = (run: (c: Context, caller: HostedCaller, roomId: string) => Promi
   }
 };
 
-router.post("/", async (c) => {
+router.post("/", roomBodyLimit, async (c) => {
   try {
     const input = await body(c);
     if (typeof input.appId !== "string" || !requireValidId(input.appId)) {
@@ -81,7 +82,7 @@ router.post("/", async (c) => {
   }
 });
 
-router.post("/join", handle(async (c, caller) => {
+router.post("/join", roomBodyLimit, handle(async (c, caller) => {
   const input = await body(c);
   if (typeof input.invite !== "string") throw new HostedRoomError(400, "INVALID_INVITE", "invite is required.");
   return joinRoom(caller, {
@@ -92,6 +93,11 @@ router.post("/join", handle(async (c, caller) => {
 }));
 
 router.get("/:roomId", handle((_c, caller, roomId) => getRoom(caller, roomId)));
+
+router.post("/:roomId/connect", roomBodyLimit, handle((c, caller, roomId) => {
+  c.header("Cache-Control", "private, no-store");
+  return connectToRoom(caller, roomId);
+}));
 
 router.get("/:roomId/events", handle((c, caller, roomId) => {
   const number = (name: string) => {
@@ -110,18 +116,18 @@ router.get("/:roomId/events", handle((c, caller, roomId) => {
   });
 }));
 
-router.post("/:roomId/events", handle(async (c, caller, roomId) => {
+router.post("/:roomId/events", roomBodyLimit, handle(async (c, caller, roomId) => {
   const input = await body(c);
   if (typeof input.type !== "string") throw new HostedRoomError(400, "INVALID_REQUEST", "type is required.");
   return publishToRoom(caller, roomId, { type: input.type, data: input.data ?? null });
 }));
 
-router.put("/:roomId/presence", handle(async (c, caller, roomId) => {
+router.put("/:roomId/presence", roomBodyLimit, handle(async (c, caller, roomId) => {
   const input = await body(c);
   return setRoomPresence(caller, roomId, presenceOf(input.presence));
 }));
 
-router.post("/:roomId/invites", handle(async (c, caller, roomId) => {
+router.post("/:roomId/invites", roomBodyLimit, handle(async (c, caller, roomId) => {
   const input = await c.req.json<{ expiresInSeconds?: unknown }>().catch(() => ({}) as { expiresInSeconds?: unknown });
   const seconds = input.expiresInSeconds === undefined ? undefined : Number(input.expiresInSeconds);
   if (seconds !== undefined && (!Number.isInteger(seconds) || seconds < 60)) {

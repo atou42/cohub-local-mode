@@ -82,7 +82,7 @@ function navigate(event: KeyboardEvent) {
 </button>
 {#if open}
 	<button type="button" class="harness-backdrop" aria-hidden="true" tabindex="-1" use:portal onclick={close}></button>
-	<div bind:this={panel} class="harness-menu" role="menu" aria-label={m.runtime_harness({}, { locale })} tabindex="-1" onkeydown={navigate} use:floatNear={{ getAnchor: () => trigger, placement: "top-start", width: 264, zIndex: 121 }}>
+	<div bind:this={panel} class="harness-menu menu-surface" role="menu" aria-label={m.runtime_harness({}, { locale })} tabindex="-1" onkeydown={navigate} use:floatNear={{ getAnchor: () => trigger, placement: "top-start", width: 264, zIndex: 121 }}>
 		<p class="menu-heading">{m.runtime_harness({}, { locale })}</p>
 		{#each options as harness}
 			{@const isLocal = harness !== "cohub"}
@@ -103,7 +103,7 @@ function navigate(event: KeyboardEvent) {
 .harness-trigger:disabled { opacity: .5; cursor: not-allowed; }
 .offline-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-warning); }
 .harness-backdrop { position: fixed; inset: 0; z-index: 120; cursor: default; }
-.harness-menu { padding: 6px; max-width: calc(100vw - 16px); border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-elevated); box-shadow: 0 8px 24px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent); }
+.harness-menu { padding: 6px; max-width: calc(100vw - 16px); }
 .menu-heading { padding: 6px 8px; color: var(--text-tertiary); font-size: 11px; }
 .harness-option { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 10px; padding: 8px; border-radius: 6px; text-align: left; cursor: pointer; }
 .harness-option:hover:not(:disabled), .harness-option:focus-visible { background: var(--bg-hover); }

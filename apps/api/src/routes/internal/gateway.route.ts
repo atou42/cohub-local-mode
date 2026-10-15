@@ -1,5 +1,6 @@
 import { context, trace, SpanStatusCode } from "@opentelemetry/api";
 import { boards, apps } from "@cohub/db";
+import { AppRoomStore } from "@cohub/infra/app-room";
 import { createLogger } from "@cohub/infra/logging";
 import { getTracer, extractTrace } from "@cohub/infra/tracing/propagator";
 import { gatewayInboundEventSchema, type GatewayInboundEvent } from "@cohub/protocol/gateway";
@@ -10,7 +11,7 @@ import { getSpacePresenceSnapshot } from "../../space-presence.js";
 import { Hono } from "hono";
 import { bindAllActiveSpaceChannelsToGateway, handleInboundEvent, resolveChannelInboundForEventWithLock } from "../../channels.js";
 import { hasPermission } from "../../permissions.js";
-import { ensureInternalRequest, getOptionalAuth, getAppSessionPrincipal, requireValidId } from "../../lib/middleware.js";
+import { ensureInternalRequest, getOptionalAuth, getAppSessionPrincipal, requireValidId, useAccountPrincipal } from "../../lib/middleware.js";
 import { getSpaceById } from "../../space-sessions.js";
 import { getSpaceSandboxBySpaceId } from "../../space-sandboxes.js";
 import { reportLocalRuntimeStatus, type LocalRuntimeStatusReport } from "../../lib/sandbox/local-runtime-status.js";
@@ -57,7 +58,7 @@ import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js"
 import { enqueueSandboxUploadFilesJob } from "../../sandbox-bash-queue.js";
 import { db } from "../../db/index.js";
 import { eq } from "drizzle-orm";
-import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket } from "../../app-rooms.js";
+import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket, verifyHostedRoomTicket } from "../../app-rooms.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const tracer = getTracer("cohub-api");
@@ -229,6 +230,31 @@ router.post("/authorize-app-room", async (c) => {
     room: serializeAppRoom(room),
     participantId: ticketPayload.participantId,
     userKey: ticketPayload.userKey,
+  });
+});
+
+router.post("/authorize-hosted-room", async (c) => {
+  const forbidden = ensureInternalRequest(c);
+  if (forbidden) return forbidden;
+  const user = useAccountPrincipal(c);
+  if (user instanceof Response) return user;
+  const body = await c.req.json<{ roomId?: string; ticket?: string }>().catch(() => null);
+  const roomId = body?.roomId;
+  const ticket = typeof body?.ticket === "string" ? verifyHostedRoomTicket(body.ticket) : null;
+  if (!roomId || !requireValidId(roomId) || ticket?.roomId !== roomId || ticket.userUuid !== user.uuid) {
+    return c.json({ ok: false, message: "invalid room admission" }, 403);
+  }
+  const seat = { roomId, participantId: ticket.participantId, owner: `seat:${ticket.participantId}` };
+  const store = new AppRoomStore(redisCommandClient);
+  if (await store.renew(seat) !== "active") return c.json({ ok: false, message: "room seat is no longer active" }, 403);
+  const room = await getAppRoomById(roomId);
+  if (!room || room.appId !== ticket.appId) return c.json({ ok: false, message: "room not found" }, 404);
+  const [app] = await db.select({ status: apps.status, spaceId: apps.spaceId }).from(apps).where(eq(apps.id, room.appId)).limit(1);
+  if (app?.status !== "published") return c.json({ ok: false, message: "app is unavailable" }, 403);
+  return c.json({
+    ok: true,
+    room: serializeAppRoom(room),
+    participantId: ticket.participantId,
   });
 });
 

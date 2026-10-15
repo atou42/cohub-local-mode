@@ -170,6 +170,14 @@ export function checkpointIdFromTaskRun(
 		: null;
 }
 
+export function saveCheckpointHasPublishWarnings(
+	run: Pick<TaskRunRecord, "taskType" | "result"> | null | undefined,
+): boolean {
+	if (run?.taskType !== "save_checkpoint") return false;
+	const warnings = asRecord(run.result)?.publishWarnings;
+	return Array.isArray(warnings) && warnings.length > 0;
+}
+
 export function saveCheckpointProgressLabel(
 	progress: unknown,
 	locale?: Locale,

@@ -1,0 +1,218 @@
+@layer base {
+	:where(
+		input[type="checkbox"],
+		input[type="radio"],
+		input[type="range"],
+		progress
+	) {
+		accent-color: var(--control-accent);
+	}
+}
+
+@layer components {
+	.primary-key {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		border-radius: 6px;
+		background: var(--brand);
+		color: var(--brand-contrast-fg);
+		font-weight: 500;
+		cursor: pointer;
+		transition:
+			background-color 120ms ease,
+			opacity 120ms ease;
+
+		&:hover:not(:disabled) {
+			background: var(--brand-hover);
+		}
+
+		&:focus-visible {
+			outline: 2px solid var(--brand-ring);
+			outline-offset: 2px;
+		}
+
+		&:disabled {
+			cursor: not-allowed;
+			opacity: 0.5;
+		}
+	}
+
+	.menu-surface {
+		border: 1px solid var(--border-subtle);
+		border-radius: 8px;
+		background: var(--bg-elevated);
+		box-shadow: var(--menu-shadow);
+	}
+
+	.spinner {
+		display: inline-block;
+		flex-shrink: 0;
+		width: 1em;
+		height: 1em;
+		border: max(1.5px, 0.125em) solid currentColor;
+		border-top-color: transparent;
+		border-radius: 999px;
+		animation: spinner-turn 0.8s linear infinite;
+	}
+
+	.toolbar-surface {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding: 4px;
+		border: 1px solid var(--border-subtle);
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+		box-shadow: var(--toolbar-shadow);
+		backdrop-filter: blur(12px);
+	}
+
+	.tool-key {
+		display: inline-flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		min-width: var(--tool-key-size, 28px);
+		height: var(--tool-key-size, 28px);
+		border: 1px solid transparent;
+		border-radius: 7px;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition:
+			background-color 100ms ease,
+			border-color 100ms ease,
+			color 100ms ease;
+
+		&:hover:not(:disabled) {
+			background: var(--bg-hover);
+			color: var(--text-primary);
+		}
+
+		&[aria-pressed="true"],
+		&[aria-expanded="true"] {
+			border-color: var(--brand-border);
+			background: var(--brand-bg);
+			color: var(--brand-muted-fg);
+		}
+
+		&.is-danger:hover:not(:disabled) {
+			background: var(--color-error-bg);
+			color: var(--error-700);
+		}
+
+		&:focus-visible {
+			outline: 2px solid var(--brand-ring);
+			outline-offset: 1px;
+		}
+
+		&:disabled {
+			cursor: not-allowed;
+			opacity: 0.4;
+		}
+	}
+
+	.color-chip {
+		display: inline-flex;
+		flex: none;
+		width: var(--color-chip-size, 18px);
+		height: var(--color-chip-size, 18px);
+		padding: 0;
+		border: 1.5px solid var(--border-subtle);
+		border-radius: 50%;
+		background: var(--chip-color, transparent);
+		cursor: pointer;
+		transition:
+			transform 100ms ease,
+			border-color 100ms ease,
+			box-shadow 100ms ease;
+
+		&:hover {
+			transform: scale(1.15);
+		}
+
+		&[aria-pressed="true"] {
+			border-color: var(--text-primary);
+			box-shadow: 0 0 0 2px
+				color-mix(in srgb, var(--chip-color) 45%, transparent);
+		}
+	}
+
+	.toolbar-divider {
+		flex: none;
+		width: 1px;
+		height: 16px;
+		margin: 0 3px;
+		background: var(--border-subtle);
+	}
+
+	.toggle-track {
+		position: relative;
+		display: inline-block;
+		flex-shrink: 0;
+		width: 28px;
+		height: 16px;
+		border-radius: 999px;
+		background: var(--border-strong);
+		transition: background-color 150ms ease;
+
+		:where([role="switch"][aria-checked="true"]) & {
+			background: var(--brand);
+		}
+
+		:where(:disabled) & {
+			opacity: 0.4;
+		}
+	}
+
+	.toggle-thumb {
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 12px;
+		height: 12px;
+		border-radius: 999px;
+		background: var(--brand-contrast-fg);
+		box-shadow: 0 1px 2px var(--shadow-medium);
+		transition: transform 150ms ease;
+
+		:where([role="switch"][aria-checked="true"]) & {
+			transform: translateX(12px);
+		}
+	}
+}
+
+/* Unlayered so the density token beats Avatar's fixed size utilities. */
+.list-row-leading {
+	width: var(--list-avatar-size);
+
+	& .avatar {
+		width: var(--list-avatar-size);
+		height: var(--list-avatar-size);
+	}
+
+	& .avatar[data-shape="tile"] {
+		border-radius: calc(var(--list-avatar-size) * 0.28);
+	}
+}
+
+@keyframes spinner-turn {
+	to {
+		rotate: 1turn;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.spinner {
+		animation-duration: 2.4s;
+	}
+
+	.tool-key,
+	.toggle-track,
+	.toggle-thumb {
+		transition: none;
+	}
+}

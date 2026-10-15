@@ -273,7 +273,7 @@ function sentItem(turn: SessionTurnRecord, streaming = false): TimelineItem {
 	};
 }
 
-export function buildTurnTimelineItems(input: {
+type TurnTimelineInput = {
 	sessionId: string | null;
 	turns: SessionTurnRecord[];
 	streaming?: {
@@ -294,7 +294,37 @@ export function buildTurnTimelineItems(input: {
 		lastPatchAt?: number | null;
 		startedAt?: number | null;
 	} | null;
-}): TimelineItem[] {
+};
+
+type TurnMessages = {
+	user: ChatMessage;
+	assistant: ChatMessage | null;
+};
+
+type TimelineCache = {
+	orderedTurns: WeakMap<SessionTurnRecord[], SessionTurnRecord[]>;
+	messages: WeakMap<SessionTurnRecord, TurnMessages>;
+};
+
+/** Scoped to a chat host; workspace turns and their arrays are immutable snapshots. */
+export function createTurnTimelineBuilder() {
+	const cache: TimelineCache = {
+		orderedTurns: new WeakMap(),
+		messages: new WeakMap(),
+	};
+	return (input: TurnTimelineInput) => renderTurnTimelineItems(input, cache);
+}
+
+export function buildTurnTimelineItems(
+	input: TurnTimelineInput,
+): TimelineItem[] {
+	return renderTurnTimelineItems(input);
+}
+
+function renderTurnTimelineItems(
+	input: TurnTimelineInput,
+	cache?: TimelineCache,
+): TimelineItem[] {
 	const renderCreatedAt = new Date().toISOString();
 	const items: TimelineItem[] = [];
 	const streamingTurnId = input.streaming?.turnId ?? null;
@@ -305,7 +335,12 @@ export function buildTurnTimelineItems(input: {
 	);
 	let streamingProcessInserted = false;
 	let streamingSentTurn: SessionTurnRecord | null = null;
-	for (const turn of dedupeRenderableTurnsByClientMessageId(input.turns)) {
+	let turns = cache?.orderedTurns.get(input.turns);
+	if (!turns) {
+		turns = dedupeRenderableTurnsByClientMessageId(input.turns);
+		cache?.orderedTurns.set(input.turns, turns);
+	}
+	for (const turn of turns) {
 		const turnRenderKey = getTurnRenderKey(turn);
 		// Keep the active turn visible while the server-side queued record is
 		// reconciling with the local optimistic one. Other queued follow-ups are
@@ -319,10 +354,18 @@ export function buildTurnTimelineItems(input: {
 			});
 			continue;
 		}
+		let messages = cache?.messages.get(turn);
+		if (!messages) {
+			messages = {
+				user: turnToUserMessage(turn),
+				assistant: turnToAssistantMessage(turn),
+			};
+			cache?.messages.set(turn, messages);
+		}
 		items.push({
 			id: `${turnRenderKey}:user`,
 			kind: "message",
-			message: turnToUserMessage(turn),
+			message: messages.user,
 		});
 		const isStreamingActiveTurn = streamingTurnId === turn.id;
 		if (isStreamingActiveTurn) {
@@ -389,7 +432,7 @@ export function buildTurnTimelineItems(input: {
 			}
 		}
 		const isLiveTurn = hasStreamingState && streamingTurnId === turn.id;
-		const assistant = turnToAssistantMessage(turn);
+		const assistant = messages.assistant;
 		if (assistant) {
 			if (isLiveTurn) {
 				// Keep the live streaming preview as the visual source of truth until

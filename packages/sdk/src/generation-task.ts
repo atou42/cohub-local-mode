@@ -1,4 +1,5 @@
 import {
+	asRecord,
 	blockDurationMs,
 	blockMimeType,
 	blockNaturalSize,
@@ -9,9 +10,8 @@ import {
 	generationCovers,
 	generationOutput,
 	generationPrompt,
-	record,
 	taskData,
-} from "./generation-blocks.js";
+} from "@cohub/protocol";
 import type { TaskRunRecord } from "./types.js";
 
 /** Media a generation delivers; text blocks (revised prompts, refusals) are not outputs. */
@@ -51,7 +51,7 @@ export type GenerationTaskView = {
 const INLINE_KEYS = ["data", "base64", "contentBase64"] as const;
 
 function isDeferred(block: Record<string, unknown>) {
-	return block.deferredBase64 === true || record(block.source)?.deferredBase64 === true;
+	return block.deferredBase64 === true || asRecord(block.source)?.deferredBase64 === true;
 }
 
 const MEDIA_TYPE_PATTERN = /^(image|video|audio)\/[\w.+-]+$/;
@@ -101,7 +101,7 @@ function projectOutputs(run: TaskRunRecord): GenerationTaskOutput[] {
 
 export function toGenerationTaskView(run: TaskRunRecord): GenerationTaskView {
 	const data = taskData(run);
-	const result = record(run.result);
+	const result = asRecord(run.result);
 	const model = data?.model ?? result?.model;
 	return {
 		id: run.id,
@@ -126,11 +126,11 @@ export function isActiveGenerationTask(task: Pick<GenerationTaskView, "status">)
 
 /** Playable source of an output: its URL, or a data URL for inline payloads. */
 export function generationOutputSource(result: unknown, outputIndex: number): string | null {
-	const block = contentBlocks(record(result)?.output)[outputIndex];
+	const block = contentBlocks(asRecord(result)?.output)[outputIndex];
 	if (!block) return null;
 	const url = blockUrl(block);
 	if (url) return url;
-	const source = record(block.source);
+	const source = asRecord(block.source);
 	const data = INLINE_KEYS.map((key) => source?.[key] ?? block[key]).find(
 		(value): value is string => typeof value === "string" && value !== "",
 	);

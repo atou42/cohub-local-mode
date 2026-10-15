@@ -70,6 +70,13 @@ cohub spaces prompt --model <model> --provider <provider> "message"
 
 List LLM models with `cohub models ls`. For multimodal generation, use the `cohub-generate` skill.
 
+For classification, triage, or scoring, `cohub decision` answers `noul` (yes/no), `choice`, and `score` questions about text or images with calibrated probabilities:
+
+```bash
+cohub decision "I was charged twice" -q '{"refund":{"type":"noul","instructions":"Refund?"}}' --json
+cohub decision "Duplicate charge?" --image ./receipt.png -q questions.json --json
+```
+
 Useful options:
 
 ```bash

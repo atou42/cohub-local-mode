@@ -11,12 +11,20 @@ export type SessionForkEdge = {
 	parentTitle?: string | null;
 };
 
+export const SESSION_TREE_MAX_DEPTH = 4;
+
+export type SessionRowTree = {
+	depth: number;
+	last: boolean;
+	hasChildren: boolean;
+	/** Ancestor levels whose rail continues past this row. */
+	rails: number[];
+};
+
 export type SessionTreeItem<T extends SessionRecord = SessionRecord> = {
 	session: T;
 	fork: SessionForkEdge | null;
-	visualDepth: number;
-	isLastChild: boolean;
-	hasChildren: boolean;
+	tree: SessionRowTree;
 };
 
 const TITLE_LIMIT = 48;
@@ -147,24 +155,39 @@ export function buildSessionForkTree<T extends SessionRecord>(
 	const compare = (a: T, b: T) =>
 		timeOf(b, new Set()) - timeOf(a, new Set()) || b.id.localeCompare(a.id);
 
-	const items: SessionTreeItem<T>[] = [];
+	const rows: { session: T; depth: number }[] = [];
 	const placed = new Set<string>();
-	const append = (session: T, visualDepth: number, isLastChild: boolean) => {
+	const append = (session: T, depth: number) => {
 		if (placed.has(session.id)) return;
 		placed.add(session.id);
-		const kids = (children.get(session.id) ?? []).sort(compare);
+		rows.push({ session, depth });
+		for (const child of (children.get(session.id) ?? []).sort(compare))
+			append(child, depth + 1);
+	};
+	for (const root of roots.sort(compare)) append(root, 0);
+	for (const session of sessions) append(session, 0);
+
+	// Deeper forks flatten into the last level; rails follow the visible rows.
+	const items: SessionTreeItem<T>[] = [];
+	const nextAtOrAbove: number[] = [];
+	rows.reduceRight((nextDepth, { session, depth: rawDepth }) => {
+		const depth = Math.min(rawDepth, SESSION_TREE_MAX_DEPTH);
 		items.push({
 			session,
-			fork: visualDepth > 0 ? (forkByChild.get(session.id) ?? null) : null,
-			visualDepth,
-			isLastChild,
-			hasChildren: kids.length > 0,
+			fork: rawDepth > 0 ? (forkByChild.get(session.id) ?? null) : null,
+			tree: {
+				depth,
+				last: nextAtOrAbove[depth] !== depth,
+				hasChildren: nextDepth > depth,
+				rails: Array.from(
+					{ length: Math.max(0, depth - 1) },
+					(_, i) => i + 1,
+				).filter((level) => nextAtOrAbove[level] === level),
+			},
 		});
-		kids.forEach((child, index) => {
-			append(child, visualDepth + 1, index === kids.length - 1);
-		});
-	};
-	for (const root of roots.sort(compare)) append(root, 0, false);
-	for (const session of sessions) append(session, 0, false);
-	return items;
+		for (let level = depth; level <= SESSION_TREE_MAX_DEPTH; level++)
+			nextAtOrAbove[level] = depth;
+		return depth;
+	}, 0);
+	return items.reverse();
 }

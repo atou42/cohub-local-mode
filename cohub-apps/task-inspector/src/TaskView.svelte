@@ -1,6 +1,6 @@
 <script lang="ts">
 import { mediaPreviewCandidates } from "@neta-art/cohub/media";
-import { CalendarClock, GitCommitHorizontal, MessageSquare } from "lucide-svelte";
+import { CalendarClock, GitCommitHorizontal, LayoutDashboard, MessageSquare } from "lucide-svelte";
 import { onMount, untrack } from "svelte";
 import { m } from "$messages";
 import MediaImage from "$kit/MediaImage.svelte";
@@ -43,6 +43,7 @@ const OUTPUT_PREVIEW_SIZE = 1536;
 const locale = $derived(getLocale());
 const run = $derived(detail?.kind === "task" ? detail.data.run : null);
 const progress = $derived(detail?.kind === "task" ? detail.data.progress : null);
+const boards = $derived(detail?.kind === "task" ? (detail.data.boards ?? []) : []);
 const streaming = $derived(run ? taskIsStreaming(run) : false);
 const status = $derived(run ? taskStatus(run.status, locale) : null);
 const command = $derived(run?.taskType === "run_command" ? runCommandPayload(run) : null);
@@ -136,6 +137,19 @@ const linkClass =
 
     {#if actionInput !== null}
       <CodeBlock label={m.task_section_input({}, { locale })} value={actionInput} />
+    {/if}
+
+    {#if boards.length}
+      <Section label={m.task_section_boards({}, { locale })} icon={LayoutDashboard}>
+        <ul class="divide-y divide-border-subtle/60 rounded-[8px] bg-bg-elevated/35">
+          {#each boards as board (board.boardId)}
+            <li class="flex min-h-11 items-center gap-3 px-4 py-2.5">
+              <span class="min-w-0 flex-1 truncate text-[13px] text-text-primary">{board.title || m.task_board_untitled({}, { locale })}</span>
+              {#if board.itemIds.length > 1}<span class="shrink-0 font-mono text-[11px] text-text-tertiary">{m.task_board_items({ count: board.itemIds.length }, { locale })}</span>{/if}
+            </li>
+          {/each}
+        </ul>
+      </Section>
     {/if}
 
     {#if run.taskType === "save_checkpoint"}

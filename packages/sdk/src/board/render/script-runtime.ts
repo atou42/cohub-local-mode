@@ -2,10 +2,12 @@ import type { BoardItem } from "@cohub/protocol";
 import type {
   BoardScriptContext,
   BoardScriptEvent,
+  BoardScriptEventOf,
   BoardScriptFrame,
   BoardScriptModule,
   BoardScriptOutput,
   BoardScriptSnapshot,
+  BoardScriptView,
 } from "../model/script.js";
 
 export type ScriptRuntimeInput = {
@@ -67,6 +69,8 @@ export function createScriptRuntime(
   let patches: BoardScriptOutput["patches"] = effects?.patches ?? {};
   let items: BoardScriptOutput["items"] = effects?.items ?? {};
   let space: "world" | "screen" = effects?.space ?? "world";
+  let anchor = effects?.anchor;
+  let view: BoardScriptView | null = null;
   let hits: BoardScriptOutput["hits"] = effects?.hits ?? {};
   const invalidate = () => {
     if (disposed) return;
@@ -99,6 +103,7 @@ export function createScriptRuntime(
     get frame() {
       return frame;
     },
+    get view() { return view; },
     random() {
       randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
       return randomState / 4294967296;
@@ -109,10 +114,11 @@ export function createScriptRuntime(
         listeners = new Set();
         handlers.set(type, listeners);
       }
-      listeners.add(handler);
+      const listener = (event: BoardScriptEvent) => handler(event as BoardScriptEventOf<typeof type>);
+      listeners.add(listener);
       invalidate();
       return () => {
-        listeners.delete(handler);
+        listeners.delete(listener);
         invalidate();
       };
     },
@@ -131,6 +137,7 @@ export function createScriptRuntime(
     scene(next, options) {
       items = structuredClone(next);
       space = options?.space ?? "world";
+      anchor = options?.anchor ? structuredClone(options.anchor) : undefined;
       invalidate();
     },
     hitRegions(next) {
@@ -194,6 +201,7 @@ export function createScriptRuntime(
     },
     event(event: BoardScriptEvent) {
       if (disposed) return;
+      if (event.type === "viewchange") view = event.data as BoardScriptView;
       const listeners = handlers.get(event.type);
       if (!listeners?.size) return;
       for (const handler of listeners) handler(event);
@@ -208,6 +216,7 @@ export function createScriptRuntime(
       return {
         parameters: module.parameters,
         space,
+        anchor,
         patches,
         items,
         hits,
@@ -224,7 +233,7 @@ export function createScriptRuntime(
         state,
         time,
         random: randomState,
-        effects: includeEffects ? { patches, items, hits, space } : undefined,
+        effects: includeEffects ? { patches, items, hits, space, anchor } : undefined,
       };
       return clone ? structuredClone(snapshot) : snapshot;
     },

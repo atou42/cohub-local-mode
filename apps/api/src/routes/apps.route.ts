@@ -1123,7 +1123,7 @@ async function publishAppVersion(
 }
 
 router.patch("/:id", async (c) => {
-  const user = useAccountPrincipal(c);
+  const user = useAuth(c);
   if (user instanceof Response) return user;
   const id = c.req.param("id");
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
@@ -1149,7 +1149,7 @@ router.get("/:id/versions", async (c) => {
 });
 
 router.post("/:id/versions", async (c) => {
-  const user = useAccountPrincipal(c);
+  const user = useAuth(c);
   if (user instanceof Response) return user;
   const id = c.req.param("id");
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);
@@ -1161,7 +1161,7 @@ router.post("/:id/versions", async (c) => {
 });
 
 router.delete("/:id", async (c) => {
-  const user = useAccountPrincipal(c);
+  const user = useAuth(c);
   if (user instanceof Response) return user;
   const id = c.req.param("id");
   if (!requireValidId(id)) return c.json({ message: "app not found" }, 404);

@@ -56,6 +56,22 @@ Assigning a field announces its channel; never mutate a value in place —
 replace it, so views can compare by identity. Derived values use `memo` for the
 same reason.
 
+## Look
+
+A renderer reads colors from `BoardRenderPalette` and everything else a theme
+may change from `BoardRenderStyle` (`render/style.ts`): card silhouette, radius,
+shadow, selection chrome, framed media, progress, icons, motion and chrome font.
+Cards draw their body through `render/surface.ts`, so one silhouette and one
+shadow serve every card type, and short facts above a card through
+`render/card-tag.ts`. Selection and hover are not drawn by cards: the stage
+overlay (`stage/overlay.ts`) owns them, so pointer and selection changes redraw
+one layer. A renderer that still needs them sets `observesSelection`.
+
+Cache keys include `context.themeKey` rather than individual palette fields.
+Zoom-dependent detail flips on `boardCardDetailed`, which follows the text
+resolution buckets; anything that must track every zoom step uses the
+renderer's `zoom` hook and only touches transforms there.
+
 ## Scripts
 
 The public authoring contract is in [`docs/board-scripts.md`](../../../../docs/board-scripts.md).

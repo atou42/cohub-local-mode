@@ -511,7 +511,7 @@ $effect(() => {
 	.label-row:hover { background: var(--bg-hover); color: var(--text-primary); }
 	.label-row.child { padding-left: 28px; color: var(--text-tertiary); }
 	.label-row.system { cursor: default; opacity: 0.82; }
-	.label-row input { flex-shrink: 0; accent-color: var(--brand); }
+	.label-row input { flex-shrink: 0; }
 
 	.create-panel {
 		margin-top: 10px;

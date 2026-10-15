@@ -208,7 +208,7 @@ async function handleAccept() {
 					{#if actionStatus === "idle"}
 						<button
 							type="button"
-							class="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-brand text-brand-contrast-fg text-sm font-medium hover:bg-brand/90 active:bg-brand/80 transition-colors"
+							class="primary-key w-full gap-2 rounded-lg px-4 py-3 text-sm"
 							onclick={() => void handleAccept()}
 						>
 							<ArrowRight class="w-4 h-4" />
@@ -239,7 +239,7 @@ async function handleAccept() {
 							<p class="text-sm text-error-soft text-center mb-3">{actionError}</p>
 							<button
 								type="button"
-								class="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg bg-brand text-brand-contrast-fg text-sm font-medium hover:bg-brand/90 active:bg-brand/80 transition-colors"
+								class="primary-key w-full gap-2 rounded-lg px-4 py-3 text-sm"
 								onclick={() => { actionStatus = "idle"; actionError = ""; }}
 							>
 								Try again

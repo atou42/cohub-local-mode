@@ -1,19 +1,14 @@
 import { getMediaResourceTitle } from "../../model/media.js";
 import type { BoardSceneItem, SceneItem } from "../../model/scene.js";
-import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { BoardVideoItem } from "@cohub/protocol";
-import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
-import {
-	syncTextResolution,
-	syncTextWrapWidth,
-	textResolutionForZoom,
-} from "../text-resolution.js";
+import { Container, Graphics, Sprite, Texture } from "pixi.js";
+import { createCardTag, formatBoardDuration, syncCardTag, type CardTag, zoomCardTag } from "../card-tag.js";
+import { cardElevation, containRect, drawCardSurface, traceCardOutline } from "../surface.js";
+import { boardCardDetailed } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
-import type {
-	BoardCardRenderer,
-	BoardRenderContext,
-} from "./board-renderer-registry.js";
+import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
+import { drawMediaPlayKey } from "./media-key.js";
 
 type VideoParts = {
 	root: Container;
@@ -21,116 +16,81 @@ type VideoParts = {
 	sprite: Sprite;
 	mask: Graphics;
 	chrome: Graphics;
-	label: Text;
+	tag: CardTag;
 	sig: string;
-	wrapWidth: number;
-	resolution: number;
 };
 
 const partsByContainer = new WeakMap<Container, VideoParts>();
-const RADIUS = 4;
+const FILM_RAIL = 10;
+const FILM_HOLE = 4;
 
-function layoutContain(sprite: Sprite, width: number, height: number) {
-	const texture = sprite.texture;
-	if (!texture.width || !texture.height) return;
-	const scale = Math.min(width / texture.width, height / texture.height);
-	sprite.width = texture.width * scale;
-	sprite.height = texture.height * scale;
-	sprite.x = (width - sprite.width) / 2;
-	sprite.y = (height - sprite.height) / 2;
+function videoTitle(item: SceneItem<BoardVideoItem>) {
+	return item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
 }
 
-function sync(
-	container: Container,
-	item: SceneItem<BoardVideoItem>,
-	context: BoardRenderContext,
-) {
+function sync(container: Container, item: SceneItem<BoardVideoItem>, context: BoardRenderContext) {
 	const parts = partsByContainer.get(container);
 	if (!parts) return;
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
-	const resizing = context.resizingIds.has(item.id);
-	const title =
-		item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
+	const title = videoTitle(item);
+	const durationMs = item.props.snapshot?.durationMs;
+	const duration = durationMs ? formatBoardDuration(durationMs) : "";
+	syncCardTag(parts.tag, { glyph: "video", text: duration ? `${title} · ${duration}` : title, width }, context);
+
 	const key = context.assetKey(item);
 	const texture = key ? context.getTexture(key) : null;
-	const failed = Boolean(key && !texture && context.hasError(key));
-
-	syncTextResolution(parts.label, parts, context.zoom);
-	if (parts.label.text !== title) parts.label.text = title;
-	syncTextWrapWidth(parts.label, parts, Math.max(1, width - 16), resizing);
-	parts.label.position.set(8, Math.max(8, height - parts.label.height - 8));
-
+	const elevation = cardElevation(context, item.id);
 	const sig = [
 		key ?? "",
 		texture ? `${texture.width}x${texture.height}` : "none",
 		width,
 		height,
-		selected,
-		hovered,
-		failed,
-		title,
-		item.props.time ?? 0,
-		parts.label.height,
-		context.palette.surface,
-		context.palette.brand,
-		context.palette.muted,
-		context.palette.border,
-		context.palette.hover,
-		context.palette.text,
+		elevation,
+		boardCardDetailed(context.zoom),
+		context.themeKey,
 	].join("|");
 	if (sig === parts.sig) return;
 	parts.sig = sig;
 
+	const framed = context.style.media === "framed";
+	const rect = { x: 0, y: 0, width, height };
+	const rail = framed ? Math.min(FILM_RAIL, height / 6) : 0;
+	const screen = { x: framed ? rail * 0.6 : 0, y: rail, width: width - (framed ? rail * 1.2 : 0), height: height - rail * 2 };
+
+	drawCardSurface(parts.plate.clear(), rect, context.style, {
+		fill: framed ? context.palette.text : context.palette.surface,
+		border: framed ? null : context.palette.border,
+		borderAlpha: 0.85,
+		elevation,
+	});
+	if (framed) drawFilmRails(parts.plate, width, height, rail, context.palette.bg);
+
+	traceCardOutline(parts.mask.clear(), framed ? screen : rect, framed ? { corner: "round", radius: 1 } : context.style).fill({ color: 0xffffff });
 	if (texture && parts.sprite.texture !== texture) parts.sprite.texture = texture;
 	parts.sprite.visible = Boolean(texture);
-	if (texture) layoutContain(parts.sprite, width, height);
-
-	parts.mask
-		.clear()
-		.roundRect(0, 0, width, height, RADIUS)
-		.fill({ color: 0xffffff });
-	parts.plate
-		.clear()
-		.roundRect(0, 0, width, height, RADIUS)
-		.fill({ color: context.palette.surface, alpha: 0.96 });
-
-	parts.chrome.clear();
 	if (texture) {
-		const bandHeight = Math.min(height, parts.label.height + 16);
-		parts.chrome
-			.rect(0, height - bandHeight, width, bandHeight)
-			.fill({ color: context.palette.surface, alpha: 0.78 });
+		const fitted = containRect(screen.width, screen.height, texture.width, texture.height);
+		parts.sprite.position.set(screen.x + fitted.x, screen.y + fitted.y);
+		parts.sprite.width = fitted.width;
+		parts.sprite.height = fitted.height;
 	}
 
-	const cx = width / 2;
-	const cy = height / 2;
-	const radius = Math.min(22, Math.min(width, height) * 0.18);
-	parts.chrome.circle(cx, cy, radius).fill({
-		color: selected ? context.palette.brand : context.palette.surface,
-		alpha: texture ? 0.88 : 0.96,
-	});
-	const triangle = radius * 0.55;
-	parts.chrome
-		.moveTo(cx - triangle * 0.35, cy - triangle * 0.6)
-		.lineTo(cx - triangle * 0.35, cy + triangle * 0.6)
-		.lineTo(cx + triangle * 0.7, cy)
-		.closePath()
-		.fill({ color: context.palette.text, alpha: 0.94 });
-	parts.chrome.roundRect(0, 0, width, height, RADIUS).stroke({
-		color: selected
-			? context.palette.brand
-			: hovered
-				? context.palette.muted
-				: context.palette.border,
-		width: selected ? 2 : 1,
-		alpha: selected ? 0.95 : 0.85,
-	});
-	parts.label.style.fill = texture
-		? context.palette.text
-		: context.palette.muted;
+	parts.chrome.clear();
+	const detailed = boardCardDetailed(context.zoom);
+	if (detailed) drawMediaPlayKey(parts.chrome, screen.x + screen.width / 2, screen.y + screen.height / 2, Math.min(18, Math.min(screen.width, screen.height) * 0.16), context);
+}
+
+function drawFilmRails(graphics: Graphics, width: number, height: number, rail: number, hole: number) {
+	const size = Math.min(FILM_HOLE, rail * 0.45);
+	const step = size * 2.5;
+	const count = Math.max(1, Math.floor((width - step) / step));
+	const start = (width - (count - 1) * step - size) / 2;
+	for (let index = 0; index < count; index += 1) {
+		const x = start + index * step;
+		graphics.rect(x, (rail - size) / 2, size, size).rect(x, height - rail + (rail - size) / 2, size, size);
+	}
+	graphics.fill({ color: hole, alpha: 0.9 });
 }
 
 export const videoCardRenderer: BoardCardRenderer = {
@@ -142,37 +102,19 @@ export const videoCardRenderer: BoardCardRenderer = {
 		const sprite = new Sprite(Texture.EMPTY);
 		const mask = new Graphics();
 		const chrome = new Graphics();
-		const resolution = textResolutionForZoom(context.zoom);
-		const label = new Text({
-			text: "",
-			style: {
-				fill: context.palette.muted,
-				fontFamily: BOARD_FONT_STACK,
-				fontSize: 12,
-				fontWeight: "500",
-				wordWrap: true,
-			},
-			resolution,
-			roundPixels: true,
-		});
-		root.addChild(plate, sprite, mask, chrome, label);
+		const tag = createCardTag();
+		root.addChild(plate, sprite, mask, chrome, tag.root);
 		sprite.mask = mask;
-		partsByContainer.set(root, {
-			root,
-			plate,
-			sprite,
-			mask,
-			chrome,
-			label,
-			sig: "",
-			wrapWidth: 0,
-			resolution,
-		});
+		partsByContainer.set(root, { root, plate, sprite, mask, chrome, tag, sig: "" });
 		if (item.type === "video") sync(root, item, context);
 		return root;
 	},
 	update: (container, item, context) => {
 		if (item.type === "video") sync(container, item, context);
+	},
+	zoom: (container, zoom) => {
+		const tag = partsByContainer.get(container)?.tag;
+		if (tag) zoomCardTag(tag, zoom);
 	},
 	renderFar: (graphics, item, context) => {
 		drawFarPlate(graphics, item.frame, {

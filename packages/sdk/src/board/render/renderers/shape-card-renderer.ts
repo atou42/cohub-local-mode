@@ -99,8 +99,6 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
 	const { props, style } = item;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const stroke = itemColor(context, style.stroke ?? style.fill, "brand");
 	const fill = itemColor(context, style.fill ?? style.stroke, "brand", "fill");
 	const fillOpacity = (style.fillOpacity ?? (style.fill ? 1 : 0)) * itemAlpha(context, style.fill ?? style.stroke);
@@ -108,7 +106,7 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 	const strokeWidth = style.strokeWidth ?? 1.75;
 	syncTextResolution(parts.label, parts, context.zoom);
 
-	const visualSig = [width, height, selected, hovered, props.geometry, props.path, fill, fillOpacity, stroke, strokeAlpha, strokeWidth, style.dash, style.radius, style.trim, context.palette.muted].join("|");
+	const visualSig = [width, height, props.geometry, props.path, fill, fillOpacity, stroke, strokeAlpha, strokeWidth, style.dash, style.radius, style.trim].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 		parts.shape.clear();
@@ -116,8 +114,7 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 			traceShapeOutline(parts.shape, props, width, height, style.radius);
 			parts.shape.fill({ color: fill, alpha: fillOpacity });
 		}
-		const lineWidth = selected ? Math.max(2.5, strokeWidth) : strokeWidth;
-		const pattern = dashPattern(style.dash, lineWidth);
+		const pattern = dashPattern(style.dash, strokeWidth);
 		const partial = style.trim !== undefined && style.trim < 1;
 		if (strokeWidth > 0 && (!partial || style.trim)) {
 			if ((pattern || partial) && props.geometry !== "path") {
@@ -125,9 +122,9 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 				tracePolyline(parts.shape, trimPolyline(outlinePoints(props.geometry, width, height, radius), style.trim), pattern);
 			} else traceShapeOutline(parts.shape, props, width, height, style.radius);
 			parts.shape.stroke({
-				color: hovered && !selected ? context.palette.muted : stroke,
-				width: lineWidth,
-				alpha: (selected ? 1 : hovered ? 0.95 : 0.85) * strokeAlpha,
+				color: stroke,
+				width: strokeWidth,
+				alpha: 0.85 * strokeAlpha,
 				cap: partial || pattern ? "round" : "butt",
 				join: "round",
 			});

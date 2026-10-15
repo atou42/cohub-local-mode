@@ -1,6 +1,7 @@
 import type { BoardSceneItem, SceneItem } from "../../model/scene.js";
 import { Container, Graphics, Rectangle, Sprite, Texture } from "pixi.js";
 import type { BoardImageItem } from "@cohub/protocol";
+import { cardElevation, containRect, drawCardSurface, traceCardOutline } from "../surface.js";
 import { positionShell } from "./base-card-renderer.js";
 import type {
 	BoardCardRenderer,
@@ -14,6 +15,7 @@ type ImageParts = {
 	root: Container;
 	sprite: Sprite;
 	placeholder: Graphics;
+	mask: Graphics;
 	sig: string;
 	cropped: Texture | null;
 	cropSource: Texture | null;
@@ -21,19 +23,6 @@ type ImageParts = {
 };
 
 const partsByContainer = new WeakMap<Container, ImageParts>();
-const RADIUS = 2;
-
-function layoutContain(sprite: Sprite, width: number, height: number) {
-	const texture = sprite.texture;
-	const tw = texture.width;
-	const th = texture.height;
-	if (!tw || !th) return;
-	const scale = Math.min(width / tw, height / th);
-	sprite.width = tw * scale;
-	sprite.height = th * scale;
-	sprite.x = (width - sprite.width) / 2;
-	sprite.y = (height - sprite.height) / 2;
-}
 
 function cropRect(crop: BoardCrop | undefined) {
 	if (!crop) return null;
@@ -62,6 +51,8 @@ function showTexture(parts: ImageParts, texture: Texture | null, crop: BoardCrop
 	if (previous && previous !== parts.cropped) previous.destroy(false);
 }
 
+const PRINT_MARGIN = 6;
+
 function sync(
 	container: Container,
 	item: SceneItem<BoardImageItem>,
@@ -71,70 +62,61 @@ function sync(
 	if (!parts) return;
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const key = context.assetKey(item);
 	const texture = key ? context.getTexture(key) : null;
 	const failed = Boolean(key && !texture && context.hasError(key));
-	const texId = texture ? `${texture.width}x${texture.height}` : "none";
+	const elevation = cardElevation(context, item.id);
 	const sig = [
 		key ?? "",
 		width,
 		height,
-		selected,
-		hovered,
-		texId,
+		texture ? `${texture.width}x${texture.height}` : "none",
 		JSON.stringify(item.props.crop ?? null),
 		failed,
-		context.colorScheme,
+		elevation,
+		context.themeKey,
 	].join("|");
 	if (sig === parts.sig) return;
 	parts.sig = sig;
 
 	showTexture(parts, texture, item.props.crop);
+	const display = parts.sprite.texture;
+	const framed = context.style.media === "framed";
+	const margin = framed ? Math.min(PRINT_MARGIN, width / 8, height / 8) : 0;
+	const area = { x: margin, y: margin, width: width - margin * 2, height: height - margin * 2 };
+	const fitted = texture ? containRect(area.width, area.height, display.width, display.height) : { ...area, x: 0, y: 0 };
+	const picture = { x: area.x + fitted.x, y: area.y + fitted.y, width: fitted.width, height: fitted.height };
+	const card = framed ? { x: picture.x - margin, y: picture.y - margin, width: picture.width + margin * 2, height: picture.height + margin * 2 } : picture;
+
 	parts.sprite.visible = Boolean(texture);
-	if (texture) layoutContain(parts.sprite, width, height);
+	if (texture) {
+		parts.sprite.position.set(picture.x, picture.y);
+		parts.sprite.width = picture.width;
+		parts.sprite.height = picture.height;
+	}
+	traceCardOutline(parts.mask.clear(), picture, framed ? { corner: "round", radius: 0 } : context.style).fill({ color: 0xffffff });
 
 	parts.placeholder.clear();
-	if (!texture) {
+	if (texture && !framed) return;
+	drawCardSurface(parts.placeholder, card, context.style, {
+		fill: context.palette.surface,
+		border: texture ? null : failed ? context.palette.border : context.palette.hover,
+		elevation,
+	});
+	if (texture) return;
+	const cx = width / 2;
+	const cy = height / 2;
+	if (failed) {
 		parts.placeholder
-			.roundRect(0, 0, width, height, RADIUS)
-			.fill({ color: context.palette.surface, alpha: 0.85 })
-			.roundRect(0, 0, width, height, RADIUS)
-			.stroke({
-				color: failed ? context.palette.border : context.palette.hover,
-				width: 1,
-				alpha: 0.9,
-			});
-		const cx = width / 2;
-		const cy = height / 2;
-		if (failed) {
-			parts.placeholder
-				.moveTo(cx - 10, cy - 10)
-				.lineTo(cx + 10, cy + 10)
-				.moveTo(cx + 10, cy - 10)
-				.lineTo(cx - 10, cy + 10)
-				.stroke({ color: context.palette.muted, width: 1.5, alpha: 0.8 });
-		} else {
-			parts.placeholder
-				.circle(cx, cy, 6)
-				.stroke({ color: context.palette.muted, width: 1.25, alpha: 0.55 });
-		}
-	}
-	parts.placeholder.visible = !texture;
-
-	if (selected || hovered) {
-		const hasPixels = Boolean(texture) && parts.sprite.width > 0;
-		const ox = hasPixels ? parts.sprite.x : 0;
-		const oy = hasPixels ? parts.sprite.y : 0;
-		const ow = hasPixels ? parts.sprite.width : width;
-		const oh = hasPixels ? parts.sprite.height : height;
-		parts.placeholder.visible = true;
-		parts.placeholder.roundRect(ox, oy, ow, oh, RADIUS).stroke({
-			color: selected ? context.palette.brand : context.palette.muted,
-			width: selected ? 2 : 1,
-			alpha: selected ? 0.95 : 0.7,
-		});
+			.moveTo(cx - 10, cy - 10)
+			.lineTo(cx + 10, cy + 10)
+			.moveTo(cx + 10, cy - 10)
+			.lineTo(cx - 10, cy + 10)
+			.stroke({ color: context.palette.muted, width: 1.5, alpha: 0.8 });
+	} else {
+		parts.placeholder
+			.circle(cx, cy, 6)
+			.stroke({ color: context.palette.muted, width: 1.25, alpha: 0.55 });
 	}
 }
 
@@ -146,35 +128,14 @@ export const imageCardRenderer: BoardCardRenderer = {
 		const sprite = new Sprite(Texture.EMPTY);
 		const placeholder = new Graphics();
 		const mask = new Graphics();
-		const maskBox = () => {
-			mask.clear();
-			if (item.type === "image") {
-				mask
-					.roundRect(0, 0, item.frame.width, item.frame.height, RADIUS)
-					.fill({ color: 0xffffff });
-			}
-		};
-		maskBox();
 		root.addChild(placeholder, sprite, mask);
 		sprite.mask = mask;
-		partsByContainer.set(root, { root, sprite, placeholder, sig: "", cropped: null, cropSource: null, cropKey: "" });
+		partsByContainer.set(root, { root, sprite, placeholder, mask, sig: "", cropped: null, cropSource: null, cropKey: "" });
 		if (item.type === "image") sync(root, item, context);
 		return root;
 	},
 	update: (container, item, context) => {
-		if (item.type !== "image") return;
-		const parts = partsByContainer.get(container);
-		if (!parts) return;
-		const mask = parts.root.children.find(
-			(child) => child !== parts.sprite && child !== parts.placeholder,
-		) as Graphics | undefined;
-		if (mask) {
-			mask
-				.clear()
-				.roundRect(0, 0, item.frame.width, item.frame.height, RADIUS)
-				.fill({ color: 0xffffff });
-		}
-		sync(container, item, context);
+		if (item.type === "image") sync(container, item, context);
 	},
 	renderFar: (graphics, item, context) => {
 		drawFarPlate(graphics, item.frame, {

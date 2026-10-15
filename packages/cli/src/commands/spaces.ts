@@ -13,10 +13,12 @@ import type {
 import type { Command } from "commander";
 import { uploadAvatarAsset, uploadChatImageAsset } from "../avatar.js";
 import { createClient } from "../client.js";
+import { collectOption, readPromptContent } from "../command-input.js";
 import { table, json as outJson, jsonRequested, ok, error, handleHttp, formatEpochMs, truncateText } from "../output.js";
 import { SESSION_STATUS_COLUMN } from "../session-status.js";
 import { resolveSpace } from "../space.js";
 import { uploadLocalFiles, type LocalUploadEntry } from "../space-files/upload.js";
+import { registerDecisionCommand } from "./decision.js";
 import { registerSpaceCommerce } from "./space-commerce.js";
 import { registerSpaceFileTransfer } from "./space-files.js";
 import { registerSpaceActivity } from "./space-activity.js";
@@ -98,10 +100,6 @@ function parseInteger(value: string, name: string, options: { min?: number; max?
   if (options.min !== undefined && parsed < options.min) return error(`Invalid ${name}`, `${name} must be at least ${options.min}`);
   if (options.max !== undefined && parsed > options.max) return error(`Invalid ${name}`, `${name} must be at most ${options.max}`);
   return parsed;
-}
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
 }
 
 function parseEnvOptions(values: string[] | undefined): Record<string, string> | undefined {
@@ -240,17 +238,6 @@ async function confirmRestart(opts: { yes?: boolean }): Promise<void> {
   }
   const answer = Buffer.concat(chunks).toString().trim().toLowerCase();
   if (answer !== "y" && answer !== "yes") return error("Cancelled");
-}
-
-async function readPromptContent(words: string[], options: { allowEmpty?: boolean } = {}): Promise<string> {
-  let content = words.join(" ");
-  if (!content && !process.stdin.isTTY) {
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    content = Buffer.concat(chunks).toString().trim();
-  }
-  if (!content && !options.allowEmpty) return error("No content", "Pass as argument or pipe via stdin");
-  return content;
 }
 
 async function sendPrompt(command: Command, words: string[], opts: PromptOptions): Promise<void> {
@@ -442,6 +429,8 @@ export function registerPrompt(program: Command): void {
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh")
     .option("--json", "Output as JSON")
     .action((words: string[], opts: CompletionOptions) => runCompletionCommand(program, words, opts));
+
+  registerDecisionCommand(program);
 }
 
 export function registerSpaceCreate(
@@ -730,6 +719,8 @@ export function registerSpaces(program: Command): void {
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh")
     .option("--json", "Output as JSON")
     .action((words: string[], opts: CompletionOptions) => runCompletionCommand(spacesCmd, words, opts));
+
+  registerDecisionCommand(spacesCmd);
 
   // ── spaces files ──
   registerFiles(spacesCmd);

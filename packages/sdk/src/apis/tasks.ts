@@ -29,8 +29,9 @@ export class TasksApi {
     private readonly websocketClient: WebsocketClient | null = null,
   ) {}
 
-  get(taskRunId: string, options?: { signal?: AbortSignal }) {
-    return this.transport.request<TaskRunDetailResponse>(`/api/tasks/${taskRunId}`, {
+  get(taskRunId: string, options?: { signal?: AbortSignal; include?: readonly "boards"[] }) {
+    const query = options?.include?.length ? `?include=${options.include.join(",")}` : "";
+    return this.transport.request<TaskRunDetailResponse>(`/api/tasks/${taskRunId}${query}`, {
       signal: options?.signal,
     });
   }

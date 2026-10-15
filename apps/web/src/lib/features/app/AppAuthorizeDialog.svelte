@@ -10,12 +10,12 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	Check,
-	Loader2,
 	Search,
 	ShieldCheck,
 } from "lucide-svelte";
 import { tick, untrack } from "svelte";
 import Dialog from "$lib/components/Dialog.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { APP_SCOPE_OPTIONS } from "$lib/resource-kit/app";
@@ -481,7 +481,7 @@ const scopeLabel = (scope: string) =>
 					{/if}
 					<div class="auth-picker-actions">
 						<button type="button" class="auth-cancel" disabled={saving} onclick={onCancel}>Deny</button>
-						<button type="button" class="auth-confirm" disabled={saving || !selectedSpaceId} onclick={() => (pickerStep = "review")}>Review access</button>
+						<button type="button" class="auth-confirm primary-key" disabled={saving || !selectedSpaceId} onclick={() => (pickerStep = "review")}>Review access</button>
 					</div>
 				</section>
 			{:else}
@@ -552,8 +552,8 @@ const scopeLabel = (scope: string) =>
 
 				<div class="auth-actions">
 					<button type="button" class="auth-cancel" disabled={saving} onclick={onCancel}>Deny</button>
-					<button type="button" class="auth-confirm" disabled={confirmDisabled} onclick={() => onConfirm(selectedSpaceId || undefined)}>
-						{#if saving}<Loader2 class="h-3.5 w-3.5 animate-spin" />{/if}
+					<button type="button" class="auth-confirm primary-key" disabled={confirmDisabled} onclick={() => onConfirm(selectedSpaceId || undefined)}>
+						{#if saving}<Spinner class="h-3.5 w-3.5" />{/if}
 						{confirmLabel}
 					</button>
 				</div>
@@ -778,7 +778,6 @@ const scopeLabel = (scope: string) =>
 	}
 
 	.auth-space-option input {
-		accent-color: var(--brand);
 		flex: 0 0 auto;
 		margin: 0;
 	}
@@ -921,12 +920,12 @@ const scopeLabel = (scope: string) =>
 		align-items: center;
 		gap: 7px;
 		border-radius: 8px;
-		border: 1px solid color-mix(in srgb, var(--error-soft) 28%, transparent);
-		background: var(--error-bg);
+		border: 1px solid color-mix(in srgb, var(--color-error-soft) 28%, transparent);
+		background: var(--color-error-bg);
 		padding: 9px 10px;
 		font-size: 12px;
 		line-height: 1.35;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 	}
 
 	.auth-actions {
@@ -965,17 +964,6 @@ const scopeLabel = (scope: string) =>
 	.auth-cancel:hover {
 		background: var(--bg-hover);
 		color: var(--text-primary);
-	}
-
-	.auth-confirm {
-		border: 1px solid var(--brand);
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
-	}
-
-	.auth-confirm:hover {
-		background: var(--brand-hover);
-		border-color: var(--brand-hover);
 	}
 
 	.auth-cancel:focus-visible,

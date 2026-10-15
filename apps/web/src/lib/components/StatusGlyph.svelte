@@ -1,7 +1,7 @@
 <script lang="ts" module>
 export type StatusGlyphShape = "dot" | "ring" | "dots";
 export type StatusGlyphTone =
-	| "brand"
+	| "activity"
 	| "success"
 	| "warning"
 	| "error"
@@ -53,8 +53,8 @@ const {
 		transition: color 200ms ease-out;
 	}
 
-	.status-glyph[data-tone="brand"] {
-		--glyph-color: var(--color-brand);
+	.status-glyph[data-tone="activity"] {
+		--glyph-color: var(--activity);
 	}
 
 	.status-glyph[data-tone="success"] {
@@ -83,7 +83,7 @@ const {
 		left: 0;
 		width: var(--d);
 		height: var(--d);
-		border-radius: 999px;
+		border-radius: var(--indicator-radius);
 		background: currentColor;
 		transition:
 			translate 240ms var(--glyph-ease),
@@ -121,19 +121,19 @@ const {
 
 	@media (prefers-reduced-motion: no-preference) {
 		.status-glyph[data-shape="dot"][data-motion="active"] > span:first-child {
-			animation: status-glyph-breathe 1.6s ease-in-out infinite;
+			animation: status-glyph-breathe 1.6s var(--indicator-easing) infinite;
 		}
 
 		.status-glyph[data-shape="dot"][data-motion="slow"] > span:first-child {
-			animation: status-glyph-breathe 3s ease-in-out infinite;
+			animation: status-glyph-breathe 3s var(--indicator-easing) infinite;
 		}
 
 		.status-glyph[data-shape="dots"][data-motion="active"] > span {
-			animation: status-glyph-wave 1.2s ease-in-out infinite;
+			animation: status-glyph-wave 1.2s var(--indicator-easing) infinite;
 		}
 
 		.status-glyph[data-shape="dots"][data-motion="slow"] > span {
-			animation: status-glyph-wave 2.4s ease-in-out infinite;
+			animation: status-glyph-wave 2.4s var(--indicator-easing) infinite;
 		}
 
 		.status-glyph[data-shape="dots"] > span:nth-child(2) {

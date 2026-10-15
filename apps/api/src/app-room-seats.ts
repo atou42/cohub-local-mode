@@ -8,6 +8,7 @@ import {
   type AppRoomRecord,
   createAppRoom,
   createAppRoomInvite,
+  createHostedRoomTicket,
   deriveAppRoomUserKey,
   deriveHostedSeatId,
   getAppRoomById,
@@ -61,7 +62,7 @@ export async function resolveHostedCaller(c: Context): Promise<HostedCaller | Re
   };
 }
 
-const seatOf = (roomId: string, caller: HostedCaller): AppRoomSeat => {
+export const seatOf = (roomId: string, caller: HostedCaller): AppRoomSeat => {
   const participantId = deriveHostedSeatId(roomId, caller.userUuid, caller.subject);
   return { roomId, participantId, owner: `seat:${participantId}` };
 };
@@ -77,7 +78,7 @@ async function liveRoom(roomId: string) {
   return room;
 }
 
-async function requireSeat(roomId: string, caller: HostedCaller) {
+export async function requireSeat(roomId: string, caller: HostedCaller) {
   const seat = seatOf(roomId, caller);
   const status = await store.renew(seat);
   if (status === "expired") throw new HostedRoomError(410, "ROOM_EXPIRED", "This room has expired.");
@@ -129,6 +130,24 @@ export async function joinRoom(caller: HostedCaller, input: { invite: string; pr
 export async function getRoom(caller: HostedCaller, roomId: string) {
   const seat = await requireSeat(roomId, caller);
   return view(await liveRoom(roomId), seat);
+}
+
+export async function connectToRoom(caller: HostedCaller, roomId: string) {
+  const seat = await requireSeat(roomId, caller);
+  const room = await liveRoom(roomId);
+  if (!(await publishedApp(room.appId))) throw new HostedRoomError(410, "ROOM_EXPIRED", "This room's App is no longer published.");
+  return {
+    room: serializeAppRoom(room),
+    appId: room.appId,
+    participantId: seat.participantId,
+    userKey: deriveAppRoomUserKey(roomId, caller.userUuid),
+    ticket: createHostedRoomTicket({
+      appId: room.appId,
+      roomId,
+      userUuid: caller.userUuid,
+      participantId: seat.participantId,
+    }, Date.parse(room.expiresAt)),
+  };
 }
 
 export async function publishToRoom(caller: HostedCaller, roomId: string, input: { type: string; data: unknown }) {

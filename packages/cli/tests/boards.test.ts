@@ -76,6 +76,11 @@ test("schema describes targets and animatable properties", async () => {
   assert.ok(overview.properties.shape?.includes("style.fill"));
   const text = JSON.parse((await capture(() => boards.parseAsync(["schema", "text"], { from: "user" }))).join("")) as { schema: { properties: Record<string, unknown> } };
   assert.ok(text.schema.properties.props);
+  const frame = JSON.parse((await capture(() => boards.parseAsync(["schema", "frame"], { from: "user" }))).join("")) as { schema: { properties: { props: { properties: Record<string, { description?: string }> } } } };
+  assert.ok(frame.schema.properties.props.properties.decoration?.description);
+  const script = JSON.parse((await capture(() => boards.parseAsync(["schema", "script"], { from: "user" }))).join("")) as { schema: { properties: Record<string, unknown> }; api: { context: Record<string, string> } };
+  assert.ok(script.schema.properties.src);
+  assert.ok(script.api.context.hitRegions);
 });
 
 test("times accept milliseconds, seconds, minutes and ranges", () => {

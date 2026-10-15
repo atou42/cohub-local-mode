@@ -1,12 +1,12 @@
-import { CONFIG_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
-import { HttpError } from "@neta-art/cohub";
+import { HOME_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
+import { HttpError, type SpaceRecord } from "@neta-art/cohub";
 import { getThemeCss } from "$lib/custom-theme/theme-css.svelte";
 import { sdk } from "$lib/sdk";
 
 const ENABLED_STORAGE_KEY = "cohub:custom-theme-enabled";
 
-function configSpaceKey(userUuid: string) {
-	return `cohub:config-space-id:${userUuid}`;
+function homeSpaceKey(userUuid: string) {
+	return `cohub:home-space-id:${userUuid}`;
 }
 
 function readStorage(key: string): string | null {
@@ -36,6 +36,14 @@ class UserTheme {
 	spaceId = $state<string | null>(null);
 
 	#userUuid: string | null = null;
+	#request = 0;
+
+	setHomeSpace(space: Pick<SpaceRecord, "id" | "userUuid" | "slug">) {
+		if (space.userUuid !== this.#userUuid || space.slug !== HOME_SPACE_SLUG) return;
+		this.#request += 1;
+		writeStorage(homeSpaceKey(space.userUuid), space.id);
+		this.spaceId = space.id;
+	}
 
 	get css(): string | null {
 		if (!customThemesAllowed || !this.enabled || !this.spaceId) return null;
@@ -50,20 +58,21 @@ class UserTheme {
 	resolve(userUuid: string | null) {
 		if (userUuid === this.#userUuid) return;
 		this.#userUuid = userUuid;
-		this.spaceId = userUuid ? readStorage(configSpaceKey(userUuid)) : null;
+		this.spaceId = userUuid ? readStorage(homeSpaceKey(userUuid)) : null;
 		if (userUuid) void this.#confirm(userUuid);
 	}
 
 	async #confirm(userUuid: string) {
+		const request = ++this.#request;
 		let spaceId: string | null;
 		try {
-			spaceId = (await sdk.spaces.getOwnedBySlug(CONFIG_SPACE_SLUG)).id;
+			spaceId = (await sdk.spaces.getOwnedBySlug(HOME_SPACE_SLUG)).id;
 		} catch (error) {
 			if (!(error instanceof HttpError && error.status === 404)) return;
 			spaceId = null;
 		}
-		if (userUuid !== this.#userUuid) return;
-		writeStorage(configSpaceKey(userUuid), spaceId);
+		if (userUuid !== this.#userUuid || request !== this.#request) return;
+		writeStorage(homeSpaceKey(userUuid), spaceId);
 		this.spaceId = spaceId;
 	}
 }
