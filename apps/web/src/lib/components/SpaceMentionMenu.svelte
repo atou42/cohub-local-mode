@@ -101,6 +101,14 @@ $effect(() => {
 	{/if}
 {/snippet}
 
+{#snippet kind(item: SpaceMentionSuggestion)}
+	{#if item.official}
+		<span class="shrink-0 rounded-full bg-brand/10 px-1.5 py-px text-[10px] font-medium leading-4 text-brand">{m.mention_official({}, { locale })}</span>
+	{:else}
+		<span class="shrink-0 text-[10px] uppercase tracking-[0.12em] text-text-placeholder">{m.mention_space({}, { locale })}</span>
+	{/if}
+{/snippet}
+
 {#if open}
 	<div class={`pointer-events-none absolute inset-x-0 z-40 hidden ${layer.desktop}`} role="presentation">
 		<div class={`pointer-events-auto mx-1 w-[min(580px,calc(100vw-3rem))] ${layer.card} overflow-hidden rounded-[18px] border border-border-subtle/90 bg-bg-content shadow-[0_18px_60px_rgba(15,23,42,0.18)] outline-none transition-all duration-150 ease-out motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1`} role="listbox" aria-label={m.mention_aria({}, { locale })} aria-activedescendant={selectedItem ? itemId(selectedIndex) : undefined} tabindex="-1">
@@ -139,7 +147,7 @@ $effect(() => {
 									<SpaceAvatar name={item.name} profile={item.spaceProfile} seed={item.spaceId} size={LIST_ROW_AVATAR.compact} />
 									<ListRowText tooltip={item.name}>
 										{#snippet title()}{#each highlightParts(item.name) as part}<span class={part.match ? 'text-brand' : ''}>{part.text}</span>{/each}{/snippet}
-										{#snippet badge()}<span class="shrink-0 text-[10px] uppercase tracking-[0.12em] text-text-placeholder">{m.mention_space({}, { locale })}</span>{/snippet}
+										{#snippet badge()}{@render kind(item)}{/snippet}
 										{#snippet lead()}{@render owner(item)}{#if description}<span class="text-text-placeholder">·</span>{/if}{/snippet}
 										{#snippet subtitle()}{description}{/snippet}
 									</ListRowText>
@@ -170,6 +178,7 @@ $effect(() => {
 						<button id={itemId(index)} type="button" data-density="compact" class={`flex h-[var(--list-row-height)] w-full items-center gap-[var(--list-row-gap)] px-4 text-left transition-colors active:bg-bg-hover ${active ? 'bg-brand/7' : ''}`} onpointerdown={(event) => event.preventDefault()} onclick={() => onselect?.(item)}>
 							<SpaceAvatar name={item.name} profile={item.spaceProfile} seed={item.spaceId} size={LIST_ROW_AVATAR.compact} />
 							<ListRowText title={item.name} tooltip={item.name}>
+								{#snippet badge()}{#if item.official}{@render kind(item)}{/if}{/snippet}
 								{#snippet lead()}{@render owner(item)}{/snippet}
 							</ListRowText>
 						</button>

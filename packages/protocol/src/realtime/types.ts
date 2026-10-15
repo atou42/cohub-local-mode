@@ -11,6 +11,8 @@ import type { BoardDelta } from "../board-model.js";
 import type { RequestSource } from "../provenance.js";
 import type { DesktopCommandDispatchedPayload } from "../desktop-command.js";
 import type { AppArtifactDescriptor, AppContentKind, AppVersionSource } from "../app.js";
+import type { AppRtcPublication } from "../rtc/index.js";
+import type { Actor, ActorKind, ActorModel } from "../provenance.js";
 import type {
   BoardAwarenessClientPayload,
   BoardAwarenessUpdate,
@@ -20,6 +22,8 @@ export const WS_COMPACT_STREAM_CAPABILITY = "session.compact_stream.v1";
 export const WS_ROOM_SUBSCRIPTION_CAPABILITY = "realtime.rooms.v1";
 export const WS_BOARD_AWARENESS_CAPABILITY = "board.awareness.v1";
 export const WS_REALTIME_ROOM_CAPABILITY = "realtime.room.v1";
+export const WS_REALTIME_ROOM_RTC_CAPABILITY = "realtime.room.rtc.v1";
+export const WS_REALTIME_ROOM_HISTORY_CAPABILITY = "realtime.room.history.v1";
 export const REALTIME_OUTBOUND_CHANNEL = "pubsub:realtime:outbound";
 export const AGENT_REALTIME_PATCH_CHANNEL = "pubsub:realtime:agent_patches";
 export const REALTIME_ROOM_KEY_PREFIX = "cohub:realtime-room:v1";
@@ -34,14 +38,22 @@ export const isRealtimeDomain = (value: unknown): value is RealtimeDomain =>
 export const REALTIME_ROOM_EVENT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 /** Maximum encoded size of a room event payload. */
 export const REALTIME_ROOM_MAX_PAYLOAD_BYTES = 16 * 1024;
+export const REALTIME_ROOM_HISTORY_SIZE = 1_000;
+export const REALTIME_ROOM_HISTORY_BYTES = 512 * 1024;
+export const REALTIME_ROOM_HISTORY_PAGE = 200;
 
 export const getRealtimeRoomMetaKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}`;
 export const getRealtimeRoomCodeKey = (appId: string, code: string) => `${REALTIME_ROOM_KEY_PREFIX}:code:${appId}:${code}`;
 export const getRealtimeRoomMembersKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:members`;
 export const getRealtimeRoomLeasesKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:leases`;
 export const getRealtimeRoomSequenceKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:sequence`;
+export const getRealtimeRoomHistoryKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:history`;
+export const getRealtimeRoomHistoryMetaKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:history:meta`;
 export const getRealtimeRoomRateKey = (roomId: string) => `${REALTIME_ROOM_KEY_PREFIX}:room:${roomId}:rate`;
 export const getRealtimeRoomIndexKey = (appId: string) => `${REALTIME_ROOM_KEY_PREFIX}:app:${appId}:rooms`;
+export const getRealtimeRoomRtcSessionKey = (sessionId: string) => `${REALTIME_ROOM_KEY_PREFIX}:rtc:session:${sessionId}`;
+export const REALTIME_ROOM_RTC_SESSIONS_KEY = `${REALTIME_ROOM_KEY_PREFIX}:rtc:sessions`;
+export const getRealtimeRoomRtcRateKey = (scope: string) => `${REALTIME_ROOM_KEY_PREFIX}:rtc:rate:${scope}`;
 
 export type RealtimeRoom =
   | `space:${string}`
@@ -82,10 +94,12 @@ export type WsClientEvent =
   | { type: "session.message.create"; requestId?: string; payload: { spaceId: string; sessionId: string; clientMessageId?: string; content: ContentBlock[]; model?: string; provider?: string; harness?: "cohub" | "pi" | "codex"; thinkingLevel?: ModelThinkingLevel } }
   | { type: "presence.update"; requestId?: string; payload: { spaceId: string; meta?: Record<string, unknown> | null } }
   | { type: "board.awareness.update"; requestId?: string; payload: BoardAwarenessClientPayload }
-  | { type: "realtime.room.join"; requestId?: string; payload: { roomId: string; ticket: string } }
+  | { type: "realtime.room.join"; requestId?: string; payload: { roomId: string; ticket: string; instanceId?: string; after?: number } }
   | { type: "realtime.room.publish"; requestId?: string; payload: { roomId: string; event: string; data: unknown; clientEventId?: string } }
   | { type: "realtime.room.leave"; requestId?: string; payload: { roomId: string } }
+  | { type: "realtime.room.detach"; requestId?: string; payload: { roomId: string } }
   | { type: "realtime.room.presence.update"; requestId?: string; payload: { roomId: string; presence: Record<string, unknown> | null } }
+  | { type: "realtime.room.history"; requestId?: string; payload: { roomId: string; after?: number; limit?: number } }
   | { type: "ping"; requestId?: string; payload?: Record<string, unknown> }
   | { type: "ack"; requestId?: string; payload?: { eventId?: string } };
 
@@ -130,6 +144,25 @@ export type RealtimeRoomMember = {
    * underlying account id.
    */
   userKey?: string;
+  kind?: ActorKind;
+  model?: ActorModel;
+  publications?: AppRtcPublication[];
+};
+
+export type RealtimeRoomHistoryEvent = {
+  id: string;
+  timestamp: number;
+  sequence: number;
+  type: string;
+  data: unknown;
+  clientEventId: string | null;
+  sender: { participantId: string };
+};
+
+export type RealtimeRoomHistory = {
+  events: RealtimeRoomHistoryEvent[];
+  cursor: number;
+  truncated: boolean;
 };
 
 export type RealtimeRoomEvent = {
@@ -165,7 +198,20 @@ export type RealtimeRoomJoinedEvent = {
     participantId: string;
     members: RealtimeRoomMember[];
     sequence: number;
+    missed?: RealtimeRoomHistory;
   };
+};
+
+export type RealtimeRoomHistoryResultEvent = {
+  id: string;
+  timestamp: number;
+  domain: "room";
+  type: "realtime.room.history";
+  requestId?: string | null;
+  spaceId?: null;
+  sessionId?: null;
+  rooms: RealtimeRoom[];
+  payload: RealtimeRoomHistory & { roomId: string };
 };
 
 export type RealtimeRoomMemberChangedEvent = {
@@ -189,6 +235,22 @@ export type RealtimeRoomPresenceUpdatedEvent = {
   timestamp: number;
   domain: "room";
   type: "realtime.room.presence.updated";
+  requestId?: string | null;
+  spaceId?: null;
+  sessionId?: null;
+  rooms: RealtimeRoom[];
+  payload: {
+    roomId: string;
+    sequence: number;
+    member: RealtimeRoomMember;
+  };
+};
+
+export type RealtimeRoomPublicationsUpdatedEvent = {
+  id: string;
+  timestamp: number;
+  domain: "room";
+  type: "realtime.room.publications.updated";
   requestId?: string | null;
   spaceId?: null;
   sessionId?: null;
@@ -702,6 +764,7 @@ export type BoardChangedEvent = {
   payload: {
     boardId: string;
     actorId: string;
+    actor?: Actor;
     mutationId: string;
     /** Version before this write; a client at exactly this version can apply `after`. */
     baseVersion: number;
@@ -922,6 +985,7 @@ export type RealtimeServerEvent =
   | DesktopCommandDispatchedEvent
   | RealtimeRoomEvent
   | RealtimeRoomJoinedEvent
+  | RealtimeRoomHistoryResultEvent
   | RealtimeRoomMemberChangedEvent
   | RealtimeRoomPresenceUpdatedEvent
   | RealtimeRoomRequestEvent

@@ -1,37 +1,28 @@
-<script lang="ts" module>
-export type SessionRowTree = {
-	depth: number;
-	last: boolean;
-	hasChildren: boolean;
-};
-</script>
-
 <script lang="ts">
 import type { SessionRecord } from "@neta-art/cohub";
 import { Check, Link2Off, Pencil, TextCursorInput, X } from "lucide-svelte";
 import type { Snippet } from "svelte";
+import { clock } from "$lib/clock.svelte";
 import ListRow from "$lib/components/list-page/ListRow.svelte";
 import ListRowText from "$lib/components/list-page/ListRowText.svelte";
 import type { ListRowDensity } from "$lib/components/list-page/list-row";
-import SidebarActionButton from "$lib/components/sidebar/SidebarActionButton.svelte";
 import StatusGlyph, {
 	type StatusGlyphMotion,
 	type StatusGlyphShape,
 	type StatusGlyphTone,
 } from "$lib/components/StatusGlyph.svelte";
+import SidebarActionButton from "$lib/components/sidebar/SidebarActionButton.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
-import { clock } from "$lib/clock.svelte";
 import { formatElapsedMs } from "$lib/format-duration";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import {
-	getSessionPreview,
-	getSessionPreviewText,
-} from "$lib/session-preview";
-import {
 	getSessionRowStatus,
+	getSessionStoppedLabel,
 	type SessionRowStatusKind,
 } from "$lib/session-activity";
+import type { SessionRowTree } from "$lib/session-fork-tree";
+import { getSessionPreview, getSessionPreviewText } from "$lib/session-preview";
 import { getSessionActivityAt } from "$lib/session-sort";
 import { authStore } from "$lib/stores/auth.svelte";
 import {
@@ -58,6 +49,7 @@ const {
 	renaming = false,
 	renameValue = "",
 	renameSaving = false,
+	renameError = "",
 	removeLabelTitle,
 	removeLabelDisabled = false,
 	onNavigate,
@@ -87,6 +79,7 @@ const {
 	renaming?: boolean;
 	renameValue?: string;
 	renameSaving?: boolean;
+	renameError?: string;
 	removeLabelTitle?: string;
 	removeLabelDisabled?: boolean;
 	onNavigate: (event: MouseEvent, session: SessionRecord) => void;
@@ -122,7 +115,7 @@ const GLYPHS: Record<
 	Exclude<SessionRowStatusKind, "idle" | "unread">,
 	Glyph
 > = {
-	running: { shape: "dots", tone: "brand", motion: "active" },
+	running: { shape: "dots", tone: "activity", motion: "active" },
 	queued: { shape: "dots", tone: "muted", soft: true },
 	stopping: { shape: "dots", tone: "muted", motion: "slow" },
 	failed: { shape: "ring", tone: "error" },
@@ -131,6 +124,7 @@ const GLYPHS: Record<
 
 const locale = $derived(getLocale());
 let renameInput = $state<HTMLInputElement | null>(null);
+const renameErrorId = $props.id();
 
 const dense = $derived(density === "dense");
 const isUnread = $derived(
@@ -178,31 +172,33 @@ const preview = $derived(
 			? getSessionPreviewText(session)
 			: getSessionPreview(session, title),
 );
-const statusDetail = $derived(status.errorMessage ?? preview);
+const detail = $derived(status.errorMessage ?? preview);
+const unread = $derived(status.kind === "unread");
+const stoppedLabel = $derived(
+	dense ? null : getSessionStoppedLabel(session, locale),
+);
 const showSourceLine = $derived(
-	!dense && !preview && hasMessages && sourceKey !== "web",
+	!dense && !stoppedLabel && !preview && hasMessages && sourceKey !== "web",
 );
 const sourceBadge = $derived(
-	showSourceBadge && !showSourceLine && sourceKey !== "web"
-		? sourceName
-		: "",
+	showSourceBadge && !showSourceLine && sourceKey !== "web" ? sourceName : "",
 );
 
-const guide = $derived<"column" | "indent" | null>(
-	tree && (tree.depth > 0 || tree.hasChildren)
-		? avatar
-			? "column"
-			: tree.depth > 0
-				? "indent"
-				: null
-		: null,
-);
-const indentPx = $derived(
-	guide === "indent" && tree
-		? Math.min(tree.depth, isMobile ? 1 : 3) * (isMobile ? 10 : 12)
-		: 0,
-);
 const isFork = $derived(Boolean(tree && tree.depth > 0));
+const guide = $derived(
+	tree && (isFork || tree.hasChildren) ? (avatar ? "column" : "indent") : null,
+);
+const treeStyle = $derived(
+	guide
+		? `--tree-depth: ${tree?.depth}${guide === "indent" ? `; --tree-step: ${isMobile ? 10 : 12}px` : ""}`
+		: undefined,
+);
+
+function railX(level: number) {
+	return level === 1
+		? "var(--tree-root-x)"
+		: `calc(var(--tree-origin) + ${level - 1} * var(--tree-step))`;
+}
 
 const actionCount = $derived(
 	isMobile
@@ -252,20 +248,7 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 </script>
 
 {#snippet leading()}
-	{#if guide === "column" && isFork}
-		<span class="tree-guide tree-guide--child" class:tree-guide--last={tree?.last} aria-hidden="true"></span>
-	{:else}
-		{@render avatar?.()}
-		{#if guide === "column" && tree?.hasChildren}
-			<span class="tree-guide tree-guide--stem" aria-hidden="true"></span>
-		{/if}
-	{/if}
-{/snippet}
-
-{#snippet unreadDot()}
-	{#if status.kind === "unread"}
-		<StatusGlyph tone="brand" soft />
-	{/if}
+	{#if !isFork}{@render avatar?.()}{/if}
 {/snippet}
 
 {#snippet meta()}
@@ -274,11 +257,12 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 			<span class="max-w-20 truncate rounded-[3px] bg-bg-hover-strong px-1.5 py-px text-[10px] font-medium leading-none text-text-tertiary" title={sourceBadge}>{sourceBadge}</span>
 		{/if}
 		{time}
+		{#if dense && unread}{@render unreadDot()}{/if}
 	</span>
 {/snippet}
 
 {#snippet people()}
-	<span class="inline-flex min-w-0 shrink-0 items-center gap-1.5 {dense ? 'max-w-[60%]' : 'max-w-[40%]'}" title={participantLabel}>
+	<span class="inline-flex min-w-0 shrink-0 items-center gap-1.5 {dense && !glyph ? 'max-w-[60%]' : 'max-w-[40%]'}" title={participantLabel}>
 		<span class="inline-flex shrink-0 -space-x-1.5 opacity-80">
 			{#each participants.slice(0, 3) as participant (participant.key)}
 				<UserAvatar name={participant.name} avatarUrl={participant.avatarUrl} seed={participant.key} size="xxs" class="border-bg-primary {dense ? 'h-3.5 w-3.5' : ''}" />
@@ -290,12 +274,18 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 
 {#snippet secondLine()}
 	{#if glyph}
-		<span class="inline-flex items-center gap-1.5 align-top {status.kind === 'failed' ? 'text-error-soft' : 'text-text-tertiary'}">
-			<StatusGlyph {...glyph} class="[--status-glyph-size:5px]" />{statusText}
+		<span class="inline-flex w-full min-w-0 items-center gap-1.5 align-top">
+			<span class="session-status" data-tone={glyph.tone} title={statusText}>
+				<StatusGlyph {...glyph} class="[--status-glyph-size:5px]" />
+				<span class="truncate">{statusText}</span>
+			</span>
+			{#if detail}<span class="min-w-0 truncate" title={detail}>{detail}</span>{/if}
 		</span>
-		{#if statusDetail}<span title={statusDetail}> · {statusDetail}</span>{/if}
-	{:else if preview}
-		<span title={preview}>{preview}</span>
+	{:else if stoppedLabel}
+		<span class="text-text-tertiary">{stoppedLabel}</span>
+		{#if preview}<span title={preview}> · {preview}</span>{/if}
+	{:else if detail}
+		<span title={detail}>{detail}</span>
 	{:else if showSourceLine}
 		<span class="text-text-placeholder">{sourceName}</span>
 	{:else if !hasMessages}
@@ -303,28 +293,66 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 	{/if}
 {/snippet}
 
+{#snippet unreadDot()}
+	<StatusGlyph tone="activity" class="[--status-glyph-size:7px]" />
+{/snippet}
+
+{#snippet treeGuide()}
+	{#if guide && tree}
+		<span class="tree" aria-hidden="true">
+			{#each tree.rails as level (level)}
+				<span class="tree-line" style:left={railX(level)}></span>
+			{/each}
+			{#if isFork}
+				<span class="tree-line" class:tree-elbow={tree.last} style:left={railX(tree.depth)}></span>
+			{/if}
+			{#if tree.hasChildren}
+				<span class="tree-line tree-stem" style:left={railX(tree.depth + 1)}></span>
+			{/if}
+		</span>
+	{/if}
+{/snippet}
+
 {#if renaming}
-	<ListRow {density} active data-session-rename leading={avatar ? leading : undefined}>
-		<input
-			bind:this={renameInput}
-			value={renameValue}
-			type="text"
-			class="min-w-0 flex-1 bg-transparent text-[length:var(--list-title-size)] leading-tight text-text-primary outline-none"
-			placeholder={m.sidebar_session_name({}, { locale })}
-			maxlength="80"
-			disabled={renameSaving}
-			oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
-			onkeydown={(event) => {
-				if (renameSaving) return;
-				if (event.key === "Enter") {
-					event.preventDefault();
-					onSubmitRename?.(session);
-				} else if (event.key === "Escape") {
-					event.preventDefault();
-					onCancelRename?.();
-				}
-			}}
-		/>
+	<ListRow
+		{density}
+		active
+		data-session-rename
+		class="session-row"
+		style={treeStyle}
+		data-tree={guide ?? undefined}
+		data-depth={guide ? tree?.depth : undefined}
+		leading={avatar ? leading : undefined}
+	>
+		{@render treeGuide()}
+		<div class="flex min-w-0 flex-1 flex-col">
+			<input
+				bind:this={renameInput}
+				value={renameValue}
+				type="text"
+				class="min-w-0 flex-1 bg-transparent text-[length:var(--list-title-size)] leading-tight text-text-primary outline-none"
+				placeholder={m.sidebar_session_name({}, { locale })}
+				aria-label={m.sidebar_session_name({}, { locale })}
+				aria-invalid={renameError ? true : undefined}
+				aria-describedby={renameError ? renameErrorId : undefined}
+				maxlength="80"
+				disabled={renameSaving}
+				oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
+				onkeydown={(event) => {
+					if (renameSaving || event.isComposing) return;
+					if (event.key === "Enter") {
+						event.preventDefault();
+						onSubmitRename?.(session);
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						onCancelRename?.();
+					}
+				}}
+			/>
+			{#if renameError}
+				<p id={renameErrorId} role="alert" class="truncate text-[10px] leading-3 text-error-soft" title={renameError}>{renameError}</p>
+			{/if}
+		</div>
 		<button
 			type="button"
 			class="shrink-0 rounded p-0.5 text-status-running transition-colors hover:bg-bg-hover disabled:opacity-50"
@@ -349,11 +377,14 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 		{density}
 		{href}
 		{active}
-		class="session-row {hoverRoomClass} {isMobile ? 'select-none [-webkit-touch-callout:none]' : ''} {guide === 'indent' ? 'session-row--indent' : ''} {guide === 'indent' && tree?.last ? 'session-row--last' : ''}"
-		style={indentPx ? `--fork-indent: ${indentPx}px` : undefined}
+		class="session-row {hoverRoomClass} {isMobile ? 'select-none [-webkit-touch-callout:none]' : ''}"
+		style={treeStyle}
+		data-tree={guide ?? undefined}
+		data-depth={guide ? tree?.depth : undefined}
+		data-unread={!dense && unread ? "" : undefined}
 		aria-current={active ? "page" : undefined}
 		title={tooltip}
-		aria-label={[title, status.label, tooltip].filter(Boolean).join(', ')}
+		aria-label={[title, status.label, stoppedLabel, tooltip].filter(Boolean).join(', ')}
 		draggable={!isMobile && draggable}
 		leading={avatar ? leading : undefined}
 		onclick={(event: MouseEvent) => onNavigate(event, session)}
@@ -361,12 +392,13 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 		ondragstart={(event: DragEvent) => onDragStart?.(event, session, title)}
 		ondragend={onDragEnd}
 	>
+		{@render treeGuide()}
 		<ListRowText
 			{title}
-			badge={unreadDot}
 			{meta}
-			lead={!glyph && participants.length > 0 ? people : undefined}
+			lead={participants.length > 0 ? people : undefined}
 			subtitle={dense && !glyph ? undefined : secondLine}
+			status={!dense && unread ? unreadDot : undefined}
 		/>
 		{#snippet trailing()}
 			{#if actionCount > 0}
@@ -387,81 +419,112 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 {/if}
 
 <style>
-	.tree-guide,
-	:global(.session-row--indent)::before,
-	:global(.session-row--indent)::after {
+	.session-status {
+		--status-tone: var(--color-text-tertiary);
+		display: inline-flex;
+		flex-shrink: 0;
+		max-width: 10rem;
+		height: var(--list-subtitle-leading);
+		align-items: center;
+		gap: 5px;
+		padding-inline: 6px;
+		border-radius: var(--indicator-radius);
+		background: color-mix(in oklab, var(--status-tone) 10%, transparent);
+		color: var(--color-text-tertiary);
+		font-size: var(--list-meta-size);
+		font-weight: 500;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+	}
+
+	.session-status[data-tone="activity"] {
+		--status-tone: var(--activity);
+		color: var(--color-text-secondary);
+	}
+
+	.session-status[data-tone="error"] {
+		--status-tone: var(--color-status-error);
+		color: var(--color-error-soft);
+	}
+
+	.session-status[data-tone="warning"] {
+		--status-tone: var(--color-status-starting);
+		color: var(--color-warning-soft);
+	}
+
+	:global(.session-row[data-unread]) {
+		--list-subtitle-color: var(--color-text-secondary);
+	}
+
+	/* Rails are borders on integer x positions so every segment snaps alike. */
+	:global(.session-row[data-tree="column"]) {
+		--tree-step: 16px;
+		--tree-root-x: calc(var(--list-row-pad-x) + var(--list-avatar-size) / 2 - 1px);
+		--tree-origin: calc(
+			var(--list-row-pad-x) + var(--list-avatar-size) + var(--list-row-gap) +
+			1px - var(--tree-step)
+		);
+		--tree-text-x: calc(var(--tree-origin) + var(--tree-depth) * var(--tree-step) - 1px);
+		--tree-title-y: calc(
+			50% - (var(--list-text-gap) + var(--list-subtitle-leading)) / 2
+		);
+		--tree-stem-y: calc(
+			50% +
+			(var(--list-title-leading) + var(--list-text-gap) + var(--list-subtitle-leading)) /
+			2 + 2px
+		);
+		--tree-reach-gap: 4px;
+		--tree-radius: 10px;
+		--tree-overhang: 0px;
+	}
+
+	:global(.session-row[data-tree="column"][data-depth="0"]) {
+		--tree-stem-y: calc(50% + var(--list-avatar-size) / 2 + 4px);
+	}
+
+	:global(.session-row[data-tree="column"]:not([data-depth="0"]) .list-row-leading) {
+		width: calc(var(--list-avatar-size) + (var(--tree-depth) - 1) * var(--tree-step));
+	}
+
+	:global(.session-row[data-tree="indent"]) {
+		--tree-origin: calc(var(--list-row-pad-x) + var(--tree-step) - 7px);
+		--tree-root-x: var(--tree-origin);
+		--tree-text-x: calc(var(--tree-origin) + (var(--tree-depth) - 1) * var(--tree-step) + 7px);
+		--tree-title-y: calc(6px + var(--list-title-leading) / 2);
+		--tree-stem-y: calc(100% - 4px);
+		--tree-reach-gap: 3px;
+		--tree-radius: 4px;
+		--tree-overhang: -2px;
+		overflow: visible;
+	}
+
+	:global(.session-row[data-tree="indent"]:not([data-depth="0"])) {
+		padding-left: var(--tree-text-x);
+	}
+
+	.tree {
 		position: absolute;
-		background: var(--list-tree-guide);
-		border-radius: 999px;
+		inset: 0 0 var(--tree-overhang);
 		pointer-events: none;
 	}
 
-	.tree-guide--stem {
-		left: calc(50% - 1px);
-		top: calc(50% + var(--list-avatar-size) / 2 + 3px);
-		bottom: 0;
-		width: 2px;
-	}
-
-	.tree-guide--child {
-		inset: 0;
-		background: none;
-	}
-
-	.tree-guide--child::before,
-	.tree-guide--child::after {
-		content: "";
+	.tree-line {
 		position: absolute;
-		left: calc(50% - 1px);
-		background: var(--list-tree-guide);
-		border-radius: 999px;
-	}
-
-	.tree-guide--child::before {
 		top: 0;
 		bottom: 0;
-		width: 2px;
+		border: 0 solid var(--list-tree-guide);
+		border-left-width: var(--list-tree-width);
 	}
 
-	.tree-guide--last::before {
-		bottom: calc(50% - 1px);
+	.tree-elbow {
+		bottom: auto;
+		right: calc(100% - var(--tree-text-x) + var(--tree-reach-gap));
+		height: calc(var(--tree-title-y) + var(--list-tree-width) / 2);
+		border-bottom-width: var(--list-tree-width);
+		border-bottom-left-radius: var(--tree-radius);
 	}
 
-	.tree-guide--child::after {
-		top: calc(50% - 1px);
-		right: calc(var(--list-row-gap) / -2);
-		height: 2px;
-	}
-
-	:global(.session-row--indent) {
-		padding-left: calc(var(--list-row-pad-x) + var(--fork-indent, 0px));
-	}
-
-	:global(.session-row--indent)::before {
-		content: "";
-		left: calc(var(--list-row-pad-x) + var(--fork-indent, 0px) - 7px);
-		top: 6px;
-		bottom: 6px;
-		width: 2px;
-	}
-
-	:global(.session-row--indent)::after {
-		content: "";
-		left: calc(var(--list-row-pad-x) + var(--fork-indent, 0px) - 7px);
-		top: calc(50% - 1px);
-		width: 7px;
-		height: 2px;
-	}
-
-	:global(.session-row--last)::before {
-		bottom: 50%;
-	}
-
-	:global(.list-row.session-row[data-density="comfortable"]) {
-		--list-subtitle-size: 13px;
-	}
-
-	:global(.list-row.session-row[data-density="compact"]) {
-		--list-subtitle-size: 11px;
+	.tree-stem {
+		top: var(--tree-stem-y);
 	}
 </style>

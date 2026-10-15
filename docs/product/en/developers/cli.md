@@ -34,11 +34,34 @@ ENV=dev cohub auth login
 ENV=dev cohub spaces ls
 ```
 
+Use a custom API endpoint for self-hosted deployments or proxies:
+
+```bash
+cohub --base-url https://api.example.com spaces ls
+COHUB_BASE_URL=https://api.example.com cohub spaces ls
+```
+
+`--base-url` takes precedence over `COHUB_BASE_URL`. Without either, the CLI uses
+the selected environment's default API address. Configure other endpoints separately:
+
+| Variable | Endpoint |
+| --- | --- |
+| `COHUB_BASE_URL` | API base URL |
+| `COHUB_WS_URL` | Realtime gateway URL (`http(s)` or `ws(s)`) |
+| `COHUB_WEB_URL` | Web base URL used in links |
+
+Changing the API base URL does not change the gateway or authentication provider.
+For self-hosted authentication, set `COHUB_AUTH_ISSUER`, `COHUB_AUTH_CLIENT_ID`,
+and, if needed, `COHUB_AUTH_RESOURCE` and `COHUB_AUTH_SCOPE`. Stored login sessions,
+Home Space caches, and Runtime directory bindings are scoped to the API base URL.
+Sign in once for each custom server, or supply `COHUB_EXECUTION_TOKEN`.
+
 ## Global flags
 
 | Flag | Purpose |
 | --- | --- |
 | `-s, --space <space>` | Target Space for space-scoped commands |
+| `--base-url <url>` | Override the API base URL |
 | `--json` | Machine-readable output |
 | `-h, --help` | Command help |
 
@@ -52,8 +75,8 @@ cohub -s home spaces files ls
 COHUB_SPACE_ID=<spaceId> cohub spaces get
 ```
 
-Commands that start new work — `prompt`, `completion`, `generate`, `apps`, and
-`public` — fall back to your Home Space when nothing else names a target. Every
+Commands that start new work — `prompt`, `completion`, `decision`, `generate`,
+`apps`, and `public` — fall back to your Home Space when nothing else names a target. Every
 other Space command reads or changes existing Space state, so it stops with an
 error instead of guessing.
 
@@ -89,6 +112,21 @@ Schedule:
 
 ```bash
 cohub -s <spaceId> spaces prompt --at "2026-07-20T09:00:00+08:00" "Weekly review" --json
+```
+
+### Decide
+
+Answer yes/no, choice, and score questions about text or images. Questions are
+inline JSON or a JSON file; local images are uploaded as WebP first.
+Text and `--image` append to a text or array `state` from `--input` without
+replacing it. A JSON object state cannot be combined with additional text or
+images; express the whole state as a text/image array instead.
+
+```bash
+cohub decision "I was charged twice" -q questions.json
+cat ticket.txt | cohub decision -q questions.json --json
+cohub decision "Duplicate charge?" --image receipt.png -q questions.json
+cohub decision --input request.json
 ```
 
 ### Run a command in the Space workspace
@@ -133,9 +171,57 @@ cohub -s <spaceId> apps ls --json
 cohub apps stats <workId|url|username/space/work>
 ```
 
-Realtime rooms use a published App's runtime identity. Use
-`client.app.realtime` inside the App; the CLI intentionally has no room
-commands.
+### Rooms
+
+Take part in a published App's realtime room like any member: read and publish
+its events, and set what others see about you. Join with an invite from the
+App (`room.invite()`), or create a room for an App you manage.
+
+```bash
+cohub rooms create --app <app>                      # prints an invite and the link that opens the room
+cohub rooms join <invite> --presence '{"name":"Guide"}'
+cohub rooms get <room>                              # members, their kind and presence, the latest sequence
+cohub rooms events <room> --after 42 --type 'chat.*'
+cohub rooms events <room> --wait 10m                # returns when someone else publishes
+cohub rooms events <room> --follow
+cohub rooms publish <room> chat.message '{"text":"Hello"}'
+cohub rooms presence <room> '{"status":"away"}'
+cohub rooms invite <room>
+cohub rooms leave <room>
+```
+
+Your seat needs no open connection: every call keeps it, and it lapses after
+`--idle` (30 minutes by default) without one. An Agent holds one seat per Chat
+and shows as `agent` with its model; a person shows as `cli`. Events are kept
+in the room history — the latest 1,000 published, up to 512 KB — so `--after`
+resumes where you left off.
+
+For bidirectional realtime events and member/presence/track announcements, keep a connection open:
+
+```bash
+cohub rooms connect <room> --json
+cohub rooms connect <room> --after 42 --input --json
+```
+
+`--input` accepts one JSON command per line: `{"op":"publish","type":"chat.message","data":{"text":"Hello"}}`, `{"op":"send","type":"cursor","data":{"x":12}}`, or `{"op":"presence","presence":{"status":"ready"}}`. `publish` returns an `ack` with its sequence; `send` is transient and has no acknowledgement or history. Input EOF keeps receiving until interrupted. Output is NDJSON with `kind` values including `connected`, `state`, `members`, `event`, `ack`, `gap`, and `input_error`. Each input line is limited to 20 KB; slow output disconnects with an error instead of buffering indefinitely.
+
+The connection renews your existing seat. Ctrl-C detaches it; `rooms leave` gives up the seat and closes attached connections. Reconnect restores members and replays retained published events; `gap` means state must be resynchronized. Audio/video transport is not included in this command.
+
+Node applications use `CohubClient.rooms.connect(roomId, { after, onRoom })`; register listeners in `onRoom` to receive the initial snapshot and replay. The returned room supports `publish`, `send`, `setPresence`, `subscribeAll`, and `onMembersChanged`. Call `room.disconnect()` to detach, `room.leave()` to give up the seat, and `client.disconnect()` to close the transport. `CohubHttpClient` retains its lightweight HTTP API.
+
+### RTC media and data streams
+
+`rooms rtc` runs WebRTC in a separate Go/Pion helper (`cohub-rtc`). The CLI downloads and verifies the helper for your platform on first use; pass `--helper <path>` to use a local build. FFmpeg is needed only for format conversion:
+
+```bash
+cohub rooms rtc <room> --audio ./voice.pcm --rate 48000 --channels 1 --output ./received
+cohub rooms rtc <room> --video ./clip.i420 --size 640x360 --fps 30 --output ./received
+cohub rooms rtc <room> --channel chat --data-input -
+```
+
+Audio is s16le PCM; video is raw I420. Encoded Ogg Opus (`--audio-format opus`) and VP8 IVF (`--video-format vp8`) inputs are passed through without re-encoding. Use FFmpeg or your model adapter to supply files/pipes. Only one input may use stdin. Completed inputs stop publishing, but receiving continues until Ctrl-C. `--participant` filters received media; `--delivery latest` selects best-effort DataChannel delivery. Output is NDJSON. Received tracks are stored in unique raw frame files with per-frame timing/format metadata; these are decoded frames, not the sender's original media. No recording occurs without `--output`. `--output -` streams framed binary media to stdout (4-byte big-endian JSON header length, UTF-8 header including `bytes`, then payload); status moves to stderr. This supports realtime model consumers without Base64 or intermediate files. Buffers are bounded and slow output fails explicitly. Each track replacement starts a new segment.
+
+The helper runs in an isolated child process. Graceful shutdown releases RTC before disconnecting; your room seat remains. Only one RTC session may own an Agent seat at a time. Node code may supply `room.rtc({ createPeerConnection })` to inject a custom PeerConnection. See `apps/sandbox/cmd/cohub-rtc/README.md` for local builds, formats, and limitations. A configured server SFU is required.
 
 ### Drive the Cohub UI
 
@@ -246,7 +332,7 @@ cohub -s <spaceId> boards apply <boardId> -i patch.json --dry-run
 cohub -s <spaceId> boards apply <boardId> -i - < changes.json
 ```
 
-`boards schema` is the source of truth for every field, and `boards preset` prints tracks for a preset motion — as an apply-ready patch with `--animation`, or bare `tracks` without it:
+`boards schema` explains every field, and `boards preset` prints tracks for a preset motion — as an apply-ready patch with `--animation`, or bare `tracks` without it:
 
 ```bash
 cohub -s <spaceId> boards schema                 # units, item types, colors, animatable properties
@@ -256,19 +342,19 @@ cohub -s <spaceId> boards preset rise --targets a,b --animation intro | cohub bo
 cohub -s <spaceId> boards preset float --targets ship   # bare tracks, to fold into your own animation
 ```
 
-`boards history` lists versions or restores one. Timeline playback lives on the top-level `boards` commands (`play`, `pause`, `resume`, `seek`, `next`, `stop`), image and video rendering stays on `boards export`, and `boards watch` streams changes and playback.
+`boards history` lists versions or restores one. Playback is shared by every viewer (`play`, `pause`, `resume`, `seek`, `next`, `stop`), `boards export` renders images and videos, and `boards watch` streams changes and playback.
 
-Board media and effects use the same item model as every other Board element. `video` and `audio` items accept `props.time` in milliseconds, so an animation track can target `props.time` directly. For example:
+`video` and `audio` items accept `props.time` in milliseconds, so an animation track can drive it:
 
 ```json
 {
   "target": "music",
-  "property": "time",
+  "property": "props.time",
   "keyframes": [{ "at": 0, "value": 0 }, { "at": 6000, "value": 6000 }]
 }
 ```
 
-An `effect` item uses a typed `props` object: `kind`, `rate`, `life`, `particleSize`, `speed`, `direction`, `spread`, `gravity`, `intensity`, optional `follow`, and optional `seed`. A `sketch` item points to a `.js` or `.mjs` Space file exporting `draw(ctx, frame)`; the headless exporter runs the same frame contract when creating PNG sequences or videos.
+A `task` item is a live card for a generation run: write only `props.taskRunId`, and the server keeps its status and results up to date. Any item can attach `script: { src, params }`, a JavaScript module that runs in a worker and draws or adds behavior; a `custom` item is an empty box whose content the module draws. `cohub boards schema script` lists the module API, and `cohub boards examples custom --module` prints a starter module.
 
 Video export consumes a frame range and uses the range step as its default frame rate:
 

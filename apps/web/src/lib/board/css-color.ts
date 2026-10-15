@@ -90,12 +90,14 @@ export function parseCssColorToNumber(value: string): number | null {
 
 /**
  * Read a CSS custom property from `host` (or documentElement) and convert to
- * 0xRRGGBB. Falls back when the value is empty or unparsable.
+ * 0xRRGGBB. Falls back when the value is empty or unparsable. `backdrop`
+ * composites translucent colors over it instead of dropping their alpha.
  */
 export function readCssColorNumber(
 	host: Element | null | undefined,
 	property: string,
 	fallback: number,
+	backdrop?: number,
 ): number {
 	const el =
 		host ?? (typeof document !== "undefined" ? document.documentElement : null);
@@ -103,6 +105,8 @@ export function readCssColorNumber(
 
 	const declared = getComputedStyle(el).getPropertyValue(property).trim();
 	if (!declared) return fallback;
+	if (backdrop !== undefined)
+		return paintPixel(declared, hexNumberToCss(backdrop), fallback);
 
 	// Fast path: already #rrggbb / rgb().
 	const direct = parseCssColorToNumber(declared);
@@ -122,6 +126,10 @@ export function readCssColorNumber(
 
 	// Canvas 2D is the browser's native CSS Color 4 -> sRGB conversion path.
 	// Reading one pixel also applies gamut mapping and ignores alpha for Pixi.
+	return paintPixel(declared, null, fallback);
+}
+
+function paintPixel(color: string, backdrop: string | null, fallback: number) {
 	if (typeof document === "undefined") return fallback;
 	colorCanvas ??= document.createElement("canvas");
 	colorCanvas.width = 1;
@@ -131,8 +139,14 @@ export function readCssColorNumber(
 	context.clearRect(0, 0, 1, 1);
 	context.fillStyle = "#010203";
 	const before = context.fillStyle;
-	context.fillStyle = declared;
+	context.fillStyle = color;
 	if (context.fillStyle === before) return fallback;
+	const parsed = context.fillStyle;
+	if (backdrop) {
+		context.fillStyle = backdrop;
+		context.fillRect(0, 0, 1, 1);
+		context.fillStyle = parsed;
+	}
 	context.fillRect(0, 0, 1, 1);
 	const pixel = context.getImageData(0, 0, 1, 1).data;
 	return (pixel[0] << 16) | (pixel[1] << 8) | pixel[2];

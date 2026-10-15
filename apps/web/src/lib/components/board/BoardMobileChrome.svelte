@@ -18,6 +18,7 @@ import {
 	History,
 	ImageDown,
 	Layers,
+	Link,
 	LocateFixed,
 	Lock,
 	LockOpen,
@@ -32,6 +33,7 @@ import {
 	Triangle,
 	Type,
 } from "lucide-svelte";
+import { boardSelectionColor } from "$lib/board/board-selection-color";
 import type { BoardEditor, BoardToolId } from "$lib/board/editor.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
@@ -47,6 +49,7 @@ const {
 	onToggleTimeline,
 	onExport,
 	onReplay,
+	onAddLink,
 	contextMenuOpen = false,
 }: {
 	editor: BoardEditor;
@@ -59,6 +62,7 @@ const {
 	onToggleTimeline?: () => void;
 	onExport?: () => void;
 	onReplay?: () => void;
+	onAddLink?: () => void;
 	contextMenuOpen?: boolean;
 } = $props();
 
@@ -69,7 +73,10 @@ const hasSelection = $derived(
 	editor.selection.length > 0 &&
 		editor.selection.some((id) => editor.itemById(id) !== null),
 );
-const canColor = $derived(editor.selectedItems.length > 0);
+const currentSelectionColor = $derived(
+	boardSelectionColor(editor.selectedItems),
+);
+const canColor = $derived(currentSelectionColor !== undefined);
 
 let insertOpen = $state(false);
 let moreOpen = $state(false);
@@ -134,6 +141,9 @@ function focusContent() {
 				</button>
 			</div>
 			<div class="sheet-row">
+				{#if onAddLink}
+					<button type="button" class="sheet-item" onclick={() => { insertOpen = false; onAddLink(); }}><Link class="h-4 w-4" /><span>{m.board_add_link({}, { locale })}</span></button>
+				{/if}
 				<button type="button" class="sheet-item" class:sheet-item--on={editor.tool === "draw"} onclick={() => setTool("draw")}>
 					<Pencil class="h-4 w-4" />
 					<span>{m.board_draw({}, { locale })}</span>
@@ -153,10 +163,11 @@ function focusContent() {
 					{#each BOARD_COLORS as color (color.id)}
 						<button
 							type="button"
-							class="swatch"
+							class="color-chip"
 							title={color.label}
 							aria-label={m.board_use_color_aria({ color: color.label }, { locale })}
-							style:--swatch-color="var({boardColorCssVar(color.id, 'stroke')})"
+							aria-pressed={currentSelectionColor === color.id}
+							style:--chip-color="var({boardColorCssVar(color.id, 'stroke')})"
 							onclick={() => editor.setSelectionColor(color.id)}
 						></button>
 					{/each}
@@ -211,11 +222,10 @@ function focusContent() {
 	{/if}
 {/if}
 
-<div class="board-mobile-bar" role="toolbar" aria-label={m.board_tools({}, { locale })}>
+<div class="board-mobile-bar toolbar-surface" role="toolbar" aria-label={m.board_tools({}, { locale })}>
 	<button
 		type="button"
-		class="bar-btn"
-		class:bar-btn--on={activeTool === "hand"}
+		class="tool-key"
 		title={m.board_hand({}, { locale })}
 		aria-label={m.board_hand({}, { locale })}
 		aria-pressed={activeTool === "hand"}
@@ -225,8 +235,7 @@ function focusContent() {
 	</button>
 	<button
 		type="button"
-		class="bar-btn"
-		class:bar-btn--on={activeTool === "select"}
+		class="tool-key"
 		title={m.board_select({}, { locale })}
 		aria-label={m.board_select({}, { locale })}
 		aria-pressed={activeTool === "select"}
@@ -238,8 +247,7 @@ function focusContent() {
 	{#if !readonly}
 		<button
 			type="button"
-			class="bar-btn"
-			class:bar-btn--on={insertOpen}
+			class="tool-key"
 			title={m.board_add({}, { locale })}
 			aria-label={m.board_add({}, { locale })}
 			aria-expanded={insertOpen}
@@ -251,24 +259,23 @@ function focusContent() {
 
 	<div class="bar-spacer"></div>
 
-	<button type="button" class="bar-btn" title={m.board_zoom_out({}, { locale })} aria-label={m.board_zoom_out({}, { locale })} onclick={() => editor.zoomOut()}>
+	<button type="button" class="tool-key" title={m.board_zoom_out({}, { locale })} aria-label={m.board_zoom_out({}, { locale })} onclick={() => editor.zoomOut()}>
 		<Minus class="h-4 w-4" />
 	</button>
-	<button type="button" class="bar-zoom" title={m.board_zoom_reset({}, { locale })} aria-label={m.board_zoom_reset({}, { locale })} onclick={() => editor.resetZoom()}>
+	<button type="button" class="tool-key bar-zoom" title={m.board_zoom_reset({}, { locale })} aria-label={m.board_zoom_reset({}, { locale })} onclick={() => editor.resetZoom()}>
 		{zoomPercent}%
 	</button>
-	<button type="button" class="bar-btn" title={m.board_zoom_in({}, { locale })} aria-label={m.board_zoom_in({}, { locale })} onclick={() => editor.zoomIn()}>
+	<button type="button" class="tool-key" title={m.board_zoom_in({}, { locale })} aria-label={m.board_zoom_in({}, { locale })} onclick={() => editor.zoomIn()}>
 		<Plus class="h-4 w-4" />
 	</button>
-	<button type="button" class="bar-btn" title={m.board_zoom_fit({}, { locale })} aria-label={m.board_zoom_fit({}, { locale })} onclick={focusContent}>
+	<button type="button" class="tool-key" title={m.board_zoom_fit({}, { locale })} aria-label={m.board_zoom_fit({}, { locale })} onclick={focusContent}>
 		<LocateFixed class="h-4 w-4" />
 	</button>
 
 	{#if readonly && onToggleTimeline}
 		<button
 			type="button"
-			class="bar-btn"
-			class:bar-btn--on={timelineOpen}
+			class="tool-key"
 			title={m.board_timeline({}, { locale })}
 			aria-label={m.board_timeline({}, { locale })}
 			aria-expanded={timelineOpen}
@@ -282,8 +289,7 @@ function focusContent() {
 		<div class="bar-spacer"></div>
 		<button
 			type="button"
-			class="bar-btn"
-			class:bar-btn--on={moreOpen}
+			class="tool-key"
 			title={m.board_more({}, { locale })}
 			aria-label={m.board_more({}, { locale })}
 			aria-expanded={moreOpen}
@@ -296,44 +302,22 @@ function focusContent() {
 
 <style>
 	.board-mobile-bar {
+		--tool-key-size: 40px;
 		position: absolute;
 		right: 8px;
 		bottom: calc(8px + env(safe-area-inset-bottom, 0px));
 		left: 8px;
 		z-index: 25;
-		display: flex;
-		align-items: center;
 		gap: 2px;
 		border-radius: 12px;
-		border: 1px solid var(--border-subtle);
-		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
 		padding: 4px;
-		box-shadow: 0 10px 24px color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
-		backdrop-filter: blur(12px);
+		overflow-x: auto;
+		scrollbar-width: none;
 	}
-
-	.bar-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		height: 40px;
-		border-radius: 9px;
-		border: 1px solid transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-		transition: background-color 100ms ease, color 100ms ease;
-	}
-	.bar-btn--on {
-		background: var(--brand-bg);
-		border-color: var(--brand-border);
-		color: var(--brand-muted-fg);
-	}
+	.board-mobile-bar::-webkit-scrollbar { display: none; }
 
 	.bar-zoom {
 		min-width: 50px;
-		height: 40px;
-		border-radius: 9px;
 		color: var(--text-tertiary);
 		font-size: 12px;
 		font-variant-numeric: tabular-nums;
@@ -354,7 +338,7 @@ function focusContent() {
 		border: 1px solid var(--border-subtle);
 		background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
 		padding: 6px;
-		box-shadow: 0 12px 28px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
+		box-shadow: var(--toolbar-shadow);
 		backdrop-filter: blur(12px);
 	}
 
@@ -383,8 +367,8 @@ function focusContent() {
 		gap: 6px;
 		min-width: 40px;
 		min-height: 44px;
-		border-radius: 10px;
 		border: 1px solid transparent;
+		border-radius: 10px;
 		color: var(--text-secondary);
 		font-size: 13px;
 		white-space: nowrap;
@@ -392,24 +376,17 @@ function focusContent() {
 	}
 	.sheet-item--wide { justify-content: flex-start; padding: 0 12px; }
 	.sheet-item--on {
-		background: var(--brand-bg);
 		border-color: var(--brand-border);
+		background: var(--brand-bg);
 		color: var(--brand-muted-fg);
 	}
-	.sheet-item--danger { color: var(--error-soft); }
+	.sheet-item--danger { color: var(--color-error-soft); }
 
 	.swatches {
 		display: flex;
 		justify-content: center;
+		--color-chip-size: 26px;
 		gap: 8px;
 		padding: 4px 2px;
-	}
-	.swatch {
-		width: 26px;
-		height: 26px;
-		border-radius: 50%;
-		border: 1.5px solid var(--border-subtle);
-		background: var(--swatch-color);
-		cursor: pointer;
 	}
 </style>

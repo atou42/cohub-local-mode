@@ -37,10 +37,11 @@ export function createSelectionModule(ctx: EditorContext) {
 	);
 
 	function set(ids: string[]) {
-		state.selection = ids;
+		state.selection = ids.filter((id) => Boolean(state.base.items[id]));
 	}
 
 	function toggle(id: string) {
+		if (!state.base.items[id]) return;
 		const { selection } = state;
 		state.selection = selection.includes(id) ? selection.filter((selected) => selected !== id) : [...selection, id];
 	}

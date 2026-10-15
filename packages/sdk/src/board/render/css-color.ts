@@ -1,41 +1,42 @@
 import { DOMAdapter, type ICanvas } from "pixi.js";
 
-const CACHE_LIMIT = 256;
-const cache = new Map<string, number | null>();
+export type BoardCssPaint = { color: number; alpha: number };
+const cache = new Map<string, BoardCssPaint | null>();
 let canvas: ICanvas | null = null;
 
-export function parseBoardCssColor(value: string): number | null {
+export function parseBoardCssPaint(value: string): BoardCssPaint | null {
   const key = value.trim();
   if (!key) return null;
-  const cached = cache.get(key);
-  if (cached !== undefined || cache.has(key)) return cached ?? null;
-
-  let result: number | null = null;
+  if (key.toLowerCase() === "transparent") return { color: 0, alpha: 0 };
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(key)?.[1];
+  if (hex) {
+    const digits = hex.length <= 4 ? [...hex].map((digit) => digit + digit).join("") : hex;
+    return { color: Number.parseInt(digits.slice(0, 6), 16), alpha: digits.length === 8 ? Number.parseInt(digits.slice(6), 16) / 255 : 1 };
+  }
+  if (cache.has(key)) return cache.get(key) ?? null;
+  let result: BoardCssPaint | null = null;
   try {
-    const direct = /^#([0-9a-f]{6})$/i.exec(key);
-    if (direct?.[1]) {
-      result = Number.parseInt(direct[1], 16);
-    } else {
-      canvas ??= DOMAdapter.get().createCanvas(1, 1);
-      const context = canvas.getContext("2d") as
-        | { fillStyle: string | CanvasGradient | CanvasPattern }
-        | null;
-      if (context) {
-        context.fillStyle = "#010203";
-        context.fillStyle = key;
-        const first = String(context.fillStyle);
-        context.fillStyle = "#040506";
-        context.fillStyle = key;
-        const second = String(context.fillStyle);
-        const match = first === second ? /^#([0-9a-f]{6})$/i.exec(first) : null;
-        if (match?.[1]) result = Number.parseInt(match[1], 16);
-      }
+    canvas ??= DOMAdapter.get().createCanvas(1, 1);
+    const context = canvas.getContext("2d") as unknown as CanvasRenderingContext2D;
+    context.fillStyle = "#010203";
+    context.fillStyle = key;
+    const first = context.fillStyle;
+    context.fillStyle = "#040506";
+    context.fillStyle = key;
+    if (first === context.fillStyle) {
+      context.clearRect(0, 0, 1, 1);
+      context.fillRect(0, 0, 1, 1);
+      const [r = 0, g = 0, b = 0, a = 0] = context.getImageData(0, 0, 1, 1).data;
+      result = { color: (r << 16) | (g << 8) | b, alpha: a / 255 };
     }
   } catch {
     result = null;
   }
-
-  if (cache.size >= CACHE_LIMIT) cache.clear();
+  if (cache.size >= 256) cache.clear();
   cache.set(key, result);
   return result;
+}
+
+export function parseBoardCssColor(value: string): number | null {
+  return parseBoardCssPaint(value)?.color ?? null;
 }

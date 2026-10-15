@@ -26,6 +26,9 @@ import { verifyAppSessionToken } from "../../app-sessions.js";
 import { mergePromptContextAuth, promptAuthContextFromAppSession } from "../../prompt-auth-context.js";
 import { getSpaceSandboxBySpaceId, updateSpaceSandbox, recoverSpaceSandbox } from "../../space-sandboxes.js";
 import { isSandboxReportTokenValid } from "../../crypto.js";
+import { sandboxWsEndpoint } from "@cohub/sandbox-client";
+import { k8sCoreApi } from "../../k8s.js";
+import { sessionsNamespace } from "../../config.js";
 import { normalizeSandboxLifecycleStatus, normalizeSandboxRuntimeStatus } from "@cohub/sandbox-controller";
 import {
   ensureInternalRequest,
@@ -158,20 +161,42 @@ router.post("/:id/sandbox-report", async (c) => {
     return c.json({ message: "forbidden" }, 403);
   }
 
+  if (sandbox.provider !== "cloud" || !sandbox.podName) return c.json({ message: "forbidden" }, 403);
+  let pod: Awaited<ReturnType<typeof k8sCoreApi.readNamespacedPod>>;
+  try {
+    pod = await k8sCoreApi.readNamespacedPod({ name: sandbox.podName, namespace: sessionsNamespace });
+  } catch (error) {
+    const statusCode = (error as { statusCode?: number; code?: number }).statusCode
+      ?? (error as { code?: number }).code;
+    if (statusCode === 404) return c.json({ message: "sandbox Pod is not ready" }, 409);
+    logger.warn("[SandboxReport] Pod lookup failed", { spaceId, podName: sandbox.podName, statusCode });
+    return c.json({ message: "sandbox Pod lookup is temporarily unavailable" }, 503);
+  }
+  if (pod.metadata?.labels?.["space-id"] !== spaceId || pod.metadata.labels.app !== "agent-sandbox") {
+    return c.json({ message: "sandbox instance mismatch" }, 403);
+  }
+  const podIp = pod.status?.podIP;
+  if (!podIp) return c.json({ message: "sandbox Pod IP is not ready" }, 409);
   const safeMeta = sanitizeSandboxMeta({
     ...(body.meta ?? {}),
-    podName: body.podName?.trim() || sandbox.podName || null,
-    sandboxId: body.sandboxId?.trim() || null,
+    podName: sandbox.podName,
+    sandboxId: sandbox.podName,
+    podIp,
+    wsEndpoint: sandboxWsEndpoint(podIp),
   });
   const reportedImageVersion = typeof safeMeta?.imageVersion === "string"
     ? safeMeta.imageVersion.trim() || null
     : null;
 
-  await updateSpaceSandbox({
+  const updatedSandbox = await updateSpaceSandbox({
     spaceId,
+    expectedReportTokenHash: expectedTokenHash,
+    expectedProvisioningGeneration: typeof sandboxMeta?.provisioningGeneration === "string"
+      ? sandboxMeta.provisioningGeneration
+      : null,
     status: normalizeSandboxLifecycleStatus(body.status),
     runtimeStatus: normalizeSandboxRuntimeStatus(body.status),
-    podName: body.podName?.trim() || sandbox.podName || `sandbox-${spaceId}`,
+    podName: sandbox.podName,
     reportedImageVersion,
     reportedAt: new Date(),
     lastHeartbeatAt: new Date(),
@@ -180,6 +205,7 @@ router.post("/:id/sandbox-report", async (c) => {
       ...(safeMeta ?? {}),
     },
   });
+  if (!updatedSandbox) return c.json({ message: "sandbox instance changed" }, 403);
 
   if (safeMeta?.requiresPodRecreate === true && safeMeta.errorClass === "stale_mount") {
     void recoverSpaceSandbox({

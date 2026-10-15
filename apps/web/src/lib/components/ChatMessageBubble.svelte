@@ -9,6 +9,7 @@ import {
 import { resolveHarness } from "@neta-art/cohub";
 import {
 	Archive,
+	ArrowDownLeft,
 	Check,
 	CloudUpload,
 	Copy,
@@ -646,8 +647,7 @@ function handleCopy() {
               class="inline-flex min-w-0 max-w-48 shrink items-center gap-1 text-text-placeholder/70 transition-colors [&[href]]:hover:text-text-secondary"
             >
               {#snippet children({ title })}
-                <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-brand/50"
-                ></span>
+                <ArrowDownLeft class="h-3 w-3 shrink-0 text-brand/60" aria-hidden="true" />
                 <span class="min-w-0 truncate font-medium"
                   >{title
                     ? m.sent_from({ title }, { locale })

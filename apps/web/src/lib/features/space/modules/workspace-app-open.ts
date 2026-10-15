@@ -25,10 +25,11 @@ export type PublishedAppOpenInput = {
 
 export type PublishedAppOpenResult =
 	| { ok: true; surface: "window" | "overlay" }
-	| { ok: false; reason: "overlay_limit" };
+	| { ok: false; reason: "overlay_limit" | "cancelled" };
 
 export type PublishedAppOpenPorts = {
 	spaceId: string;
+	isCurrent?: () => boolean;
 	/** Fetches presentation meta when neither `surface` nor `meta` is given. */
 	loadMeta?: (appId: string) => Promise<AppMeta | null>;
 	openWindow: (input: {
@@ -66,6 +67,8 @@ export async function openPublishedApp(
 			declared = undefined;
 		}
 	}
+	if (ports.isCurrent && !ports.isCurrent())
+		return { ok: false, reason: "cancelled" };
 	if (resolveOpenSurface(input.surface, declared) === "overlay") {
 		const opened = ports.openOverlay({
 			appId: input.appId,

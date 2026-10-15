@@ -1,10 +1,16 @@
 <script lang="ts">
-import { type BoardDocument, buildBoardScene } from "@neta-art/cohub/board";
 import {
 	BOARD_EXPORT_MAX_EDGE,
+	type BoardDocument,
 	type BoardExportRegion,
+	buildBoardScene,
+	createBoardAnimationSampler,
 	planBoardExport,
 } from "@neta-art/cohub/board";
+import {
+	type BoardRenderDiagnostic,
+	inspectBoardScene,
+} from "@neta-art/cohub/board/render";
 import { Check, Copy, Download, Loader2 } from "lucide-svelte";
 import {
 	type BoardImageFormat,
@@ -15,6 +21,7 @@ import {
 	exportBoardImage,
 } from "$lib/board/board-image-export";
 import Dialog from "$lib/components/Dialog.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -25,6 +32,7 @@ const {
 	bridge,
 	title,
 	selection,
+	onLocate,
 }: {
 	open: boolean;
 	onClose: () => void;
@@ -32,11 +40,12 @@ const {
 	bridge: BoardStageExportBridge | null;
 	title: string | null;
 	selection: string[];
+	onLocate?: (id: string) => void;
 } = $props();
 
 const locale = $derived(getLocale());
 
-type Scope = "all" | "selection" | "frame";
+type Scope = "all" | "selection" | "frame" | "camera";
 
 const SCALES = [1, 2, 3, 4] as const;
 const FORMATS: Array<{ id: BoardImageFormat; label: string }> = [
@@ -54,10 +63,56 @@ let busy = $state<"download" | "copy" | null>(null);
 let copied = $state(false);
 let failure = $state<string | null>(null);
 let warnings = $state<string[]>([]);
-
+let animationId = $state("");
+let seconds = $state(0);
+let viewport = $state("1600x900");
+let hints = $state<BoardRenderDiagnostic[] | null>(null);
+const animationIds = $derived(Object.keys(boardDocument.animations));
+const cameraSize = $derived.by(() => {
+	const [width = 1600, height = 900] = viewport.split("x").map(Number);
+	return { width, height };
+});
 const scene = $derived(open ? buildBoardScene(boardDocument) : null);
+const sampler = $derived(
+	open && animationId && boardDocument.animations[animationId]
+		? createBoardAnimationSampler(boardDocument, animationId)
+		: null,
+);
+const sampledScene = $derived(
+	sampler ? sampler.at(Math.max(0, seconds || 0) * 1000).scene : scene,
+);
+
+function inspect() {
+	hints = sampledScene ? inspectBoardScene(sampledScene) : [];
+}
+function hintLabel(hint: BoardRenderDiagnostic) {
+	if (hint.code === "text-clipped")
+		return m.board_issue_clipped({}, { locale });
+	if (hint.code === "text-overlap")
+		return m.board_issue_overlap({}, { locale });
+	if (hint.code === "glyph-unavailable")
+		return m.board_issue_glyph(
+			{ characters: hint.characters ?? "" },
+			{ locale },
+		);
+	return m.board_issue_follow({}, { locale });
+}
+$effect(() => {
+	boardDocument;
+	seconds;
+	animationId;
+	hints = null;
+});
+
 const frames = $derived(
-	scene ? scene.items.filter((item) => item.type === "frame").map((item) => ({ id: item.id, label: (item.props as { label: string }).label })) : [],
+	scene
+		? scene.items
+				.filter((item) => item.type === "frame")
+				.map((item) => ({
+					id: item.id,
+					label: (item.props as { label: string }).label,
+				}))
+		: [],
 );
 const hasSelection = $derived(selection.length > 0);
 
@@ -78,11 +133,15 @@ const region = $derived.by<BoardExportRegion>(() => {
 	return { kind: "all" };
 });
 
-const plan = $derived.by(() => (scene ? planBoardExport({ scene, region, scale }) : null));
+const plan = $derived.by(() =>
+	sampledScene ? planBoardExport({ scene: sampledScene, region, scale }) : null,
+);
 const sizeLabel = $derived(
-	plan
-		? `${plan.width} × ${plan.height} px`
-		: m.board_nothing_export({}, { locale }),
+	scope === "camera"
+		? `${cameraSize.width} × ${cameraSize.height} px`
+		: plan
+			? `${plan.width} × ${plan.height} px`
+			: m.board_nothing_export({}, { locale }),
 );
 const clamped = $derived(Boolean(plan?.clamped));
 
@@ -98,6 +157,16 @@ async function run(mode: "download" | "copy") {
 		const outputFormat: BoardImageFormat = mode === "copy" ? "png" : format;
 		const result = await exportBoardImage(bridge, boardDocument, {
 			region,
+			...(scope === "camera" ? { camera: cameraSize } : {}),
+			...(sampler
+				? {
+						at: {
+							animation: animationId,
+							time: Math.max(0, seconds || 0) * 1000,
+						},
+						sampler,
+					}
+				: {}),
 			scale,
 			background:
 				transparent && transparencySupported ? "transparent" : "paper",
@@ -159,6 +228,9 @@ async function run(mode: "download" | "copy") {
 				>
 					{m.board_selection_chip({}, { locale })}{hasSelection ? ` (${selection.length})` : ""}
 				</button>
+				{#if sampler}
+					<button type="button" class="chip" class:chip--active={scope === "camera"} aria-pressed={scope === "camera"} onclick={() => { scope = "camera"; }}>{m.board_export_camera({}, { locale })}</button>
+				{/if}
 				{#if frames.length > 0}
 					<button
 						type="button"
@@ -167,7 +239,7 @@ async function run(mode: "download" | "copy") {
 						aria-pressed={scope === "frame"}
 						onclick={() => { scope = "frame"; }}
 					>
-						Frame
+						{m.board_frame({}, { locale })}
 					</button>
 				{/if}
 			</div>
@@ -183,6 +255,31 @@ async function run(mode: "download" | "copy") {
 			{/if}
 		</fieldset>
 
+		{#if animationIds.length > 0}
+			<div class="grid grid-cols-2 gap-2">
+				<label class="flex min-w-0 flex-col gap-1 text-xs text-text-secondary">{m.board_export_animation({}, { locale })}
+					<select class="export-select" bind:value={animationId} onchange={() => { if (!animationId && scope === "camera") scope = "all"; }}>
+						<option value="">—</option>
+						{#each animationIds as id (id)}<option value={id}>{boardDocument.animations[id]?.name || id}</option>{/each}
+					</select>
+				</label>
+				<label class="flex min-w-0 flex-col gap-1 text-xs text-text-secondary">{m.board_export_time({}, { locale })}<input class="export-select" type="number" min="0" max={(boardDocument.animations[animationId]?.duration ?? 0) / 1000} step="0.1" bind:value={seconds} disabled={!sampler} /></label>
+			</div>
+		{/if}
+		{#if scope === "camera"}
+			<label class="flex flex-col gap-1 text-xs text-text-secondary">{m.board_export_viewport({}, { locale })}<select class="export-select" bind:value={viewport}><option>1600x900</option><option>900x1600</option><option>1080x1080</option></select></label>
+		{/if}
+		<button type="button" class="export-btn self-start" onclick={inspect}>{m.board_inspect({}, { locale })}</button>
+		{#if hints}
+			<div class="max-h-32 overflow-y-auto text-xs text-text-secondary" aria-live="polite">
+				{#if hints.length === 0}<p>{m.board_inspect_clear({}, { locale })}</p>{/if}
+				{#each hints as hint, index (`${hint.code}:${hint.item}:${index}`)}
+					<button type="button" class="block w-full rounded px-1 py-2 text-left hover:bg-bg-hover" onclick={() => { onLocate?.(hint.item); onClose(); }}>{hint.item} · {hintLabel(hint)}</button>
+				{/each}
+			</div>
+		{/if}
+
+		{#if scope !== "camera"}
 		<fieldset class="flex flex-col gap-1.5">
 			<legend class="export-label">{m.board_scale({}, { locale })}</legend>
 			<div class="flex gap-1.5" role="radiogroup" aria-label={m.board_export_scale({}, { locale })}>
@@ -199,6 +296,7 @@ async function run(mode: "download" | "copy") {
 				{/each}
 			</div>
 		</fieldset>
+		{/if}
 
 		<fieldset class="flex flex-col gap-1.5">
 			<legend class="export-label">{m.board_format({}, { locale })}</legend>
@@ -231,7 +329,7 @@ async function run(mode: "download" | "copy") {
 		<p class="text-[12px] text-text-tertiary" aria-live="polite">
 			{sizeLabel}
 			{#if clamped}
-				<span class="text-warning-400">
+				<span class="text-warning">
 					· {m.board_reduced_to({ max: BOARD_EXPORT_MAX_EDGE }, { locale })}
 				</span>
 			{/if}
@@ -264,12 +362,12 @@ async function run(mode: "download" | "copy") {
 			</button>
 			<button
 				type="button"
-				class="export-btn export-btn--primary"
+				class="primary-key"
 				disabled={!plan || busy !== null}
 				onclick={() => run("download")}
 			>
 				{#if busy === "download"}
-					<Loader2 size={14} class="animate-spin" />
+					<Spinner class="h-3.5 w-3.5" />
 				{:else}
 					<Download size={14} />
 				{/if}
@@ -324,6 +422,12 @@ async function run(mode: "download" | "copy") {
 		color: var(--text-primary);
 	}
 
+	.export-btn,
+	.primary-key {
+		padding: 5px 12px;
+		font-size: 12px;
+	}
+
 	.export-btn {
 		display: inline-flex;
 		align-items: center;
@@ -331,8 +435,6 @@ async function run(mode: "download" | "copy") {
 		border: 1px solid var(--border-subtle);
 		border-radius: 7px;
 		background: transparent;
-		padding: 5px 12px;
-		font-size: 12px;
 		color: var(--text-primary);
 		cursor: pointer;
 	}
@@ -344,15 +446,5 @@ async function run(mode: "download" | "copy") {
 	.export-btn:disabled {
 		cursor: not-allowed;
 		opacity: 0.5;
-	}
-
-	.export-btn--primary {
-		border-color: transparent;
-		background: var(--brand);
-		color: var(--brand-contrast, #fff);
-	}
-
-	.export-btn--primary:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--brand) 88%, black);
 	}
 </style>

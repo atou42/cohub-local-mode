@@ -379,7 +379,7 @@ onDestroy(() => {
   }
 
   .item.error {
-    color: var(--error-soft);
+    color: var(--color-error-soft);
   }
 
   .name {

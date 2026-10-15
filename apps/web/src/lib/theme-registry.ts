@@ -6,6 +6,8 @@ export const RESOLVED_THEMES = [
 	"solarized-dark",
 	"solarized-light",
 	"neta-studio",
+	"neta-pixel",
+	"neta-pixel-dark",
 ] as const;
 
 export type ResolvedTheme = (typeof RESOLVED_THEMES)[number];
@@ -110,6 +112,36 @@ export const THEME_REGISTRY = {
 			primaryTextColor: "#F2EDE4",
 			secondaryColor: "#252325",
 			tertiaryColor: "#131216",
+		},
+	},
+	"neta-pixel": {
+		value: "neta-pixel",
+		label: "Neta Pixel",
+		description: "Ink pixel keys, soft grays and cyan sparks",
+		themeColor: "#FFFFFF",
+		isDark: false,
+		shikiTheme: "github-light",
+		mermaidVariables: {
+			lineColor: "#B9B9BA",
+			primaryColor: "#F5F6F7",
+			primaryTextColor: "#161718",
+			secondaryColor: "#EEF0F2",
+			tertiaryColor: "#FFFFFF",
+		},
+	},
+	"neta-pixel-dark": {
+		value: "neta-pixel-dark",
+		label: "Neta Pixel Dark",
+		description: "Neta Pixel on Ink, with white pixel keys",
+		themeColor: "#161718",
+		isDark: true,
+		shikiTheme: "github-dark",
+		mermaidVariables: {
+			lineColor: "#3A3C40",
+			primaryColor: "#232426",
+			primaryTextColor: "#F2F3F5",
+			secondaryColor: "#1F2021",
+			tertiaryColor: "#161718",
 		},
 	},
 } satisfies Record<ResolvedTheme, ThemeMetadata>;

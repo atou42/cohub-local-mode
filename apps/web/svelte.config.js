@@ -21,6 +21,9 @@ const config = {
 			bundleStrategy: "split",
 		},
 		alias: {
+			// `$lib/resource-kit` is shared with the first-party resource Apps, which
+			// alias the same catalog.
+			$messages: "src/lib/paraglide/messages.js",
 			// protocol subpaths — must come before bare package alias to avoid prefix matching
 			"@cohub/protocol/core": `${protocolDir}/core/index.ts`,
 			"@cohub/protocol/fs": `${protocolDir}/fs/index.ts`,

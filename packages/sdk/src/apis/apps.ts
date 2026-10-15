@@ -1,3 +1,4 @@
+import type { AppDevice } from "@cohub/protocol/app-devices";
 import type { HttpTransport } from "../transport.js";
 import type { RequestSource } from "@cohub/protocol/provenance";
 import type { AppArtifactDescriptor, AppContentKind, AppPromotionEventKey, AppVersionSource } from "@cohub/protocol";
@@ -23,6 +24,7 @@ export type AppExtractedPageMeta = {
   themeColor?: string | null;
   surface?: "window" | "overlay" | null;
   fileHandlers?: string[];
+  devices?: AppDevice[];
   sourcePath?: string | null;
   extractedAt?: string | null;
 };
@@ -46,6 +48,7 @@ export type AppMeta = Record<string, unknown> & {
   presentation?: AppPresentationMeta;
   /** File extensions the App opens (`[".board"]`), from `<meta name="cohub:file-handlers">`. */
   fileHandlers?: string[];
+  devices?: AppDevice[];
   extracted?: AppExtractedPageMeta;
   source?: RequestSource;
 };

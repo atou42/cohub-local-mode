@@ -13,6 +13,7 @@ import type {
 import {
   BOARD_PRESET_NAMES,
   BOARD_SCHEMA_TARGETS,
+  BOARD_SCRIPT_API,
   type BoardExportRegion,
   boardJsonSchema,
   boardPresetTracks,
@@ -35,6 +36,7 @@ import { createClient, createRealtimeClient } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
 import { resolveSpace } from "../space.js";
 import { registerBoardExampleCommands } from "./boards/examples.js";
+import { registerBoardAuthoringCommands } from "./boards/authoring.js";
 
 type JsonOptions = { json?: boolean };
 
@@ -115,6 +117,8 @@ type ExportOptions = JsonOptions & {
   out?: string;
   at?: string;
   animation?: string;
+  camera?: boolean;
+  size?: string;
   scale?: string;
   padding?: string;
   frame?: string;
@@ -131,7 +135,7 @@ type ExportOptions = JsonOptions & {
 
 /** One region flag at most: being told to pick beats guessing which one wins. */
 function parseExportRegion(options: ExportOptions): BoardExportRegion {
-  const chosen = [options.frame && "--frame", options.items && "--items", options.rect && "--rect"].filter(Boolean);
+  const chosen = [options.camera && "--camera", options.frame && "--frame", options.items && "--items", options.rect && "--rect"].filter(Boolean);
   if (chosen.length > 1) throw new Error(`Pick one region: ${chosen.join(", ")} cannot be combined.`);
   if (options.frame) return { kind: "frame", id: options.frame };
   if (options.items) {
@@ -183,7 +187,9 @@ function registerExportCommand(boards: Command): void {
   withJson(boards.command("export <board>")
     .description("Render a Board to an image, or an animation to a frame sequence")
     .requiredOption("-o, --out <file>", "Output file; the extension picks the format. Sequences need %d, e.g. frames/%04d.png")
-    .option("--at <time>", "A moment (12.5s) or a range start:end:step (0:10s:100ms)")
+    .option("--at <time>", "A moment, comma-separated moments, or start:end:step")
+    .option("--camera", "Follow the animation camera")
+    .option("--size <widthxheight>", "Camera viewport in pixels", "1600x900")
     .option("--animation <id>", "Animation the --at times refer to")
     .option("--frame <item-id>", "Export one frame as a page")
     .option("--items <ids>", "Comma-separated item ids")
@@ -204,9 +210,22 @@ Examples:
   cohub boards export plan.board --animation lecture --at 4.5s -o moment.png
   cohub boards export plan.board --animation lecture --at 0:6s:40ms -o frames/%04d.png`)
     .action(async (target: string, options: ExportOptions) => {
+      const controller = new AbortController();
+      const cancel = () => controller.abort(new Error("Export cancelled."));
+      process.once("SIGINT", cancel);
       try {
         const out = options.out as string;
         const times = options.at ? parseBoardTimes(options.at) : undefined;
+        let camera: { width: number; height: number } | undefined;
+        if (options.camera) {
+          if (!options.animation || !times) throw new Error("--camera needs --animation and --at.");
+          const size = /^(\d+)x(\d+)$/.exec(options.size ?? "1600x900");
+          if (!size?.[1] || !size[2]) throw new Error("--size must be widthxheight, e.g. 1600x900.");
+          camera = { width: parseNumber(size[1], "width", { min: 1, max: 8192 }), height: parseNumber(size[2], "height", { min: 1, max: 8192 }) };
+        }
+        const progress = (completed: number, total: number) => {
+          if (!jsonRequested(options) && (completed === total || completed % 30 === 0)) process.stderr.write(`Rendered ${completed}/${total} frames\n`);
+        };
         const pathVideoFormat = videoFormatFromPath(out);
         const requestedFormat = options.format?.toLowerCase();
         if (requestedFormat && ![...BOARD_EXPORT_FORMATS, ...BOARD_VIDEO_FORMATS].includes(requestedFormat as BoardNodeExportFormat | BoardVideoExportFormat)) throw new Error(`--format must be one of ${[...BOARD_EXPORT_FORMATS, ...BOARD_VIDEO_FORMATS].join(", ")}.`);
@@ -225,6 +244,10 @@ Examples:
           const result = await runBoardVideoExport({
             spaceId: await resolveSpace(boards),
             target,
+            camera,
+            onProgress: progress,
+            signal: controller.signal,
+            force: options.force,
             region: parseExportRegion(options),
             times,
             ...(options.animation ? { animation: options.animation } : {}),
@@ -243,10 +266,24 @@ Examples:
           for (const warning of result.warnings) console.log(`  ! ${warning}`);
           return;
         }
+        const written: Array<{ path: string; time: number | null; width: number; height: number; bytes: number }> = [];
+        for (let index = 0; index < (times?.length ?? 1); index++) {
+          const path = sequence ? framePath(out, index) : out;
+          if (!options.force && existsSync(path)) throw new Error(`${path} already exists; use --force to replace it.`);
+        }
         const { runBoardExport } = await import("../board-export.js");
         const result = await runBoardExport({
           spaceId: await resolveSpace(boards),
           target,
+          camera,
+          onProgress: progress,
+          signal: controller.signal,
+          onFrame: async (frame, index) => {
+            const path = sequence ? framePath(out, index) : out;
+            await mkdir(dirname(path), { recursive: true });
+            await writeBoardOutput(path, frame.bytes, Boolean(options.force));
+            written.push({ path, time: frame.time, width: frame.width, height: frame.height, bytes: frame.bytes.length });
+          },
           region: parseExportRegion(options),
           ...(times ? { times } : {}),
           ...(options.animation ? { animation: options.animation } : {}),
@@ -259,22 +296,17 @@ Examples:
           withImages: options.images !== false,
         });
         if (!result) return error("Nothing to export: the region contains no items.");
-        const written: Array<{ path: string; time: number | null; width: number; height: number; bytes: number }> = [];
-        for (const [index, frame] of result.frames.entries()) {
-          const path = sequence ? framePath(out, index) : out;
-          await mkdir(dirname(path), { recursive: true });
-          await writeBoardOutput(path, frame.bytes, Boolean(options.force));
-          written.push({ path, time: frame.time, width: frame.width, height: frame.height, bytes: frame.bytes.length });
-        }
         if (jsonRequested(options)) return outJson({ files: written, warnings: result.warnings });
-        const first = result.frames[0];
+        const first = written[0];
         if (first) {
-          const what = sequence ? `${written.length} frames` : (first.format ?? "png").toUpperCase();
+          const what = sequence ? `${written.length} frames` : parseExportFormat(options, out).toUpperCase();
           ok(`Exported ${first.width}×${first.height} ${what} to ${sequence ? dirname(out) || "." : out}`);
         }
         for (const warning of result.warnings) console.log(`  ! ${warning}`);
       } catch (cause) {
         handleHttp(cause);
+      } finally {
+        process.removeListener("SIGINT", cancel);
       }
     });
 }
@@ -287,13 +319,18 @@ export function registerBoards(program: Command): Command {
     .description("Read, write, animate and export Boards (by id or .board path)")
     .addHelpText("after", `
 A Board is one JSON document: { board, items, animations }.
-  get      read it
-  apply    write it with a JSON Merge Patch; null deletes
-  schema   the schema of any part, and what tracks can animate
-  preset   tracks for a preset motion, ready to apply
-  history  list versions, or restore one
-  export   render an image, a frame sequence or a video
-  examples starter documents
+  get       read it
+  apply     write it with a JSON Merge Patch; null deletes
+  schema    the fields of any part and what they mean; also the script API
+  examples  starter documents and a custom script module
+  preset    tracks for a preset motion, ready to apply
+  sequence  join chapter animations into one timeline
+  path      sample a polyline into a position track
+  inspect   measure items and report layout hints
+  export    render an image, a frame sequence or a video
+  play      shared playback; also pause, resume, next, seek, stop
+  watch     stream changes and playback
+  history   list versions, or restore one
 Times are milliseconds; 500ms, 12.5s and 2m also work on the command line.`);
 
   withJson(boards.command("create <path>")
@@ -442,15 +479,15 @@ Times are milliseconds; 500ms, 12.5s and 2m also work on the command line.`);
   boards.command("schema [target]")
     .description("Print JSON Schema for a part of a Board")
     .addHelpText("after", `
-With a target: one item type, or animation, track, or camera.
-Targets: ${BOARD_SCHEMA_TARGETS.join(", ")}
-Without a target: units, item types, colors and every animatable property.`)
+Without a target: units, item types, colors and every animatable property.
+With a target: its fields and what they mean; script also lists the module API.
+Targets: ${BOARD_SCHEMA_TARGETS.join(", ")}`)
     .action((target?: string) => {
       try {
         if (!target) return outJson({ ...boardSchemaOverview(), presets: listBoardPresets() });
         const schema = boardJsonSchema(target);
         if (!schema) throw new Error(`Unknown target ${target}; expected ${BOARD_SCHEMA_TARGETS.join(", ")}.`);
-        outJson(schema);
+        outJson(target === "script" ? { ...schema, api: BOARD_SCRIPT_API } : schema);
       } catch (cause) {
         handleHttp(cause);
       }
@@ -488,6 +525,7 @@ Presets: ${BOARD_PRESET_NAMES.join(", ")}
 
   registerBoardExampleCommands(boards);
   registerExportCommand(boards);
+  registerBoardAuthoringCommands(boards);
   registerPlaybackCommands(boards);
 
   withJson(boards.command("watch <board>")

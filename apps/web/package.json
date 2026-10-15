@@ -39,6 +39,7 @@
 		"@codemirror/state": "^6.7.1",
 		"@codemirror/view": "^6.43.9",
 		"@cohub/protocol": "workspace:*",
+		"@fontsource-variable/figtree": "^5.3.0",
 		"@fontsource/geist": "^5.3.0",
 		"@fontsource/geist-mono": "^5.3.0",
 		"@lezer/highlight": "^1.2.3",

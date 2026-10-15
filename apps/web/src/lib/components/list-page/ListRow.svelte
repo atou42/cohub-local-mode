@@ -75,14 +75,4 @@ const stateClass = $derived(
 		--list-title-color: var(--sidebar-item-active-fg);
 		--list-title-weight: 500;
 	}
-
-	.list-row-leading {
-		width: var(--list-avatar-size);
-	}
-
-	/* Avatar box follows the density token. */
-	.list-row-leading > :global(.avatar) {
-		width: var(--list-avatar-size);
-		height: var(--list-avatar-size);
-	}
 </style>

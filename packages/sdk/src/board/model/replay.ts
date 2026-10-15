@@ -6,7 +6,7 @@ import {
 	type RequestSource,
 } from "@cohub/protocol";
 
-export type BoardReplayActorKind = "human" | "cli" | "agent";
+export type BoardReplayActorKind = "human" | "cli" | "agent" | "task";
 
 export type BoardReplayEntry = {
 	version: number;
@@ -20,6 +20,7 @@ export type BoardReplayPlayer = ReturnType<typeof createBoardReplayPlayer>;
 export function boardReplayActorKind(source: RequestSource | null): BoardReplayActorKind {
 	if (!source) return "human";
 	if (source.toolCallId) return "agent";
+	if (source.via === "task") return "task";
 	return source.via === "cli" ? "cli" : "human";
 }
 

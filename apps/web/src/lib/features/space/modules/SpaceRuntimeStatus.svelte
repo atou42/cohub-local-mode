@@ -24,8 +24,8 @@ import {
 	stopDeviceRuntime,
 } from "$lib/device-runtime.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
-import { formatTimeAgo } from "$lib/i18n/time-ago";
 import { m } from "$lib/paraglide/messages.js";
+import { formatTimeAgo } from "$lib/resource-kit/time";
 import { sdk } from "$lib/sdk";
 import {
 	cachedRuntimeStatus,

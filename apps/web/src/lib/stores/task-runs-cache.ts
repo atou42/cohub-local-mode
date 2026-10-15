@@ -146,14 +146,18 @@ export function patchCachedTaskRuns(
 
 export function mergeCachedTaskRun(spaceId: string, patch: TaskRunPatch) {
 	let merged: TaskRunRecord | null = null;
-	const runs = patchCachedTaskRuns(spaceId, (currentRuns) => {
-		const existing = currentRuns.find((run) => run.id === patch.id) ?? null;
-		merged = normalizeTaskRunPatch(patch, existing);
-		if (!existing) return [merged, ...currentRuns];
-		return currentRuns.map((run) =>
-			run.id === patch.id ? (merged as TaskRunRecord) : run,
-		);
-	});
+	const runs = patchCachedTaskRuns(
+		spaceId,
+		(currentRuns) => {
+			const existing = currentRuns.find((run) => run.id === patch.id) ?? null;
+			merged = normalizeTaskRunPatch(patch, existing);
+			if (!existing) return [merged, ...currentRuns];
+			return currentRuns.map((run) =>
+				run.id === patch.id ? (merged as TaskRunRecord) : run,
+			);
+		},
+		{ persist: false },
+	);
 	if (merged)
 		void writeTaskRunSummary(spaceId, merged as TaskRunRecord).catch(
 			() => undefined,

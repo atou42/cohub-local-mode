@@ -115,6 +115,10 @@
     "./apps": {
       "types": "./dist/apps/index.d.ts",
       "default": "./dist/apps/index.js"
+    },
+    "./app-rtc": {
+      "types": "./dist/app-rtc/index.d.ts",
+      "default": "./dist/app-rtc/index.js"
     }
   },
   "types": "./dist/index.d.ts",

@@ -17,6 +17,11 @@ const IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+const AUDIO_MIME_TYPES = new Set([
+  "audio/mpeg", "audio/mp3", "audio/mp4", "audio/aac", "audio/ogg",
+  "audio/wav", "audio/x-wav", "audio/wave", "audio/flac", "audio/x-flac",
+  "audio/webm", "audio/opus", "application/ogg",
+]);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 type ResolvedAddress = { address: string; family: 4 | 6 };
@@ -85,7 +90,7 @@ function requestPinned(
       url,
       {
         agent: false,
-        headers: { Accept: "image/avif,image/webp,image/png,image/jpeg,image/gif" },
+        headers: { Accept: "image/*,audio/*,application/ogg" },
         lookup: pinnedLookup(addresses),
       },
       (response) => {
@@ -100,7 +105,7 @@ function requestPinned(
         const declaredLength = Number(headers.get("content-length") ?? 0);
         if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
           response.destroy();
-          reject(new Error(`Image exceeds the ${maxBytes} byte download limit`));
+          reject(new Error(`Media exceeds the ${maxBytes} byte download limit`));
           return;
         }
 
@@ -110,7 +115,7 @@ function requestPinned(
           total += chunk.byteLength;
           if (total > maxBytes) {
             response.destroy(
-              new Error(`Image exceeds the ${maxBytes} byte download limit`),
+              new Error(`Media exceeds the ${maxBytes} byte download limit`),
             );
             return;
           }
@@ -129,7 +134,7 @@ function requestPinned(
       },
     );
     request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`Image download timed out after ${timeoutMs}ms`));
+      request.destroy(new Error(`Media download timed out after ${timeoutMs}ms`));
     });
     request.once("error", reject);
     request.end();
@@ -138,7 +143,7 @@ function requestPinned(
 
 function remainingMs(deadline: number): number {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Image download timed out");
+  if (remaining <= 0) throw new Error("Media download timed out");
   return remaining;
 }
 
@@ -150,7 +155,7 @@ async function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T
       promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Image download timed out after ${timeoutMs}ms`)),
+          () => reject(new Error(`Media download timed out after ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
@@ -166,7 +171,7 @@ async function resolvePublicUrl(
   deadline: number,
 ): Promise<{ url: URL; addresses: PinnedAddresses }> {
   const normalized = normalizeBoardRemoteUrl(value);
-  if (!normalized) throw new Error("Image URL must be a public HTTP(S) URL");
+  if (!normalized) throw new Error("Media URL must be a public HTTP(S) URL");
   const url = new URL(normalized);
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   const addresses = isIP(hostname)
@@ -177,14 +182,33 @@ async function resolvePublicUrl(
     !first ||
     addresses.some((entry) => !isPublicBoardRemoteAddress(entry.address))
   ) {
-    throw new Error("Image URL resolves to a private address");
+    throw new Error("Media URL resolves to a private address");
   }
   return { url, addresses: [first, ...rest] };
 }
 
-export async function downloadPublicImage(
+export function downloadPublicImage(
   input: string,
   options: RemoteImageDownloadOptions = {},
+): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  return downloadPublicMedia(input, IMAGE_MIME_TYPES, options);
+}
+
+export function downloadPublicAudio(
+  input: string,
+  options: RemoteImageDownloadOptions = {},
+): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  return downloadPublicMedia(input, AUDIO_MIME_TYPES, {
+    maxBytes: 64 * 1024 * 1024,
+    timeoutMs: 30_000,
+    ...options,
+  });
+}
+
+async function downloadPublicMedia(
+  input: string,
+  mimeTypes: ReadonlySet<string>,
+  options: RemoteImageDownloadOptions,
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
   const lookup = options.lookup ?? defaultLookup;
   const requester = options.requester ?? requestPinned;
@@ -200,8 +224,8 @@ export async function downloadPublicImage(
     );
     if (REDIRECT_STATUSES.has(response.status)) {
       const location = response.headers.get("location");
-      if (!location) throw new Error("Image redirect is missing a location");
-      if (redirect === MAX_REDIRECTS) throw new Error("Too many image redirects");
+      if (!location) throw new Error("Media redirect is missing a location");
+      if (redirect === MAX_REDIRECTS) throw new Error("Too many media redirects");
       current = new URL(location, url).toString();
       continue;
     }
@@ -209,17 +233,17 @@ export async function downloadPublicImage(
       throw new Error(`HTTP ${response.status}`);
     }
     if (response.bytes.byteLength > maxBytes) {
-      throw new Error(`Image exceeds the ${maxBytes} byte download limit`);
+      throw new Error(`Media exceeds the ${maxBytes} byte download limit`);
     }
     const mimeType = response.headers
       .get("content-type")
       ?.split(";", 1)[0]
       ?.trim()
       .toLowerCase();
-    if (!mimeType || !IMAGE_MIME_TYPES.has(mimeType)) {
-      throw new Error("Remote background must be a supported raster image");
+    if (!mimeType || !mimeTypes.has(mimeType)) {
+      throw new Error("Remote resource has an unsupported media type");
     }
     return { bytes: response.bytes, mimeType };
   }
-  throw new Error("Too many image redirects");
+  throw new Error("Too many media redirects");
 }

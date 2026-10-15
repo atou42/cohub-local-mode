@@ -45,7 +45,7 @@ function buildGridTexture(
 			.lineTo(0.5, size)
 			.stroke({ color, width: 1, alpha: opacity });
 	} else {
-		graphics.circle(0.5, 0.5, 0.9).fill({ color, alpha: opacity });
+		graphics.circle(size / 2, size / 2, 1.1).fill({ color, alpha: opacity });
 	}
 	const target = RenderTexture.create({ width: size, height: size });
 	context.app.renderer.render({ container: graphics, target });
@@ -79,8 +79,9 @@ function sync(parts: GridParts, context: BoardBackgroundContext) {
 	const kind = settings.background.kind === "grid" ? "grid" : "dots";
 	const visible = settings.grid?.visible === true;
 	const size = Math.max(4, settings.grid?.size ?? 24);
-	const opacity = 0.12;
-	const key = `${kind}|${size}|${palette.border}|${opacity}`;
+	const color = kind === "grid" ? palette.border : palette.muted;
+	const opacity = kind === "grid" ? 0.9 : 0.4;
+	const key = `${kind}|${size}|${color}|${opacity}`;
 
 	if (!visible) {
 		if (parts.sprite) parts.sprite.visible = false;
@@ -93,7 +94,7 @@ function sync(parts: GridParts, context: BoardBackgroundContext) {
 			parts.sprite.destroy();
 			previousTexture.destroy(true);
 		}
-		const texture = buildGridTexture(context, size, palette.border, opacity, kind);
+		const texture = buildGridTexture(context, size, color, opacity, kind);
 		parts.sprite = new TilingSprite({ texture, width, height });
 		parts.textureKey = key;
 		parts.fill.parent?.addChild(parts.sprite);

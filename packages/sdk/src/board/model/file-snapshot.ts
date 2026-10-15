@@ -7,6 +7,8 @@
  * snapshot is a cache keyed by mtime so a stale card is detectable.
  */
 
+import { getMediaResourceTitle } from "./media.js";
+
 /** Hard cap on a stored excerpt. Board cards show a few lines at most. */
 export const FILE_EXCERPT_MAX_CHARS = 480;
 
@@ -151,7 +153,7 @@ const MEDIA_EXTENSIONS = new Set([
 const IMAGE_REF_RE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)(\?|#|$)/i;
 
 function extensionOf(path: string): string {
-	const name = path.split("/").filter(Boolean).pop() ?? path;
+	const name = fileBaseName(path);
 	const dot = name.lastIndexOf(".");
 	if (dot <= 0) return "";
 	return name.slice(dot + 1).toLowerCase();
@@ -220,7 +222,7 @@ export function fileCategory(
 
 /** Basename of a path, used as a last-resort card title. */
 export function fileBaseName(path: string): string {
-	return path.split("/").filter(Boolean).pop() ?? path;
+	return getMediaResourceTitle(path);
 }
 
 /** Basename with a trailing extension stripped. Dotfiles keep their full name. */

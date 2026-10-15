@@ -62,11 +62,17 @@ export function inferBoardMediaKind(
 }
 
 export function getMediaResourceTitle(value: string) {
+	if (!/^[a-z][a-z\d+.-]*:/i.test(value)) {
+		return value.split("/").filter(Boolean).pop() || value;
+	}
 	try {
 		const url = new URL(value);
-		return decodeURIComponent(
-			url.pathname.split("/").filter(Boolean).pop() || url.hostname,
-		);
+		const title = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+		try {
+			return decodeURIComponent(title);
+		} catch {
+			return title;
+		}
 	} catch {
 		return value.split("/").filter(Boolean).pop() || value;
 	}

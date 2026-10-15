@@ -10,12 +10,13 @@ import type {
   RtcIceServers,
 } from "@cohub/protocol";
 import { type ConnectDisplayOptions, connectDisplay } from "../display-session.js";
+import { IceServerCache } from "../rtc/index.js";
 import type { HttpTransport } from "../transport.js";
 
-const ICE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
 export class SpaceDisplaysApi {
-  private ice: { value: RtcIceServers; refreshAt: number } | null = null;
+  private readonly ice = new IceServerCache((signal) =>
+    this.transport.request<RtcIceServers>(`/api/spaces/${this.spaceId}/rtc/ice-servers`, { signal }),
+  );
 
   constructor(
     private readonly transport: HttpTransport,
@@ -68,11 +69,8 @@ export class SpaceDisplaysApi {
     });
   }
 
-  async iceServers(options: { signal?: AbortSignal } = {}): Promise<RtcIceServers> {
-    if (this.ice && this.ice.refreshAt > Date.now()) return this.ice.value;
-    const value = await this.transport.request<RtcIceServers>(`/api/spaces/${this.spaceId}/rtc/ice-servers`, { signal: options.signal });
-    this.ice = { value, refreshAt: Date.parse(value.expiresAt) - ICE_REFRESH_MARGIN_MS };
-    return value;
+  iceServers(options: { signal?: AbortSignal } = {}): Promise<RtcIceServers> {
+    return this.ice.get(options.signal);
   }
 
   connect(displayId: string, options?: ConnectDisplayOptions) {

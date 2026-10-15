@@ -33,6 +33,28 @@ ENV=dev cohub auth login
 ENV=dev cohub spaces ls
 ```
 
+Use a custom API endpoint for self-hosted deployments or proxies:
+
+```bash
+cohub --base-url https://api.example.com spaces ls
+COHUB_BASE_URL=https://api.example.com cohub spaces ls
+```
+
+`--base-url` takes precedence over `COHUB_BASE_URL`. Without either, the CLI uses
+the selected environment's default API address. Configure other endpoints separately:
+
+| Variable | Endpoint |
+| --- | --- |
+| `COHUB_BASE_URL` | API base URL |
+| `COHUB_WS_URL` | Realtime gateway URL (`http(s)` or `ws(s)`) |
+| `COHUB_WEB_URL` | Web base URL used in links |
+
+Changing the API base URL does not change the gateway or authentication provider.
+For self-hosted authentication, set `COHUB_AUTH_ISSUER`, `COHUB_AUTH_CLIENT_ID`,
+and, if needed, `COHUB_AUTH_RESOURCE` and `COHUB_AUTH_SCOPE`. Stored login sessions,
+Home Space caches, and Runtime directory bindings are scoped to the API base URL.
+Sign in once for each custom server, or supply `COHUB_EXECUTION_TOKEN`.
+
 ## Usage
 
 Use `--json` when reading output for decisions, extracting IDs, or chaining commands.
@@ -74,8 +96,8 @@ cohub -s <spaceId> run -- git status
 
 Space-scoped commands use `-s`, then `COHUB_SPACE_ID`, then the Space remembered for
 the current directory. `<space>` is a Space ID, a slug you own such as `home`, or
-`username/slug`. Only `prompt`, `completion`, `generate`, `apps`, and `public` fall
-back to your Home Space; other commands exit with an error when no target is given:
+`username/slug`. Only `prompt`, `completion`, `decision`, `generate`, `apps`, and
+`public` fall back to your Home Space; other commands exit with an error when no target is given:
 
 ```bash
 cohub -s <spaceId> spaces prompt "message" --json
@@ -430,8 +452,16 @@ cohub apps resolve <appSlug> --owner <username> --space-slug <spaceSlug>
 
 Use `--json` for machine-readable output. `apps get`, `apps stats`, and `apps download` also accept `app://<username>/<space>/<app>` mention URIs. `apps stats` reports total, 24-hour, 7-day, and 30-day views with a source breakdown. Download restores newly published file and directory artifacts directly from the CDN with checksum verification. HTML files with companion assets are restored as directory bundles; Board and port apps are not downloadable. The resolve command remains available for explicit slug-based lookup.
 
-Realtime rooms use a published App's runtime identity, so they are available
-through `client.app.realtime` in the SDK rather than as CLI commands.
+Agents can join hosted Rooms and attach realtime events or media:
+
+```bash
+cohub rooms join '<invite>'
+cohub rooms connect <room-id> --json
+cohub rooms rtc <room-id> --channel chat --data-input -
+cohub rooms rtc <room-id> --audio speech.pcm --output ./received
+```
+
+RTC uses an on-demand Go/Pion helper, with external FFmpeg only when media conversion is needed. Encoded Ogg Opus and VP8 IVF inputs avoid re-encoding. Reception defaults to framed RTP archives; `--receive-format raw` decodes PCM/I420 for models. `--output -` writes binary frames to stdout and status to stderr. Recording is explicit, files are never overwritten, and the default receive quota is 1 GiB. Disconnecting keeps the hosted seat. See [Room RTC helper](../../apps/sandbox/cmd/cohub-rtc/README.md) for local builds, formats, migration details, and release prerequisites.
 
 ## Drive the Cohub UI
 

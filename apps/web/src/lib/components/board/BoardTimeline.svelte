@@ -24,6 +24,7 @@ import {
 } from "$lib/board/animation-tracks";
 import type { BoardEditor } from "$lib/board/editor.svelte";
 import BoardAnimationTracks from "$lib/components/board/BoardAnimationTracks.svelte";
+import BoardSequenceDialog from "$lib/components/board/BoardSequenceDialog.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -58,7 +59,9 @@ const animation = $derived(
 	animationId ? editor.animations[animationId] : undefined,
 );
 const playing = $derived(
-	playback?.status === "playing" && playback.animationId === animationId,
+	playback?.status === "playing" &&
+		playback.animationId === animationId &&
+		!editor.playhead,
 );
 
 let clock = $state(0);
@@ -85,6 +88,9 @@ const nextMarker = $derived(
 		null,
 );
 const keyframe = $derived(editor.keyframeState("position"));
+const chapterMarkers = $derived(
+	animation?.markers.filter((marker) => marker.label) ?? [],
+);
 
 const trackRows = $derived<BoardTrackRow[]>(
 	animation ? boardTrackRows(editor.document.items, animation.tracks) : [],
@@ -94,6 +100,7 @@ const hasCameraMotion = $derived(
 );
 
 let tracksOpen = $state(false);
+let sequenceOpen = $state(false);
 let selectedKey = $state<string | null>(null);
 
 $effect(() => {
@@ -211,6 +218,7 @@ function format(ms: number) {
 }
 </script>
 
+<div class="board-timeline-wrap">
 <div class="board-timeline" role="toolbar" aria-label={m.board_timeline({}, { locale })}>
 	<button type="button" class="timeline-btn" title={playing ? m.board_pause({}, { locale }) : m.board_play({}, { locale })} aria-label={playing ? m.board_pause({}, { locale }) : m.board_play({}, { locale })} disabled={!animation} onclick={togglePlay}>
 		{#if playing}<Pause class="h-3.5 w-3.5" />{:else}<Play class="h-3.5 w-3.5" />{/if}
@@ -221,6 +229,15 @@ function format(ms: number) {
 			<option value={id}>{editor.animations[id]?.name || id}</option>
 		{/each}
 	</select>
+	{#if !readonly && animationIds.length > 1}
+		<button type="button" class="timeline-btn" title={m.board_sequence_create({}, { locale })} aria-label={m.board_sequence_create({}, { locale })} onclick={() => { sequenceOpen = true; }}><Layers class="h-3.5 w-3.5" /></button>
+	{/if}
+	{#if chapterMarkers.length > 0}
+		<select class="timeline-select" aria-label={m.board_chapters({}, { locale })} value="" onchange={(event) => { editor.setPlayhead({ animationId: animationId!, time: Number(event.currentTarget.value) }); }}>
+			<option value="" disabled>{m.board_chapters({}, { locale })}</option>
+			{#each chapterMarkers as marker (marker.at)}<option value={marker.at}>{marker.label}</option>{/each}
+		</select>
+	{/if}
 	{#if !readonly}
 		<button type="button" class="timeline-btn" title={m.board_animation_new({}, { locale })} aria-label={m.board_animation_new({}, { locale })} onclick={create}>
 			<Plus class="h-3.5 w-3.5" />
@@ -340,17 +357,27 @@ function format(ms: number) {
 	</div>
 {/if}
 
+</div>
+{#if sequenceOpen}<BoardSequenceDialog {editor} onClose={() => { sequenceOpen = false; }} />{/if}
+
 <style>
-	.board-timeline {
+	.board-timeline-wrap {
 		position: absolute;
 		left: 50%;
 		bottom: 64px;
 		z-index: 26;
+		width: min(740px, calc(100% - 24px));
+		transform: translateX(-50%);
 		display: flex;
+		flex-direction: column-reverse;
+		gap: 4px;
+	}
+	.board-timeline {
+		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 4px;
-		width: min(640px, calc(100% - 24px));
-		transform: translateX(-50%);
+		width: 100%;
 		border-radius: 10px;
 		border: 1px solid var(--border-subtle);
 		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
@@ -378,7 +405,7 @@ function format(ms: number) {
 
 	.timeline-select {
 		max-width: 132px;
-		min-width: 0;
+		min-width: 76px;
 		border-radius: 6px;
 		background: transparent;
 		padding: 2px 4px;
@@ -393,7 +420,7 @@ function format(ms: number) {
 		min-width: 80px;
 		align-items: center;
 	}
-	.timeline-track input { width: 100%; accent-color: var(--brand); }
+	.timeline-track input { width: 100%; }
 
 	.timeline-marker {
 		position: absolute;
@@ -415,15 +442,10 @@ function format(ms: number) {
 	}
 
 	.board-tracks-panel {
-		position: absolute;
-		left: 50%;
-		bottom: calc(64px + 38px);
-		z-index: 26;
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		width: min(640px, calc(100% - 24px));
-		transform: translateX(-50%);
+		width: 100%;
 		border-radius: 10px;
 		border: 1px solid var(--border-subtle);
 		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
@@ -446,7 +468,7 @@ function format(ms: number) {
 	.tracks-edit-select {
 		flex: 1;
 		border-radius: 6px;
-		background: var(--bg-secondary);
+		background: var(--bg-surface);
 		padding: 3px 6px;
 		color: var(--text-primary);
 		font-size: 11px;

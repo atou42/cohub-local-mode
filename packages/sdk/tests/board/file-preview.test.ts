@@ -114,6 +114,9 @@ test("meta line joins type and size", () => {
 	assert.equal(fileTypeLabel("docs/notes.md"), "MD");
 	assert.equal(fileTypeLabel("data/rows.json"), "JSON");
 	assert.equal(fileTypeLabel("Makefile"), "MAKEFILE");
+	assert.equal(fileTypeLabel("https://example.com/"), "LINK");
+	assert.equal(fileTypeLabel("https://example.com/docs/guide"), "LINK");
+	assert.equal(fileTypeLabel("https://example.com/files/report.pdf"), "PDF");
 	assert.equal(fileMetaLine("docs/notes.md", 12_288), "MD · 12 KB");
 	assert.equal(fileMetaLine("docs/notes.md", undefined), "MD");
 });

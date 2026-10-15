@@ -423,9 +423,20 @@ export function createAppPreviewController(
 		}
 	}
 
+	function setLaunch(key: string, launch: AppLaunchState) {
+		const tab = find(key);
+		if (tab) patch(tab.id, { launch });
+	}
+
 	function setWindowState(key: string, windowState: AppWindowState) {
 		const tab = find(key);
-		if (tab) patch(tab.id, { windowState });
+		if (
+			tab &&
+			(tab.windowState.title !== windowState.title ||
+				tab.windowState.status !== windowState.status ||
+				tab.windowState.dirty !== windowState.dirty)
+		)
+			patch(tab.id, { windowState });
 	}
 
 	/** Whether any App window still holds unsaved work. */
@@ -478,6 +489,7 @@ export function createAppPreviewController(
 		get activeKey() {
 			return activeKey;
 		},
+		settle,
 		openApp,
 		activateApp,
 		closeApp,
@@ -486,6 +498,7 @@ export function createAppPreviewController(
 		closeFilesAtPath,
 		retry,
 		refreshIfOpen,
+		setLaunch,
 		setWindowState,
 		hasDirty,
 		flushAll,

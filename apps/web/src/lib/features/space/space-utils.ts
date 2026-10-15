@@ -1,42 +1,7 @@
 import type { SpaceRecord, UserProfile } from "@neta-art/cohub";
-import { formatCurrency, toIntlTag } from "$lib/i18n/format";
+import { formatCurrency } from "$lib/i18n/format";
 import type { Locale } from "$lib/i18n/locale";
 import type { SpaceSandboxSnapshot } from "./modules/space-status-controller.svelte";
-
-export function formatDateTime(
-	dateStr: string | null | undefined,
-	locale?: Locale,
-): string {
-	if (!dateStr) return "—";
-	const d = new Date(dateStr);
-	return new Intl.DateTimeFormat(toIntlTag(locale), {
-		month: "2-digit",
-		day: "2-digit",
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-	}).format(d);
-}
-
-export function formatShortDateTime(
-	dateStr: string | null | undefined,
-	locale?: Locale,
-): string {
-	if (!dateStr) return "—";
-	const d = new Date(dateStr);
-	return new Intl.DateTimeFormat(toIntlTag(locale), {
-		month: "short",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	}).format(d);
-}
-
-export function asRecord(value: unknown): Record<string, unknown> | null {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
 
 export function fallbackUserName(userUuid: string | null | undefined): string {
 	if (!userUuid) return "Unknown user";

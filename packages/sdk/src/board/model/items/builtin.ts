@@ -27,7 +27,7 @@ const audioItem = defineBoardItem({ type: "audio", capabilities: { canRotate: fa
 const fileItem = defineBoardItem({ type: "file", capabilities: { canRotate: false } });
 const taskItem = defineBoardItem({ type: "task", capabilities: { canRotate: false, aspectLocked: true } });
 const effectItem = defineBoardItem({ type: "effect", capabilities: { canConnect: false, canSnap: false } });
-const sketchItem = defineBoardItem({ type: "sketch" });
+const customItem = defineBoardItem({ type: "custom" });
 const frameItem = defineBoardItem({ type: "frame", capabilities: { canEdit: true, canRotate: false, canConnect: false } });
 const arrowItem = defineBoardItem({
 	type: "arrow",
@@ -87,5 +87,5 @@ export const builtinBoardItems: readonly BoardItemDefinition[] = [
 	fileItem,
 	taskItem,
 	effectItem,
-	sketchItem,
+	customItem,
 ];

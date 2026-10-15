@@ -12,7 +12,7 @@ import {
 } from "@cohub/protocol";
 import { hasPermission } from "../../permissions.js";
 import { authzDenied, requireValidId, useAuth } from "../../lib/middleware.js";
-import { getIceServers } from "../../rtc-ice.js";
+import { getIceServers } from "../../rtc/ice.js";
 import { displayErrorResponse } from "../../display-errors.js";
 import { callSandboxRpc } from "../../space-sandbox-rpc.js";
 

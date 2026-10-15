@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { json } from "../../output.js";
+import { BOARD_SCRIPT_DRAWING_EXAMPLE } from "../../board-kernel.js";
 
 /**
  * Starter documents for `boards create -i` and patches for `boards apply -i`.
@@ -66,14 +67,11 @@ export const BOARD_EXAMPLES: Record<string, { description: string; value: Record
       },
     },
   },
-  sketch: {
-    description: "A code-drawn item; `src` is a module in the Space exporting draw(ctx, frame).",
+  custom: {
+    description: "Custom Canvas content; use --module to print scripts/wave.js.",
     value: {
       items: {
-        wave: { type: "sketch", position: { x: 0, y: 0 }, size: { width: 640, height: 360 }, props: { src: "sketches/wave.js", params: { amplitude: 60 } } },
-      },
-      animations: {
-        loop: { duration: 4000, play: "always", tracks: {} },
+        wave: { type: "custom", position: { x: 0, y: 0 }, size: { width: 640, height: 360 }, script: { src: "scripts/wave.js", params: { amplitude: 60 } } },
       },
     },
   },
@@ -82,11 +80,17 @@ export const BOARD_EXAMPLES: Record<string, { description: string; value: Record
 export function registerBoardExampleCommands(boards: Command): void {
   boards.command("examples [name]")
     .description("Print a starter Board document or list the examples")
+    .option("--module", "Print the custom example's JavaScript module")
     .addHelpText("after", `
 Examples are valid input for create and apply:
   cohub boards examples lesson > lesson.json
   cohub boards create lesson.board -i lesson.json`)
-    .action((name?: string) => {
+    .action((name: string | undefined, options: { module?: boolean }) => {
+      if (options.module) {
+        if (name !== "custom") throw new Error("--module requires the custom example.");
+        process.stdout.write(BOARD_SCRIPT_DRAWING_EXAMPLE);
+        return;
+      }
       if (!name) {
         for (const [key, example] of Object.entries(BOARD_EXAMPLES)) console.log(`${key.padEnd(10)} ${example.description}`);
         return;

@@ -225,7 +225,7 @@ function formatValue(value: unknown): string {
 		color: var(--text-tertiary);
 		cursor: pointer;
 	}
-	.track-remove:hover { background: var(--error-bg); color: var(--error-soft); }
+	.track-remove:hover { background: var(--color-error-bg); color: var(--color-error-soft); }
 
 	@media (pointer: coarse) {
 		.track-label { width: 84px; }

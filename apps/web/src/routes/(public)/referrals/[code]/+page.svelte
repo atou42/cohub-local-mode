@@ -4,6 +4,7 @@ import { ArrowRight, Gift, Loader2 } from "lucide-svelte";
 import { onMount } from "svelte";
 import { goto } from "$app/navigation";
 import { ensureAuth } from "$lib/auth";
+import Spinner from "$lib/components/Spinner.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import type { Locale } from "$lib/i18n/locale";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -107,14 +108,14 @@ async function claim() {
 				<div class="mt-6 flex items-center gap-2 border-y border-border-subtle py-4 text-[13px] text-text-secondary"><Gift class="h-4 w-4 text-brand" /><span>{m.referral_get_credits({ amount: `$${referral.reward.inviteeUsd}` }, { locale })}</span></div>
 
 				{#if action === "self"}
-					<div class="mt-6"><p class="text-[13px] text-text-secondary">{m.referral_self({}, { locale })}</p><a href="/settings/referrals" class="mt-3 inline-flex h-9 items-center gap-1.5 rounded-[5px] bg-brand px-4 text-[12px] font-medium text-brand-contrast-fg">{m.referral_view_referrals({}, { locale })} <ArrowRight class="h-3.5 w-3.5" /></a></div>
+					<div class="mt-6"><p class="text-[13px] text-text-secondary">{m.referral_self({}, { locale })}</p><a href="/settings/referrals" class="primary-key mt-3 h-9 gap-1.5 px-4 text-[12px]">{m.referral_view_referrals({}, { locale })} <ArrowRight class="h-3.5 w-3.5" /></a></div>
 				{:else if action === "existing"}
-					<div class="mt-6"><p class="text-[13px] text-text-secondary">{m.referral_existing({}, { locale })}</p><a href="/" class="mt-3 inline-flex h-9 items-center gap-1.5 rounded-[5px] bg-brand px-4 text-[12px] font-medium text-brand-contrast-fg">{m.referral_open_cohub({}, { locale })} <ArrowRight class="h-3.5 w-3.5" /></a></div>
+					<div class="mt-6"><p class="text-[13px] text-text-secondary">{m.referral_existing({}, { locale })}</p><a href="/" class="primary-key mt-3 h-9 gap-1.5 px-4 text-[12px]">{m.referral_open_cohub({}, { locale })} <ArrowRight class="h-3.5 w-3.5" /></a></div>
 				{:else if action === "done"}
 					<p class="mt-6 text-[13px] text-status-running">{m.referral_applied({}, { locale })}</p>
 				{:else}
 					{#if actionError}<p class="mt-5 text-[12px] text-error-soft">{actionError}</p>{/if}
-					<button type="button" disabled={action === "claiming"} class="mt-6 inline-flex h-10 items-center gap-2 rounded-[5px] bg-brand px-5 text-[13px] font-medium text-brand-contrast-fg hover:bg-brand-hover disabled:opacity-60" onclick={() => void claim()}>{#if action === "claiming"}<Loader2 class="h-4 w-4 animate-spin" />{m.referral_joining({}, { locale })}{:else}{m.referral_join({}, { locale })} <ArrowRight class="h-4 w-4" />{/if}</button>
+					<button type="button" disabled={action === "claiming"} class="primary-key mt-6 h-10 gap-2 px-5 text-[13px]" onclick={() => void claim()}>{#if action === "claiming"}<Spinner class="h-4 w-4" />{m.referral_joining({}, { locale })}{:else}{m.referral_join({}, { locale })} <ArrowRight class="h-4 w-4" />{/if}</button>
 				{/if}
 			</div>
 		{/if}

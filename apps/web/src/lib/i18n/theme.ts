@@ -15,6 +15,10 @@ export function localizedThemeLabel(theme: ThemeMode, locale: Locale): string {
 			return m.settings_theme_solarized_light({}, options);
 		case "neta-studio":
 			return m.settings_theme_neta_studio({}, options);
+		case "neta-pixel":
+			return m.settings_theme_neta_pixel({}, options);
+		case "neta-pixel-dark":
+			return m.settings_theme_neta_pixel_dark({}, options);
 		case "system":
 			return m.settings_language_system({}, options);
 	}
@@ -36,6 +40,10 @@ export function localizedThemeDescription(
 			return m.settings_theme_solarized_light_description({}, options);
 		case "neta-studio":
 			return m.settings_theme_neta_studio_description({}, options);
+		case "neta-pixel":
+			return m.settings_theme_neta_pixel_description({}, options);
+		case "neta-pixel-dark":
+			return m.settings_theme_neta_pixel_dark_description({}, options);
 		case "system":
 			return m.settings_theme_system_description({}, options);
 	}

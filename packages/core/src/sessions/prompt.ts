@@ -290,7 +290,7 @@ function normalizePromptModelProvider(input: Pick<SubmitSessionPromptInput, "mod
 }
 
 /**
- * Expand one-shot composer shortcuts in a single-block text prompt.
+ * Expand one-shot composer shortcuts in the leading text block.
  *
  * Prompt templates are pure platform text and expand everywhere. Skills are
  * sandbox-anchored, so `expandSkillCommand` receives the executing Harness and
@@ -313,19 +313,19 @@ export const expandPromptContent = async (
   let promptTemplate: PromptTemplateUsageMeta | null = null;
   let skillUsage: SkillUsageMeta | null = null;
 
-  if (content.length === 1 && content[0]?.type === "text") {
-    const originalText = typeof content[0].text === "string" ? content[0].text : "";
-    const rawText = originalText.trim();
-    const isSkillCommand = rawText.startsWith("/skill:");
-    if (isSkillCommand && deps.expandSkillCommand) {
-      const expanded = await deps.expandSkillCommand({
+  const [first, ...rest] = content;
+  if (first?.type === "text" && typeof first.text === "string") {
+    const rawText = first.text.trim();
+    let renderedText: string | null = null;
+    if (rawText.startsWith("/skill:")) {
+      const expanded = await deps.expandSkillCommand?.({
         text: rawText,
         userId: input.userId,
         spaceId: input.spaceId,
         harness: input.harness,
       });
       if (expanded) {
-        content = [{ type: "text", text: expanded.renderedText } satisfies ContentBlock];
+        renderedText = expanded.renderedText;
         skillUsage = {
           name: expanded.skill.name,
           description: expanded.skill.description,
@@ -336,7 +336,7 @@ export const expandPromptContent = async (
           argsText: expanded.argsText,
         };
       }
-    } else if (!isSkillCommand && rawText.startsWith("/")) {
+    } else if (rawText.startsWith("/")) {
       const expanded = await deps.expandPromptTemplate({
         text: rawText,
         userId: input.userId,
@@ -344,7 +344,7 @@ export const expandPromptContent = async (
         sessionId: input.sessionId,
       });
       if (expanded) {
-        content = [{ type: "text", text: expanded.renderedText } satisfies ContentBlock];
+        renderedText = expanded.renderedText;
         promptTemplate = {
           name: expanded.template.name,
           description: expanded.template.description,
@@ -356,10 +356,11 @@ export const expandPromptContent = async (
         };
       }
     }
+    if (renderedText !== null) content = [{ ...first, text: renderedText }, ...rest];
+  }
 
-    if (input.sandboxSemantics !== false) {
-      content = normalizeDirectShellCommandContent(content);
-    }
+  if (input.sandboxSemantics !== false) {
+    content = normalizeDirectShellCommandContent(content);
   }
 
   return { content, promptTemplate, skillUsage };

@@ -54,6 +54,7 @@ import { getLocale } from "$lib/i18n/locale.svelte";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { getCohubAppLinkKey, parseCohubAppUrls } from "$lib/mentions/app";
 import { resolveCohubAppLinkMentionLabels } from "$lib/mentions/app-link-resolve";
+import { loadOfficialSpaceMention } from "$lib/mentions/official-space";
 import {
 	type ResourceMentionTextToken,
 	replaceCohubResourceUrls,
@@ -225,6 +226,7 @@ let selectedSpaceMentionIndex = $state(0);
 let selectedSpaceMentionId = $state<string | null>(null);
 let localSpaceMentionItems = $state<SpaceMentionSuggestion[]>([]);
 let remoteSpaceMentionItems = $state<SpaceMentionSuggestion[]>([]);
+let officialSpaceMention = $state<SpaceMentionSuggestion | null>(null);
 let spaceMentionLocalDone = $state(true);
 let spaceMentionRemoteDone = $state(true);
 let spaceMentionRemoteError = $state<string | null>(null);
@@ -417,6 +419,7 @@ const spaceMentionItems = $derived(
 	mergeSpaceMentionSuggestions({
 		local: localSpaceMentionItems,
 		remote: remoteSpaceMentionItems,
+		official: officialSpaceMention,
 		query: spaceMentionTrigger?.query ?? "",
 		currentSpaceId,
 		limit: 50,
@@ -916,6 +919,12 @@ function selectSpaceMentionIndex(index: number) {
 	selectedSpaceMentionId = spaceMentionItems[index]?.spaceId ?? null;
 }
 
+function refreshOfficialSpaceMention() {
+	void loadOfficialSpaceMention().then((item) => {
+		if (item) officialSpaceMention = item;
+	});
+}
+
 function scheduleSpaceMentionSearch(
 	trigger: {
 		start: number;
@@ -930,6 +939,7 @@ function scheduleSpaceMentionSearch(
 	const q = trigger.query.trim();
 	const searchKey = `${trigger.start}:${currentSpaceId ?? ""}:${q}`;
 	if (searchKey === activeSpaceMentionSearchKey) return;
+	if (activeSpaceMentionSearchKey == null) refreshOfficialSpaceMention();
 
 	abortSpaceMentionSearch();
 	activeSpaceMentionSearchKey = searchKey;
@@ -1592,7 +1602,7 @@ $effect(() => {
 									{#if showModeMenu}
 										<button type="button" class="fixed inset-0 z-30 cursor-default" aria-hidden="true" tabindex="-1" onclick={() => { showModeMenu = false; }}></button>
 										<div
-											class="absolute bottom-full left-0 z-40 mb-1.5 w-36 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg"
+											class="menu-surface absolute bottom-full left-0 z-40 mb-1.5 w-36 overflow-hidden p-1"
 											role="menu"
 											tabindex="-1"
 											aria-label="Composer mode"
@@ -1725,8 +1735,8 @@ $effect(() => {
 	}
 
 	:global(::view-transition-group(session-composer)) {
-		animation-duration: 220ms;
-		animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+		animation-duration: 140ms;
+		animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 	}
 
 	:global(::view-transition-image-pair(session-composer)) {
@@ -1737,6 +1747,7 @@ $effect(() => {
 	:global(::view-transition-old(session-composer)),
 	:global(::view-transition-new(session-composer)) {
 		inset-block: auto 0;
+		animation-duration: 100ms;
 	}
 
 	.voice-record-button {

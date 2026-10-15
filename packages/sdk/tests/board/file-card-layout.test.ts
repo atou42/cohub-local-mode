@@ -4,11 +4,8 @@ import {
 	fileCategoryAccent,
 	fileMetaLine,
 } from "../../src/board/model/file-preview.js";
-import {
-	containCoverRect,
-	ellipsizeWrappedLines,
-	fitLineWithEllipsis,
-} from "../../src/board/render/renderers/file-card-renderer.js";
+import { containRect as containCoverRect } from "../../src/board/render/surface.js";
+import { ellipsizeWrappedLines, fitLineWithEllipsis } from "../../src/board/render/text-fit.js";
 
 test("cover layout contains square images without cropping", () => {
 	assert.deepEqual(containCoverRect(260, 116, 1024, 1024), {

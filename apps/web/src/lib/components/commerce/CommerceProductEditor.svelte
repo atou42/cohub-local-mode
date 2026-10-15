@@ -201,7 +201,7 @@ const readonlyClass =
 				<input
 					id="include-cohub-balance"
 					type="checkbox"
-					class="h-4 w-4 shrink-0 accent-brand"
+					class="h-4 w-4 shrink-0"
 					bind:checked={includeCohubBalance}
 					disabled={busy}
 				/>

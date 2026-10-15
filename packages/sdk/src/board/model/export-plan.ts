@@ -73,6 +73,7 @@ function resolveRegion(
     return boundsOf.get(item.id) ?? null;
   };
   const visible = (item: BoardSceneItem, rect: Rect) => {
+    if (item.type === "effect" && item.props.kind === "trail" && item.props.follow) return true;
     const box = bounds(item);
     return box !== null && rectsIntersect(box, rect);
   };

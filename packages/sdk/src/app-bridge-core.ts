@@ -191,6 +191,7 @@ export type AppBridgeCoreConfig = {
 	getWindow?: () => AppRuntimeContext["window"];
 	/** Sends an unsolicited event to the app runtime. */
 	notify?: (payload: Record<string, unknown>) => void;
+	devices?: boolean;
 	/** @deprecated Use authorizationContext with a background surface. */
 	isBackground?: boolean;
 	/** Base origin for Cohub API requests (e.g. "https://cohub.live"). */
@@ -573,7 +574,7 @@ export function createAppBridgeCore(
 			Array.from(sessionViewerGrants.values()),
 		);
 		return {
-			capabilities: { authorization: 2, serverGrants: true },
+			capabilities: { authorization: 2, serverGrants: true, ...(config.devices ? { devices: true as const } : {}) },
 			mode: authorizationContext.surface === "broker" ? "broker" : "bridge",
 			app: {
 				id: app.id,

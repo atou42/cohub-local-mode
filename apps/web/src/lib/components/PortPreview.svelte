@@ -224,7 +224,7 @@ onDestroy(() => {
 				<div class="mb-4 text-xs leading-5 text-text-tertiary">{m.port_closed_hint({}, { locale })}</div>
 				<div class="flex items-center justify-center gap-2">
 					<button type="button" class="preview-action-btn" onclick={refresh}>{m.files_refresh({}, { locale })}</button>
-					<a class="preview-action-btn primary" href={url} target="_blank" rel="noreferrer">{m.port_open_external({}, { locale })}</a>
+					<a class="primary-key" href={url} target="_blank" rel="noreferrer">{m.port_open_external({}, { locale })}</a>
 				</div>
 			</div>
 		</div>
@@ -269,11 +269,11 @@ onDestroy(() => {
 	}
 
 	.port-status-dot.is-listening {
-		background: var(--success-soft);
+		background: var(--color-success-soft);
 	}
 
 	.port-status-dot.is-closed {
-		background: var(--error-soft);
+		background: var(--color-error-soft);
 	}
 
 	.port-observed {
@@ -294,28 +294,26 @@ onDestroy(() => {
 		border-radius: 7px;
 	}
 
+	.preview-action-btn,
+	.primary-key {
+		min-height: 32px;
+		padding: 0 10px;
+		font-size: 12px;
+		text-decoration: none;
+	}
 	.preview-action-btn {
 		display: inline-flex;
-		min-height: 32px;
 		align-items: center;
 		justify-content: center;
 		border-radius: 6px;
 		border: 1px solid var(--border-subtle);
 		background: var(--bg-hover);
-		padding: 0 10px;
 		color: var(--text-secondary);
-		font-size: 12px;
-		text-decoration: none;
 		cursor: pointer;
 	}
 	.preview-action-btn:hover {
 		border-color: var(--border-strong);
 		color: var(--text-primary);
-	}
-	.preview-action-btn.primary {
-		border-color: var(--brand);
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
 	}
 
 	@container preview-header (max-width: 460px) {

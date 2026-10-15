@@ -20,4 +20,12 @@ object WebOrigin {
     }
 
     fun urlOf(path: String): String = BuildConfig.WEB_ORIGIN.trimEnd('/') + path
+
+    fun isFirstParty(url: Uri): Boolean {
+        val host = url.host ?: return false
+        if (url.scheme != uri.scheme) return false
+        return host == domain || host.endsWith(".$domain")
+    }
+
+    private val domain: String = uri.host.orEmpty().split('.').takeLast(2).joinToString(".")
 }

@@ -66,3 +66,11 @@ cohub apps commerce orders get --app-id <app-id> --order-id <order-id>
 The runtime loop itself — `getEntitlements` → gate → `purchase` → checkout
 return → `getCheckoutState` / `getOrder` → `consumeCredits` — is documented
 with code in [App development → Commerce](https://cohub.live/docs/developers/apps#commerce).
+
+## Realtime rooms and peer channels
+
+The **Realtime room** probe joins a room by code with `client.app.realtime.createRoom()` /
+`joinRoom()`, sends `room.publish()` events, and opens `room.rtc()` for a WebRTC
+data channel that does not pass through Cohub's servers. Open the App in two tabs
+with the same code to see both paths: room events for anything that must be
+ordered, and peer channels for high-frequency traffic such as cursors or input.

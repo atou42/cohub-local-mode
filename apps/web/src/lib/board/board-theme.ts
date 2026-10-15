@@ -4,7 +4,11 @@ import {
 	boardColorCssVar,
 	buildFallbackShapeColors,
 } from "@neta-art/cohub/board";
-import type { BoardRenderPalette } from "@neta-art/cohub/board/render";
+import {
+	type BoardRenderPalette,
+	type BoardRenderStyle,
+	defaultBoardRenderStyle,
+} from "@neta-art/cohub/board/render";
 import {
 	IDENTITY_TONE_COUNT,
 	identityToken,
@@ -31,6 +35,7 @@ export type BoardThemeSnapshot = {
 	colorScheme: "dark" | "light";
 	palette: BoardRenderPalette;
 	colors: BoardShapeColors;
+	style: BoardRenderStyle;
 	identity: readonly number[];
 	background: BoardThemeBackground | null;
 };
@@ -39,19 +44,21 @@ function cssNumber(
 	host: Element | null | undefined,
 	name: string,
 	fallback: number,
+	backdrop?: number,
 ): number {
-	return readCssColorNumber(host, name, fallback);
+	return readCssColorNumber(host, name, fallback, backdrop);
 }
 
 function readPalette(host: Element | null | undefined): BoardRenderPalette {
+	const bg = cssNumber(host, "--board-bg", 0x141414);
 	return {
-		bg: cssNumber(host, "--bg-primary", 0x141414),
-		surface: cssNumber(host, "--bg-surface", 0x202020),
-		hover: cssNumber(host, "--bg-hover", 0x2a2a2a),
-		border: cssNumber(host, "--border-subtle", 0x3a3a3a),
+		bg,
+		surface: cssNumber(host, "--board-card", 0x202020, bg),
+		hover: cssNumber(host, "--bg-hover", 0x2a2a2a, bg),
+		border: cssNumber(host, "--border-subtle", 0x3a3a3a, bg),
 		brand: cssNumber(host, "--board-selection-accent", 0xff3e00),
-		text: cssNumber(host, "--text-primary", 0xf4f4f4),
-		muted: cssNumber(host, "--text-tertiary", 0x8c8c8c),
+		text: cssNumber(host, "--text-primary", 0xf4f4f4, bg),
+		muted: cssNumber(host, "--text-tertiary", 0x8c8c8c, bg),
 		rare: cssNumber(host, "--info-400", 0x38bdf8),
 		epic: cssNumber(host, "--info-500", 0xa78bfa),
 		legendary: cssNumber(host, "--warning-400", 0xf59e0b),
@@ -124,6 +131,108 @@ function cssPositiveNumberToken(
 	return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+function cssNumberToken(
+	host: Element | null | undefined,
+	name: string,
+	fallback: number,
+): number {
+	const value = Number.parseFloat(cssToken(host, name));
+	return Number.isFinite(value) ? value : fallback;
+}
+
+function cssEnumToken<T extends string>(
+	host: Element | null | undefined,
+	name: string,
+	values: readonly T[],
+	fallback: T,
+): T {
+	const value = cssToken(host, name);
+	return (values as readonly string[]).includes(value)
+		? (value as T)
+		: fallback;
+}
+
+function readStyle(
+	host: Element | null | undefined,
+	colorScheme: "dark" | "light",
+): BoardRenderStyle {
+	const base = defaultBoardRenderStyle(colorScheme);
+	const shadowAlpha = cssNumberToken(
+		host,
+		"--board-card-shadow-opacity",
+		base.shadow?.alpha ?? 0,
+	);
+	return {
+		corner: cssEnumToken(
+			host,
+			"--board-card-corner",
+			["round", "pixel"],
+			base.corner,
+		),
+		radius: cssNumberToken(host, "--board-card-radius", base.radius),
+		shadow:
+			shadowAlpha > 0
+				? {
+						color: cssNumber(
+							host,
+							"--board-card-shadow-color",
+							base.shadow?.color ?? 0,
+						),
+						alpha: shadowAlpha,
+						blur: cssNumberToken(
+							host,
+							"--board-card-shadow-blur",
+							base.shadow?.blur ?? 12,
+						),
+						y: cssNumberToken(
+							host,
+							"--board-card-shadow-y",
+							base.shadow?.y ?? 0,
+						),
+					}
+				: null,
+		selection: {
+			width: cssNumberToken(
+				host,
+				"--board-selection-width",
+				base.selection.width,
+			),
+			outset: cssNumberToken(
+				host,
+				"--board-selection-outset",
+				base.selection.outset,
+			),
+			dash: cssNumberToken(host, "--board-selection-dash", base.selection.dash),
+			handle: cssEnumToken(
+				host,
+				"--board-selection-handle",
+				["circle", "square"],
+				base.selection.handle,
+			),
+			handleSize: cssNumberToken(
+				host,
+				"--board-selection-handle-size",
+				base.selection.handleSize,
+			),
+		},
+		media: cssEnumToken(host, "--board-media", ["plain", "framed"], base.media),
+		progress: cssEnumToken(
+			host,
+			"--board-progress",
+			["shimmer", "mosaic"],
+			base.progress,
+		),
+		icons: cssEnumToken(host, "--board-icons", ["line", "pixel"], base.icons),
+		motion: cssEnumToken(
+			host,
+			"--board-motion",
+			["smooth", "stepped"],
+			base.motion,
+		),
+		font: cssToken(host, "--board-font") || base.font,
+	};
+}
+
 function readBackground(
 	host: Element | null | undefined,
 ): BoardThemeBackground | null {
@@ -146,7 +255,7 @@ export function boardThemeKey(
 		id,
 		customThemeVersion,
 		cssToken(host, "--board-selection-accent"),
-		cssToken(host, "--bg-primary"),
+		cssToken(host, "--board-bg"),
 		cssToken(host, "--board-background-image-url"),
 		cssToken(host, "--board-background-tile-width"),
 		cssToken(host, "--board-background-tile-height"),
@@ -168,6 +277,7 @@ export function resolveBoardTheme(
 		colorScheme,
 		palette,
 		colors: readShapeColors(host, colorScheme),
+		style: readStyle(host, colorScheme),
 		identity: readIdentity(host, palette.brand),
 		background: readBackground(host),
 	};

@@ -3,8 +3,8 @@ import type { BoardShapeItem } from "@cohub/protocol";
 import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { SceneItem } from "../../model/scene.js";
 import { type WorldPoint, worldPoint } from "../../model/geometry.js";
-import { dashPattern, tracePolyline, trimPolyline } from "../stroke.js";
-import { itemColor } from "../palette.js";
+import { dashPattern, roundRectPoints, tracePolyline, trimPolyline } from "../stroke.js";
+import { itemAlpha, itemColor } from "../palette.js";
 import { syncTextResolution, syncTextWrapWidth, textResolutionForZoom } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
@@ -88,22 +88,8 @@ function outlinePoints(geometry: BoardShapeItem["props"]["geometry"], width: num
 			return [p(width / 2, 0), p(width, height / 2), p(width / 2, height), p(0, height / 2), p(width / 2, 0)];
 		case "triangle":
 			return [p(width / 2, 0), p(width, height), p(0, height), p(width / 2, 0)];
-		default: {
-			const r = Math.min(radius, width / 2, height / 2);
-			if (r <= 0) return [p(0, 0), p(width, 0), p(width, height), p(0, height), p(0, 0)];
-			const corner = (cx: number, cy: number, from: number) =>
-				Array.from({ length: 9 }, (_, index) => {
-					const angle = from + (index / 8) * (Math.PI / 2);
-					return p(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
-				});
-			return [
-				...corner(width - r, r, -Math.PI / 2),
-				...corner(width - r, height - r, 0),
-				...corner(r, height - r, Math.PI / 2),
-				...corner(r, r, Math.PI),
-				p(width - r, 0),
-			];
-		}
+		default:
+			return roundRectPoints(width, height, radius);
 	}
 }
 
@@ -113,15 +99,14 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
 	const { props, style } = item;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const stroke = itemColor(context, style.stroke ?? style.fill, "brand");
 	const fill = itemColor(context, style.fill ?? style.stroke, "brand", "fill");
-	const fillOpacity = style.fillOpacity ?? (style.fill ? 1 : 0);
+	const fillOpacity = (style.fillOpacity ?? (style.fill ? 1 : 0)) * itemAlpha(context, style.fill ?? style.stroke);
+	const strokeAlpha = itemAlpha(context, style.stroke ?? style.fill);
 	const strokeWidth = style.strokeWidth ?? 1.75;
 	syncTextResolution(parts.label, parts, context.zoom);
 
-	const visualSig = [width, height, selected, hovered, props.geometry, props.path, fill, fillOpacity, stroke, strokeWidth, style.dash, style.radius, style.trim, context.palette.muted].join("|");
+	const visualSig = [width, height, props.geometry, props.path, fill, fillOpacity, stroke, strokeAlpha, strokeWidth, style.dash, style.radius, style.trim].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 		parts.shape.clear();
@@ -129,8 +114,7 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 			traceShapeOutline(parts.shape, props, width, height, style.radius);
 			parts.shape.fill({ color: fill, alpha: fillOpacity });
 		}
-		const lineWidth = selected ? Math.max(2.5, strokeWidth) : strokeWidth;
-		const pattern = dashPattern(style.dash, lineWidth);
+		const pattern = dashPattern(style.dash, strokeWidth);
 		const partial = style.trim !== undefined && style.trim < 1;
 		if (strokeWidth > 0 && (!partial || style.trim)) {
 			if ((pattern || partial) && props.geometry !== "path") {
@@ -138,15 +122,16 @@ function sync(container: Container, item: SceneItem<BoardShapeItem>, context: Bo
 				tracePolyline(parts.shape, trimPolyline(outlinePoints(props.geometry, width, height, radius), style.trim), pattern);
 			} else traceShapeOutline(parts.shape, props, width, height, style.radius);
 			parts.shape.stroke({
-				color: hovered && !selected ? context.palette.muted : stroke,
-				width: lineWidth,
-				alpha: selected ? 1 : hovered ? 0.95 : 0.85,
+				color: stroke,
+				width: strokeWidth,
+				alpha: 0.85 * strokeAlpha,
 				cap: partial || pattern ? "round" : "butt",
 				join: "round",
 			});
 		}
 	}
 
+	parts.label.alpha = itemAlpha(context, style.stroke);
 	const label = itemColor(context, style.stroke, "neutral", "label");
 	const textSig = [props.text, label, props.fontSize, props.align].join("|");
 	if (textSig !== parts.textSig) {
@@ -188,9 +173,9 @@ export const shapeCardRenderer: BoardCardRenderer = {
 		if (item.type !== "shape") return;
 		drawFarPlate(graphics, item.frame, {
 			fill: itemColor(context, item.style.fill ?? item.style.stroke, "brand", "fill"),
-			fillAlpha: Math.max(0.18, item.style.fillOpacity ?? 0),
+			fillAlpha: Math.max(0.18, item.style.fillOpacity ?? 0) * itemAlpha(context, item.style.fill ?? item.style.stroke),
 			accent: itemColor(context, item.style.stroke, "brand"),
-			accentAlpha: 0.9,
+			accentAlpha: 0.9 * itemAlpha(context, item.style.stroke),
 		});
 	},
 	destroy: (container) => {

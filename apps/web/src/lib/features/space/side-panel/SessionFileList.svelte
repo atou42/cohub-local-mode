@@ -9,8 +9,8 @@ import {
 import { setCohubResourceDragData } from "$lib/drag/cohub-resource-drag";
 import { pointerDragSource } from "$lib/drag/pointer-drag.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
-import { formatTimeAgo } from "$lib/i18n/time-ago";
 import { m } from "$lib/paraglide/messages.js";
+import { formatTimeAgo } from "$lib/resource-kit/time";
 import type { SessionFileEntry } from "./side-panel-data";
 
 type Props = {

@@ -123,7 +123,7 @@ function toggleDash() {
 
 {#if arrow && position}
 	<div
-		class="board-connection-toolbar"
+		class="board-connection-toolbar toolbar-surface"
 		style:left="{position.left}px"
 		style:top="{position.top}px"
 		role="toolbar"
@@ -133,8 +133,7 @@ function toggleDash() {
 			{#each HEAD_OPTIONS as option (option.id)}
 				<button
 					type="button"
-					class="conn-btn"
-					class:conn-btn--active={heads === option.id}
+					class="tool-key"
 					title={option.label}
 					aria-label={option.label}
 					aria-pressed={heads === option.id}
@@ -145,14 +144,13 @@ function toggleDash() {
 			{/each}
 		</div>
 
-		<div class="divider"></div>
+		<div class="toolbar-divider"></div>
 
 		<div class="group" role="group" aria-label={m.board_route_label({}, { locale })}>
 			{#each ROUTE_OPTIONS as option (option.id)}
 				<button
 					type="button"
-					class="conn-btn"
-					class:conn-btn--active={arrow.props.route === option.id}
+					class="tool-key"
 					title={option.label}
 					aria-label={option.label}
 					aria-pressed={arrow.props.route === option.id}
@@ -163,8 +161,7 @@ function toggleDash() {
 			{/each}
 			<button
 				type="button"
-				class="conn-btn"
-				class:conn-btn--active={arrow.style.dash === "dashed"}
+				class="tool-key"
 				title={m.board_line_dashed({}, { locale })}
 				aria-label={m.board_line_dashed({}, { locale })}
 				aria-pressed={arrow.style.dash === "dashed"}
@@ -174,27 +171,27 @@ function toggleDash() {
 			</button>
 		</div>
 
-		<div class="divider"></div>
+		<div class="toolbar-divider"></div>
 
 		<div class="color-list" role="group" aria-label={m.board_color({}, { locale })}>
 			{#each BOARD_COLORS as color (color.id)}
 				<button
 					type="button"
-					class="swatch"
-					class:swatch--active={(arrow.style.stroke ?? "brand") === color.id}
+					class="color-chip"
 					title={color.label}
 					aria-label={color.label}
-					style:--swatch-color="var({boardColorCssVar(color.id, 'stroke')})"
+					aria-pressed={(arrow.style.stroke ?? "brand") === color.id}
+					style:--chip-color="var({boardColorCssVar(color.id, 'stroke')})"
 					onclick={() => editor.setSelectionColor(color.id)}
 				></button>
 			{/each}
 		</div>
 
-		<div class="divider"></div>
+		<div class="toolbar-divider"></div>
 
 		<button
 			type="button"
-			class="conn-btn conn-btn--danger"
+			class="tool-key is-danger"
 			title={m.board_delete_arrow({}, { locale })}
 			aria-label={m.board_delete_arrow({}, { locale })}
 			onclick={() => editor.deleteSelection()}
@@ -206,91 +203,36 @@ function toggleDash() {
 
 <style>
 	.board-connection-toolbar {
+		--tool-key-size: 26px;
+		--color-chip-size: 16px;
 		position: absolute;
 		z-index: 24;
-		display: flex;
-		align-items: center;
-		gap: 2px;
-		transform: translate(-50%, calc(-100% - 14px));
-		border-radius: 9px;
-		border: 1px solid var(--border-subtle);
-		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
-		padding: 4px;
-		box-shadow: 0 8px 20px color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
-		backdrop-filter: blur(12px);
-		white-space: nowrap;
 		max-width: calc(100% - 16px);
 		overflow-x: auto;
+		transform: translate(-50%, calc(-100% - 12px));
+		white-space: nowrap;
 		scrollbar-width: none;
 	}
 	.board-connection-toolbar::-webkit-scrollbar { display: none; }
 
-	.group {
-		display: flex;
-		align-items: center;
-		gap: 1px;
-	}
-
-	.conn-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		border-radius: 6px;
-		color: var(--text-secondary);
-		cursor: pointer;
-		transition: background-color 100ms ease, color 100ms ease;
-		flex-shrink: 0;
-	}
-	.conn-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-	.conn-btn--active {
-		background: var(--brand-bg);
-		color: var(--brand-muted-fg);
-	}
-	.conn-btn--danger:hover { background: var(--error-bg); color: var(--error-700); }
-
+	.group,
 	.color-list {
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		padding: 0 2px;
-	}
-
-	.swatch {
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		border: 1.5px solid var(--border-subtle);
-		background: var(--swatch-color);
-		cursor: pointer;
-		transition: transform 100ms ease, border-color 100ms ease;
-		flex-shrink: 0;
-	}
-	.swatch:hover { transform: scale(1.18); }
-	.swatch--active {
-		border-color: var(--text-primary);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--swatch-color) 40%, transparent);
 	}
 
 	.dash-glyph {
 		width: 14px;
+		height: 0;
 		border-top: 2px dashed currentColor;
-	}
-
-	.divider {
-		width: 1px;
-		height: 16px;
-		margin: 0 3px;
-		background: var(--border-subtle);
-		flex-shrink: 0;
 	}
 
 	@media (pointer: coarse) {
 		.board-connection-toolbar {
+			--tool-key-size: 36px;
+			--color-chip-size: 22px;
 			max-width: calc(100% - 20px);
 		}
-		.conn-btn { width: 36px; height: 36px; flex-shrink: 0; }
-		.swatch { width: 22px; height: 22px; flex-shrink: 0; }
 	}
 </style>

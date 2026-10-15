@@ -1,4 +1,4 @@
-import { type BoardTrack, createBoardItemId } from "../model/index.js";
+import { type BoardTrack, type BoardChapter, boardSequence, createBoardItemId } from "../model/index.js";
 import type { BoardPlayhead, EditorContext } from "./context.js";
 import { readPath, sameJson } from "./document-edits.js";
 
@@ -120,7 +120,16 @@ export function createAnimationModule(ctx: EditorContext) {
 		return id;
 	}
 
-	return { setPlayhead, setRecording, keyframeState, toggleKeyframe, removeKeyframe, setKeyframeEase, createAnimation };
+	function createSequence(name: string, chapters: BoardChapter[]): string | null {
+		if (options.readonly) return null;
+		const id = createBoardItemId();
+		const animation = boardSequence(state.base, chapters);
+		commitAnimation(id, { ...animation, name });
+		setPlayhead({ animationId: id, time: 0 });
+		return id;
+	}
+
+	return { setPlayhead, setRecording, keyframeState, toggleKeyframe, removeKeyframe, setKeyframeEase, createAnimation, createSequence };
 }
 
 export type AnimationModule = ReturnType<typeof createAnimationModule>;

@@ -93,14 +93,17 @@ function controlHitRadius(pointerType: string): number {
 }
 
 export function selectionTransformControlAt(
-	transform: BoardSelectionTransform | null,
+	selection: BoardSelectionTransform | null,
 	point: WorldPoint,
 	zoom: number,
 	pointerType: string,
+	outset = 0,
 ): BoardTransformControl | null {
-	if (!transform) return null;
+	if (!selection) return null;
 	const screenRadius = controlHitRadius(pointerType);
 	const radius = screenRadius / Math.max(zoom, 0.0001);
+	const grow = outset / Math.max(zoom, 0.0001);
+	const transform = grow > 0 ? { ...selection, frame: { ...selection.frame, x: selection.frame.x - grow, y: selection.frame.y - grow, width: selection.frame.width + grow * 2, height: selection.frame.height + grow * 2 } } : selection;
 
 	if (transform.resizeMode !== "none") {
 		for (const handle of CORNER_RESIZE_HANDLES) {

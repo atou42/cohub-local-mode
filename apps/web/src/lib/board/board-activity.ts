@@ -1,4 +1,9 @@
-import type { RequestSource } from "@cohub/protocol";
+import {
+	type Actor,
+	type ActorModel,
+	actorKindOf,
+	type RequestSource,
+} from "@cohub/protocol";
 import type { BoardDocument, BoardFrame } from "@neta-art/cohub/board";
 import { createDocumentLayout, unionRects } from "@neta-art/cohub/board";
 
@@ -22,7 +27,7 @@ export type BoardAutomationActivity = {
 	status: "active" | "settled";
 	focus: BoardFrame;
 	source: RequestSource;
-	model: { provider: string | null; id: string } | null;
+	model: ActorModel | null;
 	startedAt: number;
 	updatedAt: number;
 };
@@ -33,14 +38,16 @@ type ActivityEvent = {
 	txId: string;
 	itemIds?: string[];
 	source?: RequestSource | null;
+	actor?: Actor | null;
 	timestamp?: number;
 };
 
 export function boardAutomationKind(
-	source: RequestSource,
+	source: RequestSource | null | undefined,
+	actor?: Actor | null,
 ): "cli" | "agent" | null {
-	if (source.toolCallId) return "agent";
-	return source.via === "cli" ? "cli" : null;
+	const kind = actor?.kind ?? actorKindOf(source);
+	return kind === "user" ? null : kind;
 }
 
 export function boardAutomationFocus(
@@ -48,7 +55,9 @@ export function boardAutomationFocus(
 	itemIds: string[] = [],
 ): BoardFrame | null {
 	const layout = createDocumentLayout(document.items);
-	const focus = unionRects(itemIds.filter((id) => document.items[id]).map((id) => layout.bounds(id)));
+	const focus = unionRects(
+		itemIds.filter((id) => document.items[id]).map((id) => layout.bounds(id)),
+	);
 	return focus ? { ...focus, rotation: 0 } : null;
 }
 
@@ -71,7 +80,7 @@ export function createBoardAutomationActivity(
 	fallbackFocus: BoardFrame | null = null,
 ): BoardAutomationActivity | null {
 	if (!event.source) return null;
-	const kind = boardAutomationKind(event.source);
+	const kind = boardAutomationKind(event.source, event.actor);
 	if (!kind) return null;
 	const focus = boardAutomationFocus(document, event.itemIds) ?? fallbackFocus;
 	if (!focus) return null;
@@ -88,7 +97,7 @@ export function createBoardAutomationActivity(
 		status: "active",
 		focus: { ...focus, rotation: 0 },
 		source: event.source,
-		model: null,
+		model: event.actor?.model ?? null,
 		startedAt: timestamp,
 		updatedAt: timestamp,
 	};

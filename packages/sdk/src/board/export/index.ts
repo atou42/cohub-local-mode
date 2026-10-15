@@ -1,6 +1,7 @@
 
 import type { BoardDocument } from "@cohub/protocol";
-import { boardDocumentAt } from "../model/animation.js";
+import { resolveBoardAnimationCamera, type BoardAnimationSampler } from "../model/sampling.js";
+import { createBoardRenderSampler } from "../render/sampling.js";
 import { type BoardSceneItem, buildBoardScene } from "../model/scene.js";
 import { type ICanvas, Rectangle, type Renderer, type Texture } from "pixi.js";
 import { parseBoardCssColor } from "../render/css-color.js";
@@ -14,10 +15,11 @@ import {
 } from "../model/export-plan.js";
 import {
   type BoardRenderPalette,
+  type BoardRenderStyle,
   defaultBoardPalette,
 } from "../render/index.js";
 import { ensureBoardTextMeasurement } from "../render/text-measurement.js";
-import type { BoardCardRendererResolver, BoardSketchHost } from "../render/renderers/board-renderer-registry.js";
+import type { BoardCardRendererResolver, BoardScriptHost } from "../render/renderers/board-renderer-registry.js";
 import { createBoardExportScene } from "./scene.js";
 
 export type {
@@ -32,6 +34,8 @@ export type BoardExportBackground = "paper" | "transparent" | number;
 
 export type BoardExportOptions = {
   region?: BoardExportRegion;
+  camera?: { width: number; height: number };
+  sampler?: BoardAnimationSampler;
   at?: { animation?: string; time: number };
   scale?: number;
   padding?: number;
@@ -39,8 +43,9 @@ export type BoardExportOptions = {
   background?: BoardExportBackground;
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
+  style?: Partial<BoardRenderStyle>;
   textures?: Map<string, Texture>;
-  sketches?: BoardSketchHost;
+  scripts?: BoardScriptHost;
   assetKey?: (item: BoardSceneItem) => string | null;
   renderers?: BoardCardRendererResolver;
   backgroundImage?: {
@@ -77,25 +82,39 @@ function resolveBackground(
   return css ? (parseBoardCssColor(css) ?? palette.bg) : palette.bg;
 }
 
-export function renderBoardExport(
-  renderer: Renderer,
-  input: BoardDocument,
-  options: BoardExportOptions = {},
-): BoardExportResult | null {
+export function prepareBoardExport(input: BoardDocument, options: BoardExportOptions = {}) {
   ensureBoardTextMeasurement();
-  const base = normalizeBoardDocument(input);
-  const document = options.at ? boardDocumentAt(base, options.at.animation ?? null, options.at.time).document : base;
-  const scene = buildBoardScene(document);
+  const base = options.sampler ? input : normalizeBoardDocument(input);
+  if (options.camera && options.region && options.region.kind !== "all") throw new Error("Camera export cannot be combined with a fixed region.");
+  if (options.camera && !options.at) throw new Error("Camera export needs an animation time.");
+  if (options.camera && (![options.camera.width, options.camera.height].every((n) => Number.isSafeInteger(n) && n > 0))) throw new Error("Camera dimensions must be positive integers.");
+  const sampler = options.at ? options.sampler ?? createBoardRenderSampler(base, options.at.animation ?? null, options) : undefined;
+  const sample = options.at ? sampler?.at(options.at.time) : undefined;
+  const sampled = sample?.document ?? base;
+  const document = options.scripts?.document?.(sampled, options.at?.time ?? 0) ?? sampled;
+  const scene = document === sampled ? sample?.scene ?? buildBoardScene(document) : buildBoardScene(document);
+  const camera = options.camera ? resolveBoardAnimationCamera(sample?.evaluation.camera ?? {}, (id) => scene.get(id)?.frame, options.camera, options.at?.time ?? 0) : undefined;
+  const region: BoardExportRegion = camera && options.camera ? { kind: "rect", rect: { x: -camera.x / camera.zoom, y: -camera.y / camera.zoom, width: options.camera.width / camera.zoom, height: options.camera.height / camera.zoom } } : options.region ?? { kind: "all" };
   const plan = planBoardExport({
     scene,
-    region: options.region ?? { kind: "all" },
-    scale: options.scale,
-    padding: options.padding,
+    region,
+    scale: camera?.zoom ?? options.scale,
+    padding: camera ? 0 : options.padding,
     maxEdge: options.maxEdge,
     maxPixels: options.maxPixels,
   });
-  if (!plan) return null;
+  if (plan && camera && options.camera) {
+    const ratio = plan.clamped ? plan.scale / camera.zoom : 1;
+    plan.width = Math.max(1, Math.floor(options.camera.width * ratio));
+    plan.height = Math.max(1, Math.floor(options.camera.height * ratio));
+  }
+  return plan ? { document, scene, plan, sampler } : null;
+}
 
+export function renderBoardExport(renderer: Renderer, input: BoardDocument, options: BoardExportOptions = {}): BoardExportResult | null {
+  const prepared = prepareBoardExport(input, options);
+  if (!prepared) return null;
+  const { document, scene, plan, sampler } = prepared;
   const colorScheme = options.colorScheme ?? "dark";
   const palette = { ...defaultBoardPalette(colorScheme), ...options.palette };
   const exportScene = createBoardExportScene({
@@ -103,13 +122,15 @@ export function renderBoardExport(
     scene,
     items: plan.items,
     time: options.at?.time ?? 0,
+    frameAt: sampler?.frameAt,
     world: plan.world,
     scale: plan.scale,
     colorScheme,
     palette,
     colors: options.colors,
+    style: options.style,
     textures: options.textures,
-    sketches: options.sketches,
+    scripts: options.scripts,
     assetKey: options.assetKey,
     renderers: options.renderers,
     background: resolveBackground(options.background, palette, document, colorScheme),

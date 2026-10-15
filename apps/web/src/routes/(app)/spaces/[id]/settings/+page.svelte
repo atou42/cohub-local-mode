@@ -1987,7 +1987,7 @@ $effect(() => {
 														checked={discordConfig.inbound?.requireMentionInGuild ?? true}
 														disabled={!canManageSpaceChannels || savingChannelConfigIds.has(binding.id)}
 														onchange={(event) => saveDiscordRequireMention(binding, event.currentTarget.checked)}
-														class="rounded-sm border-border-subtle bg-bg-input checked:bg-brand disabled:opacity-50"
+														class="disabled:opacity-50"
 													/>
 													<span class="min-w-0">{m.space_require_discord_mention({}, { locale })}</span>
 												</label>
@@ -1999,7 +1999,7 @@ $effect(() => {
 														checked={feishuConfig.inbound?.requireMentionInGroup ?? true}
 														disabled={!canManageSpaceChannels || savingChannelConfigIds.has(binding.id)}
 														onchange={(event) => saveFeishuRequireMention(binding, event.currentTarget.checked)}
-														class="rounded-sm border-border-subtle bg-bg-input checked:bg-brand disabled:opacity-50"
+														class="disabled:opacity-50"
 													/>
 													<span class="min-w-0">{m.space_require_feishu_mention({}, { locale })}</span>
 												</label>

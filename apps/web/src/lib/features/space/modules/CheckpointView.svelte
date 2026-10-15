@@ -25,15 +25,15 @@ import type { AccessState } from "$lib/access/access-state";
 import { classifyAccessError } from "$lib/access/access-state";
 import AccessStateView from "$lib/components/AccessStateView.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
-import CheckpointDiffPanel from "$lib/components/CheckpointDiffPanel.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import CheckpointDiffPanel from "$lib/resource-kit/CheckpointDiffPanel.svelte";
+import { asRecord } from "$lib/resource-kit/core";
 import { sdk } from "$lib/sdk";
 import {
 	buildSpaceNewSessionRoute,
 	buildSpaceTaskRoute,
 } from "$lib/space-routes";
-import { asRecord } from "../space-utils";
 import { createKeyedRouteRequestGuard } from "./route-request-guard";
 import { withCurrentWindow } from "./window-route";
 
@@ -395,6 +395,7 @@ onDestroy(() => {
 					<!-- Pending preview: collapsed by default; expand triggers NFS-light scan. -->
 					<div class="border-t border-border-subtle/60 pt-4">
 						<CheckpointDiffPanel
+							{locale}
 							summary={pendingDiff}
 							loading={pendingDiffLoading}
 							error={pendingDiffError}
@@ -602,7 +603,7 @@ onDestroy(() => {
 										</button>
 										{#if compareOpen}
 											<div
-												class="absolute right-0 z-20 mt-1 w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[6px] border border-border-subtle bg-bg-surface shadow-lg"
+												class="menu-surface absolute right-0 z-20 mt-1 w-[min(18rem,calc(100vw-2rem))] overflow-hidden"
 												role="listbox"
 											>
 												<div class="border-b border-border-subtle/60 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-text-placeholder">
@@ -646,6 +647,7 @@ onDestroy(() => {
 									</div>
 								</div>
 								<CheckpointDiffPanel
+									{locale}
 									summary={detailDiff}
 									loading={detailDiffLoading}
 									error={detailDiffError}

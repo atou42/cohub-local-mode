@@ -35,23 +35,23 @@
 	/* Semantic colors — desaturated slightly for dark mode, 400=indicator dot */
 	--success-400: oklch(78% 0.12 160);
 	--success-500: oklch(70% 0.13 160);
-	--success-700: oklch(48% 0.1 160);
+	--success-700: oklch(72% 0.078 160);
 	--success-900: oklch(24% 0.05 160);
 
 	--warning-400: oklch(82% 0.12 80);
 	--warning-500: oklch(74% 0.13 80);
-	--warning-700: oklch(52% 0.1 80);
+	--warning-700: oklch(72% 0.078 80);
 	--warning-900: oklch(26% 0.05 80);
 
 	--error-400: oklch(68% 0.18 25);
 	--error-500: oklch(62% 0.2 25);
-	--error-700: oklch(42% 0.14 25);
+	--error-700: oklch(72% 0.12 25);
 	--error-fg: var(--neutral-0);
 	--error-900: oklch(22% 0.06 25);
 
 	--info-400: oklch(72% 0.1 230);
 	--info-500: oklch(64% 0.12 230);
-	--info-700: oklch(44% 0.1 230);
+	--info-700: oklch(72% 0.072 230);
 	--info-900: oklch(22% 0.05 230);
 
 	/* Backgrounds — wider gaps between layers for clear visual hierarchy */
@@ -85,10 +85,10 @@
 	--border-subtle: var(--neutral-70); /* 32% — subtle dividers */
 	--border-strong: var(--neutral-50);
 
-	/* Interactive states — brighter than surface to signal affordance */
-	--bg-hover: oklch(28% 0.007 250 / 1); /* > bg-surface (27%) */
-	--bg-hover-strong: oklch(34% 0.008 250 / 1); /* distinct from hover */
-	--bg-active: oklch(38% 0.01 250 / 1); /* active/selected state */
+	/* Interactive states — translucent so they read on every surface */
+	--bg-hover: oklch(90% 0.02 250 / 0.11);
+	--bg-hover-strong: oklch(90% 0.02 250 / 0.19);
+	--bg-active: oklch(90% 0.02 250 / 0.24);
 
 	/* Scrollbar */
 	--scrollbar-thumb: var(--neutral-50);
@@ -101,7 +101,7 @@
 	--brand: var(--brand-400);
 	--brand-hover: var(--brand-500);
 	--brand-soft: var(--brand-700);
-	--brand-contrast-fg: var(--neutral-0);
+	--brand-contrast-fg: oklch(100% 0 0);
 	--brand-muted-fg: var(--brand);
 	--brand-muted: color-mix(in srgb, var(--brand) 10%, transparent);
 	--brand-muted-hover: color-mix(in srgb, var(--brand) 15%, transparent);

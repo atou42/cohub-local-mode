@@ -1,7 +1,8 @@
 <script lang="ts">
 import type { SpaceCommerceBenefit } from "@neta-art/cohub";
-import { Loader2, Plus, Trash2 } from "lucide-svelte";
+import { Plus, Trash2 } from "lucide-svelte";
 import { untrack } from "svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -430,11 +431,11 @@ const readonlyClass =
 		</button>
 		<button
 			type="button"
-			class="inline-flex h-9 items-center justify-center gap-1.5 rounded-[6px] bg-brand px-3 text-[12px] font-medium text-brand-contrast-fg transition-opacity disabled:opacity-50"
+			class="primary-key h-9 gap-1.5 px-3 text-[12px]"
 			onclick={() => void submit()}
 			disabled={busy || formInvalid}
 		>
-			{#if busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{/if}
+			{#if busy}<Spinner class="h-3.5 w-3.5" />{/if}
 			{isEdit ? m.benefit_editor_save({}, { locale }) : m.benefit_editor_create({}, { locale })}
 		</button>
 	</div>

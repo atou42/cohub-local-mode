@@ -1,6 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "cohub-apps/shared"
+  - "cohub-apps/task-inspector"
+  - "cohub-apps/checkpoint-explorer"
+  - "cohub-apps/schedule-manager"
+  - "cohub-apps/app-manager"
 
 injectWorkspacePackages: true
 syncInjectedDepsAfterScripts:
@@ -14,6 +19,7 @@ allowBuilds:
   core-js: false
   protobufjs: false
   "@google/genai": false
+  "@openrouter/sdk": false
 overrides:
   ioredis: ^6.0.0
 peerDependencyRules:
