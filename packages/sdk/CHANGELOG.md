@@ -1,5 +1,76 @@
 # @neta-art/cohub
 
+## 11.3.0
+
+### Minor Changes
+
+- dcb3bbc: `cohub boards schema` now explains every Board field: descriptions come from the protocol schema, so item, track, animation and settings fields say what they mean. `cohub boards schema script` prints the script attachment and the module API, exported from the SDK as `BOARD_SCRIPT_API`. `cohub boards -h` lists every Board command.
+- bebc55d: Add live hosted Room connections with bidirectional NDJSON CLI commands, member synchronization, and retained-event replay. Add participant-scoped RTC authorization and a pluggable PeerConnection factory. The CLI supports isolated, opt-in RTC media/data workers with PCM/I420 or Opus/VP8 file or pipe inputs and bounded binary or segmented-file outputs. RTC runs in an on-demand Go/Pion helper (`cohub-rtc`) that the CLI downloads and verifies; FFmpeg is needed only for format conversion.
+
+## 11.2.0
+
+### Minor Changes
+
+- c13c4af: Give Board rendering a style layer and move selection chrome to the stage.
+  
+  Themes now shape cards through `BoardRenderStyle` (silhouette, radius, shadow,
+  selection, media framing, progress, icons, motion and chrome font) alongside the
+  existing color palette, and every built-in renderer draws its surface through the
+  shared helpers in `render/surface.ts`. Cards no longer draw selection or hover
+  themselves: the stage overlay owns that chrome, so pointer and selection changes
+  redraw one layer instead of every affected card. Card chrome such as tags uses
+  `renderers/*.zoom`, a new optional hook for zoom-dependent sizing.
+  
+  Breaking for custom card renderers: `BoardRenderContext` gained `style`,
+  `themeKey` and `liftedIds`, and `drawOverlay` moved off the scene onto
+  `drawBoardOverlay` in `board/stage`. Renderers that draw their own
+  selection outline should set `observesSelection` to keep being updated when the
+  selection or hover changes.
+- ad8e425: Add decision model calls. `space.decision()` answers `noul` (yes/no), `choice`, and `score` questions about text, a JSON object, or images with calibrated probabilities, through `POST /api/spaces/:id/decisions`. Images can be https or data URLs. The CLI adds `cohub decision` and `cohub spaces decision`, which read questions from inline JSON or a file and upload local `--image` files as WebP first.
+  
+  新增决策模型调用。`space.decision()` 通过 `POST /api/spaces/:id/decisions`，针对文本、JSON 对象或图片回答 `noul`（肯定或否定）、`choice`（单选）和 `score`（打分）问题，并给出校准过的概率。图片可以是 https URL 或 data URL。CLI 新增 `cohub decision` 和 `cohub spaces decision`，问题可以写成内联 JSON 或放在文件里，本地 `--image` 图片会先转成 WebP 并上传。
+- 2aa1722: Use the account's Home Space as the source of personal configuration. User Rules now return `source: "home-space"`. Saves in Home publish user rules, skills, prompts, and model configuration through the existing pipeline; the web app reads the personal theme from Home's `.cohub/theme.css`.
+  
+  Existing config Spaces remain ordinary Spaces. Move the desired configuration files into Home before creating a Save there. No automatic migration or fallback is provided.
+
+### Patch Changes
+
+- b2d943d: Upgrade Generation SDK to 0.1.35. Generation model declarations accept the `decision` category with `systemOneExamples` and `decisionsExamples`.
+
+## 11.1.0
+
+### Minor Changes
+
+- 8d37cc6: Board task items are kept current by the server: write only `props.taskRunId`, and every Board in the Space that shows the run receives its final snapshot when it finishes. Task cards draw a live generating state with elapsed time, prompt and failure reasons, and fit their result's aspect ratio. Add `createTaskResultItems`, media `origin`, and `boards` on task details. `editor.applyTaskSnapshots` is removed; the server is the only writer of task snapshots.
+- cbbb519: Allow the SDK and CLI to override service endpoints through environment variables while retaining production and development defaults. Add the CLI `--base-url` flag and the SDK `webBaseUrl` option. Isolate CLI login sessions, Home Space caches, and Runtime directory bindings by API base URL.
+
+### Patch Changes
+
+- 56abacd: Make Board dot and grid patterns visible: dots are centered in their tile and drawn in muted ink, grid lines use the theme hairline.
+- be2784e: Reuse Board script textures safely across frames, cache script composition order, and avoid redundant accessibility DOM updates.
+
+## 11.0.0
+
+### Major Changes
+
+- 0a6b12a: Replace the standalone Sketch item with a shared script attachment for Board items and a `custom` content container. Add isolated module instances, native scene effects, Canvas drawing, local input and explicit document commits. Browser and CLI exports share the script runtime and ESM module loading contract.
+  
+  Existing Sketch documents must move `props.src`, `props.params` and `props.seed` into `script`, change `type` to `custom`, and leave `props` empty. Stored documents are not rewritten automatically.
+
+### Minor Changes
+
+- ab854d7: **App room peer channels and device access**: `room.rtc()` adds a WebRTC connection to a realtime room — named data channels (`reliable` or `latest` delivery) and media tracks, relayed between viewers and never through Cohub's servers, for traffic that room events cannot carry. `rtc.publish()` sends several tracks in one negotiation, optionally as simulcast; `replace()` switches devices without renegotiating, and a track whose source ends stops on its own. `rtc.select()` chooses whose media to receive, reusing receivers so switching is cheap, and `setQuality()` picks a simulcast quality. `channel.onPeer()` reports when this client starts or stops receiving a peer's channel; use room events for initial state synchronization. Failures are `AppRtcError` with a `code`. `client.app.devices.request()` asks the viewer for the camera or microphone an App declares with `<meta name="cohub:devices">`, so one App's grant is never reused by another in the shared frame origin; a declared `screen` is ready at once.
+- 0819b10: **App rooms beyond the App**: a room keeps the latest 1,000 published events (up to 512 KB), so a reconnect replays what it missed and `room.history()` shows a late joiner what came before. `room.invite()` lets someone outside the App join — a person in a terminal, or an Agent — and members now carry their `kind` (`user`, `agent`, `cli`) and an Agent's `model`. The new `cohub rooms` commands (`create`, `join`, `get`, `events`, `publish`, `presence`, `invite`, `leave`) and `client.rooms` hold a seat without a connection; `cohub rooms events --wait` returns when someone else publishes, so an Agent can wait in the background and wake to the room.
+- 0fc09da: Add `success`, `warning`, `error`, `info` and `status-running` App appearance tokens so Apps can render state colors that follow the host theme.
+- bd63932: Make Board animation previews and exports consistent: preserve CSS alpha, sample trails when seeking, follow animation cameras, and stream export frames with cancellation and bounded memory. Add plain frame containers, shared text/layout inspection, and helpers for chapter composition and equal-distance path sampling. Expose inspection, sequence compilation and path sampling in the CLI, with clearer animation schema semantics.
+- 9da65cc: Support stable public HTTP(S) URLs in Board image, video, audio and file sources while retaining relative Space paths. Add shared media resolution and creation helpers, batch item insertion, extensionless image loading, and safe remote audio downloads for CLI export. Published Boards distinguish captured files from live external media references.
+
+### Patch Changes
+
+- 9ef1fbd: Avoid redundant App window state messages while preserving state re-announcement when the host reloads.
+- 152521b: Render image `crop` on Boards, and draw frame borders in their authored color with `dash` and `trim`, matching shapes. A frame with an empty label shows no title.
+- 9146d58: Keep local Board script effects out of copied, cut and duplicated items, including nested transforms and arrow bindings. Publish Board script entry modules and their transitive ESM dependencies using the same import policy as the browser and CLI runtimes.
+
 ## 10.0.0
 
 ### Major Changes

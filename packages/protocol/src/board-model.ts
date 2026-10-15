@@ -6,6 +6,7 @@ import {
 	BOARD_TEXT_MIN_FONT_SIZE,
 } from "./board-constants.js";
 
+import { normalizeBoardRemoteUrl } from "./board-url.js";
 
 export const BOARD_ID_MAX_LENGTH = 160;
 export const BOARD_CAMERA_TARGET = "camera" as const;
@@ -67,7 +68,7 @@ const colorString = z
 export const BoardColorSchema = z.union([
 	colorString,
 	z.object({ light: colorString, dark: colorString }).strict(),
-]);
+]).describe("Palette token (follows the theme), CSS color, or { light, dark }.");
 export type BoardColor = z.infer<typeof BoardColorSchema>;
 
 
@@ -77,12 +78,12 @@ export type BoardDash = (typeof BOARD_DASHES)[number];
 export const BoardStyleSchema = z
 	.object({
 		fill: BoardColorSchema.optional(),
-		fillOpacity: ratio.optional(),
+		fillOpacity: ratio.optional().describe("Fill opacity, independent of the item's opacity."),
 		stroke: BoardColorSchema.optional(),
 		strokeWidth: finite.min(0).max(64).optional(),
 		dash: z.enum(BOARD_DASHES).optional(),
-		radius: nonNegative.optional(),
-		trim: ratio.optional(),
+		radius: nonNegative.optional().describe("Corner radius in board units."),
+		trim: ratio.optional().describe("Fraction of the outline drawn; animate 0 → 1 to draw it in."),
 	})
 	.strict();
 export type BoardStyle = z.infer<typeof BoardStyleSchema>;
@@ -93,6 +94,7 @@ export function isSafeBoardSourcePath(value: string): boolean {
 		value.length > 0 &&
 		value.length <= 4096 &&
 		!value.startsWith("/") &&
+		!/^[a-z][a-z\d+.-]*:/i.test(value.trimStart()) &&
 		!value.includes("\\") &&
 		value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
 	);
@@ -102,13 +104,35 @@ const srcSchema = z
 	.string()
 	.refine(isSafeBoardSourcePath, "src must be a relative Space file path");
 
+export type BoardMediaSource = { kind: "url" | "file"; value: string };
+
+export function parseBoardMediaSource(src: string): BoardMediaSource | null {
+	if (isSafeBoardSourcePath(src)) return { kind: "file", value: src };
+	return normalizeBoardRemoteUrl(src) ? { kind: "url", value: src } : null;
+}
+
+export const BoardMediaSourceSchema = z.string().max(4096).refine(
+	(src) => parseBoardMediaSource(src) !== null,
+	"src must be a public HTTP(S) URL or relative Space file path",
+).describe("Prefer a public HTTP(S) URL; a Space path relative to the workspace root also works.");
+
+export const BoardScriptSchema = z.object({
+	src: srcSchema.refine((path) => /\.m?js$/.test(path), "script src must be a .js or .mjs module").describe("A .js or .mjs Space file."),
+	params: z.record(z.string(), z.json()).default({}).describe("Values the module reads as params."),
+	targets: z.record(z.string().min(1).max(80), BoardIdSchema).default({}).describe("Named items the module can reach, as ctx.targets."),
+	seed: z.string().min(1).max(160).optional().describe("Seed for ctx.random(); defaults to the item id."),
+	enabled: z.boolean().default(true),
+}).strict().describe("A JavaScript module attached to the item; `cohub boards schema script` lists its API.");
+export type BoardScript = z.infer<typeof BoardScriptSchema>;
+
 const itemEnvelope = {
-	parent: BoardIdSchema.optional(),
-	z: finite.optional(),
+	script: BoardScriptSchema.optional(),
+	parent: BoardIdSchema.optional().describe("A frame id; position becomes relative to the frame, and the item moves with it."),
+	z: finite.optional().describe("Order among siblings; new items go on top."),
 	position: BoardVec2Schema.default({ x: 0, y: 0 }),
 	rotation: finite.default(0),
 	scale: z.union([finite, BoardVec2Schema]).default(1),
-	origin: BoardVec2Schema.default({ x: 0.5, y: 0.5 }),
+	origin: BoardVec2Schema.default({ x: 0.5, y: 0.5 }).describe("Rotation and scale origin as fractions of the size."),
 	opacity: ratio.default(1),
 	style: BoardStyleSchema.default({}),
 	locked: z.boolean().optional(),
@@ -139,8 +163,8 @@ export const BoardFrameItemSchema = z
 		props: z
 			.object({
 				label: z.string().max(280).default(""),
-				decoration: z.enum(["frame", "none"]).optional(),
-				clip: z.boolean().default(true),
+				decoration: z.enum(["frame", "none"]).optional().describe("none hides the title, border and background: an invisible group whose tracks move every child."),
+				clip: z.boolean().default(true).describe("Hide children outside the frame."),
 			})
 			.strict()
 			.prefault({}),
@@ -156,12 +180,12 @@ export const BoardTextItemSchema = z
 				text: z.string().default(""),
 				fontSize: fontSize.default(BOARD_TEXT_FONT_SIZE),
 				fontWeight: finite.min(100).max(900).default(500),
-				font: z.string().min(1).max(120).default("sans"),
+				font: z.string().min(1).max(120).default("sans").describe("sans, serif, mono, or a font family name."),
 				align: z.enum(BOARD_TEXT_ALIGNS).default("left"),
 				lineHeight: finite.min(0.5).max(4).default(4 / 3),
-				width: finite.positive().optional(),
-				reveal: ratio.default(1),
-				caret: z.boolean().default(false),
+				width: finite.positive().optional().describe("Wrap width; the height follows the text."),
+				reveal: ratio.default(1).describe("Fraction of the text shown; animate 0 → 1 to type it."),
+				caret: z.boolean().default(false).describe("Blink a caret while the text is being revealed."),
 			})
 			.strict()
 			.prefault({}),
@@ -175,7 +199,7 @@ export const BoardShapeItemSchema = z
 		props: z
 			.object({
 				geometry: z.enum(BOARD_SHAPE_GEOMETRIES).default("rectangle"),
-				path: z.string().min(1).max(200_000).optional(),
+				path: z.string().min(1).max(200_000).optional().describe("SVG path data for path geometry, fitted to the item size."),
 				text: z.string().default(""),
 				fontSize: fontSize.default(20),
 				align: z.enum(BOARD_TEXT_ALIGNS).default("center"),
@@ -190,7 +214,7 @@ export const BoardShapeItemSchema = z
 	.strict();
 
 export const BoardDrawPointSchema = z
-	.object({ x: finite, y: finite, p: ratio.default(0.5) })
+	.object({ x: finite, y: finite, p: ratio.default(0.5).describe("Pen pressure.") })
 	.strict();
 export type BoardDrawPoint = z.infer<typeof BoardDrawPointSchema>;
 
@@ -199,7 +223,7 @@ export const BoardDrawItemSchema = z
 		...unsized,
 		type: z.literal("draw"),
 		props: z
-			.object({ points: z.array(BoardDrawPointSchema).min(1).max(100_000) })
+			.object({ points: z.array(BoardDrawPointSchema).min(1).max(100_000).describe("Stroke points relative to position; the size follows them.") })
 			.strict(),
 	})
 	.strict();
@@ -216,13 +240,15 @@ export type BoardArrowAnchor = z.infer<typeof BoardArrowAnchorSchema>;
 export const BoardArrowBindingSchema = z
 	.object({
 		item: BoardIdSchema,
-		anchor: BoardArrowAnchorSchema.default("auto"),
+		anchor: BoardArrowAnchorSchema.default("auto").describe("auto uses the side facing the other end; or a side with an offset, or a point as fractions of the item."),
 		port: z.string().min(1).max(120).optional(),
 	})
 	.strict();
 export type BoardArrowBinding = z.infer<typeof BoardArrowBindingSchema>;
 
-export const BoardArrowEndSchema = z.union([BoardVec2Schema, BoardArrowBindingSchema]);
+export const BoardArrowEndSchema = z
+	.union([BoardVec2Schema, BoardArrowBindingSchema])
+	.describe("A point relative to position, or { item } to follow that item.");
 export type BoardArrowEnd = z.infer<typeof BoardArrowEndSchema>;
 
 export const BOARD_ARROW_ROUTES = ["straight", "curve", "orthogonal"] as const;
@@ -237,8 +263,8 @@ export const BoardArrowItemSchema = z
 				start: BoardArrowEndSchema,
 				end: BoardArrowEndSchema,
 				route: z.enum(BOARD_ARROW_ROUTES).default("straight"),
-				bend: finite.min(-0.85).max(0.85).default(0),
-				waypoints: z.array(BoardVec2Schema).max(64).default([]),
+				bend: finite.min(-0.85).max(0.85).default(0).describe("Sideways curve as a fraction of the length; the sign picks the side."),
+				waypoints: z.array(BoardVec2Schema).max(64).default([]).describe("Points the route passes through."),
 				arrowStart: z.boolean().default(false),
 				arrowEnd: z.boolean().default(true),
 				label: z.string().max(280).default(""),
@@ -247,7 +273,8 @@ export const BoardArrowItemSchema = z
 					.string()
 					.max(64)
 					.regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, "relation must be a lowercase slug")
-					.optional(),
+					.optional()
+					.describe("What the arrow means, as a slug such as triggers or depends-on."),
 			})
 			.strict(),
 	})
@@ -266,27 +293,35 @@ export const BoardMediaSnapshotSchema = z
 		coverPath: z.string().optional(),
 		coverUrl: z.string().optional(),
 	})
-	.strict();
+	.strict()
+	.describe("Cached facts for an instant preview; filled in when the media loads.");
 export type BoardMediaSnapshot = z.infer<typeof BoardMediaSnapshotSchema>;
 
 const fileProps = {
-	src: srcSchema,
+	src: BoardMediaSourceSchema,
 	snapshot: BoardMediaSnapshotSchema.optional(),
 };
+export const BoardMediaOriginSchema = z
+	.object({ taskRunId: z.string().min(1).max(160), artifactId: z.string().min(1).max(240) })
+	.strict()
+	.describe("The generation run and result this media came from.");
+export type BoardMediaOrigin = z.infer<typeof BoardMediaOriginSchema>;
+const mediaProps = { ...fileProps, origin: BoardMediaOriginSchema.optional() };
 const timedFileProps = {
-	...fileProps,
-	time: nonNegative.optional(),
+	...mediaProps,
+	time: nonNegative.optional().describe("Playback position in milliseconds; animate props.time to play it on a timeline."),
 };
 
 export const BoardCropSchema = z
 	.object({ x: ratio, y: ratio, w: ratio, h: ratio })
-	.strict();
+	.strict()
+	.describe("Region shown, as fractions of the image. Without it the whole image fits inside size.");
 
 export const BoardImageItemSchema = z
 	.object({
 		...boxed(640, 360),
 		type: z.literal("image"),
-		props: z.object({ ...fileProps, crop: BoardCropSchema.optional() }).strict(),
+		props: z.object({ ...mediaProps, crop: BoardCropSchema.optional() }).strict(),
 	})
 	.strict();
 export const BoardVideoItemSchema = z
@@ -322,8 +357,10 @@ export const BoardTaskSnapshotSchema = z
 		title: z.string().min(1).max(240),
 		model: z.string().max(160).optional(),
 		promptExcerpt: z.string().max(480).optional(),
+		errorExcerpt: z.string().max(240).optional(),
 		artifactCount: z.number().int().nonnegative(),
 		artifacts: z.array(BoardTaskArtifactSchema).max(BOARD_TASK_ARTIFACT_LIMIT).default([]),
+		startedAt: z.string().max(64).optional(),
 		updatedAt: z.string().optional(),
 	})
 	.strict();
@@ -334,7 +371,10 @@ export const BoardTaskItemSchema = z
 		...boxed(420, 240),
 		type: z.literal("task"),
 		props: z
-			.object({ taskRunId: z.string().min(1).max(160), snapshot: BoardTaskSnapshotSchema })
+			.object({
+				taskRunId: z.string().min(1).max(160).describe("The generation run shown; the server keeps the card's status and results up to date."),
+				snapshot: BoardTaskSnapshotSchema.describe("Maintained by the server; omit it."),
+			})
 			.strict(),
 	})
 	.strict();
@@ -411,24 +451,19 @@ export const BoardEffectItemSchema = z
 				spread: finite.min(0).max(360).default(360),
 				gravity: finite.default(0),
 				intensity: nonNegative.max(10).default(1),
-				follow: BoardIdSchema.optional(),
-				seed: z.string().min(1).max(160).optional(),
+				follow: BoardIdSchema.optional().describe("trail: the item to follow."),
+				seed: z.string().min(1).max(160).optional().describe("Makes procedural motion repeatable."),
 			})
 			.strict(),
 	})
 	.strict();
 
-export const BoardSketchItemSchema = z
+export const BoardCustomItemSchema = z
 	.object({
 		...boxed(480, 320),
-		type: z.literal("sketch"),
-		props: z
-			.object({
-				src: srcSchema.refine((path) => /\.m?js$/.test(path), "sketch src must be a .js or .mjs module"),
-				params: z.record(z.string(), z.unknown()).default({}),
-				seed: z.string().min(1).max(160).optional(),
-			})
-			.strict(),
+		type: z.literal("custom"),
+		script: BoardScriptSchema,
+		props: z.object({}).strict().default({}),
 	})
 	.strict();
 
@@ -454,7 +489,7 @@ export const BOARD_ITEM_SCHEMAS = {
 	file: BoardFileItemSchema,
 	task: BoardTaskItemSchema,
 	effect: BoardEffectItemSchema,
-	sketch: BoardSketchItemSchema,
+	custom: BoardCustomItemSchema,
 } as const;
 export type BoardBuiltinItemType = keyof typeof BOARD_ITEM_SCHEMAS;
 export const BOARD_ITEM_TYPES = Object.keys(BOARD_ITEM_SCHEMAS) as BoardBuiltinItemType[];
@@ -470,7 +505,7 @@ export type BoardAudioItem = z.infer<typeof BoardAudioItemSchema>;
 export type BoardFileItem = z.infer<typeof BoardFileItemSchema>;
 export type BoardTaskItem = z.infer<typeof BoardTaskItemSchema>;
 export type BoardEffectItem = z.infer<typeof BoardEffectItemSchema>;
-export type BoardSketchItem = z.infer<typeof BoardSketchItemSchema>;
+export type BoardCustomItem = z.infer<typeof BoardCustomItemSchema>;
 export type BoardExtensionItem = Omit<z.infer<typeof BoardExtensionItemSchema>, "type"> & { type: `${string}.${string}` };
 export type BoardBuiltinItem =
 	| BoardFrameItem
@@ -484,7 +519,7 @@ export type BoardBuiltinItem =
 	| BoardFileItem
 	| BoardTaskItem
 	| BoardEffectItem
-	| BoardSketchItem;
+	| BoardCustomItem;
 export type BoardItem = BoardBuiltinItem | BoardExtensionItem;
 export type BoardItemType = BoardItem["type"];
 export type BoardFileBackedItem =
@@ -599,21 +634,21 @@ export const BoardEaseSchema = z
 
 export const BoardKeyframeSchema = z
 	.object({
-		at: nonNegative,
+		at: nonNegative.describe("Time in milliseconds."),
 		value: z.unknown(),
-		ease: BoardEaseSchema.optional(),
+		ease: BoardEaseSchema.optional().describe("Easing into this keyframe: a CSS keyword, cubic-bezier() or steps(); defaults to linear."),
 	})
 	.strict();
 export type BoardKeyframe = z.infer<typeof BoardKeyframeSchema>;
 
 export const BoardTrackSchema = z
 	.object({
-		target: z.string().min(1).max(BOARD_ID_MAX_LENGTH),
-		property: z.string().min(1).max(200),
-		keyframes: z.array(BoardKeyframeSchema).min(1).max(100_000),
-		composite: z.enum(["replace", "add"]).default("replace"),
-		interpolation: z.enum(["auto", "step", "spline"]).default("auto"),
-		orient: z.boolean().optional(),
+		target: z.string().min(1).max(BOARD_ID_MAX_LENGTH).describe("An item id, camera, or another animation id (its time property nests that timeline)."),
+		property: z.string().min(1).max(200).describe("JSON path in the target, e.g. position, opacity, style.fill, props.text."),
+		keyframes: z.array(BoardKeyframeSchema).min(1).max(100_000).describe("Ordered by at. The value holds before the first and after the last keyframe."),
+		composite: z.enum(["replace", "add"]).default("replace").describe("replace: the latest-started track wins. add: positions and rotations add; scale and opacity multiply."),
+		interpolation: z.enum(["auto", "step", "spline"]).default("auto").describe("auto blends numbers, vectors and colors and steps other values; spline smooths position paths."),
+		orient: z.boolean().optional().describe("Rotate the item along its path."),
 	})
 	.strict()
 	.superRefine((track, context) => {
@@ -629,7 +664,7 @@ export const BoardMarkerSchema = z
 	.object({
 		at: nonNegative,
 		label: z.string().max(280).optional(),
-		pause: z.boolean().optional(),
+		pause: z.boolean().optional().describe("Hold shared playback here until next."),
 	})
 	.strict();
 export type BoardMarker = z.infer<typeof BoardMarkerSchema>;
@@ -640,12 +675,12 @@ export type BoardPlayMode = (typeof BOARD_PLAY_MODES)[number];
 export const BoardAnimationHeaderSchema = z
 	.object({
 		name: z.string().max(280).optional(),
-		duration: finite.positive().max(24 * 60 * 60 * 1000),
-		play: z.enum(BOARD_PLAY_MODES).default("manual"),
+		duration: finite.positive().max(24 * 60 * 60 * 1000).describe("Milliseconds; a new animation without it ends at its last keyframe."),
+		play: z.enum(BOARD_PLAY_MODES).default("manual").describe("manual: only shared playback starts it. auto: plays when the Board opens. always: loops continuously."),
 		delay: nonNegative.default(0),
 		loop: z.boolean().default(false),
-		end: z.enum(["hold", "reset"]).default("hold"),
-		markers: z.array(BoardMarkerSchema).max(10_000).default([]),
+		end: z.enum(["hold", "reset"]).default("hold").describe("hold keeps the last frame; reset returns to the start."),
+		markers: z.array(BoardMarkerSchema).max(10_000).default([]).describe("Labeled points on this timeline; a nested animation's markers do not carry over."),
 	})
 	.strict();
 export type BoardAnimationHeader = z.infer<typeof BoardAnimationHeaderSchema>;
@@ -663,7 +698,7 @@ export const BoardBackgroundSchema = z
 	.object({
 		kind: z.enum(["solid", "dots", "grid", "image"]).default("dots"),
 		color: BoardColorSchema.optional(),
-		imageUrl: z.string().url().max(4096).optional(),
+		imageUrl: z.string().url().max(4096).optional().describe("Background image for kind image."),
 		fit: z.enum(["cover", "contain", "repeat"]).optional(),
 		opacity: ratio.optional(),
 	})
@@ -679,7 +714,7 @@ export const BoardSettingsSchema = z
 		background: BoardBackgroundSchema.default({ kind: "dots" }),
 		grid: z
 			.object({
-				visible: z.boolean().default(false),
+				visible: z.boolean().default(false).describe("Show the grid overlay."),
 				size: finite.min(BOARD_GRID_MIN_SIZE).max(BOARD_GRID_MAX_SIZE).default(BOARD_GRID_DEFAULT_SIZE),
 			})
 			.strict()
@@ -690,7 +725,8 @@ export const BoardSettingsSchema = z
 				duration: finite.positive().max(10_000).optional(),
 			})
 			.strict()
-			.optional(),
+			.optional()
+			.describe("Motion for items as they are added."),
 	})
 	.strict();
 export type BoardSettings = z.infer<typeof BoardSettingsSchema>;

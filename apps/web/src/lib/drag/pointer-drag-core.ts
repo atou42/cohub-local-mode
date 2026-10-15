@@ -7,6 +7,8 @@
  * wires it to real pointer events.
  */
 
+import { normalizeBoardRemoteUrl } from "@cohub/protocol";
+
 /** Press duration before a drag takes over from a tap / scroll. */
 export const POINTER_DRAG_ACTIVATE_MS = 350;
 /** Movement past this before activation means the user meant to scroll. */
@@ -32,6 +34,7 @@ export type PointerDragItemType = "file" | "dir" | "app";
 export type PointerDragItem = {
 	type: PointerDragItemType;
 	path: string;
+	url?: string;
 	name: string;
 	mimeType?: string | null;
 	size?: number;
@@ -173,7 +176,8 @@ export function toBoardDropItems(payload: PointerDragPayload): BoardDropItem[] {
 	const items: BoardDropItem[] = [];
 	for (const item of payload.items) {
 		if (item.type !== "file") continue;
-		const path = item.path?.replace(/\/$/, "");
+		const path =
+			normalizeBoardRemoteUrl(item.url) ?? item.path?.replace(/\/$/, "");
 		if (!path) continue;
 		items.push({
 			path,

@@ -15,10 +15,11 @@ import {
 } from "../model/export-plan.js";
 import {
   type BoardRenderPalette,
+  type BoardRenderStyle,
   defaultBoardPalette,
 } from "../render/index.js";
 import { ensureBoardTextMeasurement } from "../render/text-measurement.js";
-import type { BoardCardRendererResolver, BoardSketchHost } from "../render/renderers/board-renderer-registry.js";
+import type { BoardCardRendererResolver, BoardScriptHost } from "../render/renderers/board-renderer-registry.js";
 import { createBoardExportScene } from "./scene.js";
 
 export type {
@@ -42,8 +43,9 @@ export type BoardExportOptions = {
   background?: BoardExportBackground;
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
+  style?: Partial<BoardRenderStyle>;
   textures?: Map<string, Texture>;
-  sketches?: BoardSketchHost;
+  scripts?: BoardScriptHost;
   assetKey?: (item: BoardSceneItem) => string | null;
   renderers?: BoardCardRendererResolver;
   backgroundImage?: {
@@ -88,8 +90,9 @@ export function prepareBoardExport(input: BoardDocument, options: BoardExportOpt
   if (options.camera && (![options.camera.width, options.camera.height].every((n) => Number.isSafeInteger(n) && n > 0))) throw new Error("Camera dimensions must be positive integers.");
   const sampler = options.at ? options.sampler ?? createBoardRenderSampler(base, options.at.animation ?? null, options) : undefined;
   const sample = options.at ? sampler?.at(options.at.time) : undefined;
-  const document = sample?.document ?? base;
-  const scene = sample?.scene ?? buildBoardScene(document);
+  const sampled = sample?.document ?? base;
+  const document = options.scripts?.document?.(sampled, options.at?.time ?? 0) ?? sampled;
+  const scene = document === sampled ? sample?.scene ?? buildBoardScene(document) : buildBoardScene(document);
   const camera = options.camera ? resolveBoardAnimationCamera(sample?.evaluation.camera ?? {}, (id) => scene.get(id)?.frame, options.camera, options.at?.time ?? 0) : undefined;
   const region: BoardExportRegion = camera && options.camera ? { kind: "rect", rect: { x: -camera.x / camera.zoom, y: -camera.y / camera.zoom, width: options.camera.width / camera.zoom, height: options.camera.height / camera.zoom } } : options.region ?? { kind: "all" };
   const plan = planBoardExport({
@@ -125,8 +128,9 @@ export function renderBoardExport(renderer: Renderer, input: BoardDocument, opti
     colorScheme,
     palette,
     colors: options.colors,
+    style: options.style,
     textures: options.textures,
-    sketches: options.sketches,
+    scripts: options.scripts,
     assetKey: options.assetKey,
     renderers: options.renderers,
     background: resolveBackground(options.background, palette, document, colorScheme),

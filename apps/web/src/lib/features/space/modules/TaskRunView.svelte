@@ -1,24 +1,20 @@
 <script lang="ts">
 import type { TaskRunRecord, UserProfile } from "@neta-art/cohub";
 import { mediaPreviewCandidates } from "@neta-art/cohub/media";
-import { Check, Copy, GitCommitHorizontal } from "lucide-svelte";
+import {
+	Check,
+	Copy,
+	GitCommitHorizontal,
+	LayoutDashboard,
+} from "lucide-svelte";
 import { onDestroy } from "svelte";
 import { goto } from "$app/navigation";
 import AudioPlayer from "$lib/components/AudioPlayer.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
-import MediaImage from "$lib/components/MediaImage.svelte";
 import MessageContentFlow from "$lib/components/MessageContentFlow.svelte";
 import { mediaLightbox } from "$lib/components/media-lightbox";
 import UserIdentity from "$lib/components/UserIdentity.svelte";
-import {
-	buildSpaceCheckpointRoute,
-	buildSpaceCronjobRoute,
-} from "$lib/space-routes";
-import { displayUserName, formatDateTime } from "../space-utils";
-import {
-	createTaskRunDetailController,
-	type TaskRealtimeEvent,
-} from "./task-run-detail-controller.svelte";
+import MediaImage from "$lib/resource-kit/MediaImage.svelte";
 import {
 	appActionInput,
 	appActionName,
@@ -32,6 +28,7 @@ import {
 	generationOutputBlocks,
 	runCommandPayload,
 	runCommandResultMeta,
+	saveCheckpointHasPublishWarnings,
 	saveCheckpointProgressLabel,
 	taskAttemptsLabel,
 	taskContextLabel,
@@ -41,7 +38,17 @@ import {
 	taskRunDuration,
 	taskRunStatusBadge,
 	taskTypeLabel,
-} from "./task-run-utils";
+} from "$lib/resource-kit/task-run";
+import { formatDateTime } from "$lib/resource-kit/time";
+import {
+	buildSpaceCheckpointRoute,
+	buildSpaceCronjobRoute,
+} from "$lib/space-routes";
+import { displayUserName } from "../space-utils";
+import {
+	createTaskRunDetailController,
+	type TaskRealtimeEvent,
+} from "./task-run-detail-controller.svelte";
 import { withCurrentWindow } from "./window-route";
 
 type Props = {
@@ -91,6 +98,7 @@ const taskRunDetailLoading = $derived(taskDetail.loading);
 const taskRunDetailError = $derived(taskDetail.error);
 const taskRunProgress = $derived(taskDetail.progress);
 const taskCopiedField = $derived(taskDetail.copiedField);
+const taskBoards = $derived(taskDetail.boards);
 
 // Only auto-redirect when this page session watched the task complete.
 // Opening an already-finished historical task keeps the task detail page.
@@ -117,6 +125,7 @@ $effect(() => {
 	if (
 		run.taskType !== "save_checkpoint" ||
 		run.status !== "completed" ||
+		saveCheckpointHasPublishWarnings(run) ||
 		watchedActiveTaskId !== run.id ||
 		redirectedCheckpointTaskId === run.id
 	) {
@@ -260,6 +269,29 @@ function userTitle(
 						<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_input({}, { locale })}</div>
 						<pre class="max-h-[36vh] overflow-auto rounded-[8px] bg-bg-elevated/35 p-3 text-[12px] font-mono leading-relaxed text-text-secondary whitespace-pre-wrap break-all">{displaySafeJson(actionInput, { locale })}</pre>
 					</section>
+				{/if}
+
+				{#if taskBoards.length > 0}
+					<section class="space-y-2">
+						<div class="text-[11px] font-medium uppercase tracking-wider text-text-placeholder">{m.task_section_boards({}, { locale })}</div>
+						<ul class="divide-y divide-border-subtle/60 rounded-[8px] bg-bg-elevated/35">
+							{#each taskBoards as board (board.boardId)}
+								<li class="flex min-h-11 items-center gap-3 px-4 py-2.5">
+									<LayoutDashboard class="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+									<span class="min-w-0 flex-1 truncate text-[13px] text-text-primary">{board.title || m.task_board_untitled({}, { locale })}</span>
+									{#if board.itemIds.length > 1}
+										<span class="shrink-0 font-mono text-[11px] text-text-tertiary">{m.task_board_items({ count: board.itemIds.length }, { locale })}</span>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+
+				{#if saveCheckpointHasPublishWarnings(taskRunDetail)}
+					<p role="alert" class="rounded-md border border-warning-bg bg-warning-bg px-4 py-3 text-[13px] leading-5 text-text-secondary">
+						{m.save_checkpoint_publish_warning({}, { locale })}
+					</p>
 				{/if}
 
 				{#if taskRunDetail.taskType === "save_checkpoint"}

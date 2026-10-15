@@ -4,6 +4,7 @@ import type {
 	SessionTurnRecord,
 	StoredIntermediateMessage,
 } from "@cohub/protocol/model";
+import { hasSentTurns } from "./sent-turns";
 import { getStreamingRenderKey } from "./session-streaming";
 import type {
 	ChatMessage,
@@ -263,7 +264,16 @@ function resolveStreamingPreviewCreatedAt(
 	return fallback;
 }
 
-export function buildTurnTimelineItems(input: {
+function sentItem(turn: SessionTurnRecord, streaming = false): TimelineItem {
+	return {
+		id: `${getTurnRenderKey(turn)}:sent`,
+		kind: "sent",
+		turnId: turn.id,
+		...(streaming ? { streaming } : {}),
+	};
+}
+
+type TurnTimelineInput = {
 	sessionId: string | null;
 	turns: SessionTurnRecord[];
 	streaming?: {
@@ -284,7 +294,37 @@ export function buildTurnTimelineItems(input: {
 		lastPatchAt?: number | null;
 		startedAt?: number | null;
 	} | null;
-}): TimelineItem[] {
+};
+
+type TurnMessages = {
+	user: ChatMessage;
+	assistant: ChatMessage | null;
+};
+
+type TimelineCache = {
+	orderedTurns: WeakMap<SessionTurnRecord[], SessionTurnRecord[]>;
+	messages: WeakMap<SessionTurnRecord, TurnMessages>;
+};
+
+/** Scoped to a chat host; workspace turns and their arrays are immutable snapshots. */
+export function createTurnTimelineBuilder() {
+	const cache: TimelineCache = {
+		orderedTurns: new WeakMap(),
+		messages: new WeakMap(),
+	};
+	return (input: TurnTimelineInput) => renderTurnTimelineItems(input, cache);
+}
+
+export function buildTurnTimelineItems(
+	input: TurnTimelineInput,
+): TimelineItem[] {
+	return renderTurnTimelineItems(input);
+}
+
+function renderTurnTimelineItems(
+	input: TurnTimelineInput,
+	cache?: TimelineCache,
+): TimelineItem[] {
 	const renderCreatedAt = new Date().toISOString();
 	const items: TimelineItem[] = [];
 	const streamingTurnId = input.streaming?.turnId ?? null;
@@ -294,7 +334,13 @@ export function buildTurnTimelineItems(input: {
 				input.streaming.status === "streaming"),
 	);
 	let streamingProcessInserted = false;
-	for (const turn of dedupeRenderableTurnsByClientMessageId(input.turns)) {
+	let streamingSentTurn: SessionTurnRecord | null = null;
+	let turns = cache?.orderedTurns.get(input.turns);
+	if (!turns) {
+		turns = dedupeRenderableTurnsByClientMessageId(input.turns);
+		cache?.orderedTurns.set(input.turns, turns);
+	}
+	for (const turn of turns) {
 		const turnRenderKey = getTurnRenderKey(turn);
 		// Keep the active turn visible while the server-side queued record is
 		// reconciling with the local optimistic one. Other queued follow-ups are
@@ -308,10 +354,18 @@ export function buildTurnTimelineItems(input: {
 			});
 			continue;
 		}
+		let messages = cache?.messages.get(turn);
+		if (!messages) {
+			messages = {
+				user: turnToUserMessage(turn),
+				assistant: turnToAssistantMessage(turn),
+			};
+			cache?.messages.set(turn, messages);
+		}
 		items.push({
 			id: `${turnRenderKey}:user`,
 			kind: "message",
-			message: turnToUserMessage(turn),
+			message: messages.user,
 		});
 		const isStreamingActiveTurn = streamingTurnId === turn.id;
 		if (isStreamingActiveTurn) {
@@ -377,9 +431,10 @@ export function buildTurnTimelineItems(input: {
 				});
 			}
 		}
-		const assistant = turnToAssistantMessage(turn);
+		const isLiveTurn = hasStreamingState && streamingTurnId === turn.id;
+		const assistant = messages.assistant;
 		if (assistant) {
-			if (hasStreamingState && streamingTurnId === turn.id) {
+			if (isLiveTurn) {
 				// Keep the live streaming preview as the visual source of truth until
 				// generation is marked terminal. Finalized / reconciled turn patches can
 				// arrive before the full persisted turn is available, and temporarily
@@ -392,6 +447,10 @@ export function buildTurnTimelineItems(input: {
 					message: assistant,
 				});
 			}
+		}
+		if (hasSentTurns(turn)) {
+			if (isLiveTurn) streamingSentTurn = turn;
+			else items.push(sentItem(turn));
 		}
 	}
 	const fallbackSequence = (input.turns.at(-1)?.sequence ?? 0) * 10 + 10;
@@ -481,6 +540,7 @@ export function buildTurnTimelineItems(input: {
 			});
 		}
 	}
+	if (streamingSentTurn) items.push(sentItem(streamingSentTurn, true));
 	// Turn footer sits at the very end of the active turn — a tail status for
 	// "still waiting / starting", not a mid-timeline process card.
 	if (hasStreamingState && input.streaming) {

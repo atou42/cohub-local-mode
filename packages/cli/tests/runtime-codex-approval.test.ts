@@ -84,10 +84,33 @@ test("Codex refuses to start work if the server does not confirm the selected ap
   const spaceId = randomUUID();
   const runtime = await testNativeRuntime({ spaceId, root, harnesses: ["codex"] });
   try {
-    const confirmed = { approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: { type: "workspaceWrite" } };
+    const confirmed = { approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }, activePermissionProfile: null };
     for (const response of [{}, { ...confirmed, approvalPolicy: "never" }, { ...confirmed, approvalsReviewer: "user" }, { ...confirmed, sandbox: { type: "dangerFullAccess" } }]) {
       await writeFile(join(root, "codex-approval-response.json"), JSON.stringify(response));
       await assert.rejects(executeTurn(runtime.native.executor, makeInput(spaceId, randomUUID(), null, { codexApprovalMode: "auto" }), () => {}, new AbortController().signal, null), /did not confirm/);
+    }
+    const requests = (await readFile(join(root, "codex-requests.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(requests.filter((r) => r.method === "turn/start").length, 0);
+  } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("Codex rejects broadened or incomplete sandbox confirmations before starting work", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-codex-approval-"));
+  const spaceId = randomUUID();
+  const runtime = await testNativeRuntime({ spaceId, root, harnesses: ["codex"] });
+  try {
+    const workspace = { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+    const confirmed = { approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: workspace, activePermissionProfile: null };
+    for (const [name, response] of Object.entries({
+      "network access": { ...confirmed, sandbox: { ...workspace, networkAccess: true } },
+      "extra writable root": { ...confirmed, sandbox: { ...workspace, writableRoots: ["/"] } },
+      "missing policy details": { ...confirmed, sandbox: { type: "workspaceWrite" } },
+      "residual permission profile": { ...confirmed, activePermissionProfile: { id: "broad-profile" } },
+    })) {
+      await t.test(name, async () => {
+        await writeFile(join(root, "codex-approval-response.json"), JSON.stringify(response));
+        await assert.rejects(executeTurn(runtime.native.executor, makeInput(spaceId, randomUUID(), null, { codexApprovalMode: "auto" }), () => {}, new AbortController().signal, null), /did not confirm/);
+      });
     }
     const requests = (await readFile(join(root, "codex-requests.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(requests.filter((r) => r.method === "turn/start").length, 0);
@@ -192,6 +215,24 @@ test("Codex does not start a Turn when updating a loaded thread's permissions fa
     await runtime.native.executor.results.acknowledge(sessionId, first.turnId);
     await writeFile(join(root, "codex-settings-error.txt"), "Machine policy rejected this permission change");
     await assert.rejects(executeTurn(runtime.native.executor, makeInput(spaceId, sessionId, first.turnId, { codexApprovalMode: "auto" }), () => {}, new AbortController().signal, null), /Machine policy rejected this permission change/);
+    const requests = (await readFile(join(root, "codex-requests.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(requests.filter((r) => r.method === "thread/settings/update").length, 1);
+    assert.equal(requests.filter((r) => r.method === "turn/start").length, 1);
+  } finally { await runtime.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("Codex rejects an unconfirmed downgrade on a loaded thread before sending more work", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cohub-codex-approval-"));
+  const spaceId = randomUUID(), sessionId = randomUUID();
+  const runtime = await testNativeRuntime({ spaceId, root, harnesses: ["codex"] });
+  try {
+    const first = makeInput(spaceId, sessionId, null, { codexApprovalMode: "full_access" });
+    const before = await executeTurn(runtime.native.executor, first, () => {}, new AbortController().signal, first.turnId);
+    await runtime.native.executor.results.record(before.session, first, first.turnId, [before.event]);
+    await runtime.native.executor.results.acknowledge(sessionId, first.turnId);
+    await writeFile(join(root, "codex-sticky-resume"), "");
+    await writeFile(join(root, "codex-approval-response.json"), JSON.stringify({ approvalPolicy: "never", approvalsReviewer: "user", sandbox: { type: "readOnly", networkAccess: true }, activePermissionProfile: null }));
+    await assert.rejects(executeTurn(runtime.native.executor, makeInput(spaceId, sessionId, first.turnId, { codexApprovalMode: "read_only" }), () => {}, new AbortController().signal, null), /did not confirm/);
     const requests = (await readFile(join(root, "codex-requests.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(requests.filter((r) => r.method === "thread/settings/update").length, 1);
     assert.equal(requests.filter((r) => r.method === "turn/start").length, 1);

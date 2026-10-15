@@ -5,15 +5,19 @@ import type {
 	BoardItem,
 	BoardScene,
 	BoardSceneItem,
-	BoardTaskSnapshot,
 	WorldPoint,
 } from "@neta-art/cohub/board";
 import {
+	createMediaBoardItem,
+	parseBoardMediaSource,
 	sceneItemToItem,
-	taskRunToBoardTaskSnapshot as taskBoardSnapshot,
 	worldPoint,
 } from "@neta-art/cohub/board";
 import type { BoardPointerEvent } from "@neta-art/cohub/board/editor";
+import {
+	type BoardRenderLabels,
+	traceCardOutline,
+} from "@neta-art/cohub/board/render";
 import {
 	type BoardAssetManager,
 	type BoardItemView,
@@ -36,6 +40,7 @@ import {
 	subscribeFilePreviews,
 } from "$lib/board/board-file-preview-source";
 import type { BoardStageExportBridge } from "$lib/board/board-image-export";
+import { createBoardLiveTasks } from "$lib/board/board-live-tasks";
 import {
 	boardMediaActionAt,
 	playableBoardMedia,
@@ -62,14 +67,7 @@ import { withCurrentWindow } from "$lib/features/space/modules/window-route";
 import { haptic } from "$lib/haptics";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
-import { sdk } from "$lib/sdk";
 import { buildSpaceTaskRoute } from "$lib/space-routes";
-import {
-	getCachedTaskRuns,
-	mergeCachedTaskRun,
-	onTaskRunsCacheUpdated,
-	restoreCachedTaskRuns,
-} from "$lib/stores/task-runs-cache";
 import { getResolvedTheme } from "$lib/theme.svelte";
 
 const {
@@ -86,11 +84,13 @@ const {
 	onPointerPresence,
 	onSurfaceChange,
 	onOpenFile,
+	onAddLinks,
 	onPlayMedia,
 	onExportReady,
+	onStageReady,
 	onBackgroundLoadStateChange,
 	onLongPress,
-	highlightedIds,
+	relatedIds,
 }: {
 	editor: BoardEditor;
 	playback?: BoardPlaybackSnapshot | null;
@@ -111,13 +111,15 @@ const {
 	) => void;
 	onSurfaceChange?: (size: { width: number; height: number }) => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
+	onAddLinks?: (urls: string[], at: WorldPoint) => void;
 	onPlayMedia?: (itemId: string) => void;
 	onExportReady?: (bridge: BoardStageExportBridge | null) => void;
+	onStageReady?: (stage: BoardStage | null) => void;
 	onBackgroundLoadStateChange?: (
 		state: BoardBackgroundLoadState | null,
 	) => void;
 	onLongPress?: (point: { x: number; y: number }) => void;
-	highlightedIds?: readonly string[];
+	relatedIds?: readonly string[];
 } = $props();
 
 const locale = $derived(getLocale());
@@ -158,50 +160,38 @@ function handleCustomThemeChanged(event: Event) {
 	themeCache = null;
 }
 
-const taskDetailRefreshes = new Map<string, string>();
-const unsubscribeTaskRuns = onTaskRunsCacheUpdated((event) => {
-	if (readonly || event.spaceId !== spaceId) return;
-	applyTaskRuns(event.runs);
+const liveTasks = createBoardLiveTasks({
+	spaceId: untrack(() => spaceId),
+	onChange: (taskRunIds) => {
+		const items = editor.items.flatMap((item) =>
+			item.type === "task" && taskRunIds.has(item.props.taskRunId)
+				? [item.id]
+				: [],
+		);
+		if (items.length) stage?.invalidate({ items });
+	},
 });
 
-function applyTaskRuns(runs: ReturnType<typeof getCachedTaskRuns>) {
-	const wanted = new Set(
-		editor.items.flatMap((item) =>
-			item.type === "task"
-				? [(item.props as { taskRunId: string }).taskRunId]
-				: [],
-		),
-	);
-	if (wanted.size === 0) return;
-	const snapshots = new Map<string, BoardTaskSnapshot>();
-	for (const run of runs) {
-		if (wanted.has(run.id)) snapshots.set(run.id, taskBoardSnapshot(run));
-	}
-	editor.applyTaskSnapshots(snapshots);
-	for (const run of runs) {
-		if (
-			!wanted.has(run.id) ||
-			run.taskType !== "generation" ||
-			run.status !== "completed" ||
-			(snapshots.get(run.id)?.artifacts.length ?? 0) > 0 ||
-			taskDetailRefreshes.get(run.id) === run.updatedAt
-		)
-			continue;
-		taskDetailRefreshes.set(run.id, run.updatedAt);
-		void sdk.tasks
-			.get(run.id)
-			.then(({ run: detail }) => {
-				if (detail.spaceId !== spaceId) return;
-				mergeCachedTaskRun(spaceId, detail);
-			})
-			.catch(() => undefined);
-	}
+const reducedMotion =
+	typeof window === "undefined"
+		? null
+		: window.matchMedia("(prefers-reduced-motion: reduce)");
+
+function renderLabels(): BoardRenderLabels {
+	return {
+		queued: m.board_task_queued({}, { locale }),
+		generating: m.board_task_generating({}, { locale }),
+		failed: m.board_task_failed({}, { locale }),
+		previewUnavailable: m.board_task_preview_unavailable({}, { locale }),
+		noPreview: m.board_task_no_preview({}, { locale }),
+	};
 }
 
 const unsubscribePreviews = subscribeFilePreviews((event) => {
 	previewVersion = filePreviewVersion();
 	if (readonly || !event || event.spaceId !== spaceId) return;
 	assets.invalidatePath(event.path);
+	stage?.invalidateScript(event.path);
 	editor.applyMediaFileChange(event.path, event.meta);
 });
 
@@ -213,6 +203,7 @@ $effect(() => {
 		const item = untrack(() => editor.itemById(id));
 		if (item?.type !== "file") continue;
 		const path = item.props.src;
+		if (parseBoardMediaSource(path)?.kind !== "file") continue;
 		const stale = isFilePreviewStale(spaceId, path);
 		const unenriched = item.props.snapshot?.mtimeMs === undefined;
 		if (stale || unenriched) targets.push({ id: item.id, path });
@@ -224,7 +215,12 @@ async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
 	const resolved = await Promise.all(
 		targets.map(async ({ id, path }) => {
 			const item = editor.itemById(id);
-			if (item?.type !== "file") return null;
+			if (
+				item?.type !== "file" ||
+				item.props.src !== path ||
+				parseBoardMediaSource(path)?.kind !== "file"
+			)
+				return null;
 			const snapshot = (item.props as { snapshot?: BoardFileSnapshotFacts })
 				.snapshot;
 			const result = await loadFilePreview(spaceId, {
@@ -233,6 +229,8 @@ async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
 				size: snapshot?.size,
 				mtimeMs: snapshot?.mtimeMs,
 			});
+			const current = editor.itemById(id);
+			if (current?.type !== "file" || current.props.src !== path) return null;
 			return { id, snapshot: result.facts, replace: result.complete };
 		}),
 	);
@@ -282,22 +280,21 @@ function drawOverlay(
 	frame: { zoom: number; scene: BoardScene },
 ) {
 	drawAwarenessOverlay(overlay, awareness.peers, resolveTheme(), frame.zoom);
-	if (!highlightedIds?.length) return;
 	const inv = 1 / Math.max(frame.zoom, 0.0001);
-	const brand = resolveTheme().palette.brand;
-	const seen = new Set<string>();
-	for (const id of highlightedIds) {
-		if (!frame.scene.get(id)) continue;
-		for (const nodeId of [id, ...frame.scene.descendants(id)]) {
-			if (seen.has(nodeId)) continue;
-			seen.add(nodeId);
-			const item = frame.scene.get(nodeId);
-			if (!item) continue;
-			const { x, y, width, height } = item.frame;
-			overlay
-				.roundRect(x, y, width, height, 4 * inv)
-				.stroke({ color: brand, width: 1.5 * inv, alpha: 0.75 });
-		}
+	const { palette, style } = resolveTheme();
+	for (const id of relatedIds ?? []) {
+		const item = frame.scene.get(id);
+		if (!item) continue;
+		traceCardOutline(
+			overlay,
+			item.frame,
+			style,
+			(style.selection.outset + 3) * inv,
+		).stroke({
+			color: palette.muted,
+			width: 1.5 * inv,
+			alpha: 0.55,
+		});
 	}
 }
 
@@ -417,17 +414,17 @@ function spread(clientX: number, clientY: number, index: number): WorldPoint {
 }
 
 function dropFiles(clientX: number, clientY: number, files: BoardDropItem[]) {
-	const created = files.map((entry, index) => ({
-		id: editor.addFile(
-			entry.path,
-			spread(clientX, clientY, index),
-			entry.snapshot,
-		),
-		path: entry.path,
-	}));
+	const created = files.map((entry, index) => {
+		const at = spread(clientX, clientY, index);
+		return createMediaBoardItem(entry.path, at.x, at.y, entry.snapshot);
+	});
 	if (created.length === 0) return;
-	editor.setSelection(created.map((entry) => entry.id));
-	void enrichFileCards(created);
+	editor.addItems(created, { select: true });
+	void enrichFileCards(
+		created.flatMap(({ id, item }) =>
+			item.type === "file" ? [{ id, path: item.props.src }] : [],
+		),
+	);
 }
 
 function dropApps(
@@ -447,7 +444,9 @@ function handleDrop(event: DragEvent) {
 	event.preventDefault();
 	dropActive = false;
 	if (readonly) return;
-	const { files, tasks, apps } = readBoardResourceDrop(event.dataTransfer);
+	const { files, tasks, apps, urls } = readBoardResourceDrop(
+		event.dataTransfer,
+	);
 	const { clientX, clientY } = event;
 	if (tasks.length > 0)
 		editor.setSelection(
@@ -461,16 +460,11 @@ function handleDrop(event: DragEvent) {
 		);
 	dropFiles(clientX, clientY, files);
 	dropApps(clientX, clientY, apps);
+	if (urls.length) onAddLinks?.(urls, spread(clientX, clientY, 0));
 }
 
 onMount(() => {
 	if (!host) return;
-	if (!readonly) {
-		applyTaskRuns(getCachedTaskRuns(spaceId));
-		void restoreCachedTaskRuns(spaceId)
-			.then(applyTaskRuns)
-			.catch(() => undefined);
-	}
 	const mounted = mountBoardStage(host, {
 		editor,
 		assets,
@@ -483,10 +477,14 @@ onMount(() => {
 				palette: theme.palette,
 				colors: theme.colors,
 				colorScheme: theme.colorScheme,
+				style: theme.style,
 				imageBackground: backdropReady,
 			};
 		},
 		playback: () => playback,
+		labels: renderLabels,
+		taskRun: liveTasks.get,
+		reducedMotion: () => reducedMotion?.matches ?? false,
 		fileState: (path) => fileAvailability(spaceId, path),
 		previews: remotePreviews,
 		strokes: remoteStrokes,
@@ -499,13 +497,24 @@ onMount(() => {
 		},
 	});
 	stage = mounted;
+	onStageReady?.(mounted);
 	void mounted.ready.then((ready) => {
 		if (!ready || stage !== mounted) return;
 		onExportReady?.({
+			snapshotScripts: () => mounted.snapshotScripts(),
+			readModule: async (path) => {
+				const url = await assetSource.resolveFileUrl(path);
+				if (!url) throw new Error("Script module is unavailable.");
+				const response = await fetch(url, {
+					signal: AbortSignal.timeout(15_000),
+				});
+				if (!response.ok) throw new Error(`Could not read ${path}.`);
+				return response.text();
+			},
 			renderer: () => mounted.renderer,
 			theme: () => {
-				const { palette, colors, colorScheme } = mounted.theme;
-				return { palette, colors, colorScheme };
+				const { palette, colors, colorScheme, style } = mounted.theme;
+				return { palette, colors, colorScheme, style };
 			},
 			assetKey: assets.assetKey,
 			withTextures: (items, use) => assets.withTextures(items, use),
@@ -551,7 +560,7 @@ $effect(() => {
 
 $effect(() => {
 	playback;
-	highlightedIds;
+	relatedIds;
 	awarenessVersion;
 	backdropReady;
 	getResolvedTheme();
@@ -561,6 +570,7 @@ $effect(() => {
 
 $effect(() => {
 	previewVersion;
+	locale;
 	untrack(() => stage?.invalidate({ cards: true }));
 });
 
@@ -570,10 +580,11 @@ onDestroy(() => {
 		CUSTOM_THEME_CHANGED_EVENT,
 		handleCustomThemeChanged,
 	);
-	unsubscribeTaskRuns();
 	unsubscribePreviews();
+	liveTasks.destroy();
 	stage?.destroy();
 	stage = null;
+	onStageReady?.(null);
 	onExportReady?.(null);
 	onBackgroundLoadStateChange?.(null);
 });
@@ -602,7 +613,7 @@ function backgroundCssColor(): string | undefined {
 <div
 	bind:this={host}
 	class="board-stage-host relative isolate h-full w-full overflow-hidden {dropActive ? 'board-drop-active' : ''}"
-	class:bg-bg-primary={Boolean(boardBackdrop)}
+	class:bg-board-bg={Boolean(boardBackdrop)}
 	role="application"
 	aria-label={m.board_stage_aria({}, { locale })}
 	data-drawer-swipe-ignore
@@ -630,7 +641,7 @@ function backgroundCssColor(): string | undefined {
 		if (readonly) return;
 		const types = event.dataTransfer?.types;
 		if (!types) return;
-		if (types.includes("text/cohub-path") || types.includes("application/x-cohub-resource")) {
+		if (types.includes("text/cohub-path") || types.includes("application/x-cohub-resource") || types.includes("text/uri-list") || types.includes("text/plain")) {
 			event.preventDefault();
 			dropActive = true;
 		}

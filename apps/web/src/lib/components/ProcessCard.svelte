@@ -7,8 +7,6 @@ import type {
 } from "@cohub/protocol/model";
 import { ChevronDown, ChevronRight, Loader2, RotateCw } from "lucide-svelte";
 import IntermediateMessageBubble from "$lib/components/IntermediateMessageBubble.svelte";
-import SentTurnsChip from "$lib/components/SentTurnsChip.svelte";
-import SentTurnsList from "$lib/components/SentTurnsList.svelte";
 import {
 	formatDurationDetail,
 	formatDurationMs,
@@ -26,8 +24,6 @@ import {
 import { getLocale } from "$lib/i18n/locale.svelte";
 import type { ModelCatalogItem } from "$lib/model-catalog";
 import { m } from "$lib/paraglide/messages.js";
-import { NO_SENT_SESSIONS } from "$lib/sent-turns";
-import { useSessionRelations } from "$lib/session-relations-context";
 import type { OpenWorkspaceFileTarget } from "$lib/workspace-file-links";
 
 type IntermediateLoadState =
@@ -350,31 +346,19 @@ const summaryLabel = $derived(
 			? m.process_running({}, { locale })
 			: m.process_title({}, { locale })),
 );
-
-const relations = useSessionRelations();
-const sentSessions = $derived(
-	relations?.sentByTurn(turn.id) ?? NO_SENT_SESSIONS,
-);
 </script>
 
 {#if !expanded}
 	<button type="button" class="flex w-full items-center gap-2 px-[var(--chat-msg-inset)] py-2 text-left transition-colors hover:bg-bg-hover/50 cursor-pointer rounded-md disabled:cursor-wait disabled:opacity-75" disabled={isLoading} onclick={() => void toggle()} title={usageTitle || undefined}>
 		{#if isLoading}<Loader2 class="w-3.5 h-3.5 text-text-tertiary shrink-0 animate-spin" />{:else}<ChevronRight class="w-3.5 h-3.5 text-text-tertiary shrink-0" />{/if}
 		<span class="text-[13px] text-text-tertiary tabular-nums">{summaryLabel}</span>
-		{#if sentSessions.length > 0}
-			<SentTurnsChip count={sentSessions.length} />
-		{/if}
 	</button>
 {:else}
 	<div class="flex flex-col gap-0">
 		<button type="button" class="flex w-full items-center gap-2 px-[var(--chat-msg-inset)] py-2 text-left transition-colors hover:bg-bg-hover/50 cursor-pointer rounded-md" onclick={() => void toggle()} title={usageTitle || undefined}>
 			<ChevronDown class="w-3.5 h-3.5 text-text-tertiary shrink-0" />
 			<span class="text-[13px] text-text-tertiary tabular-nums">{summaryLabel}</span>
-			{#if sentSessions.length > 0}
-				<SentTurnsChip count={sentSessions.length} />
-			{/if}
 		</button>
-		<SentTurnsList sessions={sentSessions} />
 		<div class="flex flex-col gap-2">
 			{#if loadError}
 				<button type="button" class="mx-[var(--chat-msg-inset)] rounded-md border border-status-error/30 bg-status-error/5 px-3 py-2 text-left text-[12px] text-status-error hover:bg-status-error/10" onclick={() => void ensureLoaded()}>

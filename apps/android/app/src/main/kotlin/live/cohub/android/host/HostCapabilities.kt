@@ -22,6 +22,7 @@ object HostCapabilities {
     const val NAVIGATION_BACK = "navigation.back"
     const val SHORTCUTS = "shortcuts"
     const val DISPLAY = "display"
+    const val MEDIA_CAPTURE = "media.capture"
 
     private val always: List<String> = listOf(
         AUTH_TOKEN,
@@ -35,6 +36,7 @@ object HostCapabilities {
         HAPTICS,
         NAVIGATION_BACK,
         SHORTCUTS,
+        MEDIA_CAPTURE,
     )
 
     fun advertised(runtime: Boolean, files: Boolean): List<String> =

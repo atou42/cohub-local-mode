@@ -5,6 +5,7 @@ import { floatNear, portal } from "$lib/actions/portal";
 import ListRow from "$lib/components/list-page/ListRow.svelte";
 import ListRowText from "$lib/components/list-page/ListRowText.svelte";
 import { LIST_ROW_AVATAR } from "$lib/components/list-page/list-row";
+import ToggleSwitch from "$lib/components/ToggleSwitch.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
@@ -213,17 +214,11 @@ $effect(() => {
 				</div>
 				<div class="presence-popover-footer">
 					<span class="presence-popover-footer-label">{m.presence_live_messages({}, { locale })}</span>
-					<button
-						type="button"
-						role="switch"
-						aria-checked={danmakuEnabled}
-						class="danmaku-switch"
-						class:on={danmakuEnabled}
-						onclick={toggleDanmaku}
-						aria-label={m.presence_toggle_live({}, { locale })}
-					>
-						<span class="danmaku-switch-thumb"></span>
-					</button>
+					<ToggleSwitch
+						checked={danmakuEnabled}
+						label={m.presence_toggle_live({}, { locale })}
+						onchange={() => toggleDanmaku()}
+					/>
 				</div>
 			</div>
 		{/if}
@@ -374,51 +369,6 @@ $effect(() => {
 	.presence-popover-footer-label {
 		font-size: 12px;
 		color: var(--text-secondary);
-	}
-
-	.danmaku-switch {
-		position: relative;
-		flex: 0 0 auto;
-		width: 30px;
-		height: 18px;
-		border: 0;
-		border-radius: 999px;
-		background: var(--bg-hover-strong);
-		cursor: pointer;
-		transition: background-color 150ms ease;
-	}
-
-	.danmaku-switch:hover {
-		background: color-mix(in srgb, var(--bg-hover-strong) 80%, var(--text-tertiary) 12%);
-	}
-
-	.danmaku-switch.on {
-		background: var(--brand);
-	}
-
-	.danmaku-switch.on:hover {
-		background: var(--brand-hover);
-	}
-
-	.danmaku-switch:focus-visible {
-		outline: 2px solid color-mix(in srgb, var(--brand) 38%, transparent);
-		outline-offset: 2px;
-	}
-
-	.danmaku-switch-thumb {
-		position: absolute;
-		top: 2px;
-		left: 2px;
-		width: 14px;
-		height: 14px;
-		border-radius: 999px;
-		background: var(--bg-elevated);
-		box-shadow: 0 1px 2px color-mix(in srgb, var(--overlay-scrim-strong) 20%, transparent);
-		transition: transform 150ms ease;
-	}
-
-	.danmaku-switch.on .danmaku-switch-thumb {
-		transform: translateX(12px);
 	}
 
 	@media (max-width: 640px) {

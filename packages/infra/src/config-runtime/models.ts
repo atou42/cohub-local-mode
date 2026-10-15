@@ -195,7 +195,7 @@ export function parseModelsConfig(rawText: string): ModelsConfig {
   return parsed;
 }
 
-function createFastContentHash(rawText: string): string {
+export function createFastContentHash(rawText: string): string {
   let hash = 2166136261;
   for (let i = 0; i < rawText.length; i++) {
     hash ^= rawText.charCodeAt(i);

@@ -1093,7 +1093,7 @@ const hoverCardPos = $derived.by(() => {
 												}}
 											></button>
 											<div
-												class="fixed z-[121] min-w-[8.5rem] overflow-hidden rounded-md border border-border-subtle bg-bg-surface py-0.5 shadow-lg"
+												class="menu-surface fixed z-[121] min-w-[8.5rem] overflow-hidden py-0.5"
 												style={`top: ${thinkingMenuPos.top}px; right: ${thinkingMenuPos.right}px;`}
 												role="listbox"
 												aria-label={m.model_selector_thinking_menu_aria({}, { locale })}
@@ -1187,7 +1187,7 @@ const hoverCardPos = $derived.by(() => {
 								<input
 									type="checkbox"
 									aria-label={m.model_selector_generation_use_aria({ model: getGenerationModelTitle(model) }, { locale })}
-									class="mt-1 h-3.5 w-3.5 accent-brand"
+									class="mt-1 h-3.5 w-3.5"
 									checked={selectedGenerationModels.has(model.model)}
 									onchange={(event) => toggleGenerationModel(model.model, event.currentTarget.checked)}
 								/>
@@ -1274,7 +1274,7 @@ const hoverCardPos = $derived.by(() => {
 													{#if isGenerationParameterExpanded(model.model, param.name)}
 														<div class="flex flex-wrap gap-1 px-2 pb-2 pt-0.5">
 															{#each param.values as value (String(value))}
-																<label class={`inline-flex min-h-7 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors duration-100 ${selectedGenerationModels.has(model.model) && getSelectedEnumValues(model.model, param.name, param.values).has(String(value)) ? "bg-brand-bg text-brand-muted-fg" : "bg-bg-surface text-text-tertiary hover:text-text-primary"}`}><input type="checkbox" class="h-3 w-3 accent-brand disabled:opacity-35" disabled={generationPolicyMode !== "limited" || !selectedGenerationModels.has(model.model) || (getSelectedEnumValues(model.model, param.name, param.values).size === 1 && getSelectedEnumValues(model.model, param.name, param.values).has(String(value)))} checked={getSelectedEnumValues(model.model, param.name, param.values).has(String(value))} onchange={(event) => toggleGenerationEnumValue(model.model, param.name, String(value), event.currentTarget.checked)} /><span>{String(value)}</span></label>
+																<label class={`inline-flex min-h-7 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors duration-100 ${selectedGenerationModels.has(model.model) && getSelectedEnumValues(model.model, param.name, param.values).has(String(value)) ? "bg-brand-bg text-brand-muted-fg" : "bg-bg-surface text-text-tertiary hover:text-text-primary"}`}><input type="checkbox" class="h-3 w-3 disabled:opacity-35" disabled={generationPolicyMode !== "limited" || !selectedGenerationModels.has(model.model) || (getSelectedEnumValues(model.model, param.name, param.values).size === 1 && getSelectedEnumValues(model.model, param.name, param.values).has(String(value)))} checked={getSelectedEnumValues(model.model, param.name, param.values).has(String(value))} onchange={(event) => toggleGenerationEnumValue(model.model, param.name, String(value), event.currentTarget.checked)} /><span>{String(value)}</span></label>
 															{/each}
 														</div>
 													{/if}

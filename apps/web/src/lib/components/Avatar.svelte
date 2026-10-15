@@ -82,6 +82,7 @@ const tone = $derived(showImage ? null : identityTone(seed));
 
 <span
 	class={`avatar inline-flex shrink-0 items-center justify-center overflow-hidden ${scale.box} ${shape === "tile" ? scale.tile : "rounded-full"} ${className}`}
+	data-shape={shape}
 	data-toned={tone ? "" : undefined}
 	style:--avatar-tone={tone ? `var(${identityToken(tone)})` : undefined}
 	aria-hidden="true"

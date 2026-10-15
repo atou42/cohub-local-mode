@@ -26,6 +26,7 @@ export type BoardEditorState = {
 	selection: string[];
 	camera: BoardViewport;
 	surfaceSize: { width: number; height: number };
+	controlOutset: number;
 	cameraPolicy: BoardCameraPolicy;
 	tool: BoardToolId;
 	toolStyles: BoardToolStyleMap;
@@ -54,6 +55,7 @@ export const STATE_CHANNELS: { readonly [K in keyof BoardEditorState]: BoardEdit
 	selection: "selection",
 	camera: "camera",
 	surfaceSize: "camera",
+	controlOutset: "selection",
 	cameraPolicy: "camera",
 	tool: "tool",
 	toolStyles: "tool",

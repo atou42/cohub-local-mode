@@ -336,7 +336,7 @@ onMount(() => {
 	</div>
 
 	{#if actionError || view.error}
-		<div class="flex shrink-0 items-center gap-3 border-b border-border-subtle px-[var(--list-content-x)] py-2 text-[12px] text-error-fg" role="alert">
+		<div class="flex shrink-0 items-center gap-3 border-b border-border-subtle px-[var(--list-content-x)] py-2 text-[12px] text-error-soft" role="alert">
 			<span class="min-w-0 flex-1 truncate">{actionError || view.error}</span>
 			{#if actionError}
 				<button type="button" class="shrink-0 text-text-secondary hover:text-text-primary" aria-label={m.common_close({}, { locale })} onclick={() => (actionError = "")}><X class="h-3.5 w-3.5" /></button>

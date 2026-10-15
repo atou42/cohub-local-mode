@@ -59,7 +59,9 @@ const animation = $derived(
 	animationId ? editor.animations[animationId] : undefined,
 );
 const playing = $derived(
-	playback?.status === "playing" && playback.animationId === animationId && !editor.playhead,
+	playback?.status === "playing" &&
+		playback.animationId === animationId &&
+		!editor.playhead,
 );
 
 let clock = $state(0);
@@ -86,7 +88,9 @@ const nextMarker = $derived(
 		null,
 );
 const keyframe = $derived(editor.keyframeState("position"));
-const chapterMarkers = $derived(animation?.markers.filter((marker) => marker.label) ?? []);
+const chapterMarkers = $derived(
+	animation?.markers.filter((marker) => marker.label) ?? [],
+);
 
 const trackRows = $derived<BoardTrackRow[]>(
 	animation ? boardTrackRows(editor.document.items, animation.tracks) : [],
@@ -416,7 +420,7 @@ function format(ms: number) {
 		min-width: 80px;
 		align-items: center;
 	}
-	.timeline-track input { width: 100%; accent-color: var(--brand); }
+	.timeline-track input { width: 100%; }
 
 	.timeline-marker {
 		position: absolute;
@@ -464,7 +468,7 @@ function format(ms: number) {
 	.tracks-edit-select {
 		flex: 1;
 		border-radius: 6px;
-		background: var(--bg-secondary);
+		background: var(--bg-surface);
 		padding: 3px 6px;
 		color: var(--text-primary);
 		font-size: 11px;

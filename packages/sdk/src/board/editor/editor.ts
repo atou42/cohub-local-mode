@@ -3,6 +3,7 @@ import {
 	type BoardFrame,
 	type BoardStyledToolId,
 	buildBoardScene,
+	hasBoardScripts,
 	clampBoardStrokeSize,
 	createBoardToolStyles,
 	defaultBoardRegistry,
@@ -60,6 +61,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 			selection: [],
 			camera: normalizeViewport(options.viewport ?? { x: 0, y: 0, zoom: 1 }),
 			surfaceSize: { width: 0, height: 0 },
+			controlOutset: 0,
 			cameraPolicy: preferences?.cameraPolicy ?? "follow",
 			tool: options.initialTool ?? "select",
 			toolStyles: preferences?.toolStyles ?? createBoardToolStyles(),
@@ -146,6 +148,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		readonly: options.readonly === true,
 		subscribe: channels.subscribe,
 
+		get hasScripts() { return read("document", () => hasBoardScripts(state.base)); },
 		get document(): BoardDocument {
 			return read("document", () => state.base);
 		},
@@ -313,6 +316,12 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		set surfaceSize(value: { width: number; height: number }) {
 			state.surfaceSize = value;
 		},
+		get controlOutset() {
+			return read("selection", () => state.controlOutset);
+		},
+		set controlOutset(value: number) {
+			if (value !== state.controlOutset) state.controlOutset = value;
+		},
 
 		loadDocument: remote.loadDocument,
 		undo: document.undo,
@@ -323,6 +332,9 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		setSettings: document.setSettings,
 		previewSettings: document.previewSettings,
 		setPlayedItems: document.setPlayedItems,
+		setScriptItems: document.setScriptItems,
+		animationItems: document.animationItems,
+		commitPatch: document.commitPatch,
 		consumeRecentlyAdded: document.consumeRecentlyAdded,
 
 		itemAt: tracked(["scene", "camera"], query.itemAt),
@@ -359,8 +371,10 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		sendToBack: selection.sendToBack,
 
 		addItem: creation.addItem,
+		addItems: creation.add,
 		addApp: creation.addApp,
 		addFile: creation.addFile,
+		addMedia: creation.addMedia,
 		addTask: creation.addTask,
 		addTaskWithSources: creation.addTaskWithSources,
 		addText: creation.addText,
@@ -380,7 +394,6 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		applyMediaFileChange: snapshots.applyMediaFileChange,
 		adoptMediaNaturalSizes: snapshots.adoptMediaNaturalSizes,
 		applyFileSnapshots: snapshots.applyFileSnapshots,
-		applyTaskSnapshots: snapshots.applyTaskSnapshots,
 
 		setPlayhead: animation.setPlayhead,
 		setRecording: animation.setRecording,
@@ -395,6 +408,7 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		pointerMove: interaction.pointerMove,
 		pointerUp: interaction.pointerUp,
 		pointerLeave: interaction.pointerLeave,
+		subscribeTransforms: interaction.subscribeTransforms,
 		cancelPointerInteraction: interaction.cancel,
 
 		destroy() {

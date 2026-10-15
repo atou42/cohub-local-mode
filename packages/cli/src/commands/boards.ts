@@ -13,6 +13,7 @@ import type {
 import {
   BOARD_PRESET_NAMES,
   BOARD_SCHEMA_TARGETS,
+  BOARD_SCRIPT_API,
   type BoardExportRegion,
   boardJsonSchema,
   boardPresetTracks,
@@ -318,13 +319,18 @@ export function registerBoards(program: Command): Command {
     .description("Read, write, animate and export Boards (by id or .board path)")
     .addHelpText("after", `
 A Board is one JSON document: { board, items, animations }.
-  get      read it
-  apply    write it with a JSON Merge Patch; null deletes
-  schema   the schema of any part, and what tracks can animate
-  preset   tracks for a preset motion, ready to apply
-  history  list versions, or restore one
-  export   render an image, a frame sequence or a video
-  examples starter documents
+  get       read it
+  apply     write it with a JSON Merge Patch; null deletes
+  schema    the fields of any part and what they mean; also the script API
+  examples  starter documents and a custom script module
+  preset    tracks for a preset motion, ready to apply
+  sequence  join chapter animations into one timeline
+  path      sample a polyline into a position track
+  inspect   measure items and report layout hints
+  export    render an image, a frame sequence or a video
+  play      shared playback; also pause, resume, next, seek, stop
+  watch     stream changes and playback
+  history   list versions, or restore one
 Times are milliseconds; 500ms, 12.5s and 2m also work on the command line.`);
 
   withJson(boards.command("create <path>")
@@ -473,15 +479,15 @@ Times are milliseconds; 500ms, 12.5s and 2m also work on the command line.`);
   boards.command("schema [target]")
     .description("Print JSON Schema for a part of a Board")
     .addHelpText("after", `
-With a target: one item type, or animation, track, or camera.
-Targets: ${BOARD_SCHEMA_TARGETS.join(", ")}
-Without a target: units, item types, colors and every animatable property.`)
+Without a target: units, item types, colors and every animatable property.
+With a target: its fields and what they mean; script also lists the module API.
+Targets: ${BOARD_SCHEMA_TARGETS.join(", ")}`)
     .action((target?: string) => {
       try {
         if (!target) return outJson({ ...boardSchemaOverview(), presets: listBoardPresets() });
         const schema = boardJsonSchema(target);
         if (!schema) throw new Error(`Unknown target ${target}; expected ${BOARD_SCHEMA_TARGETS.join(", ")}.`);
-        outJson(schema);
+        outJson(target === "script" ? { ...schema, api: BOARD_SCRIPT_API } : schema);
       } catch (cause) {
         handleHttp(cause);
       }

@@ -1,3 +1,4 @@
+import { intlTag } from "$lib/resource-kit/core";
 import type { Locale } from "./locale";
 
 /**
@@ -13,10 +14,8 @@ import type { Locale } from "./locale";
 
 export type LocaleOrString = Locale | string;
 
-export function toIntlTag(locale: LocaleOrString | undefined): string {
-	const value = locale ?? "en";
-	return value.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
-}
+/** Single source shared with the resource Apps. */
+export const toIntlTag = intlTag;
 
 // Caches are keyed by locale + option set. The app only renders a small set of
 // formatter combinations per locale, so these maps stay bounded in practice.

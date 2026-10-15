@@ -319,7 +319,7 @@ function reset() {
 	.option-row { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; }
 	.option-row label { color: var(--text-tertiary); font-size: 11px; }
 	.image-options select { height: 30px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-input); padding: 0 7px; color: var(--text-primary); }
-	.image-options input[type="range"] { width: 100%; accent-color: var(--brand); }
+	.image-options input[type="range"] { width: 100%; }
 	.appearance-footer { justify-content: flex-end; margin-top: 8px; border-top: 1px solid var(--border-subtle); padding-top: 8px; }
 	.save-status { margin-right: auto; color: var(--text-tertiary); font-size: 11px; }
 	.reset-button { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: var(--text-tertiary); font-size: 11px; }

@@ -34,23 +34,23 @@
 	/* Semantic colors — Solarized accents, restrained for dense UI. */
 	--success-400: oklch(71% 0.12 125);
 	--success-500: oklch(64% 0.12 125);
-	--success-700: oklch(45% 0.09 125);
+	--success-700: oklch(72% 0.072 125);
 	--success-900: oklch(24% 0.045 125);
 
 	--warning-400: oklch(78% 0.13 82);
 	--warning-500: oklch(70% 0.13 82);
-	--warning-700: oklch(49% 0.1 82);
+	--warning-700: oklch(72% 0.078 82);
 	--warning-900: oklch(26% 0.05 82);
 
 	--error-400: oklch(68% 0.18 25);
 	--error-500: oklch(61% 0.19 25);
-	--error-700: oklch(43% 0.14 25);
+	--error-700: oklch(72% 0.114 25);
 	--error-fg: var(--neutral-0);
 	--error-900: oklch(23% 0.06 25);
 
 	--info-400: oklch(68% 0.11 205);
 	--info-500: oklch(61% 0.12 205);
-	--info-700: oklch(43% 0.1 205);
+	--info-700: oklch(72% 0.072 205);
 	--info-900: oklch(23% 0.05 205);
 
 	/* Backgrounds — preserve Solarized's low-contrast calm, with enough UI separation. */
@@ -79,9 +79,9 @@
 	--border-strong: var(--neutral-50);
 
 	/* Interactive states */
-	--bg-hover: oklch(24% 0.024 198 / 1);
-	--bg-hover-strong: oklch(29% 0.024 198 / 1);
-	--bg-active: oklch(34% 0.024 198 / 1);
+	--bg-hover: oklch(86% 0.025 195 / 0.08);
+	--bg-hover-strong: oklch(86% 0.025 195 / 0.14);
+	--bg-active: oklch(86% 0.025 195 / 0.21);
 
 	/* Scrollbar */
 	--scrollbar-thumb: var(--neutral-50);
@@ -95,7 +95,7 @@
 	--brand: var(--brand-400);
 	--brand-hover: var(--brand-300);
 	--brand-soft: var(--brand-700);
-	--brand-contrast-fg: var(--neutral-0);
+	--brand-contrast-fg: var(--neutral-100);
 	--brand-muted-fg: var(--brand);
 	--brand-muted: color-mix(in srgb, var(--brand) 11%, transparent);
 	--brand-muted-hover: color-mix(in srgb, var(--brand) 16%, transparent);

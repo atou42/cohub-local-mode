@@ -172,9 +172,6 @@ function sync(container: Container, item: SceneItem<BoardEffectItem>, context: B
 			drawTrail(graphics, parts, item, context, color);
 			break;
 	}
-	if (context.selectedIds.has(item.id) || context.hoveredId === item.id) {
-		graphics.rect(0, 0, width, height).stroke({ color: context.palette.muted, width: 1, alpha: 0.6 });
-	}
 }
 
 export const effectCardRenderer: BoardCardRenderer = {

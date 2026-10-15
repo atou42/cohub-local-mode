@@ -4,6 +4,7 @@ import type { BoardEditor } from "$lib/board/editor.svelte";
 import Dialog from "$lib/components/Dialog.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+
 const { editor, onClose }: { editor: BoardEditor; onClose: () => void } =
 	$props();
 const locale = $derived(getLocale());
@@ -45,7 +46,7 @@ function create() {
 <Dialog open onClose={onClose} title={m.board_sequence_create({}, { locale })} maxWidth="440px">
 	<div class="flex flex-col gap-3 p-4">
 		<p class="text-xs text-text-secondary">{m.board_sequence_hint({}, { locale })}</p>
-		<select class="rounded bg-bg-secondary p-2 text-sm text-text-primary" aria-label={m.board_export_animation({}, { locale })} value="" onchange={(event) => { add(event.currentTarget.value); event.currentTarget.value = ""; }}>
+		<select class="rounded bg-bg-input p-2 text-sm text-text-primary" aria-label={m.board_export_animation({}, { locale })} value="" onchange={(event) => { add(event.currentTarget.value); event.currentTarget.value = ""; }}>
 			<option value="" disabled>{m.board_export_animation({}, { locale })}</option>
 			{#each ids.filter((id) => !chapters.some((chapter) => chapter.animation === id)) as id (id)}<option value={id}>{editor.animations[id]?.name || id}</option>{/each}
 		</select>
@@ -57,12 +58,12 @@ function create() {
 						<button type="button" class="h-9 w-9 rounded hover:bg-bg-hover disabled:opacity-30" aria-label={m.board_chapter_down({}, { locale })} disabled={index === chapters.length - 1} onclick={() => move(index, 1)}>↓</button>
 						<button type="button" class="h-9 w-9 rounded hover:bg-bg-hover" aria-label={m.board_chapter_remove({}, { locale })} onclick={() => { chapters = chapters.filter((_, i) => i !== index); }}>×</button>
 					</div>
-					<label class="flex items-center gap-2 text-xs text-text-secondary">{m.board_frame({}, { locale })}<select class="min-w-0 flex-1 rounded bg-bg-secondary p-2" value={chapter.frame ?? ""} onchange={(event) => { chapter.frame = event.currentTarget.value || undefined; }}><option value="">—</option>{#each frames as [id, item] (id)}<option value={id}>{item.type === "frame" ? item.props.label || id : id}</option>{/each}</select></label>
+					<label class="flex items-center gap-2 text-xs text-text-secondary">{m.board_frame({}, { locale })}<select class="min-w-0 flex-1 rounded bg-bg-input p-2" value={chapter.frame ?? ""} onchange={(event) => { chapter.frame = event.currentTarget.value || undefined; }}><option value="">—</option>{#each frames as [id, item] (id)}<option value={id}>{item.type === "frame" ? item.props.label || id : id}</option>{/each}</select></label>
 					<label class="flex items-center gap-2 text-xs text-text-secondary"><input type="checkbox" bind:checked={chapter.pause} />{m.board_chapter_pause({}, { locale })}</label>
 				</li>
 			{/each}
 		</ol>
-		{#if failure}<p class="text-sm text-error-500" role="alert">{m.board_sequence_failed({}, { locale })}</p>{/if}
-		<button type="button" class="self-end rounded bg-brand px-3 py-2 text-sm text-brand-contrast-fg disabled:opacity-40" disabled={chapters.length < 2} onclick={create}>{m.board_sequence_create({}, { locale })}</button>
+		{#if failure}<p class="text-sm text-error-soft" role="alert">{m.board_sequence_failed({}, { locale })}</p>{/if}
+		<button type="button" class="primary-key self-end px-3 py-2 text-sm" disabled={chapters.length < 2} onclick={create}>{m.board_sequence_create({}, { locale })}</button>
 	</div>
 </Dialog>

@@ -14,10 +14,10 @@ import {
 	Play,
 } from "lucide-svelte";
 import { clock } from "$lib/clock.svelte";
-import MediaImage from "$lib/components/MediaImage.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { cachedMediaInfo, loadMediaInfo } from "$lib/media/media-info";
 import { m } from "$lib/paraglide/messages.js";
+import MediaImage from "$lib/resource-kit/MediaImage.svelte";
 import { formatElapsed } from "./side-panel-data";
 
 type Props = {
@@ -168,7 +168,7 @@ const durationMs = $derived(output?.durationMs ?? probed?.durationMs);
 	}
 
 	.tile--failed {
-		background: color-mix(in srgb, var(--error-bg) 60%, var(--bg-elevated));
+		background: color-mix(in srgb, var(--color-error-bg) 60%, var(--bg-elevated));
 	}
 
 	.tile-surface {

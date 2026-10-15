@@ -35,6 +35,7 @@ export type SpaceMentionSuggestion = {
 	typePriorityScore: number;
 	viewerRelation?: GlobalSearchViewerRelation | "unknown" | null;
 	viewerTier?: number;
+	official?: boolean;
 };
 
 export type SpaceMentionTextToken =

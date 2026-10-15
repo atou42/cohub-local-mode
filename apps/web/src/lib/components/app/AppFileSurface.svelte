@@ -149,10 +149,10 @@ $effect(() => {
 
 	.file-error {
 		flex-shrink: 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--error-soft) 20%, transparent);
-		background: var(--error-bg);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-error-soft) 20%, transparent);
+		background: var(--color-error-bg);
 		padding: 0.4rem 0.75rem;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 		font-size: 0.6875rem;
 	}
 

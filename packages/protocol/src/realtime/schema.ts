@@ -2,7 +2,7 @@ import { z } from "zod";
 import { contentBlockSchema } from "../core/content-schema.js";
 import { harnessSchema, codexApprovalModeSchema } from "../runtime/index.js";
 import type { RealtimeCompactFrame, RealtimeEnvelope, RealtimeRoom } from "./types.js";
-import { REALTIME_DOMAINS, REALTIME_ROOM_EVENT_NAME_PATTERN } from "./types.js";
+import { REALTIME_DOMAINS, REALTIME_ROOM_EVENT_NAME_PATTERN, REALTIME_ROOM_HISTORY_PAGE } from "./types.js";
 import { BoardAwarenessClientPayloadSchema } from "./board-awareness.js";
 export { contentBlockSchema } from "../core/content-schema.js";
 export type * from "./types.js";
@@ -63,7 +63,12 @@ export const wsClientEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("realtime.room.join"),
     requestId: z.string().optional(),
-    payload: z.object({ roomId: z.string().uuid(), ticket: z.string().min(1) }),
+    payload: z.object({
+      roomId: z.string().uuid(),
+      ticket: z.string().min(1),
+      instanceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
+      after: z.number().int().nonnegative().optional(),
+    }),
   }),
   z.object({
     type: z.literal("realtime.room.publish"),
@@ -79,6 +84,20 @@ export const wsClientEventSchema = z.discriminatedUnion("type", [
     type: z.literal("realtime.room.leave"),
     requestId: z.string().optional(),
     payload: z.object({ roomId: z.string().uuid() }),
+  }),
+  z.object({
+    type: z.literal("realtime.room.detach"),
+    requestId: z.string().optional(),
+    payload: z.object({ roomId: z.string().uuid() }),
+  }),
+  z.object({
+    type: z.literal("realtime.room.history"),
+    requestId: z.string().optional(),
+    payload: z.object({
+      roomId: z.string().uuid(),
+      after: z.number().int().nonnegative().optional(),
+      limit: z.number().int().min(1).max(REALTIME_ROOM_HISTORY_PAGE).optional(),
+    }),
   }),
   z.object({
     type: z.literal("realtime.room.presence.update"),

@@ -1,0 +1,26 @@
+{
+  "name": "@cohub/app-manager",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../apps/web/scripts/ensure-i18n.mjs && vite",
+    "build": "node ../../apps/web/scripts/ensure-i18n.mjs && vite build",
+    "typecheck": "node ../../apps/web/scripts/ensure-i18n.mjs && svelte-check --tsconfig ./tsconfig.json",
+    "lint": "biome lint ."
+  },
+  "dependencies": {
+    "@cohub/protocol": "workspace:*",
+    "@neta-art/cohub": "workspace:*",
+    "@fontsource/geist": "^5.3.0",
+    "@fontsource/geist-mono": "^5.3.0",
+    "lucide-svelte": "^1.0.1",
+    "svelte": "^5.57.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@types/node": "catalog:",
+    "svelte-check": "^4.7.6",
+    "typescript": "6.0.3",
+    "vite": "^8.2.2"
+  }
+}

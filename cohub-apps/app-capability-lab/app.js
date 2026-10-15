@@ -562,6 +562,81 @@ $("parentStamp").textContent = state.parentOrigin ? new URL(state.parentOrigin).
 log("info", "Lab loaded", window.parent === window ? "standalone" : "iframe mode");
 
 $("assetProbe").onclick = () => probeAssets().catch(() => {});
+/**
+ * Realtime room: room events over the Cohub gateway, plus a WebRTC data channel
+ * between tabs relaying directly. Open the App twice with the same code.
+ */
+const roomState = { room: null, rtc: null, chat: null, cursor: null, received: 0 };
+
+function setRoomOutput() {
+  const room = roomState.room;
+  $("roomOutput").textContent = room
+    ? [
+        `room ${room.code} (${room.participantId.slice(0, 8)})`,
+        `rtc ${roomState.rtc?.state ?? "closed"}`,
+        `members ${room.members.length}`,
+        `messages received ${roomState.received}`,
+      ].join("\n")
+    : "Not joined.";
+}
+
+async function joinRoom() {
+  if (roomState.room) return;
+  setStatus("room", "warn", "joining");
+  const realtime = state.client.app.realtime;
+  const room = await realtime.joinRoom({ code: $("roomCode").value.trim() || "LAB" }).catch((error) => {
+    if (!/not found/i.test(error.message)) throw error;
+    return realtime.createRoom({ code: $("roomCode").value.trim() || "LAB" });
+  });
+  roomState.room = room;
+  room.subscribe("ping", ({ data }) => log("ok", "Room event", JSON.stringify(data)));
+  const rtc = await room.rtc();
+  roomState.rtc = rtc;
+  roomState.chat = rtc.channel("chat");
+  roomState.cursor = rtc.channel("cursor", { delivery: "latest" });
+  roomState.chat.onMessage(({ from, data }) => {
+    roomState.received += 1;
+    log("ok", "Channel message", `${from.slice(0, 8)} ${JSON.stringify(data)}`);
+    setRoomOutput();
+  });
+  roomState.cursor.onMessage(() => { roomState.received += 1; });
+  rtc.onStateChange((rtcState) => {
+    setStatus("room", rtcState === "connected" ? "ok" : "warn", rtcState);
+    setRoomOutput();
+  });
+  room.onMembersChanged(() => setRoomOutput());
+  setStatus("room", "ok", "joined");
+  setRoomOutput();
+}
+
+function sendRoomMessage() {
+  const { room, chat, cursor } = roomState;
+  if (!room || !chat) throw new Error("Join a room first.");
+  const body = { at: Date.now(), from: room.participantId.slice(0, 8) };
+  chat.send(body);
+  for (let i = 0; i < 20; i += 1) cursor.send({ ...body, x: i });
+  void room.publish("ping", body);
+  log("info", "Sent", JSON.stringify(body));
+}
+
+async function leaveRoom() {
+  await roomState.rtc?.close();
+  await roomState.room?.leave();
+  roomState.room = null;
+  roomState.rtc = null;
+  roomState.received = 0;
+  setStatus("room", "", "idle");
+  setRoomOutput();
+}
+
+$("roomJoin").onclick = () => joinRoom().catch((error) => {
+  setStatus("room", "bad", "failed");
+  log("bad", "Room join failed", error.message);
+});
+$("roomSend").onclick = () => {
+  try { sendRoomMessage(); } catch (error) { log("bad", "Send failed", error.message); }
+};
+$("roomLeave").onclick = () => leaveRoom().catch(() => {});
 $("importSdk").onclick = () => importSdk().catch(() => {});
 $("createClient").onclick = () => createClient().catch(() => {});
 $("sdkContext").onclick = () => sdkContext().catch(() => {});

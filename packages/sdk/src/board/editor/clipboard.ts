@@ -85,6 +85,7 @@ export function remapItems(
 		let item = place(source);
 		const { locked: _locked, ...unlocked } = item;
 		item = unlocked as BoardItem;
+		if (item.script) item = { ...item, script: { ...item.script, targets: Object.fromEntries(Object.entries(item.script.targets).map(([name, target]) => [name, idMap.get(target) ?? target])) } };
 		if (item.parent) {
 			const parent = idMap.get(item.parent);
 			if (parent) item = { ...item, parent };

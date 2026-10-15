@@ -18,8 +18,8 @@ const DARK: BoardRenderPalette = {
 };
 
 const LIGHT: BoardRenderPalette = {
-  bg: 0xffffff,
-  surface: 0xf4f4f5,
+  bg: 0xf7f8f9,
+  surface: 0xffffff,
   hover: 0xe9e9ec,
   border: 0xd6d6da,
   brand: 0xe8450e,

@@ -3,6 +3,7 @@ const offsets = new Map<string, number>();
 export type ScrollMemoryOptions = {
 	key: string;
 	ready: boolean;
+	onRestore?: (offset: number) => void;
 };
 
 export function scrollMemory(node: HTMLElement, initial: ScrollMemoryOptions) {
@@ -13,6 +14,7 @@ export function scrollMemory(node: HTMLElement, initial: ScrollMemoryOptions) {
 		if (restored || !options.ready) return;
 		restored = true;
 		node.scrollTop = offsets.get(options.key) ?? 0;
+		options.onRestore?.(node.scrollTop);
 	}
 
 	function save() {

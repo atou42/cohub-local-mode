@@ -212,3 +212,14 @@ export const mergeRequestSourceIntoMeta = (
 };
 
 export const COHUB_SOURCE_HEADER_NAMES: readonly string[] = Object.values(COHUB_SOURCE_HEADER);
+
+export type ActorKind = "user" | "agent" | "cli";
+
+export type ActorModel = { provider: string | null; id: string };
+
+export type Actor = { kind: ActorKind; model?: ActorModel };
+
+export const actorKindOf = (source: RequestSource | null | undefined): ActorKind => {
+  if (source?.toolCallId) return "agent";
+  return source?.via === "cli" ? "cli" : "user";
+};

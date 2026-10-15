@@ -44,9 +44,9 @@ import { setThemeWithTransition } from "$lib/theme-transition";
 const locale = $derived(getLocale());
 const localePreference = $derived(getLocalePreference());
 const mode = $derived(getTheme());
-const configSpaceId = $derived(userTheme.spaceId);
+const homeSpaceId = $derived(userTheme.spaceId);
 const hasCustomTheme = $derived(
-	configSpaceId ? getThemeCss(configSpaceId) !== null : false,
+	homeSpaceId ? getThemeCss(homeSpaceId) !== null : false,
 );
 type EditableField = "displayName" | "username";
 
@@ -81,6 +81,8 @@ const themeIcon = {
 	"solarized-dark": Palette,
 	"solarized-light": Palette,
 	"neta-studio": Palette,
+	"neta-pixel": Palette,
+	"neta-pixel-dark": Palette,
 	system: Monitor,
 } satisfies Record<ThemeMode, typeof Sun>;
 const localeOptions = $derived([
@@ -284,13 +286,13 @@ onMount(() => {
 				<h3 class="text-[13px] font-medium text-text-primary">{m.settings_theme({}, { locale })}</h3>
 				<p class="mt-1 text-[12px] leading-5 text-text-tertiary">{m.settings_theme_description({}, { locale })}</p>
 				<div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{#each THEME_OPTIONS as option (option.value)}{@const active = mode === option.value}{@const Icon = themeIcon[option.value]}<button type="button" class="group flex min-w-0 items-center gap-2 rounded-[6px] px-3 py-2.5 text-left transition-colors duration-100 {active ? 'bg-brand-bg text-text-primary' : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'}" onclick={(event) => handleThemeChange(option.value, event)}><span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] {active ? 'bg-brand/15 text-brand' : 'bg-bg-hover-strong text-text-tertiary group-hover:text-text-secondary'}"><Icon class="h-3.5 w-3.5" /></span><span class="min-w-0 flex-1"><span class="block text-[12px] font-medium">{localizedThemeLabel(option.value, locale)}</span><span class="block truncate text-[10px] text-text-tertiary">{localizedThemeDescription(option.value, locale)}</span></span>{#if active}<Check class="h-3.5 w-3.5 shrink-0 text-brand" />{/if}</button>{/each}</div>
-				{#if configSpaceId}
+				{#if homeSpaceId}
 					{@const path = SPACE_CUSTOM_THEME_CSS_PATH}
 					{@const on = hasCustomTheme && userTheme.enabled}
 					<div class="mt-2 flex min-w-0 items-center gap-2 rounded-[6px] border border-border-subtle px-3 py-2.5">
 						<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] {on ? 'bg-brand/15 text-brand' : 'bg-bg-hover-strong text-text-tertiary'}"><Paintbrush class="h-3.5 w-3.5" /></span>
 						<span class="min-w-0 flex-1"><span class="block text-[12px] font-medium text-text-primary">{m.settings_custom_theme({}, { locale })}</span><span class="block truncate text-[10px] text-text-tertiary">{hasCustomTheme ? m.settings_custom_theme_description({ path }, { locale }) : m.settings_custom_theme_empty({ path }, { locale })}</span></span>
-						<a href={hasCustomTheme ? buildSpaceFileRoute(configSpaceId, path) : buildSpaceRootRoute(configSpaceId)} class="shrink-0 rounded-[5px] px-2 py-1 text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary">{hasCustomTheme ? m.common_edit({}, { locale }) : m.settings_custom_theme_open({}, { locale })}</a>
+						<a href={hasCustomTheme ? buildSpaceFileRoute(homeSpaceId, path) : buildSpaceRootRoute(homeSpaceId)} class="shrink-0 rounded-[5px] px-2 py-1 text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary">{hasCustomTheme ? m.common_edit({}, { locale }) : m.settings_custom_theme_open({}, { locale })}</a>
 						{#if hasCustomTheme}<ToggleSwitch checked={userTheme.enabled} label={m.settings_custom_theme_toggle({}, { locale })} onchange={(enabled) => userTheme.setEnabled(enabled)} />{/if}
 					</div>
 				{/if}

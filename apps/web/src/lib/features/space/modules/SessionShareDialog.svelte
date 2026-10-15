@@ -159,9 +159,7 @@ function toggleQr() {
 						{/if}
 					</div>
 				</div>
-				<span class="switch" class:on={isPublic} aria-hidden="true">
-					<span class="switch-thumb"></span>
-				</span>
+				<span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
 			</button>
 		</section>
 
@@ -382,41 +380,6 @@ function toggleQr() {
 		font-size: 11px;
 		line-height: 1.4;
 		color: var(--text-tertiary);
-	}
-
-	.switch {
-		position: relative;
-		flex-shrink: 0;
-		width: 36px;
-		height: 20px;
-		border-radius: 999px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-input);
-		transition:
-			background-color 140ms ease,
-			border-color 140ms ease;
-	}
-
-	.switch.on {
-		background: var(--brand);
-		border-color: color-mix(in srgb, var(--brand) 70%, transparent);
-	}
-
-	.switch-thumb {
-		position: absolute;
-		top: 1px;
-		left: 1px;
-		width: 16px;
-		height: 16px;
-		border-radius: 999px;
-		background: var(--text-primary);
-		box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
-		transition: transform 140ms ease;
-	}
-
-	.switch.on .switch-thumb {
-		transform: translateX(16px);
-		background: var(--brand-contrast-fg);
 	}
 
 	@media (max-width: 639px) {

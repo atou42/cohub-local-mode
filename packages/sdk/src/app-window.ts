@@ -102,7 +102,9 @@ export class AppWindowApi {
 
 	/** Report the tab title, save status, and whether work is still unsaved. */
 	setState(patch: Partial<AppWindowState>) {
-		this.state = { ...this.state, ...patch };
+		const next = { ...this.state, ...patch };
+		if (this.stateReported && next.title === this.state.title && next.status === this.state.status && next.dirty === this.state.dirty) return;
+		this.state = next;
 		this.stateReported = true;
 		this.listen();
 		this.transport.notify?.(buildAppRuntimeWindowState(this.state));

@@ -1,5 +1,6 @@
 import type { BoardItem, BoardTrack } from "@cohub/protocol";
 import { BOARD_CAMERA_TARGET } from "@cohub/protocol";
+import { getMediaResourceTitle } from "@neta-art/cohub/board";
 
 export type BoardTrackRow = {
 	id: string;
@@ -26,16 +27,14 @@ function itemLabel(item: BoardItem, fallback: string): string {
 		case "audio":
 		case "file":
 			return (
-				item.props.snapshot?.title ??
-				item.props.src.split("/").pop() ??
-				item.type
+				item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src)
 			);
 		case "task":
 			return item.props.snapshot.title;
 		case "effect":
 			return item.props.kind;
-		case "sketch":
-			return item.props.src.split("/").pop() ?? item.type;
+		case "custom":
+			return item.script.src.split("/").pop() ?? item.type;
 		default:
 			return fallback;
 	}

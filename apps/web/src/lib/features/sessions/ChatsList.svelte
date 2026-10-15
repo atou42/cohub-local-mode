@@ -1,11 +1,13 @@
 <script lang="ts">
 import type { UserSessionListItem } from "@neta-art/cohub";
 import { Plus } from "lucide-svelte";
+import { tick } from "svelte";
 import { goto } from "$app/navigation";
 import ListRowSkeleton from "$lib/components/list-page/ListRowSkeleton.svelte";
 import {
 	type FixedListRowDensity,
 	LIST_ROW_AVATAR,
+	LIST_ROW_HEIGHT,
 } from "$lib/components/list-page/list-row";
 import SessionRow from "$lib/components/SessionRow.svelte";
 import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
@@ -46,6 +48,7 @@ const {
 } = $props();
 
 const LOAD_MORE_THRESHOLD_PX = 480;
+const OVERSCAN_ROWS = 6;
 
 const locale = $derived(getLocale());
 const isPage = $derived(variant === "page");
@@ -56,18 +59,86 @@ const density = $derived<FixedListRowDensity>(
 const isDefaultFilter = $derived(filter.source === "web" && !filter.space);
 const sessions = $derived(view.sessions);
 const forks = $derived(view.forks);
-const rows = $derived.by(() => {
-	const items = buildSessionForkTree(sessions, forks);
-	return items.map((item, index) => ({
-		...item,
-		tree: {
-			depth: Math.min(item.visualDepth, 1),
-			last: (items[index + 1]?.visualDepth ?? 0) === 0,
-			hasChildren: item.visualDepth === 0 && item.hasChildren,
-		},
-	}));
-});
+const rows = $derived(buildSessionForkTree(sessions, forks));
 let scroller = $state<HTMLDivElement | null>(null);
+let scrollTop = $state(0);
+let viewportHeight = $state(600);
+let focusedSessionId = $state<string | null>(null);
+const rowHeight = $derived(LIST_ROW_HEIGHT[density]);
+const windowTop = $derived(
+	Math.min(scrollTop, Math.max(0, rows.length * rowHeight - viewportHeight)),
+);
+const start = $derived(
+	Math.max(0, Math.floor(windowTop / rowHeight) - OVERSCAN_ROWS),
+);
+const end = $derived(
+	Math.min(
+		rows.length,
+		Math.ceil((windowTop + viewportHeight) / rowHeight) + OVERSCAN_ROWS,
+	),
+);
+const focusedIndex = $derived(
+	focusedSessionId
+		? rows.findIndex((row) => row.session.id === focusedSessionId)
+		: -1,
+);
+const visibleIndices = $derived.by(() => {
+	const indices = new Set<number>();
+	for (let index = start; index < end; index += 1) indices.add(index);
+	if (rows.length) {
+		indices.add(0);
+		indices.add(rows.length - 1);
+	}
+	if (focusedIndex >= 0) indices.add(focusedIndex);
+	return [...indices].sort((a, b) => a - b);
+});
+
+function listKeyboard(node: HTMLUListElement) {
+	const rowIndex = (target: EventTarget | null) => {
+		if (!(target instanceof Element)) return -1;
+		const row = target.closest<HTMLElement>("[data-chat-index]");
+		return row && node.contains(row) ? Number(row.dataset.chatIndex) : -1;
+	};
+	const onFocus = (event: FocusEvent) => {
+		focusedSessionId = rows[rowIndex(event.target)]?.session.id ?? null;
+	};
+	const onBlur = (event: FocusEvent) => {
+		if (
+			!(event.relatedTarget instanceof Node) ||
+			!node.contains(event.relatedTarget)
+		) {
+			focusedSessionId = null;
+		}
+	};
+	const onKeydown = async (event: KeyboardEvent) => {
+		if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey)
+			return;
+		const index = rowIndex(event.target);
+		const next = index + (event.shiftKey ? -1 : 1);
+		if (
+			index < 0 || next < 0 || next >= rows.length ||
+			visibleIndices.includes(next) || !scroller
+		) return;
+		event.preventDefault();
+		const id = rows[next].session.id;
+		scroller.scrollTop = next * rowHeight;
+		scrollTop = scroller.scrollTop;
+		await tick();
+		if (!node.isConnected || document.activeElement !== event.target) return;
+		const targetIndex = rows.findIndex((row) => row.session.id === id);
+		node.querySelector<HTMLAnchorElement>(
+			`[data-chat-index="${targetIndex}"] a[href]`,
+		)?.focus();
+	};
+	node.addEventListener("focusin", onFocus);
+	node.addEventListener("focusout", onBlur);
+	node.addEventListener("keydown", onKeydown);
+	return () => {
+		node.removeEventListener("focusin", onFocus);
+		node.removeEventListener("focusout", onBlur);
+		node.removeEventListener("keydown", onKeydown);
+	};
+}
 
 export function scrollToTop() {
 	scrollListToTop(scroller);
@@ -116,8 +187,9 @@ function open(event: MouseEvent, session: UserSessionListItem) {
 }
 
 function onScroll(event: Event) {
-	if (!active) return;
 	const element = event.currentTarget as HTMLElement;
+	scrollTop = element.scrollTop;
+	if (!active) return;
 	if (
 		element.scrollHeight - element.scrollTop - element.clientHeight <
 		LOAD_MORE_THRESHOLD_PX
@@ -128,9 +200,10 @@ function onScroll(event: Event) {
 
 <div
 	bind:this={scroller}
+	bind:clientHeight={viewportHeight}
 	class="scrollbar-quiet min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-[var(--list-gutter-x)] py-1.5"
 	onscroll={onScroll}
-	use:scrollMemory={{ key: `chats:${variant}:${chatsFilterScope(filter)}`, ready: rows.length > 0 }}
+	use:scrollMemory={{ key: `chats:${variant}:${chatsFilterScope(filter)}`, ready: rows.length > 0, onRestore: (offset) => { scrollTop = offset; } }}
 >
 	{#if view.loading && sessions.length === 0}
 		<ListRowSkeleton {density} label={m.common_loading({}, { locale })} />
@@ -152,7 +225,7 @@ function onScroll(event: Event) {
 			<div class="mt-4 flex items-center gap-2">
 				<button
 					type="button"
-					class="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-brand-muted px-3 text-[12px] font-medium text-brand-muted-fg transition-colors hover:bg-brand-muted-hover"
+					class="primary-key h-8 gap-1.5 bg-brand-muted px-3 text-[12px] text-brand-muted-fg hover:bg-brand-muted-hover"
 					onclick={() => void chatsInbox.newChat()}
 				>
 					<Plus class="h-3.5 w-3.5" />{m.sidebar_new_chat({}, { locale })}
@@ -169,11 +242,14 @@ function onScroll(event: Event) {
 			</div>
 		</div>
 	{:else}
-		<ul>
-			{#each rows as row (row.session.id)}
+		<ul {@attach listKeyboard}>
+			{#each visibleIndices as index, slot (rows[index].session.id)}
+				{@const gap = index - (visibleIndices[slot - 1] ?? -1) - 1}
+				{#if gap > 0}<li aria-hidden="true" role="presentation" style:height={`${gap * rowHeight}px`}></li>{/if}
+				{@const row = rows[index]}
 				{@const session = row.session}
 				{@const title = getSessionTreeTitle(row) ?? m.sidebar_new_chat({}, { locale })}
-				<li>
+				<li data-chat-index={index} aria-posinset={index + 1} aria-setsize={rows.length}>
 					<SessionRow
 						{session}
 						{title}

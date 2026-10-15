@@ -2,6 +2,7 @@ import {
 	applyMatrix,
 	arrowBindings,
 	type BoardArrowItem,
+	type BoardScene,
 	type BoardItem,
 	createBoardItemId,
 	invertMatrix,
@@ -25,41 +26,45 @@ export function createCopyModule(ctx: EditorContext) {
 	let internalClipboard: BoardClipboardPayload | null = null;
 	let pasteCount = 0;
 
-	function detachedSubtrees(ids: Iterable<string>): Record<string, BoardItem> {
-		const { scene } = state;
+	function detachedSubtrees(ids: Iterable<string>, scene: BoardScene): Record<string, BoardItem> {
 		const items: Record<string, BoardItem> = {};
 		for (const root of ctx.query.rootsOf(ids)) {
 			const item = scene.get(root);
-			if (!item) continue;
+			if (!item || !state.base.items[root]) continue;
 			const { id: _id, frame, ...stored } = item;
 			items[root] = ctx.document.reparent(stored as BoardItem, frame, undefined, scene.layout.box(root));
 			for (const child of scene.descendants(root)) {
-				const value = ctx.document.displayItem(child);
-				if (value) items[child] = value;
+				if (!state.base.items[child]) continue;
+				const shown = scene.get(child);
+				if (shown) {
+					const { id: _id, frame: _frame, ...value } = shown;
+					items[child] = value as BoardItem;
+				}
 			}
 		}
 		return items;
 	}
 
-	function arrowEndPoint(id: string, which: "start" | "end") {
-		const arrow = state.scene.get(id) as SceneItem<BoardArrowItem> | undefined;
+	function arrowEndPoint(scene: BoardScene, id: string, which: "start" | "end") {
+		const arrow = scene.get(id) as SceneItem<BoardArrowItem> | undefined;
 		if (arrow?.type !== "arrow") return null;
-		const resolved = resolveSceneArrow(arrow, state.scene);
+		const resolved = resolveSceneArrow(arrow, scene);
 		return applyMatrix(
-			invertMatrix(state.scene.layout.matrix(id)),
+			invertMatrix(scene.layout.matrix(id)),
 			(which === "start" ? resolved.start : resolved.end).point,
 		);
 	}
 
 	function duplicates(ids: string[], offset: number): Map<string, BoardItem> {
-		const { scene } = state;
-		const copied = detachedSubtrees(ids);
+		const scene = ctx.document.copyScene();
+		const copied = detachedSubtrees(ids, scene);
 		for (const id of Object.keys(copied)) {
 			for (const arrowId of scene.binders(id)) {
-				const arrow = ctx.document.displayItem(arrowId);
+				if (!state.base.items[arrowId]) continue;
 				const shown = scene.get(arrowId);
-				if (copied[arrowId] || !arrow || !shown || !arrowBindings(arrow).every((bound) => copied[bound])) continue;
-				copied[arrowId] = ctx.document.reparent(arrow, shown.frame, undefined, scene.layout.box(arrowId));
+				if (copied[arrowId] || !shown || !arrowBindings(shown).every((bound) => copied[bound])) continue;
+				const { id: _id, frame, ...arrow } = shown;
+				copied[arrowId] = ctx.document.reparent(arrow as BoardItem, frame, undefined, scene.layout.box(arrowId));
 			}
 		}
 		const idMap = new Map(Object.keys(copied).map((id) => [id, createBoardItemId()]));
@@ -70,9 +75,9 @@ export function createCopyModule(ctx: EditorContext) {
 				item.parent && copied[item.parent]
 					? item
 					: { ...item, position: { x: item.position.x + offset, y: item.position.y + offset } },
-			arrowEndPoint,
+			(id, which) => arrowEndPoint(scene, id, which),
 		);
-		let z = ctx.document.topZ(undefined);
+		let z = ctx.document.topZ(undefined, scene);
 		return new Map(Object.entries(moved).map(([id, item]) => [id, item.parent ? item : { ...item, z: z++ }]));
 	}
 
@@ -93,8 +98,9 @@ export function createCopyModule(ctx: EditorContext) {
 	function copySelection(): BoardClipboardPayload | null {
 		const { selection } = state;
 		if (selection.length === 0) return null;
-		const copied = detachedSubtrees(selection);
-		const origin = ctx.query.contentBounds(ctx.query.rootsOf(selection));
+		const scene = ctx.document.copyScene();
+		const copied = detachedSubtrees(selection, scene);
+		const origin = ctx.query.contentBounds(ctx.query.rootsOf(selection), scene);
 		const payload = origin ? encodeClipboard(copied, { x: origin.x, y: origin.y }) : null;
 		if (payload) {
 			internalClipboard = payload;

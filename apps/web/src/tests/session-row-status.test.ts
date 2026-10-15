@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionRecord } from "@neta-art/cohub";
-import { getSessionRowStatus } from "../lib/session-activity.ts";
+import {
+	getSessionRowStatus,
+	getSessionStoppedLabel,
+} from "../lib/session-activity.ts";
 
 type Issue = NonNullable<SessionRecord["lastTurnIssue"]>;
 
@@ -22,4 +25,12 @@ test("only failures and lost runs are issues", () => {
 		assert.equal(kindOf(issue("interrupted", reason)), "idle");
 	}
 	assert.equal(kindOf(issue("interrupted", "abort"), true), "unread");
+});
+
+test("explicit user stops have a localized label without becoming issues", () => {
+	const session = { lastTurnIssue: issue("interrupted", "abort") };
+	assert.equal(getSessionStoppedLabel(session, "en"), "Stopped");
+	assert.equal(getSessionStoppedLabel(session, "zh-CN"), "已停止");
+	assert.equal(getSessionRowStatus(session, false, "en").kind, "idle");
+	assert.equal(getSessionRowStatus(session, true, "en").kind, "unread");
 });

@@ -11,13 +11,10 @@ import {
 	readFilePendingDraft,
 	writeFilePendingDraft,
 } from "$lib/cache/repositories/file-pending-draft-repo";
-import {
-	defaultFileViewMode,
-	type FileViewMode,
-} from "$lib/components/file-diff-view";
 import { filePreviewModel } from "$lib/file-preview-model";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import { defaultFileViewMode, type FileViewMode } from "$lib/resource-kit/diff";
 import { sdk } from "$lib/sdk";
 import {
 	isTextFileResponse,

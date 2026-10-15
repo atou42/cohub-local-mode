@@ -72,6 +72,10 @@ export function regenerationRequestFromTaskRun(
 	) {
 		throw new Error("The original generation input is unavailable.");
 	}
+	const { boardContext: _boardContext, ...modelMeta } = (meta ?? {}) as Record<
+		string,
+		unknown
+	>;
 	return {
 		spaceId,
 		model,
@@ -79,8 +83,24 @@ export function regenerationRequestFromTaskRun(
 		...(parameters === undefined
 			? {}
 			: { parameters: parameters as Record<string, unknown> }),
-		...(meta === undefined ? {} : { meta: meta as Record<string, unknown> }),
+		...(Object.keys(modelMeta).length > 0 ? { meta: modelMeta } : {}),
 	};
+}
+
+const RATIO_PATTERN = /^(\d+(?:\.\d+)?)\s*[x×:/]\s*(\d+(?:\.\d+)?)$/i;
+
+export function generationAspectRatio(
+	model: Pick<PublicGenerationDeclaration, "parameters">,
+	parameters: Readonly<Record<string, unknown>>,
+): number | undefined {
+	for (const name of ["aspect_ratio", "ratio", "size"]) {
+		const value = parameters[name] ?? model.parameters?.[name]?.default;
+		const match =
+			typeof value === "string" ? RATIO_PATTERN.exec(value.trim()) : null;
+		const ratio = match ? Number(match[1]) / Number(match[2]) : Number.NaN;
+		if (Number.isFinite(ratio) && ratio > 0) return ratio;
+	}
+	return undefined;
 }
 
 export function generationPromptFromContent(

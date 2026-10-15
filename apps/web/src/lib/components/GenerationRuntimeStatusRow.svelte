@@ -24,6 +24,6 @@ const label = $derived(
 </script>
 
 <div class={`inline-flex items-center gap-1.5 px-[var(--chat-msg-inset)] ${compact ? 'py-1' : 'py-1.5'} text-[12px] leading-none text-text-tertiary`}>
-	<StatusGlyph tone="brand" motion="active" soft class="[--status-glyph-size:6px]" />
+	<StatusGlyph tone="activity" motion="active" soft class="[--status-glyph-size:6px]" />
 	<span class="truncate tabular-nums">{label}</span>
 </div>

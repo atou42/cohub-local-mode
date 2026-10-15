@@ -11,7 +11,7 @@ import {
 	isUnchangedPendingDiff,
 	patchLineClass,
 	patchLinePrefix,
-} from "./file-diff-view";
+} from "$lib/resource-kit/diff";
 
 type Props = {
 	patch: SpacePendingDiffFileResponse | null;

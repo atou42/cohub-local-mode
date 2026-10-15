@@ -4,6 +4,8 @@ export interface WorkerConfig {
   databaseUrl: string;
   workerSecret: string;
   appEncryptionKey: string;
+  rtcSfuAppId?: string;
+  rtcSfuAppSecret?: string;
   spaceStorageRoot: string;
   spaceSystemRoot: string;
   checkpointCacheRoot: string;
@@ -63,6 +65,8 @@ export const config: WorkerConfig = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   workerSecret: process.env.WORKER_SECRET ?? "",
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
+  rtcSfuAppId: process.env.RTC_SFU_APP_ID?.trim() || undefined,
+  rtcSfuAppSecret: process.env.RTC_SFU_APP_SECRET?.trim() || undefined,
   spaceStorageRoot: process.env.SPACE_STORAGE_ROOT ?? "",
   spaceSystemRoot: process.env.SPACE_SYSTEM_ROOT ?? "",
   checkpointCacheRoot: process.env.CHECKPOINT_CACHE_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",

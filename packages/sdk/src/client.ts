@@ -1,3 +1,4 @@
+import type { AppDevice } from "@cohub/protocol/app-devices";
 import { ChannelsApi } from "./apis/channels.js";
 import { BillingApi } from "./apis/billing.js";
 import { CronJobsApi } from "./apis/cron-jobs.js";
@@ -16,6 +17,7 @@ import { UserApi } from "./apis/user.js";
 import { UsersApi } from "./apis/users.js";
 import { AppsApi } from "./apis/apps.js";
 import { AppCommerceApi } from "./apis/app-commerce.js";
+import { RoomsApi } from "./apis/rooms.js";
 import { AppRealtimeApi } from "./apis/app-realtime.js";
 import { PublicInviteApi } from "./apis/invitations.js";
 import { ReferralsApi } from "./apis/referrals.js";
@@ -70,6 +72,7 @@ export class CohubClient {
   readonly voice: VoiceApi;
   readonly apps: AppsApi;
   readonly appCommerce: AppCommerceApi;
+  readonly rooms: RoomsApi;
   readonly navigation: {
     open: (
       target: import("@cohub/protocol/app-navigation").AppNavigationTarget | string,
@@ -123,7 +126,7 @@ export class CohubClient {
       appRuntime,
       appIdResolver,
       originAppResolver,
-      resolveWebBaseUrl({ env: options.env }),
+      resolveWebBaseUrl({ env: options.env, url: options.webBaseUrl }),
     );
     this.appRuntime = createAppRuntime(appTransport, appRuntime?.appId, appIdResolver);
     this.appWindow = new AppWindowApi(appTransport, {
@@ -178,6 +181,7 @@ export class CohubClient {
     this.referrals = new ReferralsApi(this.transport);
     this.apps = new AppsApi(this.transport);
     this.appCommerce = new AppCommerceApi(this.transport);
+    this.rooms = new RoomsApi(this.transport, this.websocketClient);
     this.navigation = {
       open: (target, options) =>
         this.appRuntime.navigationOpen(
@@ -194,6 +198,10 @@ export class CohubClient {
 
   context() {
     return this.appRuntime.context();
+  }
+
+  async disconnect() {
+    await this.websocketClient.disconnect();
   }
 
   /** Releases listeners this client registered. Safe to call more than once. */
@@ -246,6 +254,9 @@ export class CohubClient {
     },
     /** Ask the host to close this App's surface. */
     requestClose: () => this.appRuntime.requestClose(),
+    devices: {
+      request: (devices: AppDevice[]) => this.appRuntime.requestDevices(devices),
+    },
     /**
      * Request that the host update this overlay's geometry or pointer hit
      * regions.  Only meaningful for `overlay` surfaces; ignored otherwise.

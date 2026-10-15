@@ -21,20 +21,20 @@ import {
 } from "$lib/features/app/app-realtime";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import AppViewStats from "$lib/resource-kit/AppViewStats.svelte";
+import {
+	APP_SCOPE_GROUPS,
+	APP_SCOPE_OPTIONS,
+	appStatusTone,
+} from "$lib/resource-kit/app";
+import { formatDateTime } from "$lib/resource-kit/time";
 import {
 	buildSpaceSessionRoute,
 	buildSpaceSessionTurnRoute,
 } from "$lib/space-routes";
 import { authStore } from "$lib/stores/auth.svelte";
-import { formatDateTime } from "../space-utils";
 import AppPromotions from "./AppPromotions.svelte";
-import AppViewStats from "./AppViewStats.svelte";
 import { createAppDetailController } from "./app-detail-controller.svelte";
-import {
-	APP_SCOPE_GROUPS,
-	APP_SCOPE_OPTIONS,
-	appStatusTone,
-} from "./app-utils";
 
 type Props = {
 	spaceId: string;
@@ -213,6 +213,7 @@ onDestroy(() => {
       {#if !appDetailController.editMode}
         {#if canManageApp}
           <AppViewStats
+            {locale}
             stats={workStats}
             loading={workStatsLoading}
             error={workStatsError}
@@ -282,13 +283,13 @@ onDestroy(() => {
             <aside class="space-y-4 text-[13px]">
               <div class="space-y-2">
                 <div class="text-[10px] font-medium uppercase tracking-[0.18em] text-text-placeholder">{m.app_publish_app_can({}, { locale })}</div>
-                {#each APP_SCOPE_GROUPS as group (group.title)}
+                {#each APP_SCOPE_GROUPS as group (group.scopes.join())}
                   <div class="space-y-1">
-                    <div class="text-[10px] font-medium uppercase tracking-wider text-text-placeholder">{group.title}</div>
+                    <div class="text-[10px] font-medium uppercase tracking-wider text-text-placeholder">{group.title({}, { locale })}</div>
                     {#each APP_SCOPE_OPTIONS.filter((option) => group.scopes.includes(option.scope)) as option (option.scope)}
                       <label class="flex gap-3 rounded-[6px] bg-bg-elevated/30 px-3 py-2 text-text-secondary">
                         <input type="checkbox" bind:checked={appDetailController.formScopes[option.scope]} class="mt-0.5" />
-                        <span class="min-w-0"><span class="block text-[12px] text-text-primary">{option.label}</span><span class="block text-[11px] leading-5 text-text-placeholder">{option.description}</span></span>
+                        <span class="min-w-0"><span class="block text-[12px] text-text-primary">{option.label({}, { locale })}</span><span class="block text-[11px] leading-5 text-text-placeholder">{option.description({}, { locale })}</span></span>
                       </label>
                     {/each}
                   </div>

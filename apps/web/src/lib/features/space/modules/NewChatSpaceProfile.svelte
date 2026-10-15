@@ -14,9 +14,9 @@ import StatusGlyph, {
 import UserIdentity from "$lib/components/UserIdentity.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import { formatShortDateTime } from "$lib/resource-kit/time";
 import {
 	displayUserName,
-	formatShortDateTime,
 	formatTokenCount,
 	formatUsageCost,
 	sandboxStatusKind,
@@ -29,7 +29,7 @@ const SANDBOX_GLYPH: Record<
 	{ tone: StatusGlyphTone; motion?: StatusGlyphMotion; soft?: boolean }
 > = {
 	running: { tone: "success", motion: "slow" },
-	waking: { tone: "brand", motion: "active" },
+	waking: { tone: "activity", motion: "active" },
 	sleeping: { tone: "muted", soft: true },
 	unknown: { tone: "muted", soft: true },
 	error: { tone: "error", soft: true },

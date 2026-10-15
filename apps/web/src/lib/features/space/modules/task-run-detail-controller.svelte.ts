@@ -1,13 +1,16 @@
 import type { ChannelEnvelope } from "@cohub/protocol/realtime";
-import type { TaskRunRecord } from "@neta-art/cohub";
+import type { TaskRunBoard, TaskRunRecord } from "@neta-art/cohub";
 import { untrack } from "svelte";
 import {
 	readTaskRunDetail,
 	writeTaskRunDetail,
 } from "$lib/cache/repositories/task-runs-repo";
+import {
+	displaySafeJson,
+	mergeTaskRunRecord,
+} from "$lib/resource-kit/task-run";
 import { sdk } from "$lib/sdk";
 import { createKeyedRouteRequestGuard } from "./route-request-guard";
-import { displaySafeJson, mergeTaskRunRecord } from "./task-run-utils";
 
 export type TaskRealtimeEvent = {
 	spaceId: string;
@@ -28,6 +31,7 @@ export function createTaskRunDetailController(options: {
 	let loading = $state(false);
 	let error = $state("");
 	let progress = $state<unknown>(null);
+	let boards = $state.raw<TaskRunBoard[]>([]);
 	let copiedField = $state<"id" | "payload" | "result" | null>(null);
 	let routeStateKey = "";
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -63,12 +67,16 @@ export function createTaskRunDetailController(options: {
 			if (showLoading) loading = true;
 			error = "";
 			try {
-				const { run, progress: nextProgress } =
-					await sdk.tasks.get(targetTaskId);
+				const {
+					run,
+					progress: nextProgress,
+					boards: nextBoards = [],
+				} = await sdk.tasks.get(targetTaskId, { include: ["boards"] });
 				if (!guard.isCurrent()) return;
 				detail = run;
 				notify(run);
 				progress = nextProgress;
+				boards = nextBoards;
 				void writeTaskRunDetail(requestSpaceId, run, nextProgress).catch(
 					() => undefined,
 				);
@@ -77,6 +85,7 @@ export function createTaskRunDetailController(options: {
 			} catch (cause) {
 				if (!guard.isCurrent()) return;
 				detail = null;
+				boards = [];
 				notify(null);
 				error = cause instanceof Error ? cause.message : "Failed to load task";
 				clearPoll();
@@ -95,6 +104,7 @@ export function createTaskRunDetailController(options: {
 	async function load(targetTaskId: string) {
 		clearPoll();
 		progress = null;
+		boards = [];
 		const requestSpaceId = options.getSpaceId();
 		const cached = await readTaskRunDetail(requestSpaceId, targetTaskId).catch(
 			() => null,
@@ -196,6 +206,9 @@ export function createTaskRunDetailController(options: {
 		},
 		get progress() {
 			return progress;
+		},
+		get boards() {
+			return boards;
 		},
 		get copiedField() {
 			return copiedField;

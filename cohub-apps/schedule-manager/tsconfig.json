@@ -1,0 +1,10 @@
+{
+  "extends": "../shared/tsconfig.json",
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "vite.config.ts",
+    "../shared/src/**/*.ts",
+    "../shared/src/**/*.svelte"
+  ]
+}

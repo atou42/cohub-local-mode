@@ -293,6 +293,12 @@ restart the CLI Runtime. Unsupported explicit choices fail before execution; old
 that omit the field retain their existing behavior. Human approval cards are not included:
 if the local settings require a human decision, Cohub rejects that request.
 
+Before an explicit-mode Turn starts, Cohub verifies the complete resolved sandbox and
+permissions profile, including network access, writable roots and temporary-directory rules.
+If Codex retains broader local permissions (for example, an extra writable root when switching
+to Auto approval), the Turn fails before sending the prompt. Inherit preserves those local
+policy details when creating a new thread as well as when continuing an existing one.
+
 The header distinguishes ready, limited, offline and stale/unknown status. Runtime lifecycle
 changes invalidate the existing status cache over the shared realtime room; old snapshots
 may populate labels/models, never authorize a local turn.

@@ -1,8 +1,8 @@
 <script lang="ts">
 import type { PublicAppVersionSummary } from "@neta-art/cohub";
 import { History, Loader2, MessageSquare } from "lucide-svelte";
-import { formatShortDateTime } from "$lib/features/space/space-utils";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { formatShortDateTime } from "$lib/resource-kit/time";
 import {
 	buildSpaceSessionRoute,
 	buildSpaceSessionTurnRoute,

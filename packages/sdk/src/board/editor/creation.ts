@@ -7,6 +7,7 @@ import {
 	type BoardItem,
 	type BoardItemEntry,
 	type BoardItemInput,
+	type BoardMediaItemKind,
 	type BoardMediaSnapshot,
 	type BoardTaskSnapshot,
 	buildBoardScene,
@@ -15,6 +16,7 @@ import {
 	createBoardItemId,
 	createDrawBoardItem,
 	createFileNodeForPath,
+	createMediaBoardItem,
 	createFrameBoardItem,
 	createShapeBoardItem,
 	createTaskBoardItem,
@@ -94,10 +96,11 @@ export function createCreationModule(ctx: EditorContext) {
 		at: WorldPoint,
 		sources: BoardTaskSource[],
 		metadata?: Record<string, unknown>,
+		aspect?: number,
 	) {
 		if (options.readonly) return null;
 		const { arrow } = state.toolStyles;
-		const task = createTaskBoardItem(taskRunId, snapshot, at.x, at.y, metadata);
+		const task = createTaskBoardItem(taskRunId, snapshot, at.x, at.y, metadata, undefined, aspect);
 		const arrows = sources
 			.filter((source) => source.itemId !== task.id && state.scene.get(source.itemId))
 			.map((source) => {
@@ -241,10 +244,12 @@ export function createCreationModule(ctx: EditorContext) {
 		add,
 		addItem,
 		addApp: (app: BoardAppMetadata, at: WorldPoint) => addOne(createAppBoardItem(app, at.x, at.y)),
+		addMedia: (src: string, at: WorldPoint, options: { kind?: BoardMediaItemKind; snapshot?: BoardMediaSnapshot } = {}) =>
+			addOne(createMediaBoardItem(src, at.x, at.y, options.snapshot, undefined, options.kind)),
 		addFile: (path: string, at: WorldPoint, snapshot?: BoardMediaSnapshot & BoardFileSnapshotFacts) =>
 			addOne(createFileNodeForPath(path, at.x, at.y, snapshot)),
-		addTask: (taskRunId: string, snapshot: BoardTaskSnapshot, at: WorldPoint, metadata?: Record<string, unknown>) =>
-			addOne(createTaskBoardItem(taskRunId, snapshot, at.x, at.y, metadata)),
+		addTask: (taskRunId: string, snapshot: BoardTaskSnapshot, at: WorldPoint, metadata?: Record<string, unknown>, aspect?: number) =>
+			addOne(createTaskBoardItem(taskRunId, snapshot, at.x, at.y, metadata, undefined, aspect)),
 		addTaskWithSources,
 		addText: (text: string, at: WorldPoint) => {
 			add([createTextBoardItem(text, at.x, at.y, styles().text.color)]);

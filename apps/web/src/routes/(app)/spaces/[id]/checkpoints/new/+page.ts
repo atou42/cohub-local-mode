@@ -1,7 +1,9 @@
+import { redirectResourcePage } from "$lib/features/space/modules/resource-app-ingress";
 import { readWindowFromSearch } from "$lib/features/space/modules/window-route";
 import type { PageLoad } from "./$types";
 
 export const load: PageLoad = async ({ params, url }) => {
+	redirectResourcePage(url);
 	const preview = readWindowFromSearch(url.searchParams);
 	return {
 		spaceId: params.id,

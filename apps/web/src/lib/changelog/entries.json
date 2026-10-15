@@ -1,5 +1,75 @@
 [
 	{
+		"version": "2.67",
+		"date": "2026-10-15",
+		"tags": ["v2.67.0"],
+		"highlights": [
+			"**Live Room connections for CLI agents**: `cohub rooms connect` streams room events and members over realtime, accepts bidirectional NDJSON publish, send, and presence commands on stdin, replays retained events with `--after`, and keeps the participant's seat after disconnect.",
+			"**Optional RTC media for Rooms**: `cohub rooms rtc` moves media and data channels to an isolated Go/Pion helper (`cohub-rtc`), replacing the native RTC adapter. It supports PCM, Opus, I420, and VP8 inputs with bounded binary or file outputs, and the SDK exposes a pluggable PeerConnection factory with participant-scoped RTC authorization.",
+			"**Self-describing Board schema**: `cohub boards schema` explains every item, track, animation, and settings field from the protocol schema. `cohub boards schema script` and the SDK's `BOARD_SCRIPT_API` document the script module API, which is type-checked against the script context.",
+			"**Faster Web shell**: compact screens no longer mount or subscribe the hidden desktop Sidebar, the Chats list is windowed while keeping keyboard focus reachable, and chat timelines reuse message projections for unchanged turns, cutting build time by about 43–50% in a Node microbenchmark.",
+			"**Example Apps moved out of the repo**: NETA World and Campfire now live in the separate Cohub Example Apps Space, published at the latest SDK version, so their sources are no longer maintained here."
+		],
+		"fixes": [
+			"Sidebar App launches now share navigation and resolution, cancel stale opens when the workspace changes, and closed Save tabs can be reopened.",
+			"Session rows put the running, queued, and failed status back at the start of the preview line, so rows without a preview no longer look empty."
+		]
+	},
+	{
+		"version": "2.66",
+		"date": "2026-10-14",
+		"tags": ["v2.66.0"],
+		"highlights": [
+			"**Decision models**: the new `space.decision()` API answers `noul` (yes/no), `choice` and `score` questions about text, JSON or images with calibrated probabilities, configured separately in `.cohub/decisions.json` so decision models never appear in LLM pickers; `cohub decision` and `cohub spaces decision` accept inline JSON or a file and upload local images as WebP, while the server bills the upstream-reported cost, retries transient transport and 5xx failures once, and archives every call.",
+			"**Home Space as personal config**: User Rules, skills, prompts, model configuration and the `.cohub/theme.css` personal theme now publish from the account's Home Space through the existing Save pipeline (`User Rules` return `source: \"home-space\"`), and the web app resolves the theme from Home; existing config Spaces stay ordinary Spaces, with no automatic migration or fallback.",
+			"**Board render style layer**: themes now shape every card through a `BoardRenderStyle` layer (silhouette, radius, shadow, selection, media framing, progress, icons, motion and chrome font) over shared surface helpers, and selection and hover chrome moves to one stage overlay so pointer and selection changes redraw a single layer instead of every affected card — breaking for custom card renderers, which gain `style`, `themeKey` and `liftedIds` plus an `observesSelection` opt-in, with Neta Pixel Boards rendering pixel corners, mosaic progress and stepped motion.",
+			"**Four-level fork trees and calmer lists**: Chats and the Space sidebar share one fork tree that nests up to four levels with continuous ancestor rails (deeper forks flatten into the fourth), while session rows are redrawn around an end-of-line status pill, unread dots, denser rows and avatars, and a refreshed mobile tab bar that shows the account avatar.",
+			"**Ember App**: a new standalone Cohub App draws a shared night camp on a live Board — Board scripts render campers, fire and effects, room events fold into one camp state with bounded snapshots, proximity voice and budgeted camera media run over room RTC with relay fallback, and a fire-spirit App Action joins by invite and edits the camp only through camp events."
+		],
+		"fixes": [
+			"**Gemini 4 reasoning**: every `gemini-4-argon` turn failed with \"Google stream ended without a finish reason\" because pi-ai sent the `thinkingBudget` the model rejects; outgoing requests now translate it to the `thinkingLevel` the model expects, guarded by a test that flags when the upstream workaround can be removed.",
+			"**Turn stats and scroll**: the message stats popover opens on click only (Escape or an outside click still closes it), and the body is the single scroll region so the header stays fixed and only one scrollbar shows.",
+			"**Theme hover visibility**: command palette and space switcher hovers stay visible on every built-in theme."
+		]
+	},
+	{
+		"version": "2.65",
+		"date": "2026-10-13",
+		"tags": ["v2.65.0"],
+		"highlights": [
+			"**Server-synced Board task cards**: Board task items now carry only a `taskRunId` — the server resolves each run's snapshot on every write and, when the run finishes, writes the final state onto every Board in the Space that shows it; cards render queued, generating and failed states with elapsed time and fit their result's aspect ratio.",
+			"**Authenticated sandbox RPC**: cloud sandbox connections now require per-instance RPC credentials that are validated in constant time, bound to resource claims and refreshed with the endpoint, while concurrent instance provisioning is fenced behind a renewing per-space lease so stale claims, reports and results cannot overwrite a successor.",
+			"**Board explicit script input and scoped host events**: scripts declare their own hit targets with `hitRegions()`, observe host selection, view and transform events on demand, and anchor screen-space scenes to scoped items, while undeclared regions stay transparent to input and editor gestures keep their ownership.",
+			"**Shared theme primitives and Neta Pixel themes**: primary keys, menus, spinners and switches now come from one set of shared primitives that themes restyle in a single place, and the new light and dark Neta Pixel themes ship alongside a full contrast, translucency and token pass across every built-in theme.",
+			"**Configurable service endpoints**: the SDK (`webBaseUrl`) and CLI (`--base-url` plus environment overrides) can target any deployment while keeping production and development defaults, with CLI login sessions, Home Space caches and Runtime directory bindings isolated per API base URL."
+		],
+		"fixes": [
+			"**App management**: App save, publish and delete failed with 403 for `app_session` principals even after the viewer granted `app.manage`; the writes now use the same permission check as the read routes.",
+			"**Chat polish**: session rows show stopped turns again, the chat timeline no longer scrolls sideways on iOS, and the sent-to line under a Turn is readable.",
+			"**Board script performance**: dynamic script textures are reused safely across frames, script composition order is cached, and redundant accessibility DOM writes are avoided.",
+			"**Board patterns**: dot and grid patterns are visible again — dots centered in their tile in muted ink, grid lines in the theme hairline.",
+			"**Mentions and App errors**: the official Cohub space is pinned at the top of the @ mention picker with an Official badge, and a signed-out viewer is told to sign in instead of seeing a bare \"unauthorized\"."
+		]
+	},
+	{
+		"version": "2.64",
+		"date": "2026-10-13",
+		"tags": ["v2.64.0"],
+		"highlights": [
+			"**Unified Board scripts**: replaced the standalone Sketch item with shared script attachments and a `custom` content container, backed by one isolated module runtime and ESM loading contract shared across the browser, CLI and exports, with native scene effects, Canvas drawing, local input and explicit document commits.",
+			"**App room RTC and device access**: `room.rtc()` adds WebRTC data channels and media tracks relayed through a Cloudflare Realtime SFU (with simulcast, device switching via `replace()`, receiver reuse and per-peer events), plus per-App camera, microphone and screen grants declared with `<meta name=\"cohub:devices\">`.",
+			"**App rooms beyond the App**: rooms now retain the latest 1,000 published events (up to 512 KB) for replay and `room.history()`, members carry their `kind` and Agent model, `room.invite()` brings in Agents or terminal users, and new `cohub rooms` commands let an Agent hold a seat and await events in the background.",
+			"**Resource Apps and shared resource-kit**: task inspector, checkpoint explorer, schedule manager and App manager open in dedicated App tabs, rebuilt on a shared `resource-kit` with a matching UI kit, host appearance tokens, cache-first lists, realtime updates and protected drafts.",
+			"**Board performance and URL-first media**: isolated card rendering, batched placeholder graphics and eliminated idle frame loops and redundant awareness redraws, while Board media sources accept stable public HTTP(S) URLs alongside relative Space paths."
+		],
+		"fixes": [
+			"Render image `crop` on Boards and draw frame borders in their authored color with `dash` and `trim`, matching shapes.",
+			"Keep local Board script effects out of copied, cut and duplicated items, and publish script entry modules with their transitive ESM dependencies.",
+			"Keep concurrently created Boards intact when a create request fails alongside another request sharing the same mutation id.",
+			"Retry incomplete RTC subscriptions and respect room event limits."
+		]
+	},
+	{
 		"version": "2.63",
 		"date": "2026-10-10",
 		"tags": ["v2.63.0"],

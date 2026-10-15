@@ -110,7 +110,7 @@ const locale: Locale = $derived(getLocale());
   }
 
   .error {
-    color: var(--error);
+    color: var(--color-error);
     font-size: 13px;
   }
 </style>

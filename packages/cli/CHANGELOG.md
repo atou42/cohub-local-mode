@@ -1,5 +1,79 @@
 # @neta-art/cohub-cli
 
+## 10.3.0
+
+### Minor Changes
+
+- dcb3bbc: `cohub boards schema` now explains every Board field: descriptions come from the protocol schema, so item, track, animation and settings fields say what they mean. `cohub boards schema script` prints the script attachment and the module API, exported from the SDK as `BOARD_SCRIPT_API`. `cohub boards -h` lists every Board command.
+- bebc55d: Add live hosted Room connections with bidirectional NDJSON CLI commands, member synchronization, and retained-event replay. Add participant-scoped RTC authorization and a pluggable PeerConnection factory. The CLI supports isolated, opt-in RTC media/data workers with PCM/I420 or Opus/VP8 file or pipe inputs and bounded binary or segmented-file outputs. RTC runs in an on-demand Go/Pion helper (`cohub-rtc`) that the CLI downloads and verifies; FFmpeg is needed only for format conversion.
+
+### Patch Changes
+
+- Updated dependencies [dcb3bbc]
+- Updated dependencies [bebc55d]
+  - @neta-art/cohub@11.3.0
+
+## 10.2.0
+
+### Minor Changes
+
+- ad8e425: Add decision model calls. `space.decision()` answers `noul` (yes/no), `choice`, and `score` questions about text, a JSON object, or images with calibrated probabilities, through `POST /api/spaces/:id/decisions`. Images can be https or data URLs. The CLI adds `cohub decision` and `cohub spaces decision`, which read questions from inline JSON or a file and upload local `--image` files as WebP first.
+  
+  新增决策模型调用。`space.decision()` 通过 `POST /api/spaces/:id/decisions`，针对文本、JSON 对象或图片回答 `noul`（肯定或否定）、`choice`（单选）和 `score`（打分）问题，并给出校准过的概率。图片可以是 https URL 或 data URL。CLI 新增 `cohub decision` 和 `cohub spaces decision`，问题可以写成内联 JSON 或放在文件里，本地 `--image` 图片会先转成 WebP 并上传。
+
+### Patch Changes
+
+- b2d943d: Upgrade Generation SDK to 0.1.35. Generation model declarations accept the `decision` category with `systemOneExamples` and `decisionsExamples`.
+- Updated dependencies [c13c4af]
+- Updated dependencies [ad8e425]
+- Updated dependencies [b2d943d]
+- Updated dependencies [2aa1722]
+  - @neta-art/cohub@11.2.0
+
+## 10.1.0
+
+### Minor Changes
+
+- cbbb519: Allow the SDK and CLI to override service endpoints through environment variables while retaining production and development defaults. Add the CLI `--base-url` flag and the SDK `webBaseUrl` option. Isolate CLI login sessions, Home Space caches, and Runtime directory bindings by API base URL.
+
+### Patch Changes
+
+- Updated dependencies [56abacd]
+- Updated dependencies [be2784e]
+- Updated dependencies [8d37cc6]
+- Updated dependencies [cbbb519]
+  - @neta-art/cohub@11.1.0
+
+## 10.0.0
+
+### Major Changes
+
+- 0a6b12a: Replace the standalone Sketch item with a shared script attachment for Board items and a `custom` content container. Add isolated module instances, native scene effects, Canvas drawing, local input and explicit document commits. Browser and CLI exports share the script runtime and ESM module loading contract.
+  
+  Existing Sketch documents must move `props.src`, `props.params` and `props.seed` into `script`, change `type` to `custom`, and leave `props` empty. Stored documents are not rewritten automatically.
+
+### Minor Changes
+
+- 0819b10: **App rooms beyond the App**: a room keeps the latest 1,000 published events (up to 512 KB), so a reconnect replays what it missed and `room.history()` shows a late joiner what came before. `room.invite()` lets someone outside the App join — a person in a terminal, or an Agent — and members now carry their `kind` (`user`, `agent`, `cli`) and an Agent's `model`. The new `cohub rooms` commands (`create`, `join`, `get`, `events`, `publish`, `presence`, `invite`, `leave`) and `client.rooms` hold a seat without a connection; `cohub rooms events --wait` returns when someone else publishes, so an Agent can wait in the background and wake to the room.
+- bd63932: Make Board animation previews and exports consistent: preserve CSS alpha, sample trails when seeking, follow animation cameras, and stream export frames with cancellation and bounded memory. Add plain frame containers, shared text/layout inspection, and helpers for chapter composition and equal-distance path sampling. Expose inspection, sequence compilation and path sampling in the CLI, with clearer animation schema semantics.
+- 9da65cc: Support stable public HTTP(S) URLs in Board image, video, audio and file sources while retaining relative Space paths. Add shared media resolution and creation helpers, batch item insertion, extensionless image loading, and safe remote audio downloads for CLI export. Published Boards distinguish captured files from live external media references.
+
+### Patch Changes
+
+- 152521b: Render image `crop` on Boards, and draw frame borders in their authored color with `dash` and `trim`, matching shapes. A frame with an empty label shows no title.
+- e3bd875: Keep Codex's native model list and reasoning capabilities for custom providers without requiring a separate model catalog file. Local spaces can select all models returned by Codex instead of only the configured default.
+- 6d46e98: Upgrade Generation SDK to 0.1.33, adding Doubao ASR transcription support with optional text prompts.
+- Updated dependencies [ab854d7]
+- Updated dependencies [0819b10]
+- Updated dependencies [0fc09da]
+- Updated dependencies [9ef1fbd]
+- Updated dependencies [bd63932]
+- Updated dependencies [152521b]
+- Updated dependencies [9da65cc]
+- Updated dependencies [9146d58]
+- Updated dependencies [0a6b12a]
+  - @neta-art/cohub@11.0.0
+
 ## 9.1.2
 
 ### Patch Changes

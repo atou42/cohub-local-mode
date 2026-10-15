@@ -256,14 +256,14 @@ const sections: ShortcutSection[] = $derived([
 		min-height: 1.46rem;
 		padding: 0.08rem 0.14rem;
 		border-radius: 7px;
-		background: color-mix(in oklab, var(--bg-secondary) 58%, transparent);
+		background: color-mix(in oklab, var(--bg-surface) 58%, transparent);
 		box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--border-subtle) 52%, transparent);
 		transition:
 			background-color 120ms ease,
 			box-shadow 120ms ease;
 	}
 	.shortcut-row:hover {
-		background: color-mix(in oklab, var(--brand) 5%, var(--bg-secondary));
+		background: color-mix(in oklab, var(--brand) 5%, var(--bg-surface));
 		box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 18%, var(--border-subtle));
 	}
 	.shortcut-label {
@@ -322,7 +322,7 @@ const sections: ShortcutSection[] = $derived([
 		max-width: 100%;
 		padding: 0.28rem 0.42rem;
 		border-radius: 7px;
-		background: color-mix(in oklab, var(--bg-secondary) 58%, transparent);
+		background: color-mix(in oklab, var(--bg-surface) 58%, transparent);
 		box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--border-subtle) 52%, transparent);
 		text-decoration: none;
 		color: inherit;
@@ -331,7 +331,7 @@ const sections: ShortcutSection[] = $derived([
 			box-shadow 120ms ease;
 	}
 	.doc-card-link:hover {
-		background: color-mix(in oklab, var(--brand) 5%, var(--bg-secondary));
+		background: color-mix(in oklab, var(--brand) 5%, var(--bg-surface));
 		box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 18%, var(--border-subtle));
 	}
 	.doc-copy-wrap {

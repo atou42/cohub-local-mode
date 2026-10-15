@@ -91,6 +91,7 @@ test("generationUsageKind maps ledger types onto gate kinds", () => {
 	assert.equal(generationUsageKind(COHUB_BILLING_USAGE_TYPES.generation), "generation");
 	assert.equal(generationUsageKind(COHUB_BILLING_USAGE_TYPES.generationLlm), "llm.turn");
 	assert.equal(generationUsageKind(COHUB_BILLING_USAGE_TYPES.generationLlmRaw), "llm.raw_completion");
+	assert.equal(generationUsageKind(COHUB_BILLING_USAGE_TYPES.generationDecision), "llm.decision");
 });
 
 test("normalizePositiveUsd rejects non-positive values", () => {

@@ -16,12 +16,13 @@ import {
   BOARD_MIME_TYPE,
   isBoardPath,
   parseBoardManifest,
-  type BoardSnapshot,
   type AppArtifactManifest,
   type AppArtifactManifestFile,
   type AppBoardArtifactManifest,
   type AppBoardAsset,
 } from "@cohub/protocol";
+import { BOARD_SCRIPT_MAX_BYTES } from "@cohub/protocol/board-script-modules";
+import { collectBoardPublishReferences } from "./board-dependencies.js";
 import type { Job } from "bullmq";
 import { captureBoardSnapshots } from "@cohub/core/board";
 import { db } from "../../../db.js";
@@ -700,6 +701,7 @@ function extractPageMetaFromHtml(
     themeColor: page.themeColor,
     surface: page.surface,
     fileHandlers: page.fileHandlers,
+    devices: page.devices,
     sourcePath,
   };
 }
@@ -868,16 +870,6 @@ async function writeWorkFileAsset(input: {
   };
 }
 
-function collectBoardDependencyPaths(snapshot: BoardSnapshot): string[] {
-  const paths = new Set<string>();
-  for (const item of Object.values(snapshot.items)) {
-    const props = item.props as { src?: unknown; snapshot?: { coverPath?: unknown } } | undefined;
-    if (typeof props?.src === "string") paths.add(props.src);
-    if (item.type === "file" && typeof props?.snapshot?.coverPath === "string") paths.add(props.snapshot.coverPath);
-  }
-  return [...paths].sort((left, right) => left.localeCompare(right));
-}
-
 type CapturedBoardDependency = AppBoardAsset & {
   file?: WorkSourceFile;
   prepared?: PreparedWorkFile;
@@ -888,6 +880,7 @@ async function captureBoardDependency(
   root: string,
   sourcePath: string,
   budget: { reserve: (bytes: number) => boolean },
+  script = false,
 ): Promise<CapturedBoardDependency> {
   let absolutePath: string;
   try {
@@ -901,6 +894,9 @@ async function captureBoardDependency(
   if (!stats) return { sourcePath, status: "missing", reason: "path_not_found" };
   if (stats.isSymbolicLink() || !stats.isFile()) {
     return { sourcePath, status: "rejected", reason: "unsupported_file_type" };
+  }
+  if (script && stats.size > BOARD_SCRIPT_MAX_BYTES) {
+    throw new WorkPublishAssetError(413, `Script module exceeds the 2 MB limit: ${sourcePath}`, "board_script_too_large");
   }
   if (stats.size > MAX_WORK_SITE_BYTES) {
     return { sourcePath, status: "rejected", reason: "asset_too_large" };
@@ -916,7 +912,7 @@ async function captureBoardDependency(
     size: stats.size,
     mimeType: getMimeType(sourcePath),
   };
-  const prepared = await prepareWorkFile(file);
+  const prepared = await prepareWorkFile(file, script ? BOARD_SCRIPT_MAX_BYTES : 0);
   const extension = extname(sourcePath).toLowerCase();
   return {
     sourcePath,
@@ -980,14 +976,35 @@ async function writeAppBoardAsset(input: {
   });
   if (!snapshot) throw new WorkPublishAssetError(404, "board not found", "board_not_found");
 
-  const dependencyPaths = collectBoardDependencyPaths(snapshot);
-  if (dependencyPaths.length > MAX_WORK_SITE_FILES) {
-    throw new WorkPublishAssetError(413, `Board references more than ${MAX_WORK_SITE_FILES} assets.`, "board_too_many_assets");
-  }
+  const budget = createByteBudget(MAX_WORK_SITE_BYTES);
+  const captured = new Map<string, Promise<CapturedBoardDependency>>();
+  const capture = (path: string, script = false) => {
+    let pending = captured.get(path);
+    if (!pending) {
+      pending = captureBoardDependency(input.root, path, budget, script);
+      captured.set(path, pending);
+    }
+    return pending;
+  };
+  const { files: dependencyPaths, urls: externalUrls } = await collectBoardPublishReferences(
+    snapshot,
+    async (path) => {
+      const asset = await capture(path, true);
+      if (!asset.prepared?.prefix) throw new WorkPublishAssetError(400, `Script module is unavailable: ${path}`, "board_script_unavailable");
+      const code = asset.prepared.prefix.toString("utf8");
+      // Upload only needs the hash and file snapshot; avoid retaining a second copy.
+      asset.prepared.prefix = null;
+      return code;
+    },
+    MAX_WORK_SITE_FILES,
+  ).catch((error: unknown) => {
+    if (error instanceof WorkPublishAssetError) throw error;
+    if (error instanceof RangeError) throw new WorkPublishAssetError(413, error.message, "board_too_many_assets");
+    throw new WorkPublishAssetError(400, error instanceof Error ? error.message : "Invalid Board script dependencies.", "invalid_board_scripts");
+  });
 
   const artifactRootKey = buildWorkArtifactRoot({ spaceId: input.spaceId, appSlug: input.appSlug });
   const prefix = workContentPrefix(artifactRootKey);
-  const budget = createByteBudget(MAX_WORK_SITE_BYTES);
   const uploaded = new Set<string>();
   // Indexed rather than appended: workers finish out of order, and the manifest
   // should still list assets in the board's stable reference order.
@@ -997,7 +1014,7 @@ async function writeAppBoardAsset(input: {
     dependencyPaths.map((sourcePath, index) => ({ sourcePath, index })),
     WORK_FILE_UPLOAD_CONCURRENCY,
     async ({ sourcePath, index }) => {
-      const { file, prepared, ...asset } = await captureBoardDependency(input.root, sourcePath, budget);
+      const { file, prepared, ...asset } = await capture(sourcePath);
       assets[index] = asset;
       if (!file || !prepared || !asset.artifactPath || !asset.sha256) return;
       // Content-addressed: identical bytes are stored once.
@@ -1021,6 +1038,7 @@ async function writeAppBoardAsset(input: {
     sourcePath: input.sourcePath,
     snapshot,
     assets,
+    ...(externalUrls.length ? { externalUrls } : {}),
   };
   const body = `${JSON.stringify(manifest)}\n`;
   const objectKey = `${prefix}/board.json`;

@@ -11,9 +11,13 @@ import {
 	isNewerAppSnapshot,
 	upsertAppVersion,
 } from "$lib/features/app/app-realtime";
+import {
+	APP_SCOPE_OPTIONS,
+	scopeState,
+	selectedScopeList,
+} from "$lib/resource-kit/app";
 import { sdk } from "$lib/sdk";
 import { buildSpaceLandingRoute } from "$lib/space-routes";
-import { APP_SCOPE_OPTIONS, scopeState, selectedScopeList } from "./app-utils";
 import { createKeyedRouteRequestGuard } from "./route-request-guard";
 
 export type AppTargetType = "file" | "directory" | "port";

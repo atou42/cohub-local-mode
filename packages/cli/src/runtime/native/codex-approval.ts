@@ -64,11 +64,9 @@ async function inheritApprovalOptions(codex: CodexChannel, cwd: string): Promise
       if (typeof profile.id !== "string" || !profile.id) throw new Error("Codex did not provide a valid local permissions profile");
       return { thread: { ...approval, permissions: profile.id }, turn: { ...approval, permissions: profile.id }, inherited: resolved };
     }
-    // External sandboxes have no thread/start SandboxMode representation. A new thread inherits
-    // this machine setting naturally; existing threads receive the exact policy via settings/update.
-    if (sandbox.type === "externalSandbox") return { thread: approval, turn: { ...approval, sandboxPolicy: sandbox }, inherited: resolved };
-    const mode = sandbox.type === "readOnly" ? "read-only" : sandbox.type === "workspaceWrite" ? "workspace-write" : "danger-full-access";
-    return { thread: { ...approval, sandbox: mode }, turn: { ...approval, sandboxPolicy: sandbox }, inherited: resolved };
+    // A new thread inherits the complete local policy. Reducing it to a SandboxMode
+    // can discard network and filesystem details; existing threads receive it via settings/update.
+    return { thread: approval, turn: { ...approval, sandboxPolicy: sandbox }, inherited: resolved };
   } finally {
     await codex.request("thread/unsubscribe", { threadId });
   }
@@ -78,7 +76,7 @@ export function confirmCodexApprovalOptions(opened: JsonRecord, approval: Approv
   const expectedSandbox = approval.inherited?.sandbox ?? approval.turn.sandboxPolicy;
   if (!isDeepStrictEqual(opened.approvalPolicy, approval.thread.approvalPolicy)
     || opened.approvalsReviewer !== approval.thread.approvalsReviewer
-    || record(opened.sandbox).type !== record(expectedSandbox).type
-    || approval.thread.permissions !== undefined && record(opened.activePermissionProfile).id !== approval.thread.permissions
+    || !isDeepStrictEqual(opened.sandbox, expectedSandbox)
+    || !isDeepStrictEqual(opened.activePermissionProfile, approval.inherited?.activePermissionProfile ?? null)
   ) throw new Error("Codex did not confirm the selected approval mode; no Turn was started");
 }

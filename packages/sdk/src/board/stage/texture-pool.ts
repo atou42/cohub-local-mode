@@ -49,12 +49,8 @@ async function loadUncachedTexture(url: string): Promise<Texture> {
  */
 async function loadImageTexture(url: string): Promise<Texture> {
 	try {
-		// CDN stills keep their source's extension (`clip.mp4?x-oss-process=…`),
-		// which would pick Pixi's video parser; they are always images.
-		const asset = /[?&]x-oss-process=/.test(url)
-			? { src: url, parser: "texture" }
-			: url;
-		return await Assets.load<Texture>(asset);
+		// Media URLs need not have image extensions.
+		return await Assets.load<Texture>({ src: url, parser: "texture" });
 	} catch (workerError) {
 		const errors: unknown[] = [workerError];
 		for (const load of [loadImageElementTexture, loadUncachedTexture]) {

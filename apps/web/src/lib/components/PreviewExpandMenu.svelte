@@ -113,7 +113,7 @@ onDestroy(() => {
 	</button>
 	{#if open}
 		<div
-			class="preview-expand-popover"
+			class="preview-expand-popover menu-surface"
 			role="menu"
 			tabindex="-1"
 			use:floatNear={{
@@ -172,11 +172,7 @@ onDestroy(() => {
 	.preview-expand-popover {
 		width: 132px;
 		overflow: hidden;
-		border-radius: 8px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-elevated);
 		padding: 4px;
-		box-shadow: 0 10px 24px color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
 	}
 
 	.preview-expand-item {

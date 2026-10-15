@@ -31,6 +31,8 @@ import {
   APP_VIEW_STATS_FLUSH_SCHEDULER_ID,
 } from "@cohub/protocol";
 
+import { APP_RTC_LIVENESS_INTERVAL_MS, APP_RTC_SWEEP_JOB, APP_RTC_SWEEP_SCHEDULER_ID } from "@cohub/core/app-rtc";
+
 import "../system/jobs/index.js";
 
 const SANDBOX_IDLE_REAPER_SCHEDULER_ID = "sandbox-idle-reaper-daily";
@@ -167,6 +169,26 @@ try {
   });
 } catch (error) {
   logger.error("[SystemWorker] Failed to ensure app promotion stats flush schedule", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+try {
+  await systemQueue.upsertJobScheduler(
+    APP_RTC_SWEEP_SCHEDULER_ID,
+    { every: APP_RTC_LIVENESS_INTERVAL_MS },
+    {
+      name: APP_RTC_SWEEP_JOB,
+      data: {},
+      opts: { attempts: 1, ...defaultJobRetention },
+    },
+  );
+  logger.info("[SystemWorker] Ensured app RTC sweep schedule", {
+    schedulerId: APP_RTC_SWEEP_SCHEDULER_ID,
+    intervalMs: APP_RTC_LIVENESS_INTERVAL_MS,
+  });
+} catch (error) {
+  logger.error("[SystemWorker] Failed to ensure app RTC sweep schedule", {
     error: error instanceof Error ? error.message : String(error),
   });
 }

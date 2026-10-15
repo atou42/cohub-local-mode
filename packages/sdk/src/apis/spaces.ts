@@ -57,8 +57,10 @@ import type {
   CreateSpacePromptInput,
   CreateSpacePromptResponse,
   CreateSpaceCompletionInput,
+  CreateSpaceDecisionInput,
   SpaceCompletionResult,
   SpaceCompletionStreamEvent,
+  SpaceDecisionResult,
   SpaceEnvInput,
   SpaceFsCompleteUploadInput,
   SpaceFsCompleteUploadResponse,
@@ -2245,6 +2247,15 @@ export class SpaceClient {
       signal?.removeEventListener("abort", onAbort);
       await releaseReader();
     }
+  }
+
+  decision(input: CreateSpaceDecisionInput, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<SpaceDecisionResult>(`/api/spaces/${this.id}/decisions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: options.signal,
+    });
   }
 
   update(input: { name?: string; slug?: string | null }) {
