@@ -5,3 +5,4 @@ export * from "./scene.js";
 export * from "./stage.js";
 export * from "./texture-pool.js";
 export * from "./views.js";
+export * from "./overlay.js";

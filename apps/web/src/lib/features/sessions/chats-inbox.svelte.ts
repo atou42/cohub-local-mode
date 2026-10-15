@@ -8,7 +8,7 @@ import type {
 } from "@neta-art/cohub";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
-import { resolveAppEntryRoute } from "$lib/app-entry";
+import { resolveSpaceEntryRoute } from "$lib/app-entry";
 import type { SessionListForkRecord } from "$lib/cache/db";
 import { getCacheUserKeyAsync } from "$lib/cache/keys";
 import { openCommandPalette } from "$lib/command-palette/open";
@@ -325,7 +325,7 @@ class ChatsInbox {
 			getRecentSpaces(authStore.userUuid ?? "").length > 0 ||
 			Boolean(getCachedSpaceList()?.length);
 		if (!knowsSpaces) {
-			const destination = await resolveAppEntryRoute();
+			const destination = await resolveSpaceEntryRoute();
 			if (destination) {
 				await goto(destination);
 				return;

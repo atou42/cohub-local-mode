@@ -39,7 +39,7 @@ cohub boards create demo.board -i custom.json
 Attach a module to an existing item:
 
 ```sh
-cohub boards schema custom
+cohub boards schema script
 cohub boards apply demo.board '{"items":{"figure":{"script":{"src":"scripts/motion.js","params":{"speed":40}}}}}' --dry-run
 cohub boards apply demo.board '{"items":{"figure":{"script":{"src":"scripts/motion.js","params":{"speed":40}}}}}'
 ```
@@ -81,6 +81,7 @@ input changes or the instance calls `invalidate()`.
 ```js
 export default function (ctx) {
   ctx.state.paused ??= false;
+  ctx.hitRegions({ owner: { target: "self", label: "Toggle motion" } });
   ctx.on("click", () => { ctx.state.paused = !ctx.state.paused; });
   ctx.onFrame(({ t }) => {
     if (ctx.state.paused) return;
@@ -109,21 +110,28 @@ scripts. Current document order determines competing script overrides.
 
 ```js
 export default function (ctx) {
-  const show = () => ctx.scene({
+  const show = () => {
+    ctx.scene({
     action: {
       type: "shape",
       position: { x: 0, y: -44 },
       size: { width: 120, height: 32 },
       props: { text: "Reset" }
     }
-  }, { space: "screen" });
-
+    }, { space: "screen" });
+    ctx.hitRegions({
+      owner: { target: "self", label: "Show controls" },
+      action: { item: "action", label: "Reset" }
+    });
+  };
+  ctx.hitRegions({ owner: { target: "self", label: "Show controls" } });
   ctx.on("pointerenter", show);
   ctx.on("focus", show);
   ctx.on("click", ({ target }) => {
     if (target === "action") {
       ctx.self.present(null);
       ctx.scene({});
+      ctx.hitRegions({ owner: { target: "self", label: "Show controls" } });
     }
   });
 }
@@ -149,12 +157,79 @@ ctx.hitRegions({
 });
 ```
 
-Hit regions use local coordinates and stable IDs. Labeled regions become keyboard
-focus targets. Events include `pointerenter`, `pointerleave`, `pointerdown`,
+`hitRegions()` replaces the instance's input declarations. Use `{ target: "self" }`
+for the owner, `{ item: "local-id" }` for a temporary scene item, or a local
+rectangle for a Canvas hotspot. Rectangles should lie inside the owner's bounds.
+Only declared targets receive script input; attaching a script to a Frame never
+captures ordinary descendants. Undeclared temporary decoration is transparent to
+input. In **Interact**, ordinary cards remain editable outside declared targets.
+Labels create keyboard focus targets from the same declarations; there is no
+implicit focus target for the owner. Event `target` is the declaration's key.
+
+Events include `pointerenter`, `pointerleave`, `pointerdown`,
 `pointermove`, `pointerup`, `pointercancel`, `click`, `focus`, `blur`, `keydown`,
-and `keyup`. Pointer events carry local `point`, pointer identity and modifiers;
+and `keyup`. Pointer events carry `point` in the script owner's local coordinates
+(including events from anchored screen controls), pointer identity and modifiers;
 keyboard events carry `key`. Captured drags continue receiving pointer input.
-`target` identifies the owner, local temporary item, or hit region.
+Disabling interaction or removing a captured hit declaration cancels that script
+drag without transferring its remaining input to the editor.
+
+## Observe the host
+
+Subscribe through the same `ctx.on()` API. These events do not capture input:
+
+```js
+ctx.on("selectionchange", ({ data }) => {
+  ctx.state.selected = data.ids;
+});
+ctx.on("transformend", ({ data }) => {
+  if (!data.cancelled) ctx.state.lastMoved = data.ids;
+});
+ctx.on("viewchange", ({ data: view }) => {
+  // The payload is typed; ctx.view also holds this latest snapshot.
+  const { camera, width, height, safeRect } = view;
+});
+```
+
+Built-in host event payloads are inferred from the event name in TypeScript;
+custom event payloads remain `unknown`. View dimensions, camera translation and
+safe rectangles use screen pixels; document coordinates remain world units.
+
+Selection events contain only IDs in the script scope. Transform events contain
+`ids`, `operation` (`move`, `resize`, `rotate`, `arrow`) and `cancelled`; only local
+pointer gestures produce them, not remote writes or animation. Cancellation
+restores the editor draft. Subscriptions receive an initial selection/view and
+then changes. View and selection updates coalesce while a worker is busy. There
+is no per-frame geometry request or whole-Board broadcast. Removing the last
+subscriber removes the transform listener.
+
+`ctx.view` is null until a view event arrives; Node exports have no interactive
+view or user events. The embedding stage may provide a `safeRect` callback to
+exclude its chrome, then call `stage.invalidate()` when that area changes. Without
+an override, the safe rectangle is the stage surface. Neither view state nor
+selection enters the document, history, or shared playback.
+
+## Anchor screen UI
+
+Screen scenes default to the owner's origin. An explicit anchor follows another
+scoped document item, including parent transforms and editing gestures:
+
+```js
+ctx.scene({
+  hint: { type: "text", position: { x: 12, y: 0 }, props: { text: "Ready" } }
+}, {
+  space: "screen",
+  anchor: { item: ctx.targets.card, point: { x: 1, y: 0 } }
+});
+```
+
+The anchor point uses normalized local box coordinates (0–1); scene positions
+remain screen-pixel offsets. Missing anchors hide the scene, and references
+outside scope are rejected. Screen UI stays excluded from image export. The SDK's
+`placeBoardOverlay({ anchor, size, safeRect, placements?, gap? })` is a pure helper
+for choosing a side and clamping position. It returns `position`, `placement`, and
+`availableSize`; it never changes the camera or resizes content automatically.
+
 
 ## Coordinate items and save deliberately
 
@@ -254,7 +329,3 @@ independent runtime to every primitive.
 Boards with no enabled scripts skip the script runtime entirely. Native animation,
 input and export do not prepare script effects. Attaching the first script starts
 the host; disabling or removing the last one disposes it and its temporary output.
-
-The former `sketch` item is replaced by `custom` with the common `script` attachment.
-There is no parallel Sketch runtime. Existing documents must be updated explicitly
-before using this format; this change does not rewrite stored Board data.

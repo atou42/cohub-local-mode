@@ -4,7 +4,7 @@ import { onMount } from "svelte";
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { resolveAppEntryRoute } from "$lib/app-entry";
+import { resolveAppHomeRoute } from "$lib/app-entry";
 import {
 	hasLocalSessionHint,
 	hasRecoverableAuthSession,
@@ -71,14 +71,7 @@ async function handlePrimaryCta() {
 			redirecting = true;
 			if (browser)
 				document.documentElement.setAttribute("data-home-redirect", "1");
-			const dest = await resolveAppEntryRoute();
-			if (dest) {
-				await goto(dest);
-				return;
-			}
-			redirecting = false;
-			clearHomeRedirectAttr();
-			console.error("[home] Authenticated but no default space available");
+			await goto(await resolveAppHomeRoute());
 			return;
 		}
 		// After login, / resolves default (and ensures Home if needed).
@@ -117,14 +110,7 @@ onMount(() => {
 				clearHomeRedirectAttr();
 				return;
 			}
-			const dest = await resolveAppEntryRoute();
-			if (!dest) {
-				redirecting = false;
-				clearHomeRedirectAttr();
-				console.warn("[home] No default space after ensure");
-				return;
-			}
-			await goto(dest);
+			await goto(await resolveAppHomeRoute());
 		} catch (error) {
 			console.warn("[home] Session redirect failed:", error);
 			redirecting = false;

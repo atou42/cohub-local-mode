@@ -244,7 +244,7 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 			</button>
 			{#if resourceActions.open && resourceActionsRootEl}
 				<div
-					class="w-44 overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-1 shadow-lg"
+					class="menu-surface w-44 overflow-hidden py-1"
 					role="menu"
 					data-resource-actions
 					use:floatNear={{
@@ -408,11 +408,11 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 	}
 
 	.header-action.is-shared {
-		color: var(--success-soft);
+		color: var(--color-success-soft);
 	}
 
 	.header-action.is-shared:hover {
-		background: var(--success-bg);
-		color: var(--success);
+		background: var(--color-success-bg);
+		color: var(--color-success);
 	}
 </style>

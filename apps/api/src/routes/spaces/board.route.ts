@@ -19,7 +19,9 @@ import {
   readBoard,
   readBoardHistory,
   restoreBoardVersion,
+  BOARD_TASK_MUTATION_PREFIX,
   type BoardApplyOutcome,
+  type BoardWriteInput,
 } from "@cohub/core/board";
 import { buildBoardCreateIdentity } from "../../board-create-idempotency.js";
 import {
@@ -29,10 +31,10 @@ import {
 } from "../../board-error.js";
 import { dispatchBoardChanged, dispatchBoardPlaybackChanged } from "../../board-events.js";
 import { db } from "../../db/index.js";
-import { authzDenied, getOptionalAuth, requireValidId, useAuth } from "../../lib/middleware.js";
+import { type AuthUser, authzDenied, getOptionalAuth, requireValidId, useAuth } from "../../lib/middleware.js";
 import { getRequestSource } from "../../lib/request-source.js";
 import { resolveRequestActor } from "../../lib/request-actor.js";
-import { hasPermission } from "../../permissions.js";
+import { hasPermission, isTaskRunOwner } from "../../permissions.js";
 import {
   assertSafeRelativePath,
   createSpaceFileExclusive,
@@ -86,6 +88,11 @@ function fail(c: Context, error: unknown) {
   return c.json(errorBody(response), response.status as never);
 }
 
+function taskViewer(user: AuthUser, spaceId: string): BoardWriteInput["taskViewer"] {
+  return async ({ sessionId, userUuid }) =>
+    isTaskRunOwner(user, { userUuid }) || hasPermission(user, "taskrun.view", { spaceId, sessionId: sessionId ?? undefined });
+}
+
 async function boardExists(spaceId: string, boardId: string) {
   const [row] = await db.select({ id: boards.id }).from(boards).where(and(eq(boards.id, boardId), eq(boards.spaceId, spaceId))).limit(1);
   return Boolean(row);
@@ -99,18 +106,7 @@ function boardParams(c: { req: { param: (name: string) => string | undefined } }
 
 async function announce(c: Context, spaceId: string, boardId: string, actorId: string, outcome: BoardApplyOutcome, source: ReturnType<typeof getRequestSource>) {
   if (!outcome.written) return;
-  await dispatchBoardChanged({
-    spaceId,
-    boardId,
-    actorId,
-    actor: await resolveRequestActor(c),
-    mutationId: outcome.result.mutationId,
-    baseVersion: outcome.written.baseVersion,
-    version: outcome.result.version,
-    changed: outcome.result.changed,
-    after: outcome.written.after,
-    source,
-  }).catch(() => undefined);
+  await dispatchBoardChanged({ spaceId, boardId, actorId, actor: await resolveRequestActor(c), outcome, source }).catch(() => undefined);
   if (outcome.written.playback !== undefined) {
     await dispatchBoardPlaybackChanged({ spaceId, boardId, playback: outcome.written.playback }).catch(() => undefined);
   }
@@ -155,6 +151,7 @@ router.post("/", writeBodyLimit, async (c) => {
       boardId,
       title,
       actorId: user.uuid,
+      taskViewer: taskViewer(user, spaceId),
       ...(body.document ? { document: body.document } : {}),
       ...(identity ? { mutationId: identity.transactionId } : {}),
       source,
@@ -215,9 +212,12 @@ router.post("/:boardId/apply", writeBodyLimit, async (c) => {
   if (!(await hasPermission(user, "file.edit", { spaceId: params.spaceId }))) return authzDenied(c);
   const parsed = BoardApplyInputSchema.safeParse(await c.req.json<unknown>().catch(() => null));
   if (!parsed.success) return c.json({ code: "INVALID_PATCH", message: "Board patch is invalid.", diagnostics: zodDiagnostics(parsed.error) }, 400);
+  if (parsed.data.mutationId?.startsWith(BOARD_TASK_MUTATION_PREFIX)) {
+    return c.json({ code: "INVALID_PATCH", message: `mutationId must not start with "${BOARD_TASK_MUTATION_PREFIX}".` }, 400);
+  }
   const source = getRequestSource(c);
   try {
-    const outcome = await applyBoard(db, { ...params, actorId: user.uuid, apply: parsed.data, source });
+    const outcome = await applyBoard(db, { ...params, actorId: user.uuid, apply: parsed.data, source, taskViewer: taskViewer(user, params.spaceId) });
     await announce(c, params.spaceId, params.boardId, user.uuid, outcome, source);
     return c.json(outcome.result);
   } catch (error) {

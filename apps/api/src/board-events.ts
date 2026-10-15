@@ -1,46 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type {
-  Actor,
-  BoardChangeSummary,
-  BoardPlaybackSnapshot,
-  BoardDelta,
-  RequestSource,
-} from "@cohub/protocol";
-import { BOARD_REALTIME_DELTA_MAX_BYTES } from "@cohub/protocol";
+import type { BoardPlaybackSnapshot } from "@cohub/protocol";
+import { boardChangedEvent } from "@cohub/core/board";
 import { dispatchRealtimeEvent } from "./channels.js";
 
-export async function dispatchBoardChanged(input: {
-  spaceId: string;
-  boardId: string;
-  actorId: string;
-  actor: Actor;
-  mutationId: string;
-  baseVersion: number;
-  version: number;
-  changed: BoardChangeSummary;
-  after: BoardDelta;
-  source?: RequestSource | null;
-}) {
-  const inline = Buffer.byteLength(JSON.stringify(input.after), "utf8") <= BOARD_REALTIME_DELTA_MAX_BYTES;
-  await dispatchRealtimeEvent({
-    id: randomUUID(),
-    timestamp: Date.now(),
-    domain: "space",
-    type: "board.changed",
-    spaceId: input.spaceId,
-    sessionId: null,
-    payload: {
-      boardId: input.boardId,
-      actorId: input.actorId,
-      actor: input.actor,
-      mutationId: input.mutationId,
-      baseVersion: input.baseVersion,
-      version: input.version,
-      changed: input.changed,
-      ...(inline ? { after: input.after } : {}),
-      ...(input.source ? { source: input.source } : {}),
-    },
-  });
+export async function dispatchBoardChanged(input: Parameters<typeof boardChangedEvent>[0]) {
+  const event = boardChangedEvent(input);
+  if (event) await dispatchRealtimeEvent(event);
 }
 
 export async function dispatchBoardPlaybackChanged(input: {

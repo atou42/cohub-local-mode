@@ -3,6 +3,8 @@
 @import "./themes/solarized-dark.css";
 @import "./themes/solarized-light.css";
 @import "./themes/neta-studio.css";
+@import "./themes/neta-pixel.css";
+@import "./themes/neta-pixel-dark.css";
 
 /* ============================================================
    Board shape palette
@@ -12,6 +14,16 @@
 :where(:root, [data-theme]) {
 	/* Shared fallbacks; individual themes only override where semantics differ. */
 	--status-running: var(--success-400);
+	--activity: var(--brand);
+	--control-accent: var(--brand);
+	--menu-shadow: 0 10px 24px
+		color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
+	--toolbar-shadow: 0 8px 20px
+		color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
+	--indicator-radius: 999px;
+	--indicator-easing: ease-in-out;
+	--board-bg: var(--bg-primary);
+	--board-card: var(--bg-surface);
 	--board-selection-accent: var(--brand);
 	--board-background-image-url: "";
 	--board-background-tile-width: 0;
@@ -29,11 +41,8 @@
 	--list-row-gap: 12px;
 	--list-row-hover-bg: var(--sidebar-item-hover-bg);
 	--list-row-active-bg: var(--sidebar-item-active-bg);
-	--list-tree-guide: color-mix(
-		in oklab,
-		var(--color-brand) 34%,
-		var(--color-border-subtle)
-	);
+	--list-tree-guide: var(--color-border-default);
+	--list-tree-width: 1.5px;
 
 	--board-color-brand-stroke: var(--brand);
 	--board-color-brand-fill: var(--brand);
@@ -63,9 +72,8 @@
 	--board-color-amber-fill: var(--warning-400);
 	--board-color-amber-label: var(--text-primary);
 
-	/* Violet has no dedicated semantic scale — soft brand-adjacent hue. */
-	--board-color-violet-stroke: var(--info-500);
-	--board-color-violet-fill: var(--info-500);
+	--board-color-violet-stroke: var(--identity-7);
+	--board-color-violet-fill: var(--identity-7);
 	--board-color-violet-label: var(--text-primary);
 
 	--board-color-rose-stroke: var(--error-400);
@@ -109,6 +117,7 @@
 		--list-avatar-size: 36px;
 		--list-title-size: 14px;
 		--list-title-leading: 18px;
+		--list-text-gap: 2px;
 		--list-subtitle-size: 12px;
 		--list-subtitle-leading: 16px;
 		--list-meta-size: 11px;
@@ -119,10 +128,11 @@
 	}
 
 	[data-density="comfortable"] {
-		--list-row-height: 58px;
-		--list-avatar-size: 44px;
+		--list-row-height: 60px;
+		--list-avatar-size: 40px;
 		--list-title-size: 16px;
 		--list-title-leading: 20px;
+		--list-text-gap: 3px;
 		--list-subtitle-size: 14px;
 		--list-subtitle-leading: 18px;
 		--list-meta-size: 12px;
@@ -193,6 +203,7 @@
 	--color-chat-user-message: var(--chat-user-message-bg);
 	--color-chat-composer: var(--chat-composer-bg);
 	--color-chat-composer-focus: var(--chat-composer-bg-focus);
+	--color-board-bg: var(--board-bg);
 
 	/* Text */
 	--color-text-primary: var(--text-primary);

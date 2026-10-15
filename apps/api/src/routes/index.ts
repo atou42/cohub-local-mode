@@ -65,6 +65,7 @@ router.route("/api/public-assets", publicAssetsRouter);
 router.route("/api/apps", createAppsRouter("canonical"));
 router.route("/api/apps", createAppPromotionsRouter("canonical"));
 router.route("/api/rooms", roomsRouter);
+router.route("/api/rooms", createAppRtcRouter({ service: appRtc, loadApp: loadAppForRtc }, true));
 router.route("/api/apps", createAppRtcRouter({ service: appRtc, loadApp: loadAppForRtc }));
 router.route("/api/works", createAppsRouter("legacy"));
 router.route("/api/works", createAppPromotionsRouter("legacy"));

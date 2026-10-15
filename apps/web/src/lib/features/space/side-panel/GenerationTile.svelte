@@ -168,7 +168,7 @@ const durationMs = $derived(output?.durationMs ?? probed?.durationMs);
 	}
 
 	.tile--failed {
-		background: color-mix(in srgb, var(--error-bg) 60%, var(--bg-elevated));
+		background: color-mix(in srgb, var(--color-error-bg) 60%, var(--bg-elevated));
 	}
 
 	.tile-surface {

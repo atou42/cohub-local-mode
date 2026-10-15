@@ -15,6 +15,7 @@ import previewSessionRouter from "./preview-session.route.js";
 import startupRouter from "./startup.route.js";
 import commerceRouter from "./commerce.route.js";
 import completionsRouter from "./completions.route.js";
+import decisionsRouter from "./decisions.route.js";
 import publicFilesRouter from "./public-files.route.js";
 import webhooksRouter from "./webhooks.route.js";
 import displaysRouter from "./displays.route.js";
@@ -38,6 +39,7 @@ router.route("/", spacesRouter);
 // This remains a local/non-split fallback.
 router.route("/:id/fs", fsRouter);
 router.route("/:id/completions", completionsRouter);
+router.route("/:id/decisions", decisionsRouter);
 router.route("/:id/public", publicFilesRouter);
 router.route("/:id/members", membersRouter);
 router.route("/:id/access", accessRouter);

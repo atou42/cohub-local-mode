@@ -11,6 +11,8 @@
 
 ## Git commit
 
+Before committing, remove redundant or unnecessary comments and unit tests to keep changes concise.
+
 Add `Cohub Session: https://cohub.live/spaces/${COHUB_SPACE_ID}/sessions/${COHUB_SESSION_ID}` as a footer, if the environment variables are set.
 
 ## Release Workflow

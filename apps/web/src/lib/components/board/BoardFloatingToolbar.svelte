@@ -161,7 +161,7 @@ function toolTitle(tool: ToolDef) {
 
 <div class="board-toolbar-wrap" class:board-toolbar-wrap--immersive={immersive}>
 	{#if showStyles}
-		<div class="board-style-row" role="toolbar" aria-label="{activeTool?.label ?? 'Tool'} style">
+		<div class="board-style-row toolbar-surface" role="toolbar" aria-label="{activeTool?.label ?? 'Tool'} style">
 			{#if editor.tool === "draw" || editor.tool === "arrow"}
 				<span class="style-kind" title={m.board_stroke_width({}, { locale })} aria-hidden="true">
 					{#if editor.tool === "draw"}
@@ -181,33 +181,33 @@ function toolTitle(tool: ToolDef) {
 					label={m.board_stroke_width({}, { locale })}
 					onChange={(value) => { editor.activeStrokeSize = value; }}
 				/>
-				<div class="style-divider"></div>
+				<div class="toolbar-divider"></div>
 			{/if}
 
 			<div class="color-list" role="group" aria-label={m.board_color({}, { locale })}>
 				{#each BOARD_COLORS as color (color.id)}
 					<button
 						type="button"
-						class="color-swatch"
-						class:color-swatch--active={editor.activeColor === color.id}
+						class="color-chip"
 						title={color.label}
 						aria-label="Use {color.label}"
-						style:--swatch="var({boardColorCssVar(color.id, 'stroke')})"
+						aria-pressed={editor.activeColor === color.id}
+						style:--chip-color="var({boardColorCssVar(color.id, 'stroke')})"
 						onclick={() => { editor.activeColor = color.id; }}
 					></button>
 				{/each}
 			</div>
 
 			{#if editor.tool === "shape"}
-				<div class="style-divider"></div>
+				<div class="toolbar-divider"></div>
 				{#each SHAPE_KINDS as geo (geo)}
 					{@const option = GEO_OPTIONS[geo]}
 					<button
 						type="button"
-						class="geo-btn"
-						class:geo-btn--active={editor.activeShape === geo}
+						class="tool-key geo-key"
 						title={option.label}
 						aria-label="Use {option.label}"
+						aria-pressed={editor.activeShape === geo}
 						onclick={() => { editor.activeShape = geo; }}
 					>
 						<option.icon class="h-3.5 w-3.5" />
@@ -217,12 +217,11 @@ function toolTitle(tool: ToolDef) {
 		</div>
 	{/if}
 
-	<div class="board-floating-toolbar" role="toolbar" aria-label={m.board_tools({}, { locale })}>
+	<div class="board-floating-toolbar toolbar-surface" role="toolbar" aria-label={m.board_tools({}, { locale })}>
 		{#each TOOLS as tool (tool.id)}
 			<button
 				type="button"
-				class="tool-btn"
-				class:tool-btn--active={editor.tool === tool.id}
+				class="tool-key"
 				title={toolTitle(tool)}
 				aria-label="{tool.label} tool"
 				aria-pressed={editor.tool === tool.id}
@@ -236,15 +235,14 @@ function toolTitle(tool: ToolDef) {
 		{/each}
 
 		{#if onAddLink}
-			<button type="button" class="tool-btn" title={m.board_add_link({}, { locale })} aria-label={m.board_add_link({}, { locale })} onclick={onAddLink}><Link class="h-4 w-4" /></button>
+			<button type="button" class="tool-key" title={m.board_add_link({}, { locale })} aria-label={m.board_add_link({}, { locale })} onclick={onAddLink}><Link class="h-4 w-4" /></button>
 		{/if}
 
-		<div class="divider"></div>
+		<div class="toolbar-divider"></div>
 
 		<button
 			type="button"
-			class="tool-btn"
-			class:tool-btn--active={generationOpen}
+			class="tool-key"
 			title={m.board_generate_media({}, { locale })}
 			aria-label={m.board_generate_media({}, { locale })}
 			aria-pressed={generationOpen}
@@ -254,8 +252,7 @@ function toolTitle(tool: ToolDef) {
 		</button>
 		<button
 			type="button"
-			class="tool-btn"
-			class:tool-btn--active={appearanceOpen}
+			class="tool-key"
 			title={m.board_appearance({}, { locale })}
 			aria-label={m.board_appearance({}, { locale })}
 			aria-pressed={appearanceOpen}
@@ -266,8 +263,7 @@ function toolTitle(tool: ToolDef) {
 		{#if onToggleTimeline}
 			<button
 				type="button"
-				class="tool-btn"
-				class:tool-btn--active={timelineOpen}
+				class="tool-key"
 				title={m.board_timeline({}, { locale })}
 				aria-label={m.board_timeline({}, { locale })}
 				aria-pressed={timelineOpen}
@@ -277,11 +273,11 @@ function toolTitle(tool: ToolDef) {
 			</button>
 		{/if}
 
-		<div class="divider history-divider"></div>
+		<div class="toolbar-divider"></div>
 
 		<button
 			type="button"
-			class="tool-btn history-btn"
+			class="tool-key"
 			title={m.common_undo({}, { locale })}
 			aria-label={m.common_undo({}, { locale })}
 			disabled={!editor.canUndo}
@@ -291,7 +287,7 @@ function toolTitle(tool: ToolDef) {
 		</button>
 		<button
 			type="button"
-			class="tool-btn history-btn"
+			class="tool-key"
 			title={m.board_redo({}, { locale })}
 			aria-label={m.board_redo({}, { locale })}
 			disabled={!editor.canRedo}
@@ -326,17 +322,11 @@ function toolTitle(tool: ToolDef) {
 	}
 
 	.board-style-row {
-		display: flex;
-		align-items: center;
+		--tool-key-size: 24px;
 		gap: 4px;
 		max-width: 100%;
 		overflow-x: auto;
-		border-radius: 9px;
-		border: 1px solid var(--border-subtle);
-		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
 		padding: 4px 6px;
-		box-shadow: 0 8px 20px color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
-		backdrop-filter: blur(12px);
 		scrollbar-width: none;
 	}
 	.board-style-row::-webkit-scrollbar { display: none; }
@@ -357,84 +347,8 @@ function toolTitle(tool: ToolDef) {
 		gap: 4px;
 	}
 
-	.color-swatch {
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		border: 1.5px solid var(--border-subtle);
-		background: var(--swatch);
-		cursor: pointer;
-		transition: transform 100ms ease, border-color 100ms ease;
-	}
-	.color-swatch:hover { transform: scale(1.15); }
-	.color-swatch--active {
-		border-color: var(--text-primary);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--swatch) 45%, transparent);
-	}
-
-	.geo-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 24px;
-		height: 24px;
-		border-radius: 6px;
-		border: 1px solid transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-		transition: background-color 100ms ease, color 100ms ease;
-	}
-	.geo-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-	.geo-btn--active {
-		background: var(--brand-bg);
-		border-color: var(--brand-border);
-		color: var(--brand-muted-fg);
-	}
-
-	.style-divider {
-		width: 1px;
-		height: 16px;
-		margin: 0 2px;
-		background: var(--border-subtle);
-	}
-
 	.board-floating-toolbar {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-		border-radius: 10px;
-		border: 1px solid var(--border-subtle);
-		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
-		padding: 4px;
-		box-shadow: 0 10px 24px color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
-		backdrop-filter: blur(12px);
-	}
-
-	.tool-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 30px;
-		height: 30px;
-		border-radius: 7px;
-		border: 1px solid transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-		transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
-	}
-	.tool-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-	.tool-btn--active {
-		background: var(--brand-bg);
-		border-color: var(--brand-border);
-		color: var(--brand-muted-fg);
-	}
-	.tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-	.divider {
-		width: 1px;
-		height: 18px;
-		margin: 0 3px;
-		background: var(--border-subtle);
+		--tool-key-size: 30px;
 	}
 
 	@media (pointer: coarse) {
@@ -443,13 +357,11 @@ function toolTitle(tool: ToolDef) {
 			width: calc(100% - 16px);
 			max-width: calc(100vw - 16px);
 		}
-		.tool-btn,
-		.color-swatch,
-		.geo-btn,
+		.tool-key,
+		.color-chip,
 		.style-kind { position: relative; }
-		.tool-btn::after,
-		.color-swatch::after,
-		.geo-btn::after,
+		.tool-key::after,
+		.color-chip::after,
 		.style-kind::after {
 			content: "";
 			position: absolute;
@@ -462,6 +374,7 @@ function toolTitle(tool: ToolDef) {
 			height: 100%;
 		}
 		.board-floating-toolbar {
+			--tool-key-size: 40px;
 			max-width: 100%;
 			overflow-x: auto;
 			scrollbar-width: none;
@@ -470,23 +383,15 @@ function toolTitle(tool: ToolDef) {
 			gap: 3px;
 		}
 		.board-floating-toolbar::-webkit-scrollbar { display: none; }
-		.board-style-row {
-			max-width: 100%;
-			overflow-x: auto;
-			scrollbar-width: none;
-		}
-		.board-style-row::-webkit-scrollbar { display: none; }
-		.tool-btn { width: 40px; height: 40px; flex-shrink: 0; }
+		.board-style-row { --tool-key-size: 32px; }
 		.style-kind { width: 24px; height: 32px; }
-		.color-list { gap: 6px; }
-		.color-swatch { width: 26px; height: 26px; flex-shrink: 0; }
-		.geo-btn { width: 32px; height: 32px; flex-shrink: 0; }
+		.color-list { gap: 6px; --color-chip-size: 26px; }
 	}
 
 	@media (pointer: coarse) and (max-width: 480px) {
 		.board-toolbar-wrap {
 			bottom: calc(8px + env(safe-area-inset-bottom, 0px));
 		}
-		.tool-btn { width: 38px; height: 38px; }
+		.board-floating-toolbar { --tool-key-size: 38px; }
 	}
 </style>

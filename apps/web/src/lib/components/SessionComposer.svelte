@@ -1602,7 +1602,7 @@ $effect(() => {
 									{#if showModeMenu}
 										<button type="button" class="fixed inset-0 z-30 cursor-default" aria-hidden="true" tabindex="-1" onclick={() => { showModeMenu = false; }}></button>
 										<div
-											class="absolute bottom-full left-0 z-40 mb-1.5 w-36 overflow-hidden rounded-md border border-border-subtle bg-bg-primary p-1 shadow-lg"
+											class="menu-surface absolute bottom-full left-0 z-40 mb-1.5 w-36 overflow-hidden p-1"
 											role="menu"
 											tabindex="-1"
 											aria-label="Composer mode"

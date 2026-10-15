@@ -93,7 +93,7 @@ const activeVolume = $derived(
 	</div>
 	{#snippet footer()}
 		<div class="footer">
-			<button type="button" class="use" disabled={!listing || loading || !!failure} onclick={() => listing && onSelect(listing)}>{m.runtime_folder_use({}, { locale })}</button>
+			<button type="button" class="use primary-key" disabled={!listing || loading || !!failure} onclick={() => listing && onSelect(listing)}>{m.runtime_folder_use({}, { locale })}</button>
 		</div>
 	{/snippet}
 </Dialog>
@@ -117,10 +117,8 @@ const activeVolume = $derived(
 .failure p { margin: 0; }
 .retry { justify-self: start; height: 32px; padding: 0 12px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--border-subtle); color: var(--text-secondary); font-size: 12px; }
 .footer { display: flex; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--border-subtle); }
-.use { min-height: 36px; padding: 0 14px; border-radius: 6px; background: var(--brand); color: var(--brand-contrast-fg); font-size: 13px; font-weight: 500; }
-.use:hover { background: var(--brand-hover); }
-.use:disabled { opacity: .5; cursor: default; }
-.volume:focus-visible, .folder:focus-visible, .retry:focus-visible, .use:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.use { min-height: 36px; padding: 0 14px; font-size: 13px; }
+.volume:focus-visible, .folder:focus-visible, .retry:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 @media (max-width: 640px) {
 	.folder, .use { min-height: 44px; }
 	.use { width: 100%; }

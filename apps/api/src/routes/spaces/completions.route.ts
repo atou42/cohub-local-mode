@@ -19,6 +19,14 @@ import type {
 import { normalizeContentBlocksSafe } from "@cohub/core/content/normalize";
 import { createLogger } from "@cohub/infra/logging";
 import { authzDenied, requireValidId, useAuth } from "../../lib/middleware.js";
+import {
+  formatZodIssues,
+  RequestError,
+  requestErrorFrom,
+  requestErrorResponse,
+  type RequestErrorStatus,
+  zodIssueDetails,
+} from "../../lib/request-error.js";
 import { hasPermission } from "../../permissions.js";
 import { getSpaceById } from "../../space-sessions.js";
 import {
@@ -26,7 +34,7 @@ import {
   SpaceFsError,
   spaceFsJsonError,
 } from "../../space-fs-backend.js";
-import { archiveCompletionBestEffort, createCompletionId } from "../../completion-object-storage.js";
+import { archiveCompletionBestEffort, createModelCallId } from "../../model-call-archive.js";
 import { resolveCompletionModel } from "../../llm/models.js";
 import { loadImageToTextConfig } from "../../llm/image-to-text-config.js";
 import {
@@ -70,60 +78,6 @@ const createCompletionSchema = z.object({
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).nullish(),
   stream: z.boolean().nullish(),
 });
-
-type ErrorStatus = 400 | 401 | 402 | 403 | 404 | 413 | 500 | 502 | 503;
-
-type ZodIssueDetail = {
-  path: string;
-  message: string;
-  code: string;
-};
-
-class CompletionRequestError extends Error {
-  readonly status: ErrorStatus;
-  readonly code: string;
-  readonly details?: unknown;
-
-  constructor(status: ErrorStatus, code: string, message: string, details?: unknown) {
-    super(message);
-    this.name = "CompletionRequestError";
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
-
-function completionError(
-  c: Parameters<typeof useAuth>[0],
-  status: ErrorStatus,
-  code: string,
-  message: string,
-  details?: unknown,
-) {
-  return c.json({ error: { code, message, ...(details === undefined ? {} : { details }) }, message }, status);
-}
-
-function formatIssueList(items: string[], limit = 3): string {
-  if (items.length === 0) return "";
-  const shown = items.slice(0, limit);
-  const more = items.length > limit ? ` (+${items.length - limit} more)` : "";
-  return `${shown.join("; ")}${more}`;
-}
-
-function zodDetails(error: z.ZodError): ZodIssueDetail[] {
-  return error.issues.map((issue) => ({
-    path: issue.path.map(String).join("."),
-    message: issue.message,
-    code: issue.code,
-  }));
-}
-
-function formatZodMessage(details: ZodIssueDetail[]): string {
-  if (details.length === 0) return "Invalid request.";
-  return formatIssueList(
-    details.map((detail) => (detail.path ? `${detail.path}: ${detail.message}` : detail.message)),
-  );
-}
 
 function summarizeMessagesShape(raw: unknown): {
   messageCount: number | null;
@@ -177,7 +131,7 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
 
   const extension = extname(path).toLowerCase();
   if (extension && !ALLOWED_SYSTEM_PROMPT_EXTENSION_SET.has(extension)) {
-    throw new CompletionRequestError(
+    throw new RequestError(
       400,
       "system_prompt_invalid",
       `System prompt must be ${ALLOWED_SYSTEM_PROMPT_EXTENSIONS.join("/")} (got ${extension}).`,
@@ -192,7 +146,7 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
   try {
     const file = await readSpaceFile(spaceId, path, { visibility: "full" });
     if (!("content" in file) || typeof file.content !== "string") {
-      throw new CompletionRequestError(
+      throw new RequestError(
         503,
         "system_prompt_preparing",
         `System prompt not ready: ${path}`,
@@ -200,7 +154,7 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
       );
     }
     if (file.delivery === "url" || file.kind === "binary") {
-      throw new CompletionRequestError(
+      throw new RequestError(
         400,
         "system_prompt_unsupported",
         `System prompt is binary or too large for inline load: ${path}`,
@@ -212,7 +166,7 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
       );
     }
     if (file.content.length > MAX_SYSTEM_PROMPT_CHARS) {
-      throw new CompletionRequestError(
+      throw new RequestError(
         413,
         "system_prompt_too_large",
         `System prompt exceeds ${MAX_SYSTEM_PROMPT_CHARS} characters (${file.content.length}).`,
@@ -225,26 +179,26 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
     }
     return { path, text: file.content };
   } catch (error) {
-    if (error instanceof CompletionRequestError) throw error;
+    if (error instanceof RequestError) throw error;
     if (error instanceof SpaceFsError) {
       if (error.code === "path_not_found" || error.status === 404) {
-        throw new CompletionRequestError(
+        throw new RequestError(
           404,
           "system_prompt_not_found",
           `System prompt not found: ${path}`,
           { path, causeCode: error.code },
         );
       }
-      throw new CompletionRequestError(
-        error.status as ErrorStatus,
+      throw new RequestError(
+        error.status as RequestErrorStatus,
         error.code.startsWith("system_prompt_") ? error.code : `system_prompt_${error.code}`,
         `System prompt load failed (${path}): ${error.message}`,
         { path, causeCode: error.code },
       );
     }
     const { status, body: errBody } = spaceFsJsonError(error);
-    throw new CompletionRequestError(
-      status as ErrorStatus,
+    throw new RequestError(
+      status as RequestErrorStatus,
       errBody.code.startsWith("system_prompt_") ? errBody.code : `system_prompt_${errBody.code}`,
       `System prompt load failed (${path}): ${errBody.message}`,
       { path, causeCode: errBody.code },
@@ -307,7 +261,7 @@ router.post("/", async (c) => {
 
   const spaceId = c.req.param("id");
   if (!spaceId || !requireValidId(spaceId)) {
-    return completionError(c, 404, "space_not_found", "Space not found.");
+    return requestErrorResponse(c, 404, "space_not_found", "Space not found.");
   }
 
   if (!(await hasPermission(user, "session.prompt.readonly", { spaceId }))) {
@@ -315,13 +269,13 @@ router.post("/", async (c) => {
   }
 
   const space = await getSpaceById(spaceId);
-  if (!space) return completionError(c, 404, "space_not_found", "Space not found.");
+  if (!space) return requestErrorResponse(c, 404, "space_not_found", "Space not found.");
 
   let rawBody: unknown;
   try {
     rawBody = await c.req.json();
   } catch {
-    return completionError(
+    return requestErrorResponse(
       c,
       400,
       "invalid_completion_request",
@@ -332,13 +286,13 @@ router.post("/", async (c) => {
 
   const parsed = createCompletionSchema.safeParse(rawBody);
   if (!parsed.success) {
-    const details = zodDetails(parsed.error);
+    const details = zodIssueDetails(parsed.error);
     const shape = summarizeMessagesShape(rawBody);
-    return completionError(
+    return requestErrorResponse(
       c,
       400,
       "invalid_completion_request",
-      formatZodMessage(details),
+      formatZodIssues(details),
       {
         issues: details,
         messageCount: shape.messageCount,
@@ -352,7 +306,7 @@ router.post("/", async (c) => {
   const rawMessageCount = parsed.data.messages.length;
   const messages = normalizeMessages(parsed.data.messages);
   if (messages.length === 0) {
-    return completionError(
+    return requestErrorResponse(
       c,
       400,
       "messages_required",
@@ -366,7 +320,7 @@ router.post("/", async (c) => {
   }
 
   const stream = Boolean(body.stream);
-  const completionId = createCompletionId();
+  const completionId = createModelCallId();
   const startedAt = new Date();
 
   let systemPromptPath: string | null = null;
@@ -376,8 +330,8 @@ router.post("/", async (c) => {
     systemPromptPath = loaded.path;
     systemPrompt = loaded.text;
   } catch (error) {
-    if (error instanceof CompletionRequestError) {
-      return completionError(c, error.status, error.code, error.message, error.details);
+    if (error instanceof RequestError) {
+      return requestErrorFrom(c, error);
     }
     throw error;
   }
@@ -391,11 +345,11 @@ router.post("/", async (c) => {
     return null;
   });
   if (!resolved) {
-    return completionError(c, 502, "models_unavailable", "Models catalog unavailable.");
+    return requestErrorResponse(c, 502, "models_unavailable", "Models catalog unavailable.");
   }
   if (!resolved.model) {
     const requested = [body.provider, body.model].filter(Boolean).join("/") || "default";
-    return completionError(
+    return requestErrorResponse(
       c,
       404,
       "model_not_found",
@@ -499,7 +453,7 @@ router.post("/", async (c) => {
     const outcome = await runCompletion(runInput);
     await finalize(outcome);
     if (outcome.error && !outcome.aborted) {
-      return completionError(c, 502, outcome.error.code, outcome.error.message);
+      return requestErrorResponse(c, 502, outcome.error.code, outcome.error.message);
     }
     const result: SpaceCompletionResult = {
       completionId,

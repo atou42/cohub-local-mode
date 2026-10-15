@@ -15,6 +15,7 @@ import {
 } from "../model/export-plan.js";
 import {
   type BoardRenderPalette,
+  type BoardRenderStyle,
   defaultBoardPalette,
 } from "../render/index.js";
 import { ensureBoardTextMeasurement } from "../render/text-measurement.js";
@@ -42,6 +43,7 @@ export type BoardExportOptions = {
   background?: BoardExportBackground;
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
+  style?: Partial<BoardRenderStyle>;
   textures?: Map<string, Texture>;
   scripts?: BoardScriptHost;
   assetKey?: (item: BoardSceneItem) => string | null;
@@ -126,6 +128,7 @@ export function renderBoardExport(renderer: Renderer, input: BoardDocument, opti
     colorScheme,
     palette,
     colors: options.colors,
+    style: options.style,
     textures: options.textures,
     scripts: options.scripts,
     assetKey: options.assetKey,

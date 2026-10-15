@@ -195,7 +195,7 @@ $effect(() => {
 		</button>
 		{#if actionsMenuOpen}
 			<div
-				class="preview-actions-menu"
+				class="preview-actions-menu menu-surface"
 				role="menu"
 				use:floatNear={{
 					getAnchor: () => actionsMenuAnchor,
@@ -556,11 +556,7 @@ $effect(() => {
 
 	.preview-actions-menu {
 		overflow: hidden;
-		border: 1px solid var(--border-subtle);
-		border-radius: 8px;
-		background: var(--bg-elevated);
 		padding: 4px;
-		box-shadow: 0 10px 24px color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
 	}
 
 	/* Float presentation */
@@ -691,7 +687,7 @@ $effect(() => {
 	}
 
 	.preview-switcher-item-close:hover {
-		background: var(--bg-surface);
+		background: var(--bg-hover-strong);
 		color: var(--text-primary);
 	}
 

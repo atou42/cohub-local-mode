@@ -7,6 +7,8 @@ name: Sandbox Binaries Build and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
     paths:
@@ -17,6 +19,10 @@ on:
       - 'apps/sandbox/**'
       - '.github/workflows/sandbox-binaries-build.yml'
   workflow_dispatch:
+
+concurrency:
+  group: sandbox-binaries-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

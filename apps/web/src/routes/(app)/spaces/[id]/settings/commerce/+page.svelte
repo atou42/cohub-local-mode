@@ -19,6 +19,7 @@ import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 import CommerceBenefitEditor from "$lib/components/commerce/CommerceBenefitEditor.svelte";
 import CommerceProductEditor from "$lib/components/commerce/CommerceProductEditor.svelte";
 import Dialog from "$lib/components/Dialog.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import { formatCurrency, formatDateTime } from "$lib/i18n/format";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -569,7 +570,7 @@ $effect(() => {
 						<div class="text-[13px] font-medium text-text-primary">{m.commerce_max_plan({}, { locale })}</div>
 						<div class="text-[12px] text-text-tertiary">{m.commerce_upgrade_hint({}, { locale })}</div>
 					</div>
-					<a href="/settings/billing" class="inline-flex min-h-8 shrink-0 items-center rounded-[6px] bg-brand px-3 text-[12px] font-medium text-brand-contrast-fg transition-colors hover:bg-brand/90">{m.commerce_upgrade({}, { locale })}</a>
+					<a href="/settings/billing" class="primary-key min-h-8 shrink-0 px-3 text-[12px]">{m.commerce_upgrade({}, { locale })}</a>
 				</div>
 			{/if}
 			{#if loading}
@@ -589,8 +590,8 @@ $effect(() => {
 					</div>
 					<div class="flex items-center justify-between gap-3 p-4 sm:p-5">
 						<div class="text-[12px] text-text-tertiary">{m.commerce_setup_one_time({}, { locale })}</div>
-						<button type="button" class="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg disabled:opacity-50" onclick={() => void setupCommerce()} disabled={setupSaving || !canManage}>
-							{#if setupSaving}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Sparkles class="h-3.5 w-3.5" />{/if}
+						<button type="button" class="primary-key min-h-9 gap-1.5 px-3 py-2 text-[12px]" onclick={() => void setupCommerce()} disabled={setupSaving || !canManage}>
+							{#if setupSaving}<Spinner class="h-3.5 w-3.5" />{:else}<Sparkles class="h-3.5 w-3.5" />{/if}
 							{m.commerce_setup({}, { locale })}
 						</button>
 					</div>
@@ -633,7 +634,7 @@ $effect(() => {
 								<div class="text-[12px] text-text-tertiary">{m.commerce_benefits_desc({}, { locale })}</div>
 							</div>
 						</div>
-						<button type="button" class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-[6px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg disabled:opacity-50" onclick={() => { clearNotice(); dialog = { kind: "benefit-create" }; }} disabled={!canManage}>
+						<button type="button" class="primary-key min-h-9 shrink-0 gap-1.5 px-3 py-2 text-[12px]" onclick={() => { clearNotice(); dialog = { kind: "benefit-create" }; }} disabled={!canManage}>
 							<Plus class="h-3.5 w-3.5" /> New benefit
 						</button>
 					</div>
@@ -700,7 +701,7 @@ $effect(() => {
 								<div class="text-[12px] text-text-tertiary">{m.commerce_products_desc({}, { locale })}</div>
 							</div>
 						</div>
-						<button type="button" class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-[6px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg disabled:opacity-50" onclick={() => { clearNotice(); dialog = { kind: "product-create" }; }} disabled={!canManage}>
+						<button type="button" class="primary-key min-h-9 shrink-0 gap-1.5 px-3 py-2 text-[12px]" onclick={() => { clearNotice(); dialog = { kind: "product-create" }; }} disabled={!canManage}>
 							<Plus class="h-3.5 w-3.5" /> New product
 						</button>
 					</div>
@@ -819,8 +820,8 @@ $effect(() => {
 									</div>
 									<div class="mt-3 flex items-center justify-between gap-3">
 										<span class="text-[11px] text-text-tertiary">{m.commerce_bind_hint_immediate({}, { locale })}</span>
-										<button type="button" class="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] bg-brand px-3 py-2 text-[12px] font-medium text-brand-contrast-fg disabled:opacity-50" onclick={() => void bindBenefit()} disabled={bindingSaving || !bindingReady || !canManage}>
-											{#if bindingSaving}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Link2 class="h-3.5 w-3.5" />{/if}
+										<button type="button" class="primary-key min-h-9 gap-1.5 px-3 py-2 text-[12px]" onclick={() => void bindBenefit()} disabled={bindingSaving || !bindingReady || !canManage}>
+											{#if bindingSaving}<Spinner class="h-3.5 w-3.5" />{:else}<Link2 class="h-3.5 w-3.5" />{/if}
 											{m.commerce_bind({}, { locale })}
 										</button>
 									</div>

@@ -18,6 +18,8 @@ import {
   sanitizeTaskRunProgressForViewer,
 } from "../task-run-privacy.js";
 import { sanitizeTaskRunForList } from "@cohub/protocol/task";
+import { listTaskBoards } from "@cohub/core/board";
+import type { TaskRunBoard } from "@cohub/protocol/task";
 
 const router = new Hono();
 
@@ -160,6 +162,17 @@ router.get("/", async (c) => {
   return c.json({ runs, pageInfo: { hasMore: rows.length > limit, nextCursor: rows.length > limit ? buildTaskCursor(runs.at(-1)) : null } });
 });
 
+async function taskBoardsForViewer(
+  user: ReturnType<typeof getOptionalAuth>,
+  run: { id: string; spaceId: string | null },
+): Promise<TaskRunBoard[]> {
+  if (!run.spaceId) return [];
+  const boards = await listTaskBoards(db, { spaceId: run.spaceId, taskRunId: run.id });
+  if (!boards.length) return [];
+  const titled = await hasPermission(user, "file.view.filtered", { spaceId: run.spaceId });
+  return boards.map(({ boardId, title, itemIds }) => ({ boardId, itemIds, ...(titled ? { title } : {}) }));
+}
+
 router.get("/:taskId", async (c) => {
   const user = getOptionalAuth(c);
 
@@ -189,7 +202,10 @@ router.get("/:taskId", async (c) => {
     canViewSpaceData: hasSpaceAccess,
   });
   const progress = sanitizeTaskRunProgressForViewer(run, job?.progress ?? null, hasSpaceAccess);
-  return c.json({ run: hydratedRun, progress });
+  const boards = c.req.query("include")?.split(",").includes("boards")
+    ? { boards: await taskBoardsForViewer(user, run) }
+    : {};
+  return c.json({ run: hydratedRun, progress, ...boards });
 });
 
 export default router;

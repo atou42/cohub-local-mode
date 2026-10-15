@@ -1,5 +1,7 @@
 <script lang="ts">
 import {
+	resourceAppLaunch,
+	resourceAppRef,
 	type ResourceAppTarget,
 	readResourceAppLaunch,
 	readResourceAppTarget,
@@ -68,6 +70,12 @@ import {
 	writeInstalledApps,
 } from "$lib/features/app/app-center";
 import {
+	APP_NAVIGATION_OPEN_EVENT,
+	type AppNavigationOpenRequest,
+} from "$lib/features/app/app-navigation-request";
+import { createAppNavigator } from "$lib/features/app/app-navigator";
+import {
+	createAppNavigationResolver,
 	loadAppPreview,
 	resolveAppNavigation,
 } from "$lib/features/app/app-open";
@@ -134,6 +142,7 @@ import { authStore } from "$lib/stores/auth.svelte";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
 import { startSessionSync } from "$lib/stores/session-store";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
+import { mergeCachedTaskRun } from "$lib/stores/task-runs-cache";
 import {
 	IMMERSIVE_CHAT_MAX,
 	IMMERSIVE_CHAT_MIN,
@@ -169,11 +178,7 @@ import OpenWithDialog, {
 import PortReadyToastView from "./modules/PortReadyToast.svelte";
 import { createPortPreviewController } from "./modules/port-window-controller.svelte";
 import { extractPublicEndpoints } from "./modules/port-window-utils";
-import { createResourceAppOpener } from "./modules/resource-app-opener";
-import {
-	resourceFromUrl,
-	resourceWorkspaceUrl,
-} from "./modules/resource-app-route";
+import { resourceFromUrl } from "./modules/resource-app-route";
 import SessionShareDialog from "./modules/SessionShareDialog.svelte";
 import SpaceDanmakuLayer from "./modules/SpaceDanmakuLayer.svelte";
 import SpaceFileDomain, {
@@ -269,11 +274,15 @@ const routeSessionId = $derived(data.sessionId ?? null);
 const isNewSessionRoute = $derived(
 	routeView === "session" && routeSessionId === "new",
 );
+const routeSearchParams = $derived.by(() => {
+	const url = page.url;
+	void page.state;
+	return typeof window === "undefined"
+		? url.searchParams
+		: new URLSearchParams(window.location.search);
+});
 const routePreviewRef = $derived.by((): WindowRef | null => {
-	const searchParams =
-		typeof window === "undefined"
-			? page.url.searchParams
-			: new URLSearchParams(window.location.search);
+	const searchParams = routeSearchParams;
 	const preview = resolveRouteWindow(searchParams, page.state.workspacePreview);
 	if (preview) return preview;
 	const legacyFile = searchParams.get("file");
@@ -497,52 +506,34 @@ async function openMessageUrl(href: string, event: MouseEvent) {
 	}
 }
 
-let appNavigationSequence = 0;
-async function handleAppNavigationOpen(message: AppNavigationOpenMessage) {
-	const sequence = ++appNavigationSequence;
-	const requestSpace = spaceId;
-	const current = () =>
-		sequence === appNavigationSequence && requestSpace === spaceId;
-	if (message.target.kind !== "app") {
-		return openWorkspaceNavigation(message.target);
-	}
-	try {
-		const target = message.target;
-		const existing = appPreview.previews.find((tab) => tab.key === target.ref);
-		if (existing && target.launch?.hash && !message.call) {
-			if (
-				existing.launch?.hash !== target.launch.hash &&
-				!(await appPreview.settle(existing.key))
-			)
-				return { handled: true as const };
-			if (!current()) return { handled: true as const };
-			if (!appPreview.previews.some((tab) => tab.id === existing.id))
-				return { handled: true as const };
-			appPreview.setLaunch(existing.key, target.launch);
-			windowManager.activate("app", existing.key);
-			return { handled: true as const };
-		}
-		const { detail: parsed, launch } = await resolveAppNavigation(
-			sdk.apps,
-			target.ref,
-			target.launch,
-		);
-		if (!current()) return { handled: true as const };
-		return openResolvedAppNavigation(
+const appResolver = createAppNavigationResolver(
+	sdk.apps,
+	(appId) =>
+		appPreview.previews.find((tab) => tab.appId === appId && tab.detail)
+			?.detail,
+);
+const appNavigator = createAppNavigator({
+	getContext: () => spaceId,
+	resolve: (target) => appResolver.resolve(target.ref, target.launch),
+	open: ({ detail, launch }, message, current) =>
+		openResolvedAppNavigation(
 			message,
-			parsed.app.id,
-			appDisplayTitle(parsed.app.meta, parsed.app.slug),
+			detail.app.id,
+			appDisplayTitle(detail.app.meta, detail.app.slug),
 			{
 				source: "user",
 				...(activeSessionId ? { sessionId: activeSessionId } : {}),
 			},
 			launch,
-			parsed.app.meta,
+			detail.app.meta,
 			current,
-		);
-	} catch {
-		return { handled: false as const, reason: "inaccessible" as const };
-	}
+		),
+});
+
+async function handleAppNavigationOpen(message: AppNavigationOpenMessage) {
+	if (message.target.kind === "app") return appNavigator.open(message);
+	appNavigator.cancel();
+	return openWorkspaceNavigation(message.target);
 }
 
 const fileHandlers = createFileHandlerResolver({
@@ -693,7 +684,6 @@ async function pickOpenWith(choice: OpenWithChoice, always: boolean) {
 	});
 }
 
-let appliedResourceRoute = "";
 let appRouteSequence = 0;
 async function hydrateAppRoute(ref: WindowRef, hash: string) {
 	const target = parseAppWindowKey(ref.key);
@@ -729,31 +719,20 @@ async function hydrateAppRoute(ref: WindowRef, hash: string) {
 	);
 }
 
-const resourceApps = createResourceAppOpener({
-	getSpaceId: () => spaceId,
-	load: (ref) => resolveAppNavigation(sdk.apps, ref),
-	getLaunch: (appId) => {
-		const tab = appPreview.previews.find(
-			(item) => item.key === appWindowKey(appId),
-		);
-		return tab ? (tab.launch?.hash ?? "") : undefined;
-	},
-	settle: (appId) => appPreview.settle(appWindowKey(appId)),
-	onCancelled: () => windowManager.syncCurrent(),
-	open: (detail, launch) =>
-		windowManager.openApp({
-			appId: detail.app.id,
-			label: appDisplayTitle(detail.app.meta, detail.app.slug),
-			launch,
-			openContext: {
-				source: "user",
-				...(activeSessionId ? { sessionId: activeSessionId } : {}),
-			},
-		}),
-});
-
 async function openResourceOrFallback(target: ResourceAppTarget) {
-	if (await resourceApps.open(target)) return;
+	const targetSpace = spaceId;
+	const result = await handleAppNavigationOpen({
+		protocol: "cohub.app.navigation",
+		version: 1,
+		type: "open",
+		requestId: crypto.randomUUID(),
+		target: {
+			kind: "app",
+			ref: resourceAppRef(target),
+			launch: resourceAppLaunch(targetSpace, target),
+		},
+	});
+	if (result.handled || targetSpace !== spaceId) return;
 	const segment = {
 		task: "tasks",
 		checkpoint: "checkpoints",
@@ -815,26 +794,38 @@ function showWorkspaceNotice(message: string) {
 	}, 3000);
 }
 
+let committingAppNavigation = false;
 async function openWorkspaceApp(
 	input: PublishedAppOpenInput,
-	isCurrent = () => true,
+	isCurrent?: () => boolean,
 ) {
+	if (!isCurrent) appNavigator.cancel();
 	if (input.launch?.hash) {
-		const key = appWindowKey(input.appId);
+		const key = appWindowKey(input.appId, input.openContext.file?.path);
 		const existing = appPreview.previews.find((tab) => tab.key === key);
 		if (
 			existing &&
 			existing.launch?.hash !== input.launch.hash &&
 			!(await appPreview.settle(key))
 		) {
+			if (!isCurrent || isCurrent()) windowManager.syncCurrent();
 			return { ok: false as const, reason: "cancelled" as const };
 		}
 	}
-	if (!isCurrent()) return { ok: false as const, reason: "cancelled" as const };
+	if (isCurrent && !isCurrent())
+		return { ok: false as const, reason: "cancelled" as const };
 	const opened = await openPublishedApp(input, {
 		spaceId,
+		isCurrent,
 		loadMeta: loadPublishedAppMeta,
-		openWindow: (open) => windowManager.openApp(open),
+		openWindow: (open) => {
+			committingAppNavigation = true;
+			try {
+				windowManager.openApp(open);
+			} finally {
+				committingAppNavigation = false;
+			}
+		},
 		openOverlay: (open) => desktopLayers.openOverlay(open),
 	});
 	if (!opened.ok && opened.reason === "overlay_limit") {
@@ -2104,6 +2095,7 @@ async function handleWsEvent(payload: ChannelEnvelope) {
 				if (eventSpaceId === spaceId) {
 					taskRealtimeSeq += 1;
 					taskRealtimeEvent = { spaceId, payload, seq: taskRealtimeSeq };
+					mergeCachedTaskRun(spaceId, { ...task, id: task.id });
 				}
 			}
 		}
@@ -2181,8 +2173,7 @@ onDestroy(() => {
 	if (workspaceNoticeTimer) clearTimeout(workspaceNoticeTimer);
 	spaceBootstrap.resetLoaded();
 	// A flush still running must not navigate away from wherever we went.
-	resourceApps.cancel();
-	appNavigationSequence += 1;
+	appNavigator.cancel();
 	appRouteSequence += 1;
 	heldNavigation = null;
 });
@@ -2228,17 +2219,10 @@ beforeNavigate((navigation) => {
 		destination?.searchParams.get("native") !== "1"
 	) {
 		navigation.cancel();
-		const pathname = resourceFromUrl(page.url)
-			? `/spaces/${spaceId}`
-			: page.url.pathname;
-		const next = resourceWorkspaceUrl(
-			pathname,
-			page.url.searchParams,
-			resource.target,
-		);
-		void goto(next, { keepFocus: true, noScroll: true });
+		void openResourceOrFallback(resource.target);
 		return;
 	}
+	appNavigator.cancel();
 	if (activeSessionId) sessionChat.captureCurrentScrollAnchor(activeSessionId);
 	sessionChat.flushComposerDraft();
 	void fileWorkspace.persistInlineFileDrafts();
@@ -2426,6 +2410,8 @@ async function toggleFilesTree() {
 }
 
 function syncPreviewQuery(ref: WindowRef | null, replace = true) {
+	if (!committingAppNavigation) appNavigator.cancel();
+	appRouteSequence += 1;
 	if (typeof window === "undefined") return;
 	const search = new URLSearchParams(window.location.search);
 	// Canonicalize the legacy public-slug query when preview state changes.
@@ -2858,6 +2844,7 @@ onMount(() => {
 	sessionChat.loadSessionScrollAnchors();
 	window.addEventListener("keydown", handleSessionVimKeydown);
 	const handleAppsChanged = (event: Event) => {
+		appResolver.clear();
 		const detail = (
 			event as CustomEvent<{ spaceId?: string; app?: { id?: string } }>
 		).detail;
@@ -2888,6 +2875,23 @@ onMount(() => {
 	// The chat panel owns the agent catalog.
 	void sessionChat.loadGenerationModelsCatalog();
 	void sessionChat.loadPromptTemplates();
+	const handleAppNavigationRequest = (event: Event) => {
+		const request = (event as CustomEvent<AppNavigationOpenRequest>).detail;
+		if (!request || request.spaceId !== spaceId) return;
+		event.preventDefault();
+		void handleAppNavigationOpen(request.message).then((result) => {
+			if (
+				!result.handled &&
+				request.fallbackHref &&
+				request.spaceId === spaceId
+			)
+				void goto(request.fallbackHref, { keepFocus: true, noScroll: true });
+		});
+	};
+	window.addEventListener(
+		APP_NAVIGATION_OPEN_EVENT,
+		handleAppNavigationRequest,
+	);
 	const handleOpenInlineFileEvent = (e: Event) => {
 		const custom = e as CustomEvent<{ spaceId?: string; path?: string }>;
 		if (custom.detail?.spaceId !== spaceId || !custom.detail?.path) return;
@@ -3017,6 +3021,7 @@ onMount(() => {
 		portPreview.dispose();
 		for (const dispose of appSurfaceDisposers.values()) dispose();
 		appSurfaceDisposers.clear();
+		appResolver.clear();
 		appPreview.dispose();
 		desktopLayers.dismissAll();
 		appSurfaces.clear();
@@ -3028,6 +3033,10 @@ onMount(() => {
 		spaceRealtime.dispose();
 		window.removeEventListener("resize", handlePreviewWindowResize);
 		workspaceResizeObserver.disconnect();
+		window.removeEventListener(
+			APP_NAVIGATION_OPEN_EVENT,
+			handleAppNavigationRequest,
+		);
 		window.removeEventListener(
 			"cohub:open-inline-file",
 			handleOpenInlineFileEvent,
@@ -3047,6 +3056,7 @@ onMount(() => {
 	};
 });
 function resetSpaceScopedState(currentSpaceId: string) {
+	appResolver.clear();
 	spaceFsEventGeneration += 1;
 	spaceFsRefreshCoordinator.reset();
 	lastSandboxFsSeq = null;
@@ -3217,12 +3227,9 @@ $effect(() => {
 	const currentSpaceId = spaceId;
 	const sourceKey = activeFsSourceKey;
 	const preview = routePreviewRef;
-	const resourceTarget = readResourceAppTarget(page.url.searchParams);
+	const resourceTarget = readResourceAppTarget(routeSearchParams);
 	const appHash =
-		preview?.kind === "app" ? readAppHash(page.url.searchParams) : null;
-	const resourceRoute = resourceTarget
-		? `${currentSpaceId}:${JSON.stringify(resourceTarget)}`
-		: "";
+		preview?.kind === "app" ? readAppHash(routeSearchParams) : null;
 	const sessionKey =
 		routeView === "session" && routeSessionId ? routeSessionId : null;
 	// Retry pending port deep-links when sandbox endpoints arrive.
@@ -3247,23 +3254,14 @@ $effect(() => {
 		}
 
 		if (appHash && preview?.kind === "app") {
-			resourceApps.cancel();
-			appliedResourceRoute = "";
 			void hydrateAppRoute(preview, appHash);
 			return;
 		}
 		appRouteSequence += 1;
-		if (resourceRoute && resourceTarget) {
-			if (appliedResourceRoute !== resourceRoute) {
-				appliedResourceRoute = resourceRoute;
-				void openResourceOrFallback(resourceTarget);
-			}
+		if (resourceTarget) {
+			void openResourceOrFallback(resourceTarget);
 			return;
 		}
-		const leavingResource = Boolean(appliedResourceRoute);
-		appliedResourceRoute = "";
-		resourceApps.cancel();
-		if (leavingResource && !preview && windowManager.suspendForRoute()) return;
 
 		// 2) Compact session navigation returns to chat without disposing preview
 		// runtimes. Explicit closes have already removed their tabs before the URL
@@ -4186,11 +4184,11 @@ const headerActions = {
     color: var(--text-primary);
   }
   :global(.menu-item.danger) {
-    color: var(--error-soft);
+    color: var(--color-error-soft);
   }
   :global(.menu-item.danger:hover) {
-    background: var(--error-bg);
-    color: var(--error-soft);
+    background: var(--color-error-bg);
+    color: var(--color-error-soft);
   }
   :global(.toggle-btn) {
     display: inline-flex;

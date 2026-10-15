@@ -77,7 +77,7 @@ function buy() {
 				<span class="strip-balance">{m.purchase_balance_now({ amount: formatMoney(balance, locale) }, { locale })}</span>
 			{/if}
 		</div>
-		<button type="button" class="strip-cta" onclick={openFromStrip}>{m.purchase_cta_add_balance({}, { locale })}</button>
+		<button type="button" class="strip-cta primary-key" onclick={openFromStrip}>{m.purchase_cta_add_balance({}, { locale })}</button>
 		<button type="button" class="strip-close" onclick={() => billingConversion.close()} aria-label={m.common_close({}, { locale })}>
 			<X class="icon" aria-hidden="true" />
 		</button>
@@ -164,15 +164,8 @@ function buy() {
 		flex-shrink: 0;
 		min-height: 34px;
 		padding: 0 12px;
-		border-radius: 6px;
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
 		font-size: 12px;
 		font-weight: 600;
-		cursor: pointer;
-	}
-	.strip-cta:hover {
-		background: var(--brand-hover);
 	}
 	.strip-close,
 	.close {
@@ -242,7 +235,7 @@ function buy() {
 		color: var(--text-primary);
 	}
 	.negative {
-		color: var(--error);
+		color: var(--color-error);
 	}
 	.body {
 		min-height: 0;

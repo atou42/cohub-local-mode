@@ -10,6 +10,7 @@ const {
 	meta,
 	lead,
 	subtitle,
+	status,
 }: {
 	title: string | Snippet;
 	tooltip?: string;
@@ -17,10 +18,11 @@ const {
 	meta?: Snippet;
 	lead?: Snippet;
 	subtitle?: Snippet;
+	status?: Snippet;
 } = $props();
 </script>
 
-<span class="flex min-w-0 flex-1 flex-col justify-center gap-0.5 self-stretch overflow-hidden text-start">
+<span class="flex min-w-0 flex-1 flex-col justify-center gap-[var(--list-text-gap)] self-stretch overflow-hidden text-start">
 	<span class="list-row-title flex min-w-0 items-center gap-2">
 		<span class="flex min-w-0 flex-1 items-center gap-1.5">
 			<span class="list-row-title-text min-w-0 truncate" title={tooltip}>{#if typeof title === "string"}{title}{:else}{@render title()}{/if}</span>
@@ -30,11 +32,12 @@ const {
 			<span class="list-row-meta inline-flex shrink-0 items-center gap-1.5 tabular-nums">{@render meta()}</span>
 		{/if}
 	</span>
-	{#if lead || subtitle}
+	{#if lead || subtitle || status}
 		<span class="list-row-subtitle flex min-w-0 items-center gap-2" transition:slide={{ duration: prefersReducedMotion.current ? 0 : 180 }}>
 			{@render lead?.()}
-			{#if subtitle}
-				<span class="min-w-0 flex-1 truncate">{@render subtitle()}</span>
+			<span class="min-w-0 flex-1 truncate">{@render subtitle?.()}</span>
+			{#if status}
+				<span class="inline-flex shrink-0 items-center">{@render status()}</span>
 			{/if}
 		</span>
 	{/if}

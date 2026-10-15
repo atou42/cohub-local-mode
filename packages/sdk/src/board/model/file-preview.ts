@@ -48,12 +48,22 @@ export function filePreviewKind(
 	return "blank";
 }
 
-/** Short uppercase type label for a file card (`MD`, `JSON`, `FILE`). */
 export function fileTypeLabel(path: string): string {
+	if (isWebPageUrl(path)) return "LINK";
 	const name = fileBaseName(path);
 	const dot = name.lastIndexOf(".");
 	if (dot <= 0) return (name.replace(/^\./, "") || "file").toUpperCase();
 	return name.slice(dot + 1).toUpperCase();
+}
+
+function isWebPageUrl(path: string): boolean {
+	if (!/^https?:\/\//i.test(path)) return false;
+	try {
+		const last = new URL(path).pathname.split("/").filter(Boolean).pop() ?? "";
+		return !/\.[a-z\d]{1,8}$/i.test(last);
+	} catch {
+		return false;
+	}
 }
 
 /** Human-readable byte size. Kept as a public helper for custom card renderers. */

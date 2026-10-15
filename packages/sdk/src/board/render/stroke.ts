@@ -38,7 +38,7 @@ export function trimPolyline(path: readonly WorldPoint[], trim: number | undefin
 	return out;
 }
 
-export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], pattern: [number, number] | null, closed = false) {
+export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], pattern: [number, number] | null, closed = false, offset = 0) {
 	const points = closed && path.length > 2 ? [...path, path[0] as WorldPoint] : path;
 	if (points.length < 2) return;
 	if (!pattern) {
@@ -52,9 +52,10 @@ export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], p
 		return;
 	}
 	const [dash, gap] = pattern;
-	let penDown = true;
-	let fresh = true;
-	let remaining = dash;
+	const phase = Math.max(0, offset) % (dash + gap);
+	let penDown = phase < dash;
+	let fresh = penDown;
+	let remaining = penDown ? dash - phase : dash + gap - phase;
 	for (let index = 1; index < points.length; index += 1) {
 		const a = points[index - 1] as WorldPoint;
 		const b = points[index] as WorldPoint;

@@ -5,14 +5,13 @@ import {
 	textResolutionForZoom,
 } from "../text-resolution.js";
 import type { BoardSceneItem } from "../../model/scene.js";
+import { cardElevation, drawCardSurface, traceCardOutline } from "../surface.js";
 import { positionShell } from "./base-card-renderer.js";
 import type {
 	BoardCardRenderer,
 	BoardRenderContext,
 } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
-
-const RADIUS = 10;
 
 type UnknownParts = {
 	root: Container;
@@ -34,31 +33,21 @@ function sync(
 	if (!parts) return;
 	positionShell(parts.root, item);
 	const { width, height } = item.frame;
-	const selected = context.selectedIds.has(item.id);
 	const realType = item.type;
 	syncTextResolution(parts.label, parts, context.zoom);
-	const visualSig = [
-		width,
-		height,
-		selected,
-		context.palette.surface,
-		context.palette.brand,
-		context.palette.border,
-		context.palette.muted,
-	].join("|");
+	const elevation = cardElevation(context, item.id);
+	const visualSig = [width, height, elevation, context.themeKey].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
-		parts.box.clear();
-		parts.box
-			.roundRect(0, 0, width, height, RADIUS)
-			.fill({ color: context.palette.surface, alpha: 0.7 })
-			.roundRect(0, 0, width, height, RADIUS)
-			.stroke({
-				color: selected ? context.palette.brand : context.palette.border,
-				width: selected ? 2 : 1,
-				alpha: 0.8,
-			});
-		parts.box.roundRect(6, 6, width - 12, height - 12, RADIUS - 4).stroke({
+		const rect = { x: 0, y: 0, width, height };
+		drawCardSurface(parts.box.clear(), rect, context.style, {
+			fill: context.palette.surface,
+			fillAlpha: 0.7,
+			border: context.palette.border,
+			borderAlpha: 0.8,
+			elevation,
+		});
+		traceCardOutline(parts.box, rect, context.style, -6).stroke({
 			color: context.palette.muted,
 			width: 1,
 			alpha: 0.4,

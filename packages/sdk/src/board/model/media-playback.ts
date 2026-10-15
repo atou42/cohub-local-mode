@@ -1,7 +1,7 @@
 import { parseBoardMediaSource } from "@cohub/protocol/board-model";
 import { getMediaResourceTitle } from "./media.js";
 import type { BoardSceneItem, } from "./scene.js";
-import { rankedTaskArtifacts } from "./task.js";
+import { rankedTaskArtifacts } from "@cohub/protocol";
 
 export type BoardAssetSource = {
 	resolveFileUrl: (path: string) => Promise<string | null>;

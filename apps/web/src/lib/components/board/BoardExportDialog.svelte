@@ -1,11 +1,16 @@
 <script lang="ts">
-import { type BoardDocument, buildBoardScene, createBoardAnimationSampler } from "@neta-art/cohub/board";
-import { inspectBoardScene, type BoardRenderDiagnostic } from "@neta-art/cohub/board/render";
 import {
 	BOARD_EXPORT_MAX_EDGE,
+	type BoardDocument,
 	type BoardExportRegion,
+	buildBoardScene,
+	createBoardAnimationSampler,
 	planBoardExport,
 } from "@neta-art/cohub/board";
+import {
+	type BoardRenderDiagnostic,
+	inspectBoardScene,
+} from "@neta-art/cohub/board/render";
 import { Check, Copy, Download, Loader2 } from "lucide-svelte";
 import {
 	type BoardImageFormat,
@@ -16,6 +21,7 @@ import {
 	exportBoardImage,
 } from "$lib/board/board-image-export";
 import Dialog from "$lib/components/Dialog.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
@@ -67,22 +73,46 @@ const cameraSize = $derived.by(() => {
 	return { width, height };
 });
 const scene = $derived(open ? buildBoardScene(boardDocument) : null);
-const sampler = $derived(open && animationId && boardDocument.animations[animationId] ? createBoardAnimationSampler(boardDocument, animationId) : null);
-const sampledScene = $derived(sampler ? sampler.at(Math.max(0, seconds || 0) * 1000).scene : scene);
+const sampler = $derived(
+	open && animationId && boardDocument.animations[animationId]
+		? createBoardAnimationSampler(boardDocument, animationId)
+		: null,
+);
+const sampledScene = $derived(
+	sampler ? sampler.at(Math.max(0, seconds || 0) * 1000).scene : scene,
+);
 
 function inspect() {
 	hints = sampledScene ? inspectBoardScene(sampledScene) : [];
 }
 function hintLabel(hint: BoardRenderDiagnostic) {
-	if (hint.code === "text-clipped") return m.board_issue_clipped({}, { locale });
-	if (hint.code === "text-overlap") return m.board_issue_overlap({}, { locale });
-	if (hint.code === "glyph-unavailable") return m.board_issue_glyph({ characters: hint.characters ?? "" }, { locale });
+	if (hint.code === "text-clipped")
+		return m.board_issue_clipped({}, { locale });
+	if (hint.code === "text-overlap")
+		return m.board_issue_overlap({}, { locale });
+	if (hint.code === "glyph-unavailable")
+		return m.board_issue_glyph(
+			{ characters: hint.characters ?? "" },
+			{ locale },
+		);
 	return m.board_issue_follow({}, { locale });
 }
-$effect(() => { boardDocument; seconds; animationId; hints = null; });
+$effect(() => {
+	boardDocument;
+	seconds;
+	animationId;
+	hints = null;
+});
 
 const frames = $derived(
-	scene ? scene.items.filter((item) => item.type === "frame").map((item) => ({ id: item.id, label: (item.props as { label: string }).label })) : [],
+	scene
+		? scene.items
+				.filter((item) => item.type === "frame")
+				.map((item) => ({
+					id: item.id,
+					label: (item.props as { label: string }).label,
+				}))
+		: [],
 );
 const hasSelection = $derived(selection.length > 0);
 
@@ -103,11 +133,15 @@ const region = $derived.by<BoardExportRegion>(() => {
 	return { kind: "all" };
 });
 
-const plan = $derived.by(() => (sampledScene ? planBoardExport({ scene: sampledScene, region, scale }) : null));
+const plan = $derived.by(() =>
+	sampledScene ? planBoardExport({ scene: sampledScene, region, scale }) : null,
+);
 const sizeLabel = $derived(
-	scope === "camera" ? `${cameraSize.width} × ${cameraSize.height} px` : plan
-		? `${plan.width} × ${plan.height} px`
-		: m.board_nothing_export({}, { locale }),
+	scope === "camera"
+		? `${cameraSize.width} × ${cameraSize.height} px`
+		: plan
+			? `${plan.width} × ${plan.height} px`
+			: m.board_nothing_export({}, { locale }),
 );
 const clamped = $derived(Boolean(plan?.clamped));
 
@@ -124,7 +158,15 @@ async function run(mode: "download" | "copy") {
 		const result = await exportBoardImage(bridge, boardDocument, {
 			region,
 			...(scope === "camera" ? { camera: cameraSize } : {}),
-			...(sampler ? { at: { animation: animationId, time: Math.max(0, seconds || 0) * 1000 }, sampler } : {}),
+			...(sampler
+				? {
+						at: {
+							animation: animationId,
+							time: Math.max(0, seconds || 0) * 1000,
+						},
+						sampler,
+					}
+				: {}),
 			scale,
 			background:
 				transparent && transparencySupported ? "transparent" : "paper",
@@ -287,7 +329,7 @@ async function run(mode: "download" | "copy") {
 		<p class="text-[12px] text-text-tertiary" aria-live="polite">
 			{sizeLabel}
 			{#if clamped}
-				<span class="text-warning-400">
+				<span class="text-warning">
 					· {m.board_reduced_to({ max: BOARD_EXPORT_MAX_EDGE }, { locale })}
 				</span>
 			{/if}
@@ -320,12 +362,12 @@ async function run(mode: "download" | "copy") {
 			</button>
 			<button
 				type="button"
-				class="export-btn export-btn--primary"
+				class="primary-key"
 				disabled={!plan || busy !== null}
 				onclick={() => run("download")}
 			>
 				{#if busy === "download"}
-					<Loader2 size={14} class="animate-spin" />
+					<Spinner class="h-3.5 w-3.5" />
 				{:else}
 					<Download size={14} />
 				{/if}
@@ -380,6 +422,12 @@ async function run(mode: "download" | "copy") {
 		color: var(--text-primary);
 	}
 
+	.export-btn,
+	.primary-key {
+		padding: 5px 12px;
+		font-size: 12px;
+	}
+
 	.export-btn {
 		display: inline-flex;
 		align-items: center;
@@ -387,8 +435,6 @@ async function run(mode: "download" | "copy") {
 		border: 1px solid var(--border-subtle);
 		border-radius: 7px;
 		background: transparent;
-		padding: 5px 12px;
-		font-size: 12px;
 		color: var(--text-primary);
 		cursor: pointer;
 	}
@@ -400,15 +446,5 @@ async function run(mode: "download" | "copy") {
 	.export-btn:disabled {
 		cursor: not-allowed;
 		opacity: 0.5;
-	}
-
-	.export-btn--primary {
-		border-color: transparent;
-		background: var(--brand);
-		color: var(--brand-contrast, #fff);
-	}
-
-	.export-btn--primary:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--brand) 88%, black);
 	}
 </style>

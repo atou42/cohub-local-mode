@@ -30,50 +30,22 @@ const locale = $derived(getLocale());
 const compact = $derived(useCompactShell());
 let button = $state<HTMLButtonElement | null>(null);
 let panel = $state<HTMLElement | null>(null);
-let pinned = $state(false);
-let timer: ReturnType<typeof setTimeout> | undefined;
-
-function cancelClose() {
-	if (timer) clearTimeout(timer);
-}
-
-function preview(event: PointerEvent) {
-	if (event.pointerType !== "mouse" || compact) return;
-	cancelClose();
-	open = true;
-}
-
-function scheduleClose() {
-	cancelClose();
-	if (!pinned && !compact)
-		timer = setTimeout(() => {
-			open = false;
-		}, 160);
-}
 
 function close(restoreFocus = false) {
-	cancelClose();
 	open = false;
-	pinned = false;
 	if (restoreFocus) (button ?? anchor)?.focus();
 }
 
 async function toggle() {
-	if (open && pinned) return close(true);
-	cancelClose();
-	pinned = true;
+	if (open) return close(true);
 	open = true;
 	await tick();
 	panel?.focus();
 }
 
 $effect(() => {
-	if (!open) {
-		pinned = false;
-		return;
-	}
+	if (!open) return;
 	untrack(() => onopen?.());
-	if (!trigger) pinned = true;
 	const compactMode = compact;
 
 	function outside(event: Event) {
@@ -100,7 +72,6 @@ $effect(() => {
 	}
 	document.addEventListener("keydown", keydown, true);
 	return () => {
-		cancelClose();
 		if (!compactMode) {
 			document.removeEventListener("pointerdown", outside);
 			document.removeEventListener("focusin", outside);
@@ -111,7 +82,7 @@ $effect(() => {
 </script>
 
 {#snippet panelContent()}
-	<div class="flex items-center justify-between gap-3 border-b border-border-subtle px-3 py-2.5">
+	<div class="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-3 py-2.5">
 		<h3 id={`${id}-title`} class="font-medium text-text-primary">{title}</h3>
 		<button
 			type="button"
@@ -122,7 +93,7 @@ $effect(() => {
 			<X size={16} />
 		</button>
 	</div>
-	<div class="max-h-[min(72dvh,640px)] overflow-y-auto p-3 text-[12px] font-normal text-text-secondary select-text">
+	<div class="min-h-0 flex-1 overflow-y-auto p-3 text-[12px] font-normal text-text-secondary select-text">
 		{@render children()}
 	</div>
 {/snippet}
@@ -136,8 +107,6 @@ $effect(() => {
 		aria-haspopup="dialog"
 		aria-expanded={open}
 		aria-controls={open ? id : undefined}
-		onpointerenter={preview}
-		onpointerleave={scheduleClose}
 		onclick={toggle}
 	>
 		{@render trigger()}
@@ -147,7 +116,9 @@ $effect(() => {
 {#if open && compact}
 	<Sheet open={open} onClose={() => close(true)} maxWidth="480px">
 		{#snippet children()}
-			{@render panelContent()}
+			<div class="flex max-h-[min(72dvh,640px)] min-h-0 flex-col">
+				{@render panelContent()}
+			</div>
 		{/snippet}
 	</Sheet>
 {:else if open}
@@ -157,11 +128,8 @@ $effect(() => {
 		role="dialog"
 		aria-labelledby={`${id}-title`}
 		tabindex="-1"
-		class="w-[min(360px,calc(100vw-16px))] max-h-[min(70dvh,540px)] overflow-y-auto rounded-lg border border-border-subtle bg-bg-primary text-[12px] font-normal text-text-secondary shadow-lg outline-none select-text"
+		class="flex w-[min(360px,calc(100vw-16px))] max-h-[min(70dvh,540px)] flex-col overflow-hidden rounded-lg border border-border-subtle bg-bg-primary text-[12px] font-normal text-text-secondary shadow-lg outline-none select-text"
 		use:floatNear={{ getAnchor: () => button ?? anchor, placement: "bottom-end", gap: 6, zIndex: 130 }}
-		onpointerenter={cancelClose}
-		onpointerleave={scheduleClose}
-		onfocusin={() => { pinned = true; cancelClose(); }}
 	>
 		{@render panelContent()}
 	</div>

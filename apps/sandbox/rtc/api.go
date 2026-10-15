@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/cohub/apps/sandbox/rtccore"
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/interceptor/pkg/gcc"
-	"github.com/pion/logging"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/cohub/apps/sandbox/display"
@@ -156,31 +156,7 @@ func newAPI(logger *slog.Logger) (*webrtc.API, <-chan cc.BandwidthEstimator, err
 		return nil, nil, err
 	}
 
-	settings := webrtc.SettingEngine{LoggerFactory: pionLoggers{logger}}
+	settings := webrtc.SettingEngine{LoggerFactory: rtccore.Loggers{Logger: logger}}
 	settings.SetICETimeouts(iceDisconnectedTimeout, iceFailedTimeout, iceKeepAlive)
 	return webrtc.NewAPI(webrtc.WithMediaEngine(media), webrtc.WithInterceptorRegistry(registry), webrtc.WithSettingEngine(settings)), estimators, nil
-}
-
-// pionLoggers routes pion's logs into slog: its errors become warnings, its
-// warnings debug lines, the rest is dropped. Pion never writes to stderr,
-// which Android uses as the control pipe.
-type pionLoggers struct{ logger *slog.Logger }
-
-func (f pionLoggers) NewLogger(scope string) logging.LeveledLogger {
-	return pionLogger{f.logger.With(slog.String("pion", scope))}
-}
-
-type pionLogger struct{ logger *slog.Logger }
-
-func (l pionLogger) Trace(string)                  {}
-func (l pionLogger) Tracef(string, ...any)         {}
-func (l pionLogger) Debug(string)                  {}
-func (l pionLogger) Debugf(string, ...any)         {}
-func (l pionLogger) Info(string)                   {}
-func (l pionLogger) Infof(string, ...any)          {}
-func (l pionLogger) Warn(msg string)               { l.logger.Debug(msg) }
-func (l pionLogger) Warnf(format string, a ...any) { l.logger.Debug(fmt.Sprintf(format, a...)) }
-func (l pionLogger) Error(msg string)              { l.logger.Warn(msg) }
-func (l pionLogger) Errorf(format string, a ...any) {
-	l.logger.Warn(fmt.Sprintf(format, a...))
 }

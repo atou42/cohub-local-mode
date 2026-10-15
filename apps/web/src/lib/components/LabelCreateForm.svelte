@@ -1,7 +1,8 @@
 <script lang="ts">
 import type { LabelListItem } from "@neta-art/cohub";
-import { ChevronDown, Loader2, Plus } from "lucide-svelte";
+import { ChevronDown, Plus } from "lucide-svelte";
 import { tick } from "svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import {
@@ -121,8 +122,8 @@ async function submit() {
 		{#if onCancel}
 			<button type="button" class="label-dialog-button ghost" onclick={onCancel}>{m.common_cancel({}, { locale })}</button>
 		{/if}
-		<button type="button" class="label-dialog-button primary" disabled={!name.trim() || saving} onclick={() => void submit()}>
-			{#if saving}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Plus class="h-3 w-3" />{/if}
+		<button type="button" class="label-dialog-button primary-key" disabled={!name.trim() || saving} onclick={() => void submit()}>
+			{#if saving}<Spinner class="h-3 w-3" />{:else}<Plus class="h-3 w-3" />{/if}
 			{submitLabel}
 		</button>
 	</div>
@@ -175,7 +176,7 @@ async function submit() {
 	}
 
 	.label-create-error {
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 		font-size: 12px;
 	}
 
@@ -196,15 +197,6 @@ async function submit() {
 		font-size: 12px;
 		line-height: 1;
 		transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
-	}
-
-	.label-dialog-button.primary {
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
-	}
-
-	.label-dialog-button.primary:disabled {
-		opacity: 0.55;
 	}
 
 	.label-dialog-button.ghost {

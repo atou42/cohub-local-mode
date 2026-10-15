@@ -603,7 +603,7 @@ onDestroy(() => {
 										</button>
 										{#if compareOpen}
 											<div
-												class="absolute right-0 z-20 mt-1 w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[6px] border border-border-subtle bg-bg-surface shadow-lg"
+												class="menu-surface absolute right-0 z-20 mt-1 w-[min(18rem,calc(100vw-2rem))] overflow-hidden"
 												role="listbox"
 											>
 												<div class="border-b border-border-subtle/60 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-text-placeholder">

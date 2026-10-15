@@ -1,5 +1,54 @@
 # @neta-art/cohub
 
+## 11.3.0
+
+### Minor Changes
+
+- dcb3bbc: `cohub boards schema` now explains every Board field: descriptions come from the protocol schema, so item, track, animation and settings fields say what they mean. `cohub boards schema script` prints the script attachment and the module API, exported from the SDK as `BOARD_SCRIPT_API`. `cohub boards -h` lists every Board command.
+- bebc55d: Add live hosted Room connections with bidirectional NDJSON CLI commands, member synchronization, and retained-event replay. Add participant-scoped RTC authorization and a pluggable PeerConnection factory. The CLI supports isolated, opt-in RTC media/data workers with PCM/I420 or Opus/VP8 file or pipe inputs and bounded binary or segmented-file outputs. RTC runs in an on-demand Go/Pion helper (`cohub-rtc`) that the CLI downloads and verifies; FFmpeg is needed only for format conversion.
+
+## 11.2.0
+
+### Minor Changes
+
+- c13c4af: Give Board rendering a style layer and move selection chrome to the stage.
+  
+  Themes now shape cards through `BoardRenderStyle` (silhouette, radius, shadow,
+  selection, media framing, progress, icons, motion and chrome font) alongside the
+  existing color palette, and every built-in renderer draws its surface through the
+  shared helpers in `render/surface.ts`. Cards no longer draw selection or hover
+  themselves: the stage overlay owns that chrome, so pointer and selection changes
+  redraw one layer instead of every affected card. Card chrome such as tags uses
+  `renderers/*.zoom`, a new optional hook for zoom-dependent sizing.
+  
+  Breaking for custom card renderers: `BoardRenderContext` gained `style`,
+  `themeKey` and `liftedIds`, and `drawOverlay` moved off the scene onto
+  `drawBoardOverlay` in `board/stage`. Renderers that draw their own
+  selection outline should set `observesSelection` to keep being updated when the
+  selection or hover changes.
+- ad8e425: Add decision model calls. `space.decision()` answers `noul` (yes/no), `choice`, and `score` questions about text, a JSON object, or images with calibrated probabilities, through `POST /api/spaces/:id/decisions`. Images can be https or data URLs. The CLI adds `cohub decision` and `cohub spaces decision`, which read questions from inline JSON or a file and upload local `--image` files as WebP first.
+  
+  新增决策模型调用。`space.decision()` 通过 `POST /api/spaces/:id/decisions`，针对文本、JSON 对象或图片回答 `noul`（肯定或否定）、`choice`（单选）和 `score`（打分）问题，并给出校准过的概率。图片可以是 https URL 或 data URL。CLI 新增 `cohub decision` 和 `cohub spaces decision`，问题可以写成内联 JSON 或放在文件里，本地 `--image` 图片会先转成 WebP 并上传。
+- 2aa1722: Use the account's Home Space as the source of personal configuration. User Rules now return `source: "home-space"`. Saves in Home publish user rules, skills, prompts, and model configuration through the existing pipeline; the web app reads the personal theme from Home's `.cohub/theme.css`.
+  
+  Existing config Spaces remain ordinary Spaces. Move the desired configuration files into Home before creating a Save there. No automatic migration or fallback is provided.
+
+### Patch Changes
+
+- b2d943d: Upgrade Generation SDK to 0.1.35. Generation model declarations accept the `decision` category with `systemOneExamples` and `decisionsExamples`.
+
+## 11.1.0
+
+### Minor Changes
+
+- 8d37cc6: Board task items are kept current by the server: write only `props.taskRunId`, and every Board in the Space that shows the run receives its final snapshot when it finishes. Task cards draw a live generating state with elapsed time, prompt and failure reasons, and fit their result's aspect ratio. Add `createTaskResultItems`, media `origin`, and `boards` on task details. `editor.applyTaskSnapshots` is removed; the server is the only writer of task snapshots.
+- cbbb519: Allow the SDK and CLI to override service endpoints through environment variables while retaining production and development defaults. Add the CLI `--base-url` flag and the SDK `webBaseUrl` option. Isolate CLI login sessions, Home Space caches, and Runtime directory bindings by API base URL.
+
+### Patch Changes
+
+- 56abacd: Make Board dot and grid patterns visible: dots are centered in their tile and drawn in muted ink, grid lines use the theme hairline.
+- be2784e: Reuse Board script textures safely across frames, cache script composition order, and avoid redundant accessibility DOM updates.
+
 ## 11.0.0
 
 ### Major Changes

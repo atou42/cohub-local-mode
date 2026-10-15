@@ -29,7 +29,7 @@ const SANDBOX_GLYPH: Record<
 	{ tone: StatusGlyphTone; motion?: StatusGlyphMotion; soft?: boolean }
 > = {
 	running: { tone: "success", motion: "slow" },
-	waking: { tone: "brand", motion: "active" },
+	waking: { tone: "activity", motion: "active" },
 	sleeping: { tone: "muted", soft: true },
 	unknown: { tone: "muted", soft: true },
 	error: { tone: "error", soft: true },

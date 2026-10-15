@@ -239,6 +239,8 @@ export function generationUsageKind(usageType: CohubBillingUsageType): BillingUs
       return "llm.turn";
     case COHUB_BILLING_USAGE_TYPES.generationLlmRaw:
       return "llm.raw_completion";
+    case COHUB_BILLING_USAGE_TYPES.generationDecision:
+      return "llm.decision";
     default:
       return "generation";
   }

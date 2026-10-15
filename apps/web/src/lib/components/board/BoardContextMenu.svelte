@@ -1,18 +1,17 @@
 <script lang="ts">
-import {
-	featuredTaskArtifact,
-	parseBoardMediaSource,
-} from "@neta-art/cohub/board";
+import { boardItemOrigin, parseBoardMediaSource } from "@neta-art/cohub/board";
 import {
 	ArrowDownToLine,
 	ArrowUpToLine,
 	BoxSelect,
 	Clapperboard,
 	Copy,
+	Crosshair,
 	ExternalLink,
 	History,
 	ImageDown,
 	LayoutDashboard,
+	LayoutGrid,
 	Link,
 	LocateFixed,
 	Pencil,
@@ -32,7 +31,8 @@ const {
 	onClose,
 	onOpenFile,
 	onAddLink,
-	onAddTaskMedia,
+	onAddTaskResults,
+	onShowSource,
 	onOpenTask,
 	onRegenerateTask,
 	onAddToGeneration,
@@ -47,7 +47,8 @@ const {
 	onClose: () => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
 	onAddLink?: () => void;
-	onAddTaskMedia?: (itemId: string) => void;
+	onAddTaskResults?: (itemId: string) => void;
+	onShowSource?: (itemId: string) => void;
 	onOpenTask?: (taskRunId: string) => void;
 	onRegenerateTask?: (itemId: string) => void;
 	onAddToGeneration?: () => void;
@@ -87,16 +88,18 @@ const singleTask = $derived.by(() => {
 	const item = editor.selectedItems[0];
 	if (item?.type !== "task") return null;
 	const props = item.props;
-	const artifact = featuredTaskArtifact(props.snapshot.artifacts);
 	return {
-		canAddMedia:
-			artifact &&
-			artifact.type !== "text" &&
-			parseBoardMediaSource(artifact.url)?.kind === "url",
+		hasResults: props.snapshot.artifactCount > 0,
 		id: item.id,
 		taskRunId: props.taskRunId,
 		taskType: props.snapshot.taskType,
 	};
+});
+const singleOrigin = $derived.by(() => {
+	if (editor.selectedItems.length !== 1) return null;
+	const item = editor.selectedItems[0];
+	const origin = item ? boardItemOrigin(item) : null;
+	return item && origin ? { id: item.id, taskRunId: origin.taskRunId } : null;
 });
 
 type MenuAction = {
@@ -123,11 +126,24 @@ const actions = $derived.by<MenuAction[]>(() => {
 			icon: Sparkles,
 			run: onAddToGeneration,
 		});
-	if (task?.canAddMedia && onAddTaskMedia)
+	if (task?.hasResults && onAddTaskResults)
 		list.push({
-			label: m.board_add_result({}, { locale }),
-			icon: Copy,
-			run: () => onAddTaskMedia(task.id),
+			label: m.board_add_results({}, { locale }),
+			icon: LayoutGrid,
+			run: () => onAddTaskResults(task.id),
+		});
+	const origin = singleOrigin;
+	if (origin && onShowSource)
+		list.push({
+			label: m.board_show_source({}, { locale }),
+			icon: Crosshair,
+			run: () => onShowSource(origin.id),
+		});
+	if (origin && onOpenTask)
+		list.push({
+			label: m.board_open_task({}, { locale }),
+			icon: LayoutDashboard,
+			run: () => onOpenTask(origin.taskRunId),
 		});
 	if (task && onOpenTask)
 		list.push({
@@ -259,7 +275,7 @@ onDestroy(() => {
 <div
 	bind:this={menu}
 	use:portal
-	class="board-context-menu"
+	class="board-context-menu menu-surface"
 	class:board-context-menu--sheet={sheet}
 	style:left={sheet ? undefined : `${left}px`}
 	style:top={sheet ? undefined : `${top}px`}
@@ -287,11 +303,7 @@ onDestroy(() => {
 		position: fixed;
 		z-index: 130;
 		min-width: 168px;
-		border-radius: 9px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-elevated);
 		padding: 4px;
-		box-shadow: 0 12px 28px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
 	}
 
 	.ctx-scrim {
@@ -338,5 +350,5 @@ onDestroy(() => {
 	}
 	.ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 	.ctx-item:disabled { cursor: default; opacity: 0.55; }
-	.ctx-item--danger:hover { background: var(--error-bg); color: var(--error-700); }
+	.ctx-item--danger:hover { background: var(--color-error-bg); color: var(--error-700); }
 </style>

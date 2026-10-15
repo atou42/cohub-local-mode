@@ -3,7 +3,10 @@ import { FolderKanban, MessageSquare, Pin, Plus, Tag } from "lucide-svelte";
 import { settingsCommandSection } from "$lib/command-palette/commands";
 import type { CommandPaletteItem } from "$lib/command-palette/types";
 import ListRowText from "$lib/components/list-page/ListRowText.svelte";
-import { LIST_ROW_AVATAR } from "$lib/components/list-page/list-row";
+import {
+	type FixedListRowDensity,
+	LIST_ROW_AVATAR,
+} from "$lib/components/list-page/list-row";
 import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
 import { SETTINGS_SECTION_ICONS } from "$lib/components/settings-section";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
@@ -13,6 +16,7 @@ import HighlightedText from "./HighlightedText.svelte";
 
 const {
 	item,
+	density,
 	active,
 	pinnable,
 	onActivate,
@@ -20,6 +24,7 @@ const {
 	onTogglePin,
 }: {
 	item: CommandPaletteItem;
+	density: FixedListRowDensity;
 	active: boolean;
 	pinnable: boolean;
 	onActivate: () => void;
@@ -129,20 +134,22 @@ const timestamp = $derived.by(() => {
 <div
 	class:active
 	class="command-result"
-	data-density="compact"
+	data-density={density}
 	onpointermove={onHover}
 	role="option"
 	aria-selected={active}
 	tabindex="-1"
 >
 	<button type="button" class="command-result-main" onclick={onActivate}>
-		{#if showsSpaceAvatar}
-			<SpaceAvatar name={item.spaceName || item.title || item.spaceId} profile={item.spaceProfile} seed={item.spaceId} size={LIST_ROW_AVATAR.compact} />
-		{:else}
-			<div class={`command-type-mark ${typeMeta.className}`} aria-label={item.type}>
-				<Icon class="h-4 w-4" />
-			</div>
-		{/if}
+		<span class="list-row-leading flex shrink-0 items-center justify-center">
+			{#if showsSpaceAvatar}
+				<SpaceAvatar name={item.spaceName || item.title || item.spaceId} profile={item.spaceProfile} seed={item.spaceId} size={LIST_ROW_AVATAR[density]} />
+			{:else}
+				<div class={`command-type-mark ${typeMeta.className}`} aria-label={item.type}>
+					<Icon class="h-4 w-4" />
+				</div>
+			{/if}
+		</span>
 		<ListRowText title={titleText} tooltip={title} meta={matchCount || timestamp ? meta : undefined} {lead} {subtitle} />
 		<div class="command-enter">↵</div>
 	</button>
@@ -235,7 +242,7 @@ const timestamp = $derived.by(() => {
 	.command-result.active .command-pin-btn { opacity: 1; }
 	.command-result.active .command-pin-btn:not(.pinned) { color: var(--text-tertiary); }
 
-	.command-result.active { background: color-mix(in oklch, var(--brand-bg) 56%, var(--bg-hover) 44%); }
+	.command-result.active { background: color-mix(in srgb, var(--brand) 6%, var(--bg-hover)); }
 	.command-result.active .command-enter { opacity: 1; }
 	.command-result.active .command-type-mark { border-color: color-mix(in oklch, currentColor 36%, transparent); }
 
@@ -246,7 +253,7 @@ const timestamp = $derived.by(() => {
 		width: var(--list-avatar-size);
 		height: var(--list-avatar-size);
 		border: 1px solid color-mix(in oklch, currentColor 18%, transparent);
-		border-radius: 10px;
+		border-radius: calc(var(--list-avatar-size) * 0.28);
 		background: color-mix(in oklch, currentColor 10%, var(--bg-primary) 90%);
 		color: var(--text-tertiary);
 	}

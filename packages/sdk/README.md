@@ -46,16 +46,37 @@ Development uses:
 - API: `https://api-dev.cohub.live`
 - WebSocket: `wss://gateway-dev.cohub.live/ws`
 
-Custom endpoints are still supported when needed:
+Override endpoints for self-hosted deployments or proxies:
 
 ```ts
 const client = createCohubClient({
   baseUrl: "https://api.example.com",
+  webBaseUrl: "https://cohub.example.com",
   getAccessToken: async () => localStorage.getItem("token"),
   websocket: {
     url: "https://gateway.example.com",
   },
+  voice: {
+    url: "https://gateway.example.com",
+  },
 });
+```
+
+In Node.js, the SDK and CLI share these optional environment variables:
+
+| Variable | Endpoint |
+| --- | --- |
+| `COHUB_BASE_URL` | API base URL |
+| `COHUB_WS_URL` | Realtime gateway URL (`http(s)` or `ws(s)`; `/ws` is added when omitted) |
+| `COHUB_WEB_URL` | Web origin for App authorization and CLI links |
+| `COHUB_VOICE_WS_URL` | Voice input gateway URL; falls back to `COHUB_WS_URL` with `/asr/ws` |
+
+Explicit client options take precedence over environment variables. Unconfigured
+endpoints use the selected environment's defaults. API, web, and gateway addresses
+are configured separately; changing `baseUrl` does not change the gateway.
+
+```bash
+COHUB_BASE_URL=http://localhost:3000 COHUB_WS_URL=ws://localhost:8080 node app.js
 ```
 
 ## Spaces and sessions
@@ -101,10 +122,15 @@ const stop = board.subscribe({
 });
 ```
 
-Task Items keep a small, replaceable display snapshot beside their stable
-`taskRunId`; build it from an authoritative TaskRun with
-`taskRunToBoardTaskSnapshot(taskRun)` from `@neta-art/cohub/board`, and restore
-a Board's TaskRuns in one request with `client.tasks.getMany(ids, { spaceId })`.
+Task Items show a run by its `taskRunId`. Write only the id; the server fills
+the display snapshot from the run and rewrites it when the run finishes, on
+every Board in the Space that shows it. Lay a run's results out as media with
+`createTaskResultItems`; each result keeps an `origin` leading back to the run.
+
+```ts
+const { taskRunId } = await client.generations.create({ spaceId, model, content });
+await board.apply({ items: { hero: { type: "task", position: { x: 80, y: 80 }, size: { width: 480, height: 270 }, props: { taskRunId } } } });
+```
 
 ### Layers
 

@@ -7,6 +7,7 @@ import {
 } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient } from "../client.js";
+import { collectOption } from "../command-input.js";
 import { error, formatLocalDateTime, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
 
 type JsonOption = { json?: boolean };
@@ -32,10 +33,6 @@ type ConsumeOptions = JsonOption & {
   operationId?: string;
   reason?: string;
 };
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
-}
 
 function requireText(value: string | undefined, label: string, flag: string): string {
   const text = value?.trim();

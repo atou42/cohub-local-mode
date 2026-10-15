@@ -78,6 +78,7 @@ import CommandPaletteResultRow from "$lib/components/command-palette/CommandPale
 import FilterBar from "$lib/components/list-page/FilterBar.svelte";
 import FilterChip from "$lib/components/list-page/FilterChip.svelte";
 import ListRowSkeleton from "$lib/components/list-page/ListRowSkeleton.svelte";
+import type { FixedListRowDensity } from "$lib/components/list-page/list-row";
 import SwipePager from "$lib/components/list-page/SwipePager.svelte";
 import { SwipeTabs } from "$lib/components/list-page/swipe-tabs.svelte";
 import { settingsSectionLabel } from "$lib/components/settings-section";
@@ -124,6 +125,9 @@ const RESULT_LIMIT = 30;
 const DEBOUNCE_MS = 180;
 const POINTER_HOVER_ARM_MS = 220;
 const fullScreen = new MediaQuery("max-width: 640px");
+const rowDensity = $derived<FixedListRowDensity>(
+	fullScreen.current ? "comfortable" : "compact",
+);
 
 /**
  * Land a rebuilt default list without a redundant render. The result list is
@@ -1330,13 +1334,14 @@ onMount(() => {
 								ontouchmove={dismissKeyboard}
 							>
 								{#if !items || (active && items.length === 0 && isSearching)}
-									<ListRowSkeleton density="compact" rows={6} label={m.common_loading({}, { locale })} />
+									<ListRowSkeleton density={rowDensity} rows={6} label={m.common_loading({}, { locale })} />
 								{:else if items.length === 0}
 									{@render emptyState(active)}
 								{:else}
 									{#each items as item, itemIndex (commandItemKey(item))}
 										<CommandPaletteResultRow
 											{item}
+											density={rowDensity}
 											active={active && itemIndex === activeIndex}
 											pinnable={active && isSpacePickerMode && item.type === "space" && !item.isArchived}
 											onActivate={() => void activate(item)}

@@ -21,6 +21,10 @@ export function textZoomBucket(zoom: number): number {
 	return TEXT_ZOOM_BUCKETS[TEXT_ZOOM_BUCKETS.length - 1] ?? 4;
 }
 
+export function boardCardDetailed(zoom: number): boolean {
+	return textZoomBucket(zoom) >= 1;
+}
+
 /** Effective text resolution for a given camera zoom. */
 export function textResolutionForZoom(zoom: number): number {
 	const bucket = textZoomBucket(zoom);

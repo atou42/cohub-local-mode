@@ -6,6 +6,7 @@ import type { SceneItem } from "../../model/scene.js";
 import { itemAlpha, itemColor } from "../palette.js";
 import { dashPattern, endAngle, traceArrowhead, tracePolyline, trimPolyline } from "../stroke.js";
 import { syncTextResolution, textResolutionForZoom } from "../text-resolution.js";
+import { drawCardSurface } from "../surface.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarStroke } from "./far-plate.js";
 
@@ -28,8 +29,6 @@ function sync(container: Container, item: SceneItem<BoardArrowItem>, context: Bo
 	parts.root.rotation = 0;
 	parts.root.scale.set(1);
 	const { props, style } = item;
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	parts.line.alpha = itemAlpha(context, style.stroke);
 	const color = itemColor(context, style.stroke, "brand");
 	const size = style.strokeWidth ?? BOARD_ARROW_STROKE_SIZE;
@@ -37,12 +36,12 @@ function sync(container: Container, item: SceneItem<BoardArrowItem>, context: Bo
 
 	const resolved = resolveSceneArrow(item, context.scene);
 	const path = trimPolyline(resolved.path, style.trim);
-	const lineSig = [path.map((point) => `${point.x},${point.y}`).join(";"), selected, hovered, color, size, style.dash, props.arrowStart, props.arrowEnd].join("|");
+	const lineSig = [path.map((point) => `${point.x},${point.y}`).join(";"), color, size, style.dash, props.arrowStart, props.arrowEnd].join("|");
 	if (lineSig !== parts.lineSig) {
 		parts.lineSig = lineSig;
 		parts.line.clear();
-		const width = selected ? size + 1 : size;
-		const stroke = { color, width, alpha: selected || hovered ? 1 : 0.92, cap: "round", join: "round" } as const;
+		const width = size;
+		const stroke = { color, width, alpha: 0.92, cap: "round", join: "round" } as const;
 		tracePolyline(parts.line, path, dashPattern(style.dash, width));
 		parts.line.stroke(stroke);
 		const first = path[0];
@@ -59,19 +58,20 @@ function sync(container: Container, item: SceneItem<BoardArrowItem>, context: Bo
 		}
 	}
 
-	const labelSig = [props.label, context.palette.text, context.palette.bg, props.fontSize].join("|");
+	const labelSig = [props.label, props.fontSize, context.themeKey].join("|");
 	if (labelSig !== parts.labelSig) {
 		parts.labelSig = labelSig;
 		parts.label.text = props.label;
 		parts.label.style.fill = context.palette.text;
 		parts.label.style.fontSize = props.fontSize;
-		const padX = props.fontSize * 0.4;
-		const padY = props.fontSize * 0.15;
+		const padX = props.fontSize * 0.5;
+		const padY = props.fontSize * 0.25;
 		const { width, height } = parts.label;
-		parts.backdrop.clear();
-		parts.backdrop
-			.roundRect(-width / 2 - padX, -height / 2 - padY, width + padX * 2, height + padY * 2, props.fontSize * 0.3)
-			.fill({ color: context.palette.bg, alpha: 0.92 });
+		const plate = { x: -width / 2 - padX, y: -height / 2 - padY, width: width + padX * 2, height: height + padY * 2 };
+		drawCardSurface(parts.backdrop.clear(), plate, { ...context.style, radius: Math.min(context.style.radius, plate.height / 2) }, {
+			fill: context.palette.surface,
+			border: context.palette.border,
+		});
 	}
 	const visible = props.label.length > 0 && (style.trim === undefined || style.trim >= 0.5);
 	parts.label.visible = visible;

@@ -3,6 +3,7 @@ type Gesture = {
   target: BoardScriptPointerTarget | null;
   x: number;
   y: number;
+  cancelled?: boolean;
 };
 
 export function createBoardScriptPointerRouter() {
@@ -28,7 +29,7 @@ export function createBoardScriptPointerRouter() {
       if (phase === "down") gestures.set(pointerId, { target, ...point });
       const gesture = gestures.get(pointerId);
       const recipient = gesture
-        ? gesture.target
+        ? gesture.cancelled ? null : gesture.target
         : phase === "move"
           ? target
           : null;
@@ -36,7 +37,7 @@ export function createBoardScriptPointerRouter() {
       if (phase === "up") {
         gestures.delete(pointerId);
         if (
-          !cancelled &&
+          !cancelled && !gesture?.cancelled &&
           gesture?.target &&
           target?.owner === gesture.target.owner &&
           target.target === gesture.target.target &&
@@ -45,6 +46,15 @@ export function createBoardScriptPointerRouter() {
           click = gesture.target;
       }
       return { recipient, click };
+    },
+    cancelScripts(cancel: (pointerId: number, target: BoardScriptPointerTarget) => void, owner?: string, retained?: Readonly<Record<string, unknown>>) {
+      for (const [pointerId, gesture] of gestures) {
+        if (!gesture.cancelled && gesture.target && (!owner || gesture.target.owner === owner) &&
+            (!retained || !Object.hasOwn(retained, gesture.target.target))) {
+          gesture.cancelled = true;
+          cancel(pointerId, gesture.target);
+        }
+      }
     },
     clear() {
       gestures.clear();

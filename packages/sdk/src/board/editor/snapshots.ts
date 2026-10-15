@@ -2,7 +2,6 @@ import {
 	type BoardFileSnapshotFacts,
 	type BoardItem,
 	type BoardMediaSnapshot,
-	type BoardTaskSnapshot,
 	featuredTaskArtifact,
 	mergeFileSnapshot,
 } from "../model/index.js";
@@ -14,9 +13,10 @@ export type BoardNaturalSize = { id: string; width: number; height: number };
 function fitHeight<T extends Extract<BoardItem, { size: unknown }>>(item: T, natural: BoardNaturalSize): T | null {
 	const height = (item.size.width * natural.height) / natural.width;
 	if (!Number.isFinite(height) || height <= 0) return null;
+	const shift = item.type === "task" ? 0 : (item.size.height - height) / 2;
 	return {
 		...item,
-		position: { x: item.position.x, y: item.position.y + (item.size.height - height) / 2 },
+		position: { x: item.position.x, y: item.position.y + shift },
 		size: { ...item.size, height },
 	};
 }
@@ -85,19 +85,7 @@ export function createSnapshotsModule(ctx: EditorContext) {
 		commit(changes);
 	}
 
-	function applyTaskSnapshots(snapshots: ReadonlyMap<string, BoardTaskSnapshot>) {
-		if (snapshots.size === 0) return;
-		const changes = new Map<string, BoardItem>();
-		for (const [id, item] of Object.entries(state.base.items)) {
-			if (item.type !== "task") continue;
-			const snapshot = snapshots.get(item.props.taskRunId);
-			if (snapshot && !sameJson(snapshot, item.props.snapshot))
-				changes.set(id, { ...item, props: { ...item.props, snapshot } });
-		}
-		commit(changes);
-	}
-
-	return { applyMediaFileChange, adoptMediaNaturalSizes, applyFileSnapshots, applyTaskSnapshots };
+	return { applyMediaFileChange, adoptMediaNaturalSizes, applyFileSnapshots };
 }
 
 export type SnapshotsModule = ReturnType<typeof createSnapshotsModule>;

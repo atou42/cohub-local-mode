@@ -151,7 +151,7 @@ function select(product: BillingCatalogProduct) {
 					<CheckoutSummary {flow} {locale} {signedIn} {ctaLabel} {onbuy} />
 				</div>
 			{:else}
-				<button type="button" class="bar-cta" disabled={flow.checkoutLoading} onclick={onbuy}>
+				<button type="button" class="bar-cta primary-key" disabled={flow.checkoutLoading} onclick={onbuy}>
 					{ctaLabel ?? (flow.selected.kind === "plan" ? m.purchase_cta_subscribe({}, { locale }) : m.purchase_cta_add_balance({}, { locale }))}
 				</button>
 			{/if}
@@ -258,7 +258,7 @@ function select(product: BillingCatalogProduct) {
 		color: var(--text-secondary);
 	}
 	.notice :global(.icon) {
-		color: var(--error);
+		color: var(--color-error);
 	}
 	.notice button {
 		margin-left: auto;
@@ -349,15 +349,8 @@ function select(product: BillingCatalogProduct) {
 	}
 	.bar-cta {
 		min-height: 44px;
-		border-radius: 6px;
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
 		font-size: 13px;
 		font-weight: 600;
-		cursor: pointer;
-	}
-	.bar-cta:disabled {
-		opacity: 0.55;
 	}
 	.bar-body {
 		max-height: 60vh;

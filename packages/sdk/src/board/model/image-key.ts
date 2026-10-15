@@ -1,6 +1,6 @@
 import { parseBoardMediaSource } from "@cohub/protocol/board-model";
 import type { BoardSceneItem, } from "./scene.js";
-import { featuredTaskArtifact, taskArtifactPreviewUrl } from "./task.js";
+import { featuredTaskArtifact, taskArtifactPreviewUrl } from "@cohub/protocol";
 
 export function imageAssetKey(item: BoardSceneItem): string | null {
   if (item.type === "image") {

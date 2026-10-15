@@ -43,6 +43,7 @@ local previous = member.rtcSessionId or ""
 local changed = false
 if mode == "claim" then
   if member.userKey ~= ARGV[8] then return {-4} end
+  if ARGV[10] == "1" and previous ~= "" then return {-8} end
   member.rtcSessionId = ARGV[2]
   member.publications = nil
   changed = before ~= nil
@@ -198,7 +199,7 @@ if count > tonumber(ARGV[1]) then return 0 end
 return 1
 `;
 
-export type MemberRtcStatus = "room_not_found" | "room_expired" | "not_member" | "forbidden" | "stale" | "limit" | "name_taken";
+export type MemberRtcStatus = "room_not_found" | "room_expired" | "not_member" | "forbidden" | "stale" | "limit" | "name_taken" | "busy";
 
 const MEMBER_STATUS: Record<number, MemberRtcStatus> = {
   [-1]: "room_not_found",
@@ -207,6 +208,7 @@ const MEMBER_STATUS: Record<number, MemberRtcStatus> = {
   [-4]: "forbidden",
   [-5]: "stale",
   [-6]: "limit",
+  [-8]: "busy",
   [-7]: "name_taken",
 };
 
@@ -233,7 +235,7 @@ const checkMemberReply = (reply: unknown) => {
 };
 
 export type MemberRtcChange =
-  | { mode: "claim"; userKey: string }
+  | { mode: "claim"; userKey: string; exclusive?: boolean }
   | { mode: "add"; publications: AppRtcPublication[]; limits: { data: number; media: number } }
   | { mode: "remove"; ids: string[] }
   | { mode: "release" };
@@ -328,6 +330,7 @@ export class AppRtcStore {
       REALTIME_OUTBOUND_CHANNEL,
       change.mode === "claim" ? change.userKey : "",
       change.mode === "add" ? JSON.stringify(change.limits) : "{}",
+      change.mode === "claim" && change.exclusive ? "1" : "0",
     ));
     const previous = typeof result[2] === "string" && result[2] ? result[2] : null;
     return { sequence: Number(result[1]) || 0, previousSessionId: previous === input.sessionId ? null : previous };

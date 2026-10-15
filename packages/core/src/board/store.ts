@@ -36,6 +36,7 @@ import {
 	type RequestSource,
 	applyBoardPatch,
 	arrowBindings,
+	boardTaskSource,
 	boardJsonEquals,
 	boardPatchTouches,
 	createBoardLayout,
@@ -47,6 +48,7 @@ import {
 	summarizeBoardDelta,
 	trackReferences,
 } from "@cohub/protocol";
+import { BOARD_TASK_MUTATION_PREFIX, type BoardTaskViewer, listTaskBoards, resolveBoardTaskSnapshots } from "./tasks.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: any Postgres driver (postgres-js in production, PGlite in tests).
 export type BoardDatabase = PgDatabase<PgQueryResultHKT, any, any>;
@@ -97,6 +99,11 @@ function readSettings(data: unknown): BoardSettings {
 
 function itemData(item: BoardItem): JsonRecord {
 	return item;
+}
+
+function itemSource(item: BoardItem): string | null {
+	if (item.type === "task") return boardTaskSource(item.props.taskRunId);
+	return "src" in item.props && typeof item.props.src === "string" ? item.props.src : null;
 }
 
 const headerData = (header: BoardAnimationHeader) => header as JsonRecord;
@@ -278,9 +285,17 @@ export type BoardApplyOutcome = {
 	written?: { baseVersion: number; after: BoardDelta; playback?: BoardPlaybackSnapshot | null };
 };
 
+export type BoardWriteInput = {
+	spaceId: string;
+	boardId: string;
+	actorId: string;
+	source?: RequestSource | null;
+	taskViewer?: BoardTaskViewer;
+};
+
 export async function applyBoard(
 	db: BoardDatabase,
-	input: { spaceId: string; boardId: string; actorId: string; apply: BoardApplyInput; source?: RequestSource | null },
+	input: BoardWriteInput & { apply: BoardApplyInput },
 ): Promise<BoardApplyOutcome> {
 	const parsed = BoardApplyInputSchema.safeParse(input.apply);
 	if (!parsed.success) {
@@ -302,7 +317,7 @@ function reportedPatch(apply: ParsedApply): JsonRecord {
 
 export async function applyBoardInTransaction(
 	tx: Tx,
-	input: { spaceId: string; boardId: string; actorId: string; apply: ParsedApply; source?: RequestSource | null },
+	input: BoardWriteInput & { apply: ParsedApply },
 ): Promise<BoardApplyOutcome> {
 	const { apply } = input;
 	const mutationId = apply.mutationId ?? randomUUID();
@@ -320,13 +335,21 @@ export async function applyBoardInTransaction(
 	}
 
 	let patch = apply.patch as BoardPatch;
+	const resolveTasks = async (current: (id: string) => BoardItem | undefined, whole: boolean) => {
+		const tasks = await resolveBoardTaskSnapshots(tx, { spaceId: input.spaceId, patch, current, viewer: input.taskViewer, whole });
+		if (!tasks.ok) throw new BoardError(tasks.status, tasks.code, `${tasks.path}: ${tasks.message}`, [{ severity: "error", code: tasks.code, path: tasks.path, message: tasks.message }]);
+		return tasks.patch;
+	};
 	if (apply.replace) {
+		const current = await readDocument(tx, board.id, board.settings);
+		patch = await resolveTasks((id) => current.items[id], true);
 		const target = parseBoardDocument(patch);
 		if (!target.ok) throw new BoardError(400, "INVALID_PATCH", "Board document is invalid.", target.diagnostics);
-		patch = diffBoardDocuments(await readDocument(tx, board.id, board.settings), target.document);
+		patch = diffBoardDocuments(current, target.document);
 	}
 
 	const state = await preloadState(tx, board.id, board.settings, patch, apply.cascade);
+	if (!apply.replace) patch = await resolveTasks(state.state.item, false);
 	const applied = applyBoardPatch(state.state, patch, {
 		cascade: apply.cascade,
 		resolveArrowEnd: (arrowId, which) => state.layout.arrowEnd(arrowId, which),
@@ -599,7 +622,7 @@ async function writeDelta(tx: Tx, boardId: string, after: BoardDelta, preloaded:
 				parentId: item.parent ?? null,
 				z: item.z ?? 0,
 				...box,
-				src: "src" in item.props && typeof item.props.src === "string" ? item.props.src : null,
+				src: itemSource(item),
 				binds: arrowBindings(item),
 				data: itemData(item),
 				version,
@@ -688,16 +711,52 @@ async function writeDelta(tx: Tx, boardId: string, after: BoardDelta, preloaded:
 }
 
 
+export type BoardTaskSyncWrite = { boardId: string; outcome: BoardApplyOutcome };
+
+export async function syncTaskBoards(
+	db: BoardDatabase,
+	input: Omit<BoardWriteInput, "boardId" | "taskViewer"> & {
+		taskRunId: string;
+		revision: string;
+		onError?: (boardId: string, error: unknown) => void;
+	},
+): Promise<BoardTaskSyncWrite[]> {
+	const source = boardTaskSource(input.taskRunId);
+	const writes: BoardTaskSyncWrite[] = [];
+	for (const { boardId } of await listTaskBoards(db, { spaceId: input.spaceId, taskRunId: input.taskRunId })) {
+		try {
+			const outcome = await db.transaction(async (tx) => {
+				await findBoard(tx, input.spaceId, boardId, true);
+				const live = await tx
+					.select({ id: boardItems.id })
+					.from(boardItems)
+					.where(and(eq(boardItems.boardId, boardId), eq(boardItems.src, source)));
+				if (!live.length) return null;
+				const apply = BoardApplyInputSchema.parse({
+					patch: { items: Object.fromEntries(live.map(({ id }) => [id, { props: { taskRunId: input.taskRunId } }])) },
+					mutationId: `${BOARD_TASK_MUTATION_PREFIX}${input.taskRunId}:${input.revision}`,
+				});
+				return applyBoardInTransaction(tx, { spaceId: input.spaceId, boardId, actorId: input.actorId, source: input.source, apply });
+			});
+			if (outcome) writes.push({ boardId, outcome });
+		} catch (error) {
+			input.onError?.(boardId, error);
+		}
+	}
+	return writes;
+}
+
+
 export async function createBoard(
 	db: BoardDatabase,
-	input: { spaceId: string; boardId?: string; title: string; actorId: string; document?: BoardPatch; mutationId?: string; source?: RequestSource | null },
+	input: Omit<BoardWriteInput, "boardId"> & { boardId?: string; title: string; document?: BoardPatch; mutationId?: string },
 ): Promise<{ boardId: string; result: BoardApplyResult }> {
 	const boardId = input.boardId ?? randomUUID();
 	return db.transaction(async (tx) => {
 		const now = new Date();
 		await tx.insert(boards).values({ id: boardId, spaceId: input.spaceId, title: input.title, version: 0, settings: {}, createdAt: now, updatedAt: now }).onConflictDoNothing();
 		const apply = BoardApplyInputSchema.parse({ patch: input.document ?? {}, mutationId: input.mutationId ?? `create:${boardId}` });
-		const { result } = await applyBoardInTransaction(tx, { spaceId: input.spaceId, boardId, actorId: input.actorId, apply, source: input.source });
+		const { result } = await applyBoardInTransaction(tx, { spaceId: input.spaceId, boardId, actorId: input.actorId, apply, source: input.source, taskViewer: input.taskViewer });
 		return { boardId, result };
 	});
 }

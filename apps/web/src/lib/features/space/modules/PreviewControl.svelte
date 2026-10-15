@@ -78,7 +78,7 @@ $effect(() => {
 		</button>
 		{#if open}
 			<div
-				class="preview-control-popover"
+				class="preview-control-popover menu-surface"
 				role="menu"
 				use:floatNear={{
 					getAnchor: () => triggerEl,
@@ -151,11 +151,7 @@ $effect(() => {
 
 	.preview-control-popover {
 		overflow: hidden;
-		border: 1px solid var(--border-subtle);
-		border-radius: 8px;
-		background: var(--bg-elevated);
 		padding: 4px;
-		box-shadow: 0 10px 24px color-mix(in srgb, var(--overlay-scrim-strong) 16%, transparent);
 	}
 
 	@media (pointer: coarse) {

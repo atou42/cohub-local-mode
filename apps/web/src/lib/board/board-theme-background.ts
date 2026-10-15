@@ -28,6 +28,8 @@ export function resolveBoardBackground(
 			...(declared.opacity !== undefined ? { opacity: declared.opacity } : {}),
 		};
 	}
-	if ((declared.kind !== "solid" && declared.kind !== "dots") || declared.color) return null;
+	if ((declared.kind !== "solid" && declared.kind !== "dots") || declared.color)
+		return null;
+	if (settings.grid?.visible) return null;
 	return themeBackground;
 }

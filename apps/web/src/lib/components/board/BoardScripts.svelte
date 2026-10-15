@@ -6,23 +6,38 @@ import type { BoardEditor } from "$lib/board/editor.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 
-const { editor, stage, readonly = false }: {
-  editor: BoardEditor;
-  stage: BoardStage | null;
-  readonly?: boolean;
+const {
+	editor,
+	stage,
+	readonly = false,
+}: {
+	editor: BoardEditor;
+	stage: BoardStage | null;
+	readonly?: boolean;
 } = $props();
 const locale = $derived(getLocale());
 const hasScripts = $derived(editor.hasScripts);
-const selected = $derived(editor.selection.length === 1 ? editor.document.items[editor.selection[0] ?? ""] : null);
+const selected = $derived(
+	editor.selection.length === 1
+		? editor.document.items[editor.selection[0] ?? ""]
+		: null,
+);
 let mode = $state<"edit" | "interact" | "paused">("edit");
 let error = $state<string | null>(null);
-$effect(() => { if (hasScripts) stage?.setScriptMode(readonly ? "interact" : mode); });
 $effect(() => {
-  if (!hasScripts) { error = null; return; }
-  const id = editor.selection.length === 1 ? editor.selection[0] : undefined;
-  const refresh = () => { error = id ? stage?.scriptError(id) ?? null : null; };
-  untrack(refresh);
-  return stage?.subscribeScripts(refresh);
+	if (hasScripts) stage?.setScriptMode(readonly ? "interact" : mode);
+});
+$effect(() => {
+	if (!hasScripts) {
+		error = null;
+		return;
+	}
+	const id = editor.selection.length === 1 ? editor.selection[0] : undefined;
+	const refresh = () => {
+		error = id ? (stage?.scriptError(id) ?? null) : null;
+	};
+	untrack(refresh);
+	return stage?.subscribeScripts(refresh);
 });
 </script>
 
@@ -40,7 +55,7 @@ $effect(() => {
 {/if}
 
 <style>
-.script-controls { position:absolute; top:12px; right:12px; z-index:30; display:flex; align-items:center; gap:2px; padding:3px; color:var(--text-secondary); background:var(--bg-secondary); border:1px solid var(--border-primary); border-radius:6px; }
+.script-controls { position:absolute; top:12px; right:12px; z-index:30; display:flex; align-items:center; gap:2px; padding:3px; color:var(--text-secondary); background:var(--bg-surface); border:1px solid var(--border-primary); border-radius:6px; }
 span { display:flex; align-items:center; gap:5px; padding:0 7px; font-size:11px; }
 span.error { color:var(--error-500); }
 button { display:flex; align-items:center; justify-content:center; width:30px; height:30px; background:transparent; border:0; border-radius:4px; color:inherit; cursor:pointer; }

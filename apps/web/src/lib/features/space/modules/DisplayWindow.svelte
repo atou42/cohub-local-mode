@@ -481,7 +481,7 @@ const problemCopy = $derived.by(() => {
 					</div>
 					<div class="mb-1 text-sm font-medium text-text-primary">{problemCopy.title}</div>
 					<div class="mb-4 text-xs leading-5 text-text-tertiary">{problemCopy.hint}</div>
-					<button type="button" class="display-action" onclick={() => view.reconnect()}>{m.display_retry({}, { locale })}</button>
+					<button type="button" class="display-action primary-key" onclick={() => view.reconnect()}>{m.display_retry({}, { locale })}</button>
 				</div>
 			</div>
 		{/if}
@@ -505,10 +505,10 @@ const problemCopy = $derived.by(() => {
 		background: var(--text-placeholder);
 	}
 	.display-dot[data-phase="live"] {
-		background: var(--success-soft);
+		background: var(--color-success-soft);
 	}
 	.display-dot[data-phase="problem"] {
-		background: var(--error-soft);
+		background: var(--color-error-soft);
 	}
 	.display-status {
 		flex: 0 0 auto;
@@ -613,24 +613,9 @@ const problemCopy = $derived.by(() => {
 		pointer-events: none;
 	}
 	.display-action {
-		display: inline-flex;
 		min-height: 32px;
-		align-items: center;
-		justify-content: center;
-		border-radius: 6px;
-		border: 1px solid var(--brand);
-		background: var(--brand);
 		padding: 0 12px;
-		color: var(--brand-contrast-fg);
 		font-size: 12px;
-		cursor: pointer;
-	}
-	.display-action:hover {
-		background: var(--brand-hover);
-	}
-	.display-action:focus-visible {
-		outline: 2px solid var(--brand);
-		outline-offset: 2px;
 	}
 	@media (max-width: 640px) {
 		.display-action {
