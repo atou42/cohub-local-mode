@@ -96,6 +96,37 @@ test("a prematurely closed compressed source or decoder is not an intentional re
   } finally { await f.cleanup(); }
 });
 
+test("a compressed reader can return after decompression has naturally completed", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.path, zstdCompressSync(Buffer.from(f.header)));
+    const transcript = new URL("../src/runtime/native/transcript.ts", import.meta.url).href;
+    const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      import streams from "node:stream/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      import { setImmediate as nextTurn } from "node:timers/promises";
+      const pipeline = streams.pipeline;
+      let completion;
+      // Observe the real pipeline so this regression does not depend on a timed sleep.
+      streams.pipeline = (...args) => completion = pipeline(...args);
+      syncBuiltinESMExports();
+      const { codexRolloutBytes } = await import(${JSON.stringify(transcript)});
+      const iterator = codexRolloutBytes(${JSON.stringify(f.path)}, null);
+      const first = await iterator.next();
+      assert.equal(first.done, false);
+      assert.equal(first.value.toString(), ${JSON.stringify(f.header)});
+      await completion;
+      await nextTurn();
+      assert.deepEqual(await iterator.return(), { value: undefined, done: true });
+      await nextTurn();
+      console.log("completed reader returned without a late error");
+    `], { cwd: process.cwd(), timeout: 10_000 });
+    assert.equal(result.stdout.trim(), "completed reader returned without a late error");
+    assert.equal(result.stderr, "");
+  } finally { await f.cleanup(); }
+});
+
 test("compressed reads preserve full bytes and reject invalid prefix boundaries", async () => {
   const f = await fixture();
   try {

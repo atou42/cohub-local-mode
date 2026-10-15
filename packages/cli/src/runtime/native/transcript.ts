@@ -173,7 +173,8 @@ async function* compressedCodexRolloutBytes(path: string, signal?: AbortSignal):
       && (!current.readableEnded || ("writableFinished" in current && !current.writableFinished)));
     // Do not replace a pending source/decoder failure with our own stop. Newer pipelines can
     // overwrite AbortError, so stop with an ordinary error whose identity survives cleanup.
-    if (!priorError && !prematurelyClosed && !signal?.aborted) stream.destroy(stoppedReading);
+    // A finished writable side no longer needs interruption; pipeline may have removed its listeners.
+    if (!stream.writableFinished && !priorError && !prematurelyClosed && !signal?.aborted) stream.destroy(stoppedReading);
     const { error } = await pumping;
     const failure = priorError ?? error;
     // biome-ignore lint/correctness/noUnsafeFinally: A reader return must still reject archive errors and caller cancellation.
