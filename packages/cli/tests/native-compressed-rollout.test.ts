@@ -24,32 +24,75 @@ async function readBytes(path: string, endBytes: number | null, signal?: AbortSi
   return Buffer.concat(chunks);
 }
 
-test("compressed headers and exact prefixes survive early reader cancellation", async () => {
+test("compressed headers and exact prefixes survive early reader cancellation", async (t) => {
   const f = await fixture();
   try {
     const transcript = new URL("../src/runtime/native/transcript.ts", import.meta.url).href;
     const adapters = new URL("../src/runtime/native/adapters.ts", import.meta.url).href;
-    // A separate process detects late unhandled decoder errors after the read has returned.
-    const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
-      import assert from "node:assert/strict";
-      import { createHash } from "node:crypto";
-      import { codexRolloutBytes, readNativeTranscriptHeader } from ${JSON.stringify(transcript)};
-      import { readSessionHeader } from ${JSON.stringify(adapters)};
-      const path = ${JSON.stringify(f.path)}, cwd = ${JSON.stringify(f.root)};
-      assert.deepEqual(await readNativeTranscriptHeader(path, "codex"), { nativeSessionId: "thread", cwd });
-      assert.deepEqual(await readSessionHeader(path, "codex"), { harness: "codex", nativeSessionId: "thread", cwd, thread: "user" });
-      const chunks = [];
-      for await (const chunk of codexRolloutBytes(path, ${Buffer.byteLength(f.header)})) chunks.push(chunk);
-      assert.equal(Buffer.concat(chunks).toString(), ${JSON.stringify(f.header)});
-      const hash = createHash("sha256");
-      let bytes = 0;
-      for await (const chunk of codexRolloutBytes(path, ${f.raw.length})) { bytes += chunk.length; hash.update(chunk); }
-      assert.equal(bytes, ${f.raw.length});
-      assert.equal(hash.digest("hex"), ${JSON.stringify(createHash("sha256").update(f.raw).digest("hex"))});
-      console.log("headers and exact prefix survived");
-    `], { cwd: process.cwd(), timeout: 10_000 });
-    assert.equal(result.stdout.trim(), "headers and exact prefix survived");
-    assert.equal(result.stderr, "");
+    const checks = [
+      ["native header", `assert.deepEqual(await readNativeTranscriptHeader(path, "codex"), { nativeSessionId: "thread", cwd });`],
+      ["discovery header", `assert.deepEqual(await readSessionHeader(path, "codex"), { harness: "codex", nativeSessionId: "thread", cwd, thread: "user" });`],
+      ["short prefix", `
+        const chunks = [];
+        for await (const chunk of codexRolloutBytes(path, ${Buffer.byteLength(f.header)})) chunks.push(chunk);
+        assert.equal(Buffer.concat(chunks).toString(), ${JSON.stringify(f.header)});
+      `],
+      ["full prefix", `
+        const hash = createHash("sha256");
+        let bytes = 0;
+        for await (const chunk of codexRolloutBytes(path, ${f.raw.length})) { bytes += chunk.length; hash.update(chunk); }
+        assert.equal(bytes, ${f.raw.length});
+        assert.equal(hash.digest("hex"), ${JSON.stringify(createHash("sha256").update(f.raw).digest("hex"))});
+      `],
+    ];
+    // Separate processes detect late decoder errors and identify the failing read boundary.
+    for (const [name, check] of checks) await t.test(name, async () => {
+      const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+        import assert from "node:assert/strict";
+        import { createHash } from "node:crypto";
+        import { codexRolloutBytes, readNativeTranscriptHeader } from ${JSON.stringify(transcript)};
+        import { readSessionHeader } from ${JSON.stringify(adapters)};
+        const path = ${JSON.stringify(f.path)}, cwd = ${JSON.stringify(f.root)};
+        ${check}
+        console.log("read completed");
+      `], { cwd: process.cwd(), timeout: 10_000 });
+      assert.equal(result.stdout.trim(), "read completed");
+      assert.equal(result.stderr, "");
+    });
+  } finally { await f.cleanup(); }
+});
+
+test("a prematurely closed compressed source or decoder is not an intentional reader stop", async (t) => {
+  const f = await fixture();
+  try {
+    const transcript = new URL("../src/runtime/native/transcript.ts", import.meta.url).href;
+    for (const target of ["source", "decoder"]) await t.test(target, async () => {
+      const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+        import assert from "node:assert/strict";
+        import fs from "node:fs";
+        import zlib from "node:zlib";
+        import { syncBuiltinESMExports } from "node:module";
+        let source, decoder;
+        const createReadStream = fs.createReadStream, createDecompress = zlib.createZstdDecompress;
+        fs.createReadStream = (path, options) => source = createReadStream(path, { ...options, highWaterMark: 1 });
+        Object.defineProperty(zlib, "createZstdDecompress", { value: (...args) => decoder = createDecompress(...args) });
+        syncBuiltinESMExports();
+        const { codexRolloutBytes } = await import(${JSON.stringify(transcript)});
+        const iterator = codexRolloutBytes(${JSON.stringify(f.path)}, null);
+        const first = await iterator.next();
+        assert.equal(first.done, false);
+        assert.ok(first.value.toString().startsWith(${JSON.stringify(f.header)}));
+        const broken = ${target};
+        assert.equal(broken.destroyed, false);
+        broken.destroy();
+        assert.equal(broken.errored, null);
+        // Return immediately: the premature-close event has not been delivered yet.
+        await assert.rejects(iterator.return(), { code: "ERR_STREAM_PREMATURE_CLOSE" });
+        console.log("premature close preserved");
+      `], { cwd: process.cwd(), timeout: 10_000 });
+      assert.equal(result.stdout.trim(), "premature close preserved");
+      assert.equal(result.stderr, "");
+    });
   } finally { await f.cleanup(); }
 });
 

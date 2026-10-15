@@ -157,19 +157,28 @@ async function scanCodexRollouts(signal?: AbortSignal): Promise<Map<string, stri
 }
 
 async function* compressedCodexRolloutBytes(path: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  const stop = new AbortController();
   const stoppedReading = new Error("Codex rollout reader stopped at its requested boundary");
+  const source = createReadStream(path);
+  const decoder = createZstdDecompress();
   const stream = new PassThrough();
   // Observe decoder errors until the pipeline closes, including after an early header/prefix read.
-  const pumping = pipeline(createReadStream(path), createZstdDecompress(), stream, { signal: signal ? AbortSignal.any([signal, stop.signal]) : stop.signal })
+  const pumping = pipeline(source, decoder, stream, { signal })
     .then(() => ({ error: null }), (error: unknown) => ({ error }));
   try {
     yield* stream.iterator({ destroyOnReturn: false });
   } finally {
-    stop.abort(stoppedReading);
+    const streams = [source, decoder, stream];
+    const priorError = streams.find((current) => current.errored)?.errored;
+    const prematurelyClosed = streams.some((current) => current.destroyed
+      && (!current.readableEnded || ("writableFinished" in current && !current.writableFinished)));
+    // Do not replace a pending source/decoder failure with our own stop. Newer pipelines can
+    // overwrite AbortError, so stop with an ordinary error whose identity survives cleanup.
+    if (!priorError && !prematurelyClosed && !signal?.aborted) stream.destroy(stoppedReading);
     const { error } = await pumping;
+    const failure = priorError ?? error;
     // biome-ignore lint/correctness/noUnsafeFinally: A reader return must still reject archive errors and caller cancellation.
-    if (error && !(error instanceof Error && error.name === "AbortError" && error.cause === stoppedReading && !signal?.aborted)) throw error;
+    if (failure && failure !== stoppedReading) throw failure;
+    signal?.throwIfAborted();
   }
 }
 
