@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { Transform } from "node:stream";
+import { PassThrough, Transform } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -156,11 +156,27 @@ async function scanCodexRollouts(signal?: AbortSignal): Promise<Map<string, stri
   return index;
 }
 
+async function* compressedCodexRolloutBytes(path: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
+  const stop = new AbortController();
+  const stoppedReading = new Error("Codex rollout reader stopped at its requested boundary");
+  const stream = new PassThrough();
+  // Observe decoder errors until the pipeline closes, including after an early header/prefix read.
+  const pumping = pipeline(createReadStream(path), createZstdDecompress(), stream, { signal: signal ? AbortSignal.any([signal, stop.signal]) : stop.signal })
+    .then(() => ({ error: null }), (error: unknown) => ({ error }));
+  try {
+    yield* stream.iterator({ destroyOnReturn: false });
+  } finally {
+    stop.abort(stoppedReading);
+    const { error } = await pumping;
+    // biome-ignore lint/correctness/noUnsafeFinally: A reader return must still reject archive errors and caller cancellation.
+    if (error && !(error instanceof Error && error.name === "AbortError" && error.cause === stoppedReading && !signal?.aborted)) throw error;
+  }
+}
+
 /** Raw JSONL bytes of a rollout, transparently decompressing `.zst` and honoring a lineage cutoff. */
 export async function* codexRolloutBytes(path: string, endBytes: number | null, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  // compose (not pipe) so a source error propagates and early exit destroys both streams.
   const stream = path.endsWith(".zst")
-    ? createReadStream(path, { signal }).compose(createZstdDecompress())
+    ? compressedCodexRolloutBytes(path, signal)
     : createReadStream(path, endBytes != null ? { end: endBytes - 1, signal } : { signal });
   let total = 0, last = -1;
   for await (const chunk of stream) {
