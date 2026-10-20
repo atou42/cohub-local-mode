@@ -37,6 +37,16 @@ mock.module("@cohub/billing", { namedExports: {
   },
 } });
 
+mock.module("../src/space-wallet-billing.js", { namedExports: {
+  spaceWalletBilling: {
+    gate: { evaluate: async () => ({ status: "allowed" }) },
+    recordUsage: async (input: Record<string, unknown>) => {
+      recorded.push(input);
+      return { status: "recorded" };
+    },
+  },
+} });
+
 const { default: router } = await import("../src/routes/spaces/decisions.route.js");
 const { Hono } = await import("hono");
 const app = new Hono().route("/spaces/:id/decisions", router);

@@ -14,7 +14,7 @@ const GiB = 1024 * MiB;
 // ── Durable object-storage uploads ────────────────────────────────────────────
 
 /** Maximum size of a single uploaded file. */
-export const UPLOAD_MAX_FILE_BYTES = 1 * GiB;
+export const UPLOAD_MAX_FILE_BYTES = 2 * GiB;
 /** Maximum combined size of one upload batch. */
 export const UPLOAD_MAX_BATCH_BYTES = 2 * GiB;
 /** Maximum file count of one upload batch. */

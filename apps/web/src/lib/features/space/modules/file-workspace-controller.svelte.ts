@@ -668,8 +668,11 @@ export function createFileWorkspaceController(
 				nextEntries = await fetchSpaceFsDirWithCache(
 					context.spaceId,
 					dirPath,
-					async () =>
-						(await sdk.space(context.spaceId).files.list(dirPath)).entries,
+					() =>
+						createActiveFsClient({
+							spaceId: context.spaceId,
+							source: { kind: "live" },
+						}).list(dirPath),
 					{ force: true },
 				);
 			} catch {
@@ -735,15 +738,21 @@ export function createFileWorkspaceController(
 		fileTreeError = null;
 		try {
 			const client = createActiveFsClient({ spaceId, source });
+			const read = () =>
+				client.list("", (partial) => {
+					if (
+						requestToken === fileTreeRequestToken &&
+						sourceKey === options.getActiveFsSourceKey() &&
+						fileTree.length === 0
+					) {
+						setActiveFileTree(makeFsNodes(partial));
+						fileTreeLoading = false;
+					}
+				});
 			const entries =
 				source.kind === "live"
-					? await fetchSpaceFsDirWithCache(
-							spaceId,
-							"",
-							async () => (await client.list("")).entries,
-							{ force: true },
-						)
-					: (await client.list("")).entries;
+					? await fetchSpaceFsDirWithCache(spaceId, "", read, { force: true })
+					: (await read()).entries;
 			if (
 				requestToken !== fileTreeRequestToken ||
 				sourceKey !== options.getActiveFsSourceKey()
@@ -815,15 +824,34 @@ export function createFileWorkspaceController(
 				spaceId: requestSpaceId,
 				source,
 			});
+			let previewed = hasExistingChildren || Boolean(cached?.length);
+			const read = () =>
+				client.list(node.path, (partial) => {
+					if (
+						previewed ||
+						directoryLoadTokenByPath[node.path] !== requestToken ||
+						sourceKey !== options.getActiveFsSourceKey()
+					)
+						return;
+					previewed = true;
+					setActiveFileTree(
+						updateNodeState(fileTree, node.path, (item) => ({
+							...item,
+							children: makeFsNodes(partial),
+							isLoaded: false,
+							isLoading: false,
+						})),
+					);
+				});
 			const entries =
 				source.kind === "live"
 					? await fetchSpaceFsDirWithCache(
 							requestSpaceId,
 							node.path,
-							async () => (await client.list(node.path)).entries,
+							read,
 							{ force: true },
 						)
-					: (await client.list(node.path)).entries;
+					: (await read()).entries;
 			if (
 				directoryLoadTokenByPath[node.path] !== requestToken ||
 				sourceKey !== options.getActiveFsSourceKey()
@@ -1679,8 +1707,11 @@ export function createFileWorkspaceController(
 				const entries = await fetchSpaceFsDirWithCache(
 					context.spaceId,
 					parentPath,
-					async () =>
-						(await sdk.space(context.spaceId).files.list(parentPath)).entries,
+					() =>
+						createActiveFsClient({
+							spaceId: context.spaceId,
+							source: { kind: "live" },
+						}).list(parentPath),
 					{ force: true },
 				);
 				if (isCurrentWorkspaceContext(context))
@@ -1852,38 +1883,8 @@ export function createFileWorkspaceController(
 					tab.draft !== tab.response.content,
 			);
 		},
-		get inlineFileIsMarkdown() {
-			return (
-				filePreviewModel(getActiveInlineFile()?.response).kind === "markdown"
-			);
-		},
-		get inlineFileIsCsv() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "csv";
-		},
-		get inlineFileIsHtml() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "html";
-		},
-		get inlineFileHasRenderedPreview() {
-			return filePreviewModel(getActiveInlineFile()?.response)
-				.hasRenderedPreview;
-		},
-		get inlineFileIsText() {
-			return filePreviewModel(getActiveInlineFile()?.response).isText;
-		},
-		get inlineFileIsImage() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "image";
-		},
-		get inlineFileIsVideo() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "video";
-		},
-		get inlineFileIsAudio() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "audio";
-		},
-		get inlineFileIsPdf() {
-			return filePreviewModel(getActiveInlineFile()?.response).kind === "pdf";
-		},
-		get inlineFileDataUrl() {
-			return filePreviewModel(getActiveInlineFile()?.response).mediaUrl;
+		get inlineFilePreview() {
+			return filePreviewModel(getActiveInlineFile()?.response);
 		},
 		get inlineFileDownloadUrl() {
 			const inlineFile = getActiveInlineFile();

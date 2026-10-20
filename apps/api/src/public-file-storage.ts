@@ -3,6 +3,9 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import {
+  UPLOAD_ERROR_BATCH_TOO_LARGE,
+  UPLOAD_ERROR_FILE_TOO_LARGE,
+  UPLOAD_ERROR_TOO_MANY_FILES,
   UPLOAD_MAX_BATCH_BYTES,
   UPLOAD_MAX_BATCH_FILES,
   UPLOAD_MAX_FILE_BYTES,
@@ -29,6 +32,9 @@ export class PublicFileConfigError extends Error {
 
 export class PublicFileValidationError extends Error {
   override name = "PublicFileValidationError";
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
 }
 
 type RequiredStorage = PresignStorageConfig & {
@@ -135,7 +141,7 @@ export function createPublicFileUpload(
   if (input.overwrite != null && typeof input.overwrite !== "boolean") {
     throw new PublicFileValidationError("overwrite must be a boolean");
   }
-  if (input.entries.length > UPLOAD_MAX_BATCH_FILES) throw new PublicFileValidationError("too many files");
+  if (input.entries.length > UPLOAD_MAX_BATCH_FILES) throw new PublicFileValidationError("too many files", UPLOAD_ERROR_TOO_MANY_FILES);
 
   const seenIds = new Set<string>();
   const seenPaths = new Set<string>();
@@ -149,10 +155,10 @@ export function createPublicFileUpload(
     if (seenPaths.has(path)) throw new PublicFileValidationError("duplicate public path");
     seenPaths.add(path);
     if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > UPLOAD_MAX_FILE_BYTES) {
-      throw new PublicFileValidationError("file too large");
+      throw new PublicFileValidationError("file too large", UPLOAD_ERROR_FILE_TOO_LARGE);
     }
     totalBytes += entry.size;
-    if (totalBytes > UPLOAD_MAX_BATCH_BYTES) throw new PublicFileValidationError("upload too large");
+    if (totalBytes > UPLOAD_MAX_BATCH_BYTES) throw new PublicFileValidationError("upload too large", UPLOAD_ERROR_BATCH_TOO_LARGE);
     return {
       id: entry.id,
       path,

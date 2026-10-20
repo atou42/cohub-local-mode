@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isTextMime } from "@cohub/protocol/fs";
 import type { SpaceFsFileResponse, WorkContent } from "@neta-art/cohub";
 import { Download } from "lucide-svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -8,7 +9,7 @@ import { m } from "$lib/paraglide/messages.js";
 
 const locale = $derived(getLocale());
 
-import { isTextMime, tryResolveTextFileResponse } from "$lib/space-file-text";
+import { tryResolveTextFileResponse } from "$lib/space-file-text";
 import type { ResolveWorkspaceAsset } from "$lib/workspace-assets";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 

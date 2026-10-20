@@ -1,10 +1,11 @@
-import { fork } from "node:child_process";
+import { execFile, fork, type ForkOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { createInterface } from "node:readline/promises";
-import { isLocalHarness } from "@neta-art/cohub";
-import { discoverHarnesses, installedHarnesses } from "./harness.js";
+import { isLocalHarness, LOCAL_HARNESS_SPECS, LOCAL_HARNESSES, type LocalHarness } from "@neta-art/cohub";
+import { discoverHarnesses, installedHarnesses, type HarnessExecutables } from "./harnesses/index.js";
 import type { Command } from "commander";
 import { requireAccessToken } from "../auth.js";
 import { createClient } from "../client.js";
@@ -12,16 +13,19 @@ import { currentIdentityKey, explicitSpace, resolveSpaceRef } from "../space.js"
 import { canonicalRuntimeRoot, getRuntimeSpaceBinding, resolveRuntimeSpace } from "./space-binding.js";
 import { controlRuntimeInstance, requestRuntimeInstance, runtimeInstanceDirectory } from "./instance.js";
 import { ensureNativeSync, repairIntegrations } from "./native/attach.js";
-import type { RuntimeDiagnostic } from "./diagnostics.js";
+import { serializeDiagnosticError, type RuntimeDiagnostic } from "./diagnostics.js";
 import { createDiagnosticConsole, printRuntimeSummary, runtimeWebUrl, type RuntimeSummary } from "./presentation.js";
 import { runRuntime, type RuntimeLaunch } from "./supervisor.js";
 
-export type RuntimeUpOptions = { space?: string; new?: boolean; name?: string; harness: string[]; pi?: string; codex?: string; display?: string | boolean; yes?: boolean; json?: boolean; detach?: boolean; verbose?: boolean };
+export type RuntimeUpOptions = HarnessExecutables & { space?: string; new?: boolean; name?: string; harness: string[]; display?: string | boolean; yes?: boolean; json?: boolean; detach?: boolean; verbose?: boolean };
+/** Executable overrides come from the per-harness `--<harness> <path>` options. */
+export const runtimeExecutables = (options: HarnessExecutables): HarnessExecutables =>
+  Object.fromEntries(LOCAL_HARNESSES.flatMap((harness) => options[harness] ? [[harness, options[harness]]] : []));
 export const resolveLocalSpaceName = (root: string, name?: string) => name?.trim() || basename(root) || "local-space";
-export function parseRuntimeHarnesses(values: string[]): ("pi" | "codex")[] {
+export function parseRuntimeHarnesses(values: string[]): LocalHarness[] {
   const names = values.flatMap((value) => value.split(",")).map((name) => name.trim()).filter(Boolean);
-  if (names.some((name) => !isLocalHarness(name))) throw new Error("Harness must be pi or codex");
-  return [...new Set(names.length ? names : ["pi"])] as ("pi" | "codex")[];
+  if (names.some((name) => !isLocalHarness(name))) throw new Error(`Harness must be one of: ${LOCAL_HARNESSES.join(", ")}`);
+  return [...new Set(names.length ? names : ["pi"])] as LocalHarness[];
 }
 
 export function parseRuntimeDisplay(
@@ -30,10 +34,10 @@ export function parseRuntimeDisplay(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   if (value === false) return undefined;
-  if (value === undefined && platform !== "darwin" && (platform !== "linux" || !env.DISPLAY)) return undefined;
+  if (value === undefined && platform !== "darwin" && platform !== "win32" && (platform !== "linux" || !env.DISPLAY)) return undefined;
   const spec = value === undefined || value === true ? "auto" : value.trim();
-  if (!/^(auto|macos|x11(:[\w.:-]+)?|xvfb(:\d{3,4}x\d{3,4})?)$/.test(spec)) {
-    throw new Error("Display must be auto, macos, x11[:display] or xvfb[:WIDTHxHEIGHT]");
+  if (!/^(auto|macos|windows|x11(:[\w.:-]+)?|xvfb(:\d{3,4}x\d{3,4})?)$/.test(spec)) {
+    throw new Error("Display must be auto, macos, windows, x11[:display] or xvfb[:WIDTHxHEIGHT]");
   }
   if (platform === "linux" && spec === "auto" && !env.DISPLAY) {
     throw new Error(env.WAYLAND_DISPLAY
@@ -61,7 +65,9 @@ export async function startBackgroundRuntime(config: RuntimeLaunch): Promise<Run
   return new Promise((resolve, reject) => {
     // Keep the same Node executable and loader (also works from source in tests).
     const workerUrl = new URL(import.meta.url.endsWith(".ts") ? "./worker.ts" : "./worker.js", import.meta.url);
-    const child = fork(workerUrl, [], { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    // fork forwards spawn options; windowsHide keeps a detached Windows worker from opening a console.
+    const forkOptions: ForkOptions & { windowsHide: boolean } = { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true };
+    const child = fork(workerUrl, [], forkOptions);
     const diagnosticConsole = createDiagnosticConsole(config.verbose);
     let last: RuntimeSummary | null = null;
     let settled = false;
@@ -89,7 +95,17 @@ export async function startBackgroundRuntime(config: RuntimeLaunch): Promise<Run
   });
 }
 
+/** Collaborators execute as this OS user; an elevated Windows token would grant them administrator rights. */
+async function assertNotElevatedOnWindows() {
+  if (process.platform !== "win32") return;
+  if (!process.env.SystemRoot) throw new Error("SystemRoot is not set; cannot check terminal elevation");
+  const { stdout } = await promisify(execFile)(join(process.env.SystemRoot, "System32", "whoami.exe"), ["/groups"], { encoding: "utf8", windowsHide: true });
+  // High (S-1-16-12288) and System (S-1-16-16384) integrity labels mark an elevated token.
+  if (/\bS-1-16-(?:12288|16384)\b/.test(stdout)) throw new Error("Run cohub runtime up from a non-elevated terminal");
+}
+
 export async function runtimeUp(program: Command, dir: string | undefined, options: RuntimeUpOptions) {
+  await assertNotElevatedOnWindows();
   const requestedRoot = resolve(dir ?? process.cwd());
   if (!(await stat(requestedRoot)).isDirectory()) throw new Error("Workspace is not a directory");
   const root = await canonicalRuntimeRoot(requestedRoot);
@@ -102,16 +118,17 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
   const binding = await getRuntimeSpaceBinding(root, identity);
   const existingId = requested || binding?.spaceId;
   let harnesses = parseRuntimeHarnesses(options.harness);
+  const executables = runtimeExecutables(options);
   let display = options.display === undefined ? undefined : parseRuntimeDisplay(options.display);
   if (existingId && !options.new) {
     const existing = await requestRuntimeInstance(runtimeInstanceDirectory(identity, existingId));
     if (existing) {
-      if (existing.root !== root || options.harness.length && [...existing.harnesses].sort().join() !== [...harnesses].sort().join() || options.pi || options.codex || options.display !== undefined && display !== existing.display) {
+      if (existing.root !== root || options.harness.length && [...existing.harnesses].sort().join() !== [...harnesses].sort().join() || Object.keys(executables).length || options.display !== undefined && display !== existing.display) {
         throw new Error("Runtime is running with a different configuration. Use down first");
       }
       // `up` is the single idempotent entry: a reused instance adopts its running
       // Harnesses (unless explicitly overridden) and completes native sync setup.
-      const native = await ensureNativeSync({ root, spaceId: existing.spaceId, identity, harnesses: options.harness.length ? harnesses : parseRuntimeHarnesses(existing.harnesses), yes: options.yes, executables: { pi: options.pi, codex: options.codex } });
+      const native = await ensureNativeSync({ root, spaceId: existing.spaceId, identity, harnesses: options.harness.length ? harnesses : parseRuntimeHarnesses(existing.harnesses), yes: options.yes, executables });
       // The running Runtime applies consent given now without restarting.
       const directory = runtimeInstanceDirectory(identity, existing.spaceId);
       await controlRuntimeInstance(directory, "reload").catch(() => undefined);
@@ -121,8 +138,8 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
     }
   }
   display = parseRuntimeDisplay(options.display);
-  if (!options.harness.length) harnesses = await installedHarnesses(root, options);
-  if (!harnesses.length) throw new Error("Install and sign in to Pi or Codex, or pass --harness");
+  if (!options.harness.length) harnesses = await installedHarnesses(root, executables);
+  if (!harnesses.length) throw new Error(`Install and sign in to ${LOCAL_HARNESSES.map((harness) => LOCAL_HARNESS_SPECS[harness].label).join(", ")}, or pass --harness`);
   let createNew = Boolean(options.new);
   let name = resolveLocalSpaceName(root, options.name);
   if (!options.yes) {
@@ -154,8 +171,13 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
     throw new Error("Stop the existing Runtime before rebinding this directory");
   }
   await repairIntegrations(options.pi);
-  // Fail local preflight before creating remote state; the worker reuses this catalog.
-  const capabilities = await discoverHarnesses(harnesses, options, root);
+  // Fail local preflight before creating remote state; the worker reuses this catalog. Without
+  // `--harness`, a discovered harness that cannot start is skipped with a warning.
+  const capabilities = await discoverHarnesses(harnesses, executables, root, options.harness.length ? undefined : (harness, error) => {
+    process.stderr.write(`Skipping ${LOCAL_HARNESS_SPECS[harness].label}: ${serializeDiagnosticError(error).message.split("\n")[0]}\n`);
+  });
+  if (!capabilities.harnesses.length) throw new Error("No installed harness could start; fix the warnings above or pass --harness");
+  harnesses = capabilities.harnesses;
   const client = createClient();
   const { spaceId, source } = await resolveRuntimeSpace({
     root, identityKey: identity, explicitSpaceId: requested,
@@ -167,8 +189,8 @@ export async function runtimeUp(program: Command, dir: string | undefined, optio
     },
   });
   // Consent (or --yes) precedes any user-level integration install; failure never blocks startup.
-  const native = await ensureNativeSync({ root, spaceId, identity, harnesses, yes: options.yes, executables: { pi: options.pi, codex: options.codex } });
-  const config: RuntimeLaunch = { spaceId, root, identity, harnesses, capabilities, executables: { pi: options.pi, codex: options.codex }, background: Boolean(options.detach), verbose: options.verbose, importHistory: native.importHistory, display };
+  const native = await ensureNativeSync({ root, spaceId, identity, harnesses, yes: options.yes, executables });
+  const config: RuntimeLaunch = { spaceId, root, identity, harnesses, capabilities, executables, background: Boolean(options.detach), verbose: options.verbose, importHistory: native.importHistory, display };
   const existing = await requestRuntimeInstance(runtimeInstanceDirectory(identity, spaceId));
   if (existing) {
     if (existing.root !== root) throw new Error("This Space is running in another directory");

@@ -1,3 +1,8 @@
+import {
+	type HarnessKind,
+	LOCAL_HARNESSES,
+	type LocalHarness,
+} from "@cohub/protocol/runtime";
 import type { RuntimeStatus } from "@neta-art/cohub";
 
 /**
@@ -59,9 +64,25 @@ export function runtimeTone(
 /** Local model counts per Harness, for the capability summary. */
 export function harnessModelCounts(
 	status: RuntimeStatus | null | undefined,
-): Record<"pi" | "codex", number> {
-	const counts = { pi: 0, codex: 0 };
+): Record<LocalHarness, number> {
+	const counts = Object.fromEntries(
+		LOCAL_HARNESSES.map((harness) => [harness, 0]),
+	) as Record<LocalHarness, number>;
 	for (const model of status?.capabilities?.models ?? [])
 		counts[model.harness] += 1;
 	return counts;
+}
+
+/** Picker options: Cohub and the connected Harnesses; the current choice stays so its state is explained. */
+export function harnessOptions(
+	value: HarnessKind,
+	available: readonly HarnessKind[],
+	online: boolean,
+): HarnessKind[] {
+	return [
+		"cohub",
+		...LOCAL_HARNESSES.filter(
+			(harness) => (online && available.includes(harness)) || harness === value,
+		),
+	];
 }

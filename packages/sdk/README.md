@@ -218,6 +218,12 @@ editor.addItem("acme.order", { at: editor.viewCenter(), props: { orderId: "o-1",
 // React: const selection = useSyncExternalStore((fn) => editor.subscribe("selection", fn), () => editor.selection);
 ```
 
+For draggable DOM item views, use `createBoardPointerGestures(element, { move, end })`
+from `board/stage`: call `start(event)` for accepted pointer downs and `cancel()`
+on unmount. It follows active pointers outside the element, preserves mouse gestures
+when capture is lost, and cancels on window blur or page hide. Forward events through
+`context.toPointerEvent` to the editor; keep hover handling separate from active gestures.
+
 Items of a type the client does not know still render as a placeholder, move
 and keep every field, so documents written by newer clients are never
 rewritten by older ones. For a canvas look instead of DOM, pass renderers to
@@ -256,6 +262,25 @@ const stop = session.subscribe({
 
 stop();
 ```
+
+## Space wallets
+
+```ts
+const wallet = client.space(spaceId).wallet;
+const balance = await wallet.get();
+const catalog = await wallet.catalog();
+const activity = await wallet.activities(1);
+const { checkout, orderId } = await wallet.createOrder({
+  id: crypto.randomUUID(), // Persist and reuse this ID when retrying.
+  productKey,
+});
+const confirmation = await wallet.confirmOrder(orderId);
+```
+
+Open `checkout.checkoutUrl` to pay. Confirmation requires the contributor's
+session; a payment redirect is not proof of settlement. Space funds pay whole
+usage charges when sufficient, otherwise the original user's balance is used.
+Personal balance transfers and withdrawals are not supported.
 
 ## Apps and the App runtime
 

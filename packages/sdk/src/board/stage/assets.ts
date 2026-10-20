@@ -4,10 +4,13 @@ import {
 	boardImageKeySource,
 	featuredTaskArtifact,
 	imageAssetKey,
+	boardModelFormat,
+	isBoardModelItem,
 	parseBoardMediaSource,
 } from "../model/index.js";
+import type { ModelFormat } from "@cohub/protocol/fs";
 import { mediaPreviewCandidates } from "../../media.js";
-import type { Texture } from "pixi.js";
+import { Texture } from "pixi.js";
 import {
 	DEFAULT_LRU_BUDGET,
 	type LruBudget,
@@ -25,7 +28,8 @@ import {
 	videoTextureNaturalSize,
 } from "../render/index.js";
 
-type BoardAssetMedia = "image" | "video";
+type BoardUrlMedia = "image" | "video";
+type BoardAssetMedia = BoardUrlMedia | "model";
 type BoardAssetSource = {
 	kind: "file" | "url";
 	media: BoardAssetMedia;
@@ -43,15 +47,24 @@ function taskPreviewKey(artifact: BoardTaskArtifact | undefined) {
 		: null;
 }
 
+const STILL_MEDIA = ["video", "model"] as const;
+
+function stillKey(
+	media: (typeof STILL_MEDIA)[number],
+	src: string,
+	mtimeMs: number | undefined,
+) {
+	const source = parseBoardMediaSource(src);
+	if (!source) return null;
+	return source.kind === "url"
+		? `${media}-url:${encodeURIComponent(source.value)}`
+		: `${media}:${encodeURIComponent(source.value)}:${mtimeMs ?? "unknown"}`;
+}
+
 export function boardAssetKey(item: BoardSceneItem): string | null {
 	if (item.type === "task") return taskPreviewKey(featuredTaskArtifact(item.props.snapshot.artifacts));
-	if (item.type === "video") {
-		const source = parseBoardMediaSource(item.props.src);
-		if (!source) return null;
-		return source.kind === "url"
-			? `video-url:${encodeURIComponent(source.value)}`
-			: `video:${encodeURIComponent(source.value)}:${item.props.snapshot?.mtimeMs ?? "unknown"}`;
-	}
+	if (item.type === "video") return stillKey("video", item.props.src, item.props.snapshot?.mtimeMs);
+	if (item.type === "file" && isBoardModelItem(item)) return stillKey("model", item.props.src, item.props.snapshot?.mtimeMs);
 	return imageAssetKey(item);
 }
 
@@ -62,28 +75,30 @@ function keySource(key: string): BoardAssetSource | null {
 		if (separator < 0) return null;
 		baseKey = key.slice(separator + 1);
 	}
-	if (baseKey.startsWith("video-url:")) {
-		try {
-			return {
-				kind: "url",
-				media: "video",
-				value: decodeURIComponent(baseKey.slice(10)),
-			};
-		} catch {
-			return null;
+	for (const media of STILL_MEDIA) {
+		if (baseKey.startsWith(`${media}-url:`)) {
+			try {
+				return {
+					kind: "url",
+					media,
+					value: decodeURIComponent(baseKey.slice(media.length + 5)),
+				};
+			} catch {
+				return null;
+			}
 		}
-	}
-	if (baseKey.startsWith("video:")) {
-		const separator = baseKey.lastIndexOf(":");
-		if (separator <= 6) return null;
-		try {
-			return {
-				kind: "file",
-				media: "video",
-				value: decodeURIComponent(baseKey.slice(6, separator)),
-			};
-		} catch {
-			return null;
+		if (baseKey.startsWith(`${media}:`)) {
+			const separator = baseKey.lastIndexOf(":");
+			if (separator <= media.length) return null;
+			try {
+				return {
+					kind: "file",
+					media,
+					value: decodeURIComponent(baseKey.slice(media.length + 1, separator)),
+				};
+			} catch {
+				return null;
+			}
 		}
 	}
 	const image = boardImageKeySource(baseKey);
@@ -100,6 +115,20 @@ type Entry = {
 	retryAt: number;
 	retryTimer: ReturnType<typeof setTimeout> | null;
 	lastUsedAt: number;
+};
+
+type Load = (entry: Entry) => Promise<Texture | null>;
+
+export type BoardModelPreviewRequest = {
+	key: string;
+	src: string;
+	format: ModelFormat;
+	size?: number;
+};
+
+export type BoardModelPreviews = {
+	load: (request: BoardModelPreviewRequest) => Promise<ImageBitmap>;
+	maxBytes?: number;
 };
 
 export type BoardAssetManager = {
@@ -135,11 +164,12 @@ export type BoardAssetManagerOptions = {
 	concurrency?: number;
 	videoConcurrency?: number;
 	loadVideoPreviews?: boolean;
+	modelPreviews?: BoardModelPreviews;
 	lruBudget?: LruBudget;
 	imageTexturePool?: BoardImageTexturePool;
 	loadTexture?: (
 		url: string,
-		media: BoardAssetMedia,
+		media: BoardUrlMedia,
 	) => Promise<Texture | null>;
 	unloadTexture?: (
 		url: string,
@@ -153,10 +183,11 @@ export function createBoardAssetManager(
 	options: BoardAssetManagerOptions,
 ): BoardAssetManager {
 	const concurrency = Math.max(1, options.concurrency ?? 4);
-	const videoConcurrency = Math.max(
-		1,
-		Math.min(options.videoConcurrency ?? 2, concurrency),
-	);
+	const limits: Record<BoardAssetMedia, number> = {
+		image: concurrency,
+		video: Math.max(1, Math.min(options.videoConcurrency ?? 2, concurrency)),
+		model: 1,
+	};
 	const budget = options.lruBudget ?? DEFAULT_LRU_BUDGET;
 	const now = options.now ?? (() => Date.now());
 	const imagePool = options.imageTexturePool ?? boardImageTexturePool;
@@ -173,8 +204,10 @@ export function createBoardAssetManager(
 	const unloadTexture =
 		options.unloadTexture ??
 		(async (url, texture, media) => {
-			if (media === "video" || !url) {
+			if (media !== "image" || !url) {
+				const resource = texture?.source.resource as { close?: () => void } | undefined;
 				texture?.destroy(true);
+				resource?.close?.();
 				return;
 			}
 			if (useSharedImagePool) {
@@ -198,13 +231,17 @@ export function createBoardAssetManager(
 
 	const entries = new Map<string, Entry>();
 	const pathVersions = new Map<string, number>();
-	const resolvers = new Map<string, () => Promise<string | null>>();
+	const loaders = new Map<string, Load>();
+	const failedModels = new Set<string>();
 	const inflight = new Set<string>();
-	const queue: Array<{ key: string; getUrl: () => Promise<string | null> }> =
-		[];
+	const queue: Array<{ key: string; load: Load }> = [];
 	const listeners = new Set<() => void>();
 	let active = 0;
-	let activeVideos = 0;
+	const activeByMedia: Record<BoardAssetMedia, number> = {
+		image: 0,
+		video: 0,
+		model: 0,
+	};
 	let disposed = false;
 
 	function notify() {
@@ -217,6 +254,7 @@ export function createBoardAssetManager(
 		const source = keySource(key);
 		if (source?.media === "video" && options.loadVideoPreviews === false)
 			return null;
+		if (source?.media === "model" && !modelPreviewable(item)) return null;
 		if (source?.kind !== "file") return key;
 		const version = pathVersions.get(source.value) ?? 0;
 		return version > 0 ? `local:${version}:${key}` : key;
@@ -255,11 +293,11 @@ export function createBoardAssetManager(
 			entry.retryTimer = null;
 			if (disposed || entries.get(key) !== entry) return;
 			if (entry.refs <= 0 || entry.texture || entry.loading) return;
-			const getUrl = resolvers.get(key);
-			if (!getUrl) return;
+			const load = loaders.get(key);
+			if (!load) return;
 			entry.error = false;
 			if (!queue.some((task) => task.key === key)) {
-				queue.push({ key, getUrl });
+				queue.push({ key, load });
 				pump();
 			}
 		}, delay);
@@ -267,7 +305,7 @@ export function createBoardAssetManager(
 
 	function evict(key: string, entry: Entry) {
 		clearRetry(entry);
-		resolvers.delete(key);
+		loaders.delete(key);
 		if (entry.url || entry.texture)
 			releaseTexture(key, entry.url ?? "", entry.texture);
 		entries.delete(key);
@@ -299,7 +337,8 @@ export function createBoardAssetManager(
 		entry.loading = false;
 		inflight.delete(key);
 		active -= 1;
-		if (keySource(key)?.media === "video") activeVideos -= 1;
+		const media = keySource(key)?.media;
+		if (media) activeByMedia[media] -= 1;
 		if (entries.get(key) !== entry) {
 			if (texture) releaseTexture(key, entry.url ?? "", texture);
 			if (!disposed) pump();
@@ -318,9 +357,10 @@ export function createBoardAssetManager(
 			entry.retryAt =
 				now() + Math.min(1000 * 2 ** entry.attempts, MAX_RETRY_DELAY);
 			console.warn(`[board] failed to load preview for ${key}`, error);
+			if (media === "model") failedModels.add(key);
 			if (entry.refs <= 0) evict(key, entry);
 			else {
-				scheduleRetry(key, entry);
+				if (media !== "model") scheduleRetry(key, entry);
 				notify();
 			}
 		}
@@ -330,8 +370,8 @@ export function createBoardAssetManager(
 	function pump() {
 		while (!disposed && active < concurrency && queue.length > 0) {
 			const taskIndex = queue.findIndex(({ key }) => {
-				const source = keySource(key);
-				return source?.media !== "video" || activeVideos < videoConcurrency;
+				const media = keySource(key)?.media;
+				return !media || activeByMedia[media] < limits[media];
 			});
 			if (taskIndex < 0) return;
 			const [task] = queue.splice(taskIndex, 1);
@@ -342,23 +382,45 @@ export function createBoardAssetManager(
 			entry.loading = true;
 			inflight.add(task.key);
 			active += 1;
-			if (source.media === "video") activeVideos += 1;
-			task
-				.getUrl()
-				.then(async (url) => {
-					if (!url || disposed) return null;
-					entry.url = url;
-					const pendingKey = `${source.media}:${url}`;
-					const pending = pendingUnloads.get(pendingKey);
-					if (pending) await pending;
-					if (disposed) return null;
-					return loadTexture(url, source.media);
-				})
-				.then(
-					(texture) => settle(task.key, entry, texture ?? null),
-					(error) => settle(task.key, entry, null, error),
-				);
+			activeByMedia[source.media] += 1;
+			task.load(entry).then(
+				(texture) => settle(task.key, entry, texture),
+				(error) => settle(task.key, entry, null, error),
+			);
 		}
+	}
+
+	function urlLoader(source: BoardAssetSource & { media: BoardUrlMedia }): Load {
+		const getUrl =
+			source.kind === "url"
+				? () => Promise.resolve(source.value)
+				: () => resolveFileUrl(source.value);
+		return async (entry) => {
+			const url = await getUrl();
+			if (!url || disposed) return null;
+			entry.url = url;
+			const pending = pendingUnloads.get(`${source.media}:${url}`);
+			if (pending) await pending;
+			if (disposed) return null;
+			return loadTexture(url, source.media);
+		};
+	}
+
+	function modelPreviewable(item: BoardSceneItem) {
+		const previews = options.modelPreviews;
+		if (!previews) return false;
+		const size = item.type === "file" ? item.props.snapshot?.size : undefined;
+		return size === undefined || size <= (previews.maxBytes ?? Number.POSITIVE_INFINITY);
+	}
+
+	function modelLoader(item: BoardSceneItem, key: string): Load | null {
+		const previews = options.modelPreviews;
+		if (!previews || item.type !== "file") return null;
+		const { src, snapshot } = item.props;
+		const format = boardModelFormat(src, snapshot?.mimeType);
+		if (!format) return null;
+		const request = { key, src, format, size: snapshot?.size };
+		return async () => Texture.from(await previews.load(request));
 	}
 
 	const manager: BoardAssetManager = {
@@ -376,7 +438,7 @@ export function createBoardAssetManager(
 		requestItem(item) {
 			if (disposed) return;
 			const key = managedAssetKey(item);
-			if (!key) return;
+			if (!key || failedModels.has(key)) return;
 			const source = keySource(key);
 			if (!source) return;
 			const entry = ensureEntry(key);
@@ -386,12 +448,13 @@ export function createBoardAssetManager(
 			entry.error = false;
 			clearRetry(entry);
 			if (queue.some((queued) => queued.key === key)) return;
-			const getUrl =
-				source.kind === "url"
-					? () => Promise.resolve(source.value)
-					: () => resolveFileUrl(source.value);
-			resolvers.set(key, getUrl);
-			queue.push({ key, getUrl });
+			const load =
+				source.media === "model"
+					? modelLoader(item, key)
+					: urlLoader({ ...source, media: source.media });
+			if (!load) return;
+			loaders.set(key, load);
+			queue.push({ key, load });
 			pump();
 		},
 		getTexture(key) {
@@ -482,7 +545,8 @@ export function createBoardAssetManager(
 			queue.length = 0;
 			listeners.clear();
 			pathVersions.clear();
-			resolvers.clear();
+			loaders.clear();
+			failedModels.clear();
 			for (const [key, entry] of entries) evict(key, entry);
 			entries.clear();
 		},

@@ -76,6 +76,12 @@ contains `t`, `dt`, `width`, `height`, `seed`, `params`, and `state`. Times use
 milliseconds. Static drawings need no `animated` export; they redraw when their
 input changes or the instance calls `invalidate()`.
 
+Keep drawing inside `width` × `height`. Node script workers use the renderer's
+registered fonts; prefer `Geist` or `Geist Mono` for consistent Canvas text. Native
+text items remain editable and measurable by `boards inspect`; text and shapes
+painted inside a Canvas are not inspected. When combining them, set explicit `z`
+values (for example, custom graphics `0`, native labels `10`).
+
 ## Add behavior
 
 ```js

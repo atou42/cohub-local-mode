@@ -31,6 +31,7 @@ import {
   resolveBoardId,
   writeBoardOutput,
 } from "../board-command-support.js";
+import { BOARD_EXPORT_IMAGE_MEMORY_MIB } from "../board-export-resources.js";
 import { formatBoardTime, parseBoardTime, parseBoardTimes } from "../board-time.js";
 import { createClient, createRealtimeClient } from "../client.js";
 import { error, handleHttp, json as outJson, jsonRequested, ok, table } from "../output.js";
@@ -41,6 +42,16 @@ import { registerBoardAuthoringCommands } from "./boards/authoring.js";
 type JsonOptions = { json?: boolean };
 
 export const parseJsonObject = parseBoardJsonObject;
+
+export function boardSchemaField(schema: Record<string, unknown> | undefined, path: string): unknown {
+  let field = schema;
+  for (const part of path.split(".")) {
+    const properties = field?.properties as Record<string, Record<string, unknown>> | undefined;
+    if (!part || !properties || !Object.hasOwn(properties, part)) throw new Error(`Unknown schema field ${path}.`);
+    field = properties[part];
+  }
+  return field;
+}
 
 function withJson(command: Command): Command {
   return command.option("--json", "Output as JSON");
@@ -129,6 +140,7 @@ type ExportOptions = JsonOptions & {
   format?: string;
   quality?: string;
   images?: boolean;
+  imageMemory?: string;
   fps?: string;
   force?: boolean;
 };
@@ -201,6 +213,7 @@ function registerExportCommand(boards: Command): void {
     .option("--format <format>", `Override the format (${BOARD_EXPORT_FORMATS.join(", ")}, ${BOARD_VIDEO_FORMATS.join(", ")})`)
     .option("--quality <q>", "JPEG/WebP quality from 0 to 1", "0.92")
     .option("--fps <rate>", "Video frame rate; defaults to the --at step")
+    .option("--image-memory <mib>", "Decoded image memory budget in MiB", String(BOARD_EXPORT_IMAGE_MEMORY_MIB))
     .option("--no-images", "Draw placeholders instead of downloading images")
     .option("--force", "Replace existing output files"))
     .addHelpText("after", `
@@ -226,6 +239,10 @@ Examples:
         const progress = (completed: number, total: number) => {
           if (!jsonRequested(options) && (completed === total || completed % 30 === 0)) process.stderr.write(`Rendered ${completed}/${total} frames\n`);
         };
+        const imageMemoryMiB = parseNumber(options.imageMemory ?? String(BOARD_EXPORT_IMAGE_MEMORY_MIB), "--image-memory", { min: 1, max: 65536, integer: true });
+        const onPlan = ({ width, height, frames }: { width: number; height: number; frames: number }) => {
+          if (!jsonRequested(options)) process.stderr.write(`Rendering ${width}x${height}, ${frames} frame(s)\n`);
+        };
         const pathVideoFormat = videoFormatFromPath(out);
         const requestedFormat = options.format?.toLowerCase();
         if (requestedFormat && ![...BOARD_EXPORT_FORMATS, ...BOARD_VIDEO_FORMATS].includes(requestedFormat as BoardNodeExportFormat | BoardVideoExportFormat)) throw new Error(`--format must be one of ${[...BOARD_EXPORT_FORMATS, ...BOARD_VIDEO_FORMATS].join(", ")}.`);
@@ -246,6 +263,8 @@ Examples:
             target,
             camera,
             onProgress: progress,
+            onPlan,
+            imageMemoryMiB,
             signal: controller.signal,
             force: options.force,
             region: parseExportRegion(options),
@@ -277,6 +296,8 @@ Examples:
           target,
           camera,
           onProgress: progress,
+          onPlan,
+          imageMemoryMiB,
           signal: controller.signal,
           onFrame: async (frame, index) => {
             const path = sequence ? framePath(out, index) : out;
@@ -478,15 +499,18 @@ Times are milliseconds; 500ms, 12.5s and 2m also work on the command line.`);
 
   boards.command("schema [target]")
     .description("Print JSON Schema for a part of a Board")
+    .option("--field <path>", "Print one field, e.g. props.decoration or props.geometry")
     .addHelpText("after", `
 Without a target: units, item types, colors and every animatable property.
 With a target: its fields and what they mean; script also lists the module API.
 Targets: ${BOARD_SCHEMA_TARGETS.join(", ")}`)
-    .action((target?: string) => {
+    .action((target: string | undefined, options: { field?: string }) => {
       try {
+        if (options.field && !target) throw new Error("--field needs a schema target, e.g. schema frame --field props.decoration.");
         if (!target) return outJson({ ...boardSchemaOverview(), presets: listBoardPresets() });
         const schema = boardJsonSchema(target);
         if (!schema) throw new Error(`Unknown target ${target}; expected ${BOARD_SCHEMA_TARGETS.join(", ")}.`);
+        if (options.field) return outJson(boardSchemaField(schema.schema, options.field));
         outJson(target === "script" ? { ...schema, api: BOARD_SCRIPT_API } : schema);
       } catch (cause) {
         handleHttp(cause);

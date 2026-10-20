@@ -10,3 +10,8 @@ export function formatBytes(bytes: number): string {
 	const value = bytes / 1024 ** index;
 	return `${value < 10 && index > 0 ? value.toFixed(1) : Math.round(value)} ${UNITS[index]}`;
 }
+
+/** Like {@link formatBytes} but rounds whole units, e.g. "2 GB" for a 2 GiB limit. */
+export function formatByteLimit(bytes: number): string {
+	return formatBytes(bytes).replace(/\.0 /, " ");
+}

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { basename, extname } from "node:path";
+import { basename } from "node:path";
 import { SPACE_CUSTOM_THEME_CSS_PATH } from "@cohub/protocol";
+import { mimeTypeForPath, normalizeMime } from "@cohub/protocol/fs";
 import { FS_CDN_LARGE_FILE_THRESHOLD_BYTES, type FsCdnEnvironment } from "./types.js";
 
 const forcedCdnPaths = new Set([SPACE_CUSTOM_THEME_CSS_PATH]);
@@ -11,36 +12,19 @@ export function isForcedFsCdnPath(path: string) {
   return forcedCdnPaths.has(normalizeFsCdnPath(path));
 }
 
-const mediaExtensions = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".webp",
-  ".gif",
-  ".avif",
-  ".svg",
-  ".bmp",
-  ".ico",
-  ".mp4",
-  ".webm",
-  ".mov",
-  ".m4v",
-  ".mp3",
-  ".wav",
-  ".ogg",
-  ".m4a",
-  ".aac",
-  ".flac",
-  ".opus",
-  ".pdf",
-]);
+const isMediaMime = (mime: string | null) =>
+  Boolean(
+    mime &&
+      (mime.startsWith("image/") ||
+        mime.startsWith("video/") ||
+        mime.startsWith("audio/") ||
+        mime.startsWith("model/") ||
+        mime === "application/pdf"),
+  );
 
+/** Media, documents and 3D models are served from the CDN regardless of size. */
 export function isFsCdnMediaLike(path: string, mimeType: string | null) {
-  if (mimeType?.startsWith("image/")) return true;
-  if (mimeType?.startsWith("video/")) return true;
-  if (mimeType?.startsWith("audio/")) return true;
-  if (mimeType === "application/pdf") return true;
-  return mediaExtensions.has(extname(path).toLowerCase());
+  return isMediaMime(normalizeMime(mimeType)) || isMediaMime(mimeTypeForPath(path));
 }
 
 export function shouldUseFsCdnCache(input: { path: string; mimeType: string | null; size: number }) {

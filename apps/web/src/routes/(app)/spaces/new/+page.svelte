@@ -496,7 +496,7 @@ async function handleSubmit(event: SubmitEvent) {
                   <input value={mod.mountSlug ?? ""} onblur={(event) => { const slug = (event.currentTarget as HTMLInputElement).value.trim(); if (slug !== (mod.mountSlug ?? "")) updateModMountSlug(mod.modSpaceId, slug); }} onkeydown={(event) => { if (event.key === 'Enter' && !isComposingKeyboardEvent(event)) { event.preventDefault(); const slug = (event.currentTarget as HTMLInputElement).value.trim(); if (slug !== (mod.mountSlug ?? "")) updateModMountSlug(mod.modSpaceId, slug); } }} placeholder="Mount slug" class="mt-2 w-full rounded-[5px] border border-border-subtle bg-bg-input px-2 py-1.5 font-mono text-[11px] text-text-primary placeholder:text-text-placeholder focus:border-brand/40 focus:outline-none" />
                 </div>
                 <div class="flex items-center justify-end gap-2 md:justify-start">
-                  <span class="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider {(mod.enabled ?? true) ? 'bg-success-bg text-success-soft' : 'bg-bg-hover text-text-placeholder'}">{(mod.enabled ?? true) ? 'enabled' : 'disabled'}</span>
+                  <span class="tag uppercase tracking-wider {(mod.enabled ?? true) ? '' : 'text-text-placeholder'}" data-tone={(mod.enabled ?? true) ? 'success' : undefined}>{(mod.enabled ?? true) ? 'enabled' : 'disabled'}</span>
                   <button type="button" onclick={() => toggleMod(mod.modSpaceId)} class="text-[11px] text-text-placeholder hover:text-text-secondary">{(mod.enabled ?? true) ? 'Disable' : 'Enable'}</button>
                   <button type="button" onclick={() => removeMod(mod.modSpaceId)} class="text-[11px] text-text-placeholder hover:text-error-soft">Remove</button>
                 </div>

@@ -66,7 +66,6 @@ export function boardSequence(document: BoardDocument, chapters: readonly BoardC
     const chapterIndex = String(index).padStart(String(chapters.length).length, "0");
     for (const [id, track] of Object.entries(animation.tracks)) {
       if (document.animations[track.target]) throw new Error(`Chapter ${chapter.animation} contains nested clocks; compose its leaf animations instead.`);
-      if (chapter.frame && track.target === "camera" && track.property === "focus") continue;
       // Preserve both lexical replace priority and original additive evaluation order.
       tracks[`chapter-${chapterIndex}-${ranks.get(id)}`] = {
         ...track,
@@ -86,7 +85,7 @@ export function boardSequence(document: BoardDocument, chapters: readonly BoardC
           ...(index < chapters.length - 1 ? [{ at: boundary + (chapters[index + 1]?.gap ?? 0), value: 0 }] : []),
         ],
       };
-      tracks[`camera-${index}`] = {
+      tracks[`chapter-${chapterIndex}--camera`] = {
         target: "camera",
         property: "focus",
         composite: "replace",

@@ -3,7 +3,10 @@ import type {
 	AppDetailResponse,
 	AppRuntimeShellContext,
 } from "@neta-art/cohub";
-import type { BoardItemViewContext } from "@neta-art/cohub/board/stage";
+import {
+	type BoardItemViewContext,
+	createBoardPointerGestures,
+} from "@neta-art/cohub/board/stage";
 import type { AppNavigationHandler, BoardAppMeta } from "$lib/board/board-app";
 import AppSurface from "$lib/components/app/AppSurface.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -37,6 +40,21 @@ const APP_CONTENT_MIN_HEIGHT = 120;
 let detail = $state<AppDetailResponse | null>(null);
 let loading = $state(true);
 let forwardedPointerId: number | null = null;
+let bar: HTMLDivElement | undefined = $state();
+let pointers: ReturnType<typeof createBoardPointerGestures> | undefined;
+
+$effect(() => {
+	if (!bar) return;
+	const gestures = createBoardPointerGestures(bar, {
+		move: handleBarPointerMove,
+		end: handleBarPointerEnd,
+	});
+	pointers = gestures;
+	return () => {
+		gestures.cancel();
+		pointers = undefined;
+	};
+});
 
 $effect(() => {
 	const appId = meta.appId;
@@ -58,12 +76,12 @@ const contentVisible = $derived(
 );
 
 function handleBarPointerDown(event: PointerEvent) {
-	if (event.button !== 0 || forwardedPointerId !== null) return;
+	if (event.button !== 0 || forwardedPointerId !== null || !pointers) return;
 	event.preventDefault();
 	event.stopPropagation();
+	pointers.start(event);
 	forwardedPointerId = event.pointerId;
 	context.editor.pointerDown(context.toPointerEvent(event));
-	(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 }
 
 function handleBarPointerMove(event: PointerEvent) {
@@ -98,11 +116,8 @@ function handleBarPointerEnd(event: PointerEvent) {
 		class="board-app-bar"
 		role="button"
 		tabindex="-1"
+		bind:this={bar}
 		onpointerdown={handleBarPointerDown}
-		onpointermove={handleBarPointerMove}
-		onpointerup={handleBarPointerEnd}
-		onpointercancel={handleBarPointerEnd}
-		onlostpointercapture={handleBarPointerEnd}
 	>
 		{#if meta.icon}<img src={meta.icon} alt="" />{/if}
 		<span>{meta.name}</span>

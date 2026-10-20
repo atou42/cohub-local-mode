@@ -9,6 +9,7 @@ import type {
 } from "@neta-art/cohub/board";
 import {
 	createMediaBoardItem,
+	isBoardModelItem,
 	parseBoardMediaSource,
 	sceneItemToItem,
 	worldPoint,
@@ -43,7 +44,7 @@ import type { BoardStageExportBridge } from "$lib/board/board-image-export";
 import { createBoardLiveTasks } from "$lib/board/board-live-tasks";
 import {
 	boardMediaActionAt,
-	playableBoardMedia,
+	opensInPlace,
 } from "$lib/board/board-media-playback";
 import {
 	type BoardBackgroundLoadState,
@@ -85,7 +86,7 @@ const {
 	onSurfaceChange,
 	onOpenFile,
 	onAddLinks,
-	onPlayMedia,
+	onOpenInPlace,
 	onExportReady,
 	onStageReady,
 	onBackgroundLoadStateChange,
@@ -112,7 +113,7 @@ const {
 	onSurfaceChange?: (size: { width: number; height: number }) => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
 	onAddLinks?: (urls: string[], at: WorldPoint) => void;
-	onPlayMedia?: (itemId: string) => void;
+	onOpenInPlace?: (itemId: string) => void;
 	onExportReady?: (bridge: BoardStageExportBridge | null) => void;
 	onStageReady?: (stage: BoardStage | null) => void;
 	onBackgroundLoadStateChange?: (
@@ -347,7 +348,7 @@ function handlePointer(
 			const key = item ? assets.assetKey(item) : null;
 			if (
 				item &&
-				playableBoardMedia(item, assetSource) &&
+				opensInPlace(item, assetSource) &&
 				boardMediaActionAt(item, input.world, stage?.camera.zoom ?? 1, {
 					materialized: stage?.isMaterialized(item.id) ?? false,
 					hasVideoPreview: Boolean(key && assets.getTexture(key)),
@@ -355,7 +356,7 @@ function handlePointer(
 			) {
 				event.preventDefault();
 				editor.setSelection([item.id]);
-				onPlayMedia?.(item.id);
+				onOpenInPlace?.(item.id);
 				return false;
 			}
 			scheduleLongPress(event, input);
@@ -391,11 +392,12 @@ function handlePointer(
 
 function handleDoubleClick(item: BoardSceneItem | null): boolean {
 	if (item?.type === "video" || item?.type === "audio") {
-		onPlayMedia?.(item.id);
+		onOpenInPlace?.(item.id);
 		return true;
 	}
 	if (item?.type === "file") {
-		void onOpenFile?.(item.props.src);
+		if (isBoardModelItem(item)) onOpenInPlace?.(item.id);
+		else void onOpenFile?.(item.props.src);
 		return true;
 	}
 	if (item?.type === "task") {

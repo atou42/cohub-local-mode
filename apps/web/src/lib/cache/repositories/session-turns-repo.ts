@@ -19,6 +19,7 @@ import {
 	readSessionTurnsCacheSafely,
 } from "$lib/cache/repositories/session-turns-cache-safety";
 import type { CacheSource } from "$lib/cache/types";
+import { sessionMatchesContext } from "$lib/session-context";
 import { areSessionTurnRecordsEqual } from "$lib/session-turn-equality";
 import { mergeTurnsById } from "$lib/stores/turn-cache";
 
@@ -182,13 +183,20 @@ async function readRecord(spaceId: string, sessionId: string) {
 	const userKey = getCacheUserKey();
 	const key = sessionTurnsKey(userKey, spaceId, sessionId);
 	const cached = memory.get(key);
-	if (cached) return { record: cached, source: "memory" as CacheSource };
+	if (cached) {
+		return !cached.session || sessionMatchesContext(cached.session, spaceId, sessionId)
+			? { record: cached, source: "memory" as CacheSource }
+			: null;
+	}
 	const record = await readSessionTurnsCacheSafely({
 		read: () => idbGet<SessionTurnsCacheRecord>("session_turns", key),
 		onError: (error) =>
 			console.warn("[sessionTurnsRepo] Failed to read turn cache:", error),
 	});
-	if (!record) return null;
+	if (
+		!record ||
+		(record.session && !sessionMatchesContext(record.session, spaceId, sessionId))
+	) return null;
 	return { record: remember(record), source: "indexeddb" as CacheSource };
 }
 
@@ -215,6 +223,9 @@ async function writeRecord(
 		trimAnchorSequence?: number | null;
 	},
 ) {
+	if (input.session && !sessionMatchesContext(input.session, spaceId, sessionId)) {
+		throw new Error("Session cache context mismatch");
+	}
 	const userKey = getCacheUserKey();
 	const key = sessionTurnsKey(userKey, spaceId, sessionId);
 	const now = Date.now();
@@ -327,7 +338,10 @@ export const sessionTurnsRepo = {
 			onError: (error) =>
 				console.warn("[sessionTurnsRepo] Failed to find turn cache:", error),
 		});
-		if (!record) return null;
+		if (
+			!record ||
+			(record.session && !sessionMatchesContext(record.session, record.spaceId, sessionId))
+		) return null;
 		const cached = memory.get(record.key);
 		return {
 			spaceId: record.spaceId,
@@ -347,6 +361,9 @@ export const sessionTurnsRepo = {
 		},
 		options?: { source?: CacheSource },
 	) {
+		if (!sessionMatchesContext(response.session, spaceId, sessionId)) {
+			throw new Error("Session cache context mismatch");
+		}
 		return runSessionMutation(spaceId, sessionId, async () => {
 			ensureBroadcastSubscription();
 			const current = await readRecord(spaceId, sessionId);

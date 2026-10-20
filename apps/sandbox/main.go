@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,6 +49,15 @@ func (s *prepareState) SetSetup(setup *protocol.SandboxSetupInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setup = setup
+	s.err = setup.Error
+	switch setup.Status {
+	case "waiting", "running":
+		s.status = "preparing"
+	case "succeeded":
+		s.status = "ready"
+	case "failed":
+		s.status = "degraded"
+	}
 }
 
 func (s *prepareState) Get() (string, string) {
@@ -143,6 +151,7 @@ func main() {
 }
 
 type sandboxRuntime struct {
+	processes       *process.Manager
 	server          *ws.Server
 	search          *search.Manager
 	displays        *display.Hub
@@ -243,6 +252,7 @@ func buildRuntime(
 		}
 	})
 	return sandboxRuntime{
+		processes:       processManager,
 		server:          server,
 		search:          searchManager,
 		displays:        displays,
@@ -257,7 +267,9 @@ func buildRuntime(
 }
 
 func runCloud(logger *slog.Logger, cfg env.Config) {
-	state := &prepareState{status: "preparing"}
+	state := &prepareState{status: "preparing", setup: &protocol.SandboxSetupInfo{Status: "waiting"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 	hostname, _ := os.Hostname()
 	reporter := report.NewClient(cfg, hostname)
@@ -268,79 +280,54 @@ func runCloud(logger *slog.Logger, cfg env.Config) {
 	server.SetFSResyncOnAttach(true)
 
 	initialMeta := map[string]interface{}{
+		"workspaceDir": cfg.WorkspaceDir,
 		"hostname":     hostname,
 		"imageVersion": cfg.ImageVersion,
 		"startedAt":    startedAt,
 		"podIp":        cfg.PodIP,
 		"wsEndpoint":   sandboxWSEndpoint(cfg.PodIP),
 	}
-	if err := reporter.Report(report.Payload{
-		Status: "provisioning",
-		Meta:   initialMeta,
-	}); err != nil {
-		logger.Warn("failed to report sandbox provisioning", slog.String("error", err.Error()))
+	payload := func() report.Payload {
+		status, lastError := state.Get()
+		meta := make(map[string]interface{}, len(initialMeta)+2)
+		for key, value := range initialMeta {
+			meta[key] = value
+		}
+		meta["setup"], meta["lastError"] = state.GetSetup(), lastError
+		return report.Payload{Status: status, Meta: meta}
 	}
-
-	// Ensure workspace mount exists in background while WS server starts.
 	go func() {
-		summary, err := workspace.Prepare(cfg, logger)
+		err := reporter.WaitForBootstrap(ctx, payload, func(status string, err error) {
+			setup := &protocol.SandboxSetupInfo{Status: "waiting"}
+			if status == "failed" {
+				setup.Error = "Workspace bootstrap failed; setup has not run"
+			}
+			state.SetSetup(setup)
+			if err != nil {
+				logger.Warn("waiting for workspace bootstrap", slog.String("error", err.Error()))
+			}
+		})
 		if err != nil {
-			logger.Error("workspace prepare failed", slog.String("error", err.Error()))
-			state.Set("error", err)
-			if reportErr := reporter.Report(report.Payload{
-				Status: "error",
-				Meta: map[string]interface{}{
-					"hostname":     hostname,
-					"imageVersion": cfg.ImageVersion,
-					"lastError":    err.Error(),
-					"podIp":        cfg.PodIP,
-					"wsEndpoint":   sandboxWSEndpoint(cfg.PodIP),
-				},
-			}); reportErr != nil {
-				logger.Warn("failed to report sandbox error", slog.String("error", reportErr.Error()))
-			}
-		} else {
-			// Persist setup result into state for heartbeat visibility.
-			// Both SetSetup and Set are called sequentially in the same goroutine;
-			// heartbeat reads use GetSetup/Get with RLock, so race risk is negligible.
-			if summary.Setup != nil {
-				si := &protocol.SandboxSetupInfo{
-					Ran:      summary.Setup.Ran,
-					ExitCode: summary.Setup.ExitCode,
-					Stdout:   summary.Setup.Stdout,
-					Stderr:   summary.Setup.Stderr,
-					Duration: summary.Setup.Duration,
-					Error:    summary.Setup.Error,
-				}
-				state.SetSetup(si)
-				if summary.Setup.ExitCode != 0 || summary.Setup.Error != "" {
-					state.Set("degraded", nil)
+			return
+		}
+		runner := workspace.NewSetupRunner(cfg, sandbox.processes, logger, func(setup *protocol.SandboxSetupInfo) {
+			state.SetSetup(setup)
+			if setup.Status == "running" {
+				if _, err := reporter.ReportWithBootstrap(ctx, payload()); err != nil {
+					logger.Warn("failed to report setup progress", slog.String("error", err.Error()))
 				}
 			}
-
-			searchManager.Activate()
-			logger.Info("workspace mount ready",
-				slog.String("workspaceDir", summary.WorkspaceDir),
-				slog.String("platformAgentsDir", summary.PlatformAgentsDir),
-				slog.String("userAgentsDir", cfg.UserAgentsDir),
-			)
-			currentStatus, _ := state.Get()
-			if currentStatus == "preparing" {
-				state.Set("ready", nil)
+		})
+		runner.Run(ctx)
+		searchManager.Activate()
+		for ctx.Err() == nil {
+			if _, err := reporter.ReportWithBootstrap(ctx, payload()); err == nil {
+				return
 			}
-			if reportErr := reporter.Report(report.Payload{
-				Status: state.status,
-				Meta: map[string]interface{}{
-					"hostname":          hostname,
-					"imageVersion":      cfg.ImageVersion,
-					"workspaceDir":      summary.WorkspaceDir,
-					"platformAgentsDir": summary.PlatformAgentsDir,
-					"userAgentsDir":     cfg.UserAgentsDir,
-					"podIp":             cfg.PodIP,
-					"wsEndpoint":        sandboxWSEndpoint(cfg.PodIP),
-				},
-			}); reportErr != nil {
-				logger.Warn("failed to report sandbox ready", slog.String("error", reportErr.Error()))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
 			}
 		}
 	}()
@@ -349,14 +336,6 @@ func runCloud(logger *slog.Logger, cfg env.Config) {
 		logger.Error("sandbox exited", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-}
-
-// A JVM supervisor (Android) can only wire the standard streams, so it selects COHUB_RUNTIME_CONTROL_FD=2.
-func runtimeControlFD() uintptr {
-	if fd, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COHUB_RUNTIME_CONTROL_FD"))); err == nil && fd >= 2 {
-		return uintptr(fd)
-	}
-	return 3
 }
 
 // runLocal connects the sandbox to the gateway relay in dial-out mode. There is
@@ -399,7 +378,11 @@ func runLocal(logger *slog.Logger, spaceID, root, relayURL string) {
 	defer stop()
 	var managed *relay.ManagedControl
 	if os.Getenv("COHUB_RUNTIME_MANAGED") == "1" {
-		control := os.NewFile(runtimeControlFD(), "runtime-control")
+		control, err := openRuntimeControl()
+		if err != nil {
+			logger.Error("failed to open runtime control channel", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
 		defer control.Close()
 		managed = relay.NewManagedControl(cfg.RelayToken, os.Stdin, control, stop)
 	}

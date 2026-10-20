@@ -7,5 +7,6 @@ export type BillingClientConfig = {
 export type BillingRuntimeConfig = {
   talesofaiBillingBaseUrl?: string;
   talesofaiBillingBusinessKey?: string;
+  talesofaiBillingSpaceWalletBusinessKey?: string;
   talesofaiBillingAdminApiKey?: string;
 };

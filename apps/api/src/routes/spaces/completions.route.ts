@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   BillingAccessBlockedError,
   billingOperations,
-  createBillingUsageGate,
   COHUB_BILLING_TOKEN_TYPES,
   COHUB_BILLING_USAGE_TYPES,
   normalizePositiveUsd,
@@ -42,16 +41,12 @@ import {
   streamCompletionEvents,
   type RunCompletionOutcome,
 } from "../../llm/stream-completion.js";
+import { spaceWalletBilling } from "../../space-wallet-billing.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
 
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    logger.warn("[BillingGate] fail-open after completion billing evaluation error", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 const MAX_SYSTEM_PROMPT_CHARS = 500_000;
 const ALLOWED_SYSTEM_PROMPT_EXTENSIONS = [".md", ".markdown", ".txt", ".prompt"] as const;
@@ -207,6 +202,7 @@ async function loadSystemPrompt(spaceId: string, systemPromptPath: string | null
 }
 
 async function recordCompletionBilling(input: {
+  spaceId: string;
   completionId: string;
   userId: string;
   provider: string;
@@ -221,7 +217,8 @@ async function recordCompletionBilling(input: {
   if (amountUsd <= 0) return;
 
   try {
-    const result = await billingOperations.recordUsage({
+    const result = await spaceWalletBilling.recordUsage({
+      spaceId: input.spaceId,
       userId: input.userId,
       amountUsd,
       tokenType: COHUB_BILLING_TOKEN_TYPES.usdMicroCent,
@@ -400,6 +397,7 @@ router.post("/", async (c) => {
   const finalize = async (outcome: RunCompletionOutcome) => {
     const completedAt = new Date();
     await recordCompletionBilling({
+      spaceId,
       completionId,
       userId: user.uuid,
       provider: model.provider,
@@ -410,6 +408,7 @@ router.post("/", async (c) => {
     });
     await Promise.all(outcome.imageToTextCalls.map((call, index) => call.status === "succeeded"
       ? recordCompletionBilling({
+          spaceId,
           completionId: `${completionId}:image-to-text:${call.messageIndex}:${call.imageIndex}:${index}`,
           userId: user.uuid,
           provider: call.provider,

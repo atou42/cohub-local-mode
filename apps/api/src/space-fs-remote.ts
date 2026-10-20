@@ -1,6 +1,10 @@
+import { FsPaginationError, pageDirectory } from "./fs-pagination.js";
+import type { SpaceFsListOptions, SpaceFsTreePage } from "@cohub/protocol/fs";
 import { basename } from "node:path";
 import { SandboxRpcError } from "@cohub/sandbox-client";
 import {
+  isTextMime,
+  mimeTypeForPath,
   spaceFsVersionMatches,
   type SpaceFsEntry,
   type SpaceFsFileResponse,
@@ -13,7 +17,8 @@ import {
 } from "@cohub/protocol/fs";
 import type { RpcEventPayload } from "@cohub/protocol/sandbox";
 import { INLINE_UPLOAD_MAX_FILES, LOCAL_SANDBOX_UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
-import { assertSafeRelativePath, getMimeType, isTextMime, resolveReadMimeType, sanitizeFileName, SpaceFsError } from "./space-fs.js";
+import { assertSafeRelativePath, sanitizeFileName, SpaceFsError } from "./space-fs.js";
+import { resolveReadMimeType } from "./space-fs-mime.js";
 import type { SpaceFsVisibility } from "@cohub/core/space-fs";
 import { callSandboxRpc, getSandboxCapabilities, SandboxOfflineError } from "./space-sandbox-rpc.js";
 
@@ -47,9 +52,14 @@ const assertSafeSubpath = assertSafeRelativePath;
 // Translate sandbox RPC failures into the SpaceFsError vocabulary the routes
 // and web client already understand. Offline errors bubble up as 503.
 function mapRpcError(error: unknown): never {
-  if (error instanceof SpaceFsError || error instanceof SandboxOfflineError) throw error;
+  if (error instanceof SpaceFsError || error instanceof FsPaginationError || error instanceof SandboxOfflineError) throw error;
   if (error instanceof SandboxRpcError) {
     switch (error.rpcErrorCode) {
+      case "INVALID_CURSOR":
+      case "BAD_REQUEST":
+        throw new SpaceFsError(400, "invalid_cursor", error.message);
+      case "DIRECTORY_CHANGED":
+        throw new SpaceFsError(409, "directory_changed", "Directory changed. Restart the listing.");
       case "NOT_FOUND":
         throw new SpaceFsError(404, "path_not_found", "File or directory not found.");
       case "NOT_DIRECTORY":
@@ -61,6 +71,8 @@ function mapRpcError(error: unknown): never {
         throw new SpaceFsError(403, "read_only", "This path is read-only.");
       case "CONFLICT":
         throw new SpaceFsError(409, "file_conflict", "File changed since it was opened.");
+      case "DIRECTORY_NOT_EMPTY":
+        throw new SpaceFsError(400, "directory_not_empty", "Directory is not empty.");
       default:
         throw new SpaceFsError(500, "space_fs_error", error.message);
     }
@@ -112,28 +124,50 @@ async function collectMissingRemoteDirectories(spaceId: string, targetDir: strin
 export async function listSpaceDirectory(
   spaceId: string,
   path = "",
-  options?: { visibility?: SpaceFsVisibility },
-): Promise<SpaceFsTreeResponse> {
+  options?: { visibility?: SpaceFsVisibility } & Partial<SpaceFsListOptions>,
+): Promise<SpaceFsTreeResponse | SpaceFsTreePage> {
   const visibility = options?.visibility ?? "full";
   assertFullVisibility(visibility);
   try {
-    const result = await callSandboxRpc(spaceId, "fs.tree", {
-      path: path || ".",
-      depth: 1,
-      limit: MAX_TREE_ENTRIES,
-      respectGitignore: false,
-    });
-    const entries: SpaceFsEntry[] = result.entries.map((entry) => {
-      const relPath = toPosixJoin(path, entry.path);
-      return {
-        name: entry.name,
-        path: relPath,
-        type: entry.type,
-        size: entry.size,
-        mimeType: entry.type === "file" ? getMimeType(entry.name) : null,
-        mtimeMs: entry.mtimeMs,
-      };
-    });
+    const supportsPagination = (await getSandboxCapabilities(spaceId))?.fsTreePagination === true;
+    const pagination = options?.pagination ? { ...options, pagination: true as const } : undefined;
+    const entries: SpaceFsEntry[] = [];
+    let cursor = supportsPagination ? pagination?.cursor : undefined;
+    const seen = new Set(cursor ? [cursor] : []);
+    let truncated = false;
+    do {
+      const result = await callSandboxRpc(spaceId, "fs.tree", {
+        path: path || ".",
+        depth: 1,
+        limit: pagination?.limit && supportsPagination ? pagination.limit : MAX_TREE_ENTRIES,
+        respectGitignore: false,
+        ...(supportsPagination ? { pagination: true, cursor } : {}),
+      });
+      if (supportsPagination && result.nextCursor === undefined) {
+        throw new SpaceFsError(502, "invalid_pagination", "Sandbox returned an invalid directory page.");
+      }
+      for (const entry of result.entries) {
+        entries.push({
+          name: entry.name,
+          path: toPosixJoin(path, entry.path),
+          type: entry.type,
+          size: entry.size,
+          mimeType: entry.type === "file" ? mimeTypeForPath(entry.name) : null,
+          mtimeMs: entry.mtimeMs,
+        });
+      }
+      truncated ||= result.truncated !== false;
+      const next = supportsPagination ? result.nextCursor : null;
+      if (next && seen.has(next)) throw new SpaceFsError(502, "invalid_cursor", "Sandbox returned a repeated directory cursor.");
+      if (next) seen.add(next);
+      cursor = next ?? undefined;
+    } while (!pagination && cursor);
+    if (pagination) {
+      if (!supportsPagination) {
+        return pageDirectory({ path, entries }, JSON.stringify([spaceId, path, visibility]), JSON.stringify(entries.map((entry) => entry.name)), pagination, truncated);
+      }
+      return { path, entries, nextCursor: cursor ?? null, truncated };
+    }
     return { path, entries };
   } catch (error) {
     mapRpcError(error);
@@ -149,7 +183,7 @@ function buildFileResponse(relativePath: string, params: {
   ctimeMs?: number;
 }): SpaceFsFileResponse {
   // Prefer filename text types over generic sandbox sniffs (e.g. .npmrc → octet-stream).
-  const mimeType = resolveReadMimeType(getMimeType(relativePath), params.mimeType);
+  const mimeType = resolveReadMimeType(mimeTypeForPath(relativePath), params.mimeType);
   const kind = isTextMime(mimeType) ? "text" : "binary";
   const content = kind === "text"
     ? (params.contentBase64 ? Buffer.from(params.contentBase64, "base64").toString("utf8") : params.content)
@@ -229,7 +263,6 @@ export async function readSpaceFiles(
 
   const toReadError = (path: string, error: unknown) => {
     if (error instanceof SandboxOfflineError) throw error;
-    if (error instanceof SandboxRpcError && error.rpcErrorCode === "IO_ERROR") throw new SandboxOfflineError(spaceId, error);
     const status = error instanceof SpaceFsError ? error.status : 500;
     const code = error instanceof SpaceFsError ? error.code : "space_fs_error";
     const message = error instanceof Error ? error.message : "Failed to read file.";
@@ -370,6 +403,15 @@ export async function createSpaceFileExclusive(spaceId: string, input: SpaceFsWr
   }
 }
 
+/** Native fs.delete/fs.move report OS failures as IO_ERROR; keep the argv path's 400 contract. */
+async function nativeMutation(code: "delete_failed" | "move_failed", run: () => Promise<unknown>) {
+  try { await run(); }
+  catch (error) {
+    if (error instanceof SandboxRpcError && error.rpcErrorCode === "IO_ERROR") throw new SpaceFsError(400, code, error.message);
+    throw error;
+  }
+}
+
 // Run a shell-less argv command and capture stderr for error reporting.
 async function runProcess(spaceId: string, argv: string[]): Promise<{ exitCode: number | null; stderr: string }> {
   let stderr = "";
@@ -416,6 +458,10 @@ export async function deleteSpaceNode(spaceId: string, path: string, recursive =
     const stat = await callSandboxRpc(spaceId, "fs.stat", { path: safePath });
     if (!stat.exists) throw new SpaceFsError(404, "path_not_found", "File or directory not found.");
     const nodeType: SpaceFsEntry["type"] | "unknown" = stat.isDirectory ? "dir" : "file";
+    if ((await getSandboxCapabilities(spaceId))?.fsDelete === true) {
+      await nativeMutation("delete_failed", () => callSandboxRpc(spaceId, "fs.delete", { path: safePath, recursive }));
+      return { path: safePath, deleted: true, nodeType };
+    }
     // Non-recursive directory delete must fail on non-empty dirs (rmdir parity).
     const argv = stat.isDirectory
       ? (recursive ? ["rm", "-rf", "--", safePath] : ["rmdir", "--", safePath])
@@ -449,8 +495,12 @@ export async function moveSpaceNode(spaceId: string, input: SpaceFsMoveInput) {
     if (targetStat.exists && targetStat.isDirectory) {
       throw new SpaceFsError(400, "move_failed", "Destination path is a directory.");
     }
-    const { exitCode, stderr } = await runProcess(spaceId, ["mv", "--", from, to]);
-    if (exitCode !== 0) throw new SpaceFsError(400, "move_failed", stderr || "failed to move");
+    if (capabilities?.fsMove === true) {
+      await nativeMutation("move_failed", () => callSandboxRpc(spaceId, "fs.move", { fromPath: from, toPath: to }));
+    } else {
+      const { exitCode, stderr } = await runProcess(spaceId, ["mv", "--", from, to]);
+      if (exitCode !== 0) throw new SpaceFsError(400, "move_failed", stderr || "failed to move");
+    }
     return { fromPath: from, toPath: to, nodeType, createdDirs: directoryResult.createdDirs };
   } catch (error) {
     mapRpcError(error);
@@ -542,7 +592,7 @@ export async function uploadSpaceFiles(
           path: candidate.path,
           name: candidate.name,
           size: result.bytesWritten,
-          mimeType: getMimeType(candidate.name),
+          mimeType: mimeTypeForPath(candidate.name),
           mtimeMs: result.mtimeMs ?? Date.now(),
           created: supportsDisposition ? result.created === true : !existing?.exists,
         });

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { modelFormatForPath } from "@cohub/protocol/fs";
 import type { AppRecord, SpaceFsFileResponse } from "@neta-art/cohub";
 import type { Snippet } from "svelte";
 import AudioPlayer from "$lib/components/AudioPlayer.svelte";
@@ -9,6 +10,11 @@ import { filePreviewModel } from "$lib/file-preview-model";
 import { formatBytes } from "$lib/format-bytes";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { createLazyModuleLoader } from "$lib/lazy-module";
+import {
+	createModelSource,
+	readFileModelBytes,
+	workspaceReferences,
+} from "$lib/model3d/source";
 import { m } from "$lib/paraglide/messages.js";
 import type { ResolveWorkspaceAsset } from "$lib/workspace-assets";
 import type {
@@ -27,6 +33,9 @@ const loadCsvPreview = createLazyModuleLoader(
 );
 const loadPdfPreview = createLazyModuleLoader(
 	() => import("$lib/components/PdfPreview.svelte"),
+);
+const loadModelPreview = createLazyModuleLoader(
+	() => import("$lib/components/ModelPreview.svelte"),
 );
 
 /**
@@ -100,6 +109,7 @@ let editorAttempt = $state(0);
 let renderedAttempt = $state(0);
 let csvAttempt = $state(0);
 let pdfAttempt = $state(0);
+let modelAttempt = $state(0);
 const editorPromise = $derived.by(() => {
 	editorAttempt;
 	return loadCodeEditor();
@@ -115,6 +125,27 @@ const csvPromise = $derived.by(() => {
 const pdfPromise = $derived.by(() => {
 	pdfAttempt;
 	return loadPdfPreview();
+});
+const modelPromise = $derived.by(() => {
+	modelAttempt;
+	return loadModelPreview();
+});
+const modelSource = $derived.by(() => {
+	const format = modelFormatForPath(file.path, file.mimeType);
+	if (!format) return null;
+	const current = file;
+	const resolve = resolveWorkspaceAsset;
+	return createModelSource({
+		key: `${current.path}:${current.size}:${current.mtimeMs}:${current.url ?? ""}`,
+		name: current.name,
+		format,
+		size: current.size,
+		read: (options) => readFileModelBytes(current, options),
+		references: (signal) =>
+			workspaceReferences(current.path, async (path) =>
+				resolve ? (await resolve(path, { signal })).src : null,
+			),
+	});
 });
 </script>
 
@@ -255,6 +286,15 @@ const pdfPromise = $derived.by(() => {
 				})}
 			{/await}
 		</div>
+	{:else if model.kind === "model3d" && modelSource}
+		{#await modelPromise then module}
+			{@const ModelPreview = module.default}
+			<ModelPreview source={modelSource} {isMobile} {downloadUrl} {downloadName} />
+		{:catch}
+			{@render LazyError(m.model3d_preview_failed({}, { locale }), () => {
+				modelAttempt += 1;
+			})}
+		{/await}
 	{:else if fallback}
 		{@render fallback()}
 	{:else}

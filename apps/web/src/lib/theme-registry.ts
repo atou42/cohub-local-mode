@@ -123,9 +123,9 @@ export const THEME_REGISTRY = {
 		shikiTheme: "github-light",
 		mermaidVariables: {
 			lineColor: "#B9B9BA",
-			primaryColor: "#F5F6F7",
+			primaryColor: "#F6F6F6",
 			primaryTextColor: "#161718",
-			secondaryColor: "#EEF0F2",
+			secondaryColor: "#ECECED",
 			tertiaryColor: "#FFFFFF",
 		},
 	},
@@ -139,7 +139,7 @@ export const THEME_REGISTRY = {
 		mermaidVariables: {
 			lineColor: "#3A3C40",
 			primaryColor: "#232426",
-			primaryTextColor: "#F2F3F5",
+			primaryTextColor: "#F2F2F3",
 			secondaryColor: "#1F2021",
 			tertiaryColor: "#161718",
 		},

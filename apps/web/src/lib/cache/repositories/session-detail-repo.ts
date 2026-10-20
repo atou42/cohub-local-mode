@@ -13,6 +13,7 @@ import {
 } from "$lib/cache/db";
 import { getCacheUserKey, sessionDetailKey } from "$lib/cache/keys";
 import { MemoryLru } from "$lib/cache/memory-lru";
+import { sessionMatchesContext } from "$lib/session-context";
 import type { CacheSource } from "$lib/cache/types";
 
 const SESSION_DETAIL_TTL_MS = 60_000;
@@ -65,9 +66,14 @@ async function readRecord(spaceId: string, sessionId: string) {
 	const userKey = getCacheUserKey();
 	const key = sessionDetailKey(userKey, spaceId, sessionId);
 	const cached = memory.get(key);
-	if (cached) return { record: cached, source: "memory" as CacheSource };
+	if (cached) {
+		return sessionMatchesContext(cached.session, spaceId, sessionId)
+			? { record: cached, source: "memory" as CacheSource }
+			: null;
+	}
 	const record = await idbGet<SessionDetailCacheRecord>("session_details", key);
-	if (!record) return null;
+	if (!record || !sessionMatchesContext(record.session, spaceId, sessionId))
+		return null;
 	return { record: remember(record), source: "indexeddb" as CacheSource };
 }
 
@@ -76,6 +82,9 @@ async function writeRecord(
 	session: SessionRecord,
 	options?: { broadcast?: boolean; source?: CacheSource; updatedAt?: number },
 ) {
+	if (!sessionMatchesContext(session, spaceId, session.id)) {
+		throw new Error("Session cache context mismatch");
+	}
 	session = sanitizeSessionRecordStats(session);
 	const userKey = getCacheUserKey();
 	const key = sessionDetailKey(userKey, spaceId, session.id);
@@ -157,7 +166,10 @@ export const sessionDetailRepo = {
 			"by_user_session",
 			[getCacheUserKey(), sessionId],
 		);
-		if (!record) return null;
+		if (
+			!record ||
+			!sessionMatchesContext(record.session, record.spaceId, sessionId)
+		) return null;
 		const cached = memory.get(record.key);
 		return {
 			spaceId: record.spaceId,

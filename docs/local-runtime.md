@@ -38,11 +38,54 @@ If creation succeeded but its ID was not received, inspect your Spaces and use `
 do not automatically create a replacement. 原始创建回执会保留，结果未知时不会自动重建。
 
 It supervises the workspace bridge and the Harness connection. Node.js 24+ is required.
-Pi and Codex must already be installed and authenticated locally. Without `--harness`,
-startup discovers installed Pi/Codex executables on PATH (or explicit executable overrides).
-Capability/authentication failures remain explicit; it never silently switches executors.
-`--pi` and `--codex` override executable paths. Repeated `--harness` options and comma-separated values are
-accepted. `--yes` accepts the explicit local execution consent for non-interactive startup.
+On Windows, install Git for Windows (or set `COHUB_BASH` to `bash.exe`) and run `runtime up` from a
+non-elevated terminal: collaborators execute as your OS user, so an administrator terminal is refused.
+The Pi extension connects over a private named pipe. Codex's shared app-server listens on an AF_UNIX
+socket Node cannot reach on Windows, so terminal Codex chats sync read-only there.
+Cancelling a turn on Windows stops Pi/Codex tools by process tree; a detached background job whose parent
+already exited can keep running.
+Harnesses (`pi`, `codex`, `claude` for Claude Code, `workbuddy` for the WorkBuddy CLI `codebuddy`) must
+already be installed and authenticated locally. Without `--harness`, startup discovers every installed
+harness on PATH (or explicit executable overrides); one that fails its startup check is skipped with a
+warning, and startup fails only when none can run. Explicitly requested harnesses must all pass; a Turn
+never silently switches executors. `--<harness> <path>` (for example `--claude`) overrides an executable
+path. Repeated `--harness` options and comma-separated values are accepted. `--yes` accepts the explicit
+local execution consent for non-interactive startup.
+未指定 `--harness` 时自动发现所有已安装的 Harness，启动检查失败的告警并跳过，全部失败才报错；显式指定的必须全部可用。
+
+## Harness adapters / Harness 适配器
+
+Each local harness is one adapter under `packages/cli/src/runtime/harnesses/`. The shared Runtime
+(execution receipts, Session files, projection, archives, recovery, native ingest) calls the adapter
+and does not branch on a harness. Adding one takes two steps:
+
+1. Register its identity in `LOCAL_HARNESS_SPECS` (`packages/protocol/src/runtime/harnesses.ts`): label,
+   archive `nativeFormat` (immutable once archives exist) and whether it can enforce read-only access.
+2. Implement `LocalHarnessAdapter` (`harnesses/types.ts`) and list it in `harnesses/index.ts`: executable,
+   model discovery, running a Turn, native file layout, history projection and archive restore. A
+   `transcript` reader enables receipt-less recovery and, with `nativeSync`, terminal conversation sync.
+
+CLI flags, Web pickers, labels, API validation and archive schemas derive from the registry. Logos live in
+`apps/web/src/lib/assets/harness-icons/` (LobeHub Icons, MIT); a harness without one gets a generic icon.
+Live control of terminal sessions stays harness-specific: the Pi extension and Codex's shared app-server.
+
+新增 Harness 只需在协议注册表登记，并在 `harnesses/` 下实现一个适配器；共享逻辑不再按 Harness 分支。
+CLI 参数、Web 选择器、API 校验与归档结构均由注册表派生。终端会话的实时控制仍由 Pi 扩展与 Codex 共享 app-server 各自实现。
+
+Claude Code and WorkBuddy run one stream-json process per Turn (`-p --input-format stream-json`). Full
+access maps to `--permission-mode acceptEdits`. Read-only maps to `plan` with only the Read, Glob and Grep
+tools and no MCP servers, since plan mode still honours the user's allow rules. Other tools follow the
+user's own permission rules and permission requests are always denied, never granted. Cohub history is projected
+into their native transcript (`~/.claude/projects`, `~/.codebuddy/projects`) and continued with
+`--resume`; thinking blocks and tool calls without results are left out. Startup checks the CLI's help
+for every flag a Turn uses, so an older or unrelated executable is skipped. The `default` model passes no
+`--model`, keeping the user's own configuration; thinking levels map to `--effort`. They run Cohub Turns only:
+terminal conversations are not synced, and an unknown outcome keeps the explicit stop confirmation.
+
+Claude Code 与 WorkBuddy 每个 Turn 启动一个 stream-json 进程：完整权限映射为 `acceptEdits`；只读映射为 `plan`，
+且仅开放 Read、Glob、Grep 工具、不加载 MCP（plan 模式仍会执行本机允许规则）。其他工具遵循本机权限规则，权限请求一律拒绝。云端历史投影到原生会话文件并通过 `--resume` 续接。
+启动时检查 CLI 是否提供 Turn 所需的全部参数，旧版或无关的同名程序会被跳过。`default` 模型不传 `--model`，沿用用户自己的配置；思考等级映射为 `--effort`。
+二者仅执行 Cohub 发起的 Turn，不同步终端会话；结果未知时仍需显式确认停止。
 
 ## Native clients / 原生客户端
 
@@ -214,11 +257,11 @@ enabled in Accessibility settings. See [Displays](displays.md).
 设备 Runtime 还可以把手机屏幕共享给它所服务的一个 Space：人在 Web 端通过 WebRTC 查看和操作，Space 的 Agent 通过截图和输入使用它。
 每次共享都需要系统的录屏授权，直到用户停止；操作屏幕还需要在无障碍设置中启用 Cohub。详见 [Displays](displays.md)。
 
-On a computer, `cohub runtime up --display` shares its screen the same way (macOS, or Linux with
+On a computer, `cohub runtime up --display` shares its screen the same way (macOS, Windows, or Linux with
 X11; asking first unless `--yes`), and `--display xvfb[:WxH]` gives a headless Linux machine a
 virtual screen that programs started in the Space draw on.
 
-在电脑上，`cohub runtime up --display` 以同样方式共享屏幕（macOS，或使用 X11 的 Linux；除非传入 `--yes`，否则会先询问），
+在电脑上，`cohub runtime up --display` 以同样方式共享屏幕（macOS、Windows，或使用 X11 的 Linux；除非传入 `--yes`，否则会先询问），
 `--display xvfb[:WxH]` 则为无界面的 Linux 机器启动一块虚拟屏，Space 中启动的程序都画在上面。
 
 ## Lifecycle / 生命周期

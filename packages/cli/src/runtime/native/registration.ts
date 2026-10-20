@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { nativeIngestTurnSchema, NATIVE_SYNC_SOURCE, type ContentBlock, type NativeIngestTurn } from "@neta-art/cohub";
+import { nativeIngestTurnSchema, NATIVE_SYNC_SOURCE, type ContentBlock, type LocalHarness, type NativeIngestTurn } from "@neta-art/cohub";
 import type { SessionTurnProjectionClient } from "../turn-projection.js";
 import { nativeStableId } from "./identity.js";
 
 export type NativeRegistration = { turn: unknown; parent: unknown | null };
 export type RegistrationDiagnostic = { turnId: string; sessionId: string; requestDigest: string; localSha256: string; registeredSha256: string; localBytes: number; registeredBytes: number };
-type ExpectedRegistration = { spaceId: string; sessionId: string; harness: "pi" | "codex"; nativeSessionId: string } & Pick<NativeIngestTurn, "turnId" | "parentTurnId" | "startedAt" | "userContent" | "origin">;
+type ExpectedRegistration = { spaceId: string; sessionId: string; harness: LocalHarness; nativeSessionId: string } & Pick<NativeIngestTurn, "turnId" | "parentTurnId" | "startedAt" | "userContent" | "origin">;
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Native registration identity mismatch: invalid record");
   return value as Record<string, unknown>;

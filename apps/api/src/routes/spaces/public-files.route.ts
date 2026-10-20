@@ -12,7 +12,7 @@ import {
   PublicFileConfigError,
   PublicFileValidationError,
 } from "../../public-file-storage.js";
-import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse } from "../../upload-quota.js";
 import { redisCommandClient } from "../../redis.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -58,12 +58,9 @@ router.post("/uploads", uploadBodyLimit, async (c) => {
     return c.json(plan);
   } catch (error) {
     if (error instanceof PublicFileValidationError) {
-      return c.json({ message: error.message }, 400);
+      return c.json({ ...(error.code ? { code: error.code } : {}), message: error.message }, 400);
     }
-    if (error instanceof UploadRateLimitError) {
-      c.header("Retry-After", String(error.retryAfterSeconds));
-      return c.json({ message: error.message, retryAfterSeconds: error.retryAfterSeconds }, 429);
-    }
+    if (error instanceof UploadRateLimitError) return uploadRateLimitedResponse(c, error);
     if (error instanceof PublicFileConfigError) {
       logger.error("[public-files] storage is not configured", { error });
       return c.json({ message: error.message }, 503);

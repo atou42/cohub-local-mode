@@ -7,3 +7,4 @@ Dockerfile
 !.env.example
 *.log
 vendor
+docker-bake*.hcl

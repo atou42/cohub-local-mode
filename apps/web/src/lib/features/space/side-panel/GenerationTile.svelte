@@ -5,15 +5,9 @@ import {
 	type MediaVariantSize,
 	mediaPreviewCandidates,
 } from "@neta-art/cohub/media";
-import {
-	AlertCircle,
-	AudioLines,
-	Film,
-	Image as ImageIcon,
-	Info,
-	Play,
-} from "lucide-svelte";
+import { AlertCircle, Info, Play } from "lucide-svelte";
 import { clock } from "$lib/clock.svelte";
+import EntityIcon from "$lib/components/EntityIcon.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { cachedMediaInfo, loadMediaInfo } from "$lib/media/media-info";
 import { m } from "$lib/paraglide/messages.js";
@@ -129,11 +123,11 @@ const durationMs = $derived(output?.durationMs ?? probed?.durationMs);
 				{#snippet fallback()}
 					<span class="tile-placeholder items-center justify-center text-text-placeholder">
 						{#if output?.type === "audio"}
-							<AudioLines class="h-5 w-5" />
+							<EntityIcon name="audio" class="h-5 w-5" />
 						{:else if output?.type === "video"}
-							<Film class="h-5 w-5" />
+							<EntityIcon name="video" class="h-5 w-5" />
 						{:else}
-							<ImageIcon class="h-5 w-5" />
+							<EntityIcon name="image" class="h-5 w-5" />
 						{/if}
 					</span>
 				{/snippet}

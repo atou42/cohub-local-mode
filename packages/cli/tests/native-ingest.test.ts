@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { RuntimeArchiveStore } from "../src/runtime/archive-store.js";
-import { piSessionDirectoryName } from "../src/runtime/native/adapters.js";
+import { piSessionDirectoryName } from "../src/runtime/harnesses/pi.js";
 import { nativeStableId, nativeTurnId } from "../src/runtime/native/identity.js";
 import { discoverTranscripts, NativeIngest, type IngestHooks, type TranscriptState } from "../src/runtime/native/ingest.js";
 import { fakeNativeServer as fakeServer } from "./fixtures/native-server.js";
@@ -172,6 +172,32 @@ test("discovery covers the project and its subdirectories, skips Codex's own thr
     assert(found.some((item) => item.nativeSessionId === user));
     assert.deepEqual(found.filter((item) => item.harness === "pi").map((item) => item.path.endsWith("b.jsonl")), [true, false], "newest first");
   } finally { await w.cleanup(); }
+});
+
+test("native scan and import sync root and child sessions while excluding nested bindings", async () => {
+  const w = await workspace();
+  const ingest = w.ingest({ enabledAt: "2026-01-01T00:00:00Z", harnesses: ["codex"] });
+  try {
+    const server = fakeServer();
+    const child = join(w.project, "sub");
+    const nested = join(child, "nested");
+    ingest.exclude([`${w.project}/.`, w.project.toUpperCase(), nested]);
+    const live = randomUUID(), history = randomUUID(), excluded = randomUUID(), sibling = randomUUID();
+    const recent = new Date("2026-01-02T00:00:00Z");
+    await w.write(w.codexPath(live), codexRollout(live, w.project, ["live"]), recent);
+    await w.write(w.codexPath(history), codexRollout(history, child, ["history"]), new Date("2025-01-01T00:00:00Z"));
+    await w.write(w.codexPath(excluded), codexRollout(excluded, join(nested, "child"), ["excluded"]), recent);
+    await w.write(w.codexPath(sibling), codexRollout(sibling, `${w.project}-other`, ["sibling"]), recent);
+    await ingest.load();
+    ingest.connect(server.transport);
+    await until(() => server.turns.has(turnIdOf("codex", live, "live")) && ingest.status().live === 0);
+    assert.equal(server.turns.size, 1);
+    assert.deepEqual((await ingest.plan()).map((item) => item.nativeSessionId), [history]);
+    await ingest.startImport();
+    await until(() => ingest.status().import.state === "done");
+    assert.equal(server.turns.size, 2);
+    assert(server.turns.has(turnIdOf("codex", history, "history")));
+  } finally { await ingest.close(AbortSignal.timeout(2_000)); await w.cleanup(); }
 });
 
 test("a new terminal conversation syncs in order, and a restart asks the server instead of resending", async () => {

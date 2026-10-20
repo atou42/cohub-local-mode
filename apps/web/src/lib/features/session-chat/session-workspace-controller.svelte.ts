@@ -1,6 +1,7 @@
 import type { SessionRecord, SessionTurnRecord } from "@neta-art/cohub";
 import type { AccessState } from "$lib/access/access-state";
 import { createRequestDedupe } from "$lib/features/space/modules/request-dedupe";
+import { sessionMatchesContext } from "$lib/session-context";
 import { sessionStore } from "$lib/stores/session-store";
 
 export type SessionViewState = {
@@ -16,7 +17,7 @@ export type SessionViewState = {
 	oldestCursor: number | undefined;
 };
 
-export function createSessionWorkspaceController() {
+export function createSessionWorkspaceController(getSpaceId: () => string) {
 	let rawSessionStateById = $state.raw<Record<string, SessionViewState>>({});
 	let activeSessionId = $state<string | null>(null);
 	let loadingSessionIds = $state<Record<string, boolean>>({});
@@ -26,8 +27,15 @@ export function createSessionWorkspaceController() {
 	const syncSessionNewerDedupe = createRequestDedupe();
 	const composed = new WeakMap<SessionViewState, SessionViewState>();
 
-	function withStoredSession(id: string, state: SessionViewState) {
+	function getSession(id: string) {
 		const session = sessionStore.get(id);
+		return session && sessionMatchesContext(session, getSpaceId(), id)
+			? session
+			: undefined;
+	}
+
+	function withStoredSession(id: string, state: SessionViewState) {
+		const session = getSession(id);
 		if (!session || session === state.session) return state;
 		const cached = composed.get(state);
 		if (cached?.session === session) return cached;
@@ -74,7 +82,7 @@ export function createSessionWorkspaceController() {
 		if (!existing) {
 			setSessionStates({
 				...sessionStateById,
-				[sessionId]: initialSessionState(sessionStore.get(sessionId)),
+				[sessionId]: initialSessionState(getSession(sessionId)),
 			});
 		} else if (
 			!existing.loaded &&
@@ -167,6 +175,7 @@ export function createSessionWorkspaceController() {
 		get preloadingSessionIds() {
 			return preloadingSessionIds;
 		},
+		getSession,
 		prepareRouteSession,
 		setSessionState,
 		patchSessionState,

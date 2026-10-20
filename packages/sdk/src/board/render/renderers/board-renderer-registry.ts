@@ -13,6 +13,7 @@ import { frameCardRenderer } from "./frame-card-renderer.js";
 import { shapeCardRenderer } from "./shape-card-renderer.js";
 import { customCardRenderer } from "./custom-card-renderer.js";
 import { imageCardRenderer } from "./image-card-renderer.js";
+import { modelCardRenderer } from "./model-card-renderer.js";
 import { taskCardRenderer } from "./task-card-renderer.js";
 import { textCardRenderer } from "./text-card-renderer.js";
 import { unknownCardRenderer } from "./unknown-card-renderer.js";
@@ -117,6 +118,7 @@ const builtinCardRenderers: readonly BoardCardRenderer[] = [
 	imageCardRenderer,
 	videoCardRenderer,
 	audioCardRenderer,
+	modelCardRenderer,
 	fileCardRenderer,
 	taskCardRenderer,
 	shapeCardRenderer,

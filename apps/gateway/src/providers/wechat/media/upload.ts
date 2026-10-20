@@ -42,18 +42,19 @@ const sanitizeFilename = (value: string | undefined, fallback: string) => {
   return cleaned || fallback;
 };
 
-async function fetchMediaSource(source: GatewayMediaItem["source"]) {
+async function fetchMediaSource(source: GatewayMediaItem["source"], signal?: AbortSignal) {
   if (source.type === "base64") {
-    return base64ToTempMediaFile(source.data, WECHAT_OUTBOUND_ATTACHMENT_MAX_BYTES, "wechat-outbound-base64");
+    return base64ToTempMediaFile(source.data, WECHAT_OUTBOUND_ATTACHMENT_MAX_BYTES, "wechat-outbound-base64", signal);
   }
 
   const response = await safeFetch({
     url: source.url,
     label: "wechat outbound media",
     timeoutMs: LARGE_MEDIA_TIMEOUT_MS,
+    init: { signal },
   });
   if (!response.ok) throw new Error(`WeChat outbound media download failed ${response.status}`);
-  return responseToTempMediaFile(response, WECHAT_OUTBOUND_ATTACHMENT_MAX_BYTES, "wechat-outbound-media");
+  return responseToTempMediaFile(response, WECHAT_OUTBOUND_ATTACHMENT_MAX_BYTES, "wechat-outbound-media", { signal });
 }
 
 export async function uploadWeChatMediaItem(params: {
@@ -62,8 +63,10 @@ export async function uploadWeChatMediaItem(params: {
   cdnBaseUrl: string;
   token: string;
   to: string;
+  signal?: AbortSignal;
 }) {
-  const file = await fetchMediaSource(params.item.source);
+  if (params.item.kind === "video") throw new Error("WeChat videos must be sent as URLs");
+  const file = await fetchMediaSource(params.item.source, params.signal);
   try {
     if (file.size === 0) throw new Error("WeChat outbound media is empty");
     if (params.item.kind === "image" && !detectImageMimeType(await readTempMediaHead(file, 32))) {
@@ -72,7 +75,7 @@ export async function uploadWeChatMediaItem(params: {
 
     const filekey = crypto.randomBytes(16).toString("hex");
     const aesKey = crypto.randomBytes(16);
-    const rawFileMd5 = await hashTempMediaFile(file, "md5");
+    const rawFileMd5 = await hashTempMediaFile(file, "md5", params.signal);
     const encryptedSize = aesEcbPaddedSize(file.size);
     const uploadUrl = await getWeChatUploadUrl({
       baseUrl: params.baseUrl,
@@ -84,6 +87,7 @@ export async function uploadWeChatMediaItem(params: {
       rawFileMd5,
       fileSize: encryptedSize,
       aesKeyHex: aesKey.toString("hex"),
+      signal: params.signal,
     });
     const uploaded = await uploadWeChatCdnFile({
       file,
@@ -93,6 +97,7 @@ export async function uploadWeChatMediaItem(params: {
       cdnBaseUrl: params.cdnBaseUrl,
       aesKey,
       label: `wechat:${params.to}:${params.item.kind}-upload`,
+      signal: params.signal,
     });
     const media = {
       encrypt_query_param: uploaded.downloadParam,
@@ -102,9 +107,6 @@ export async function uploadWeChatMediaItem(params: {
 
     if (params.item.kind === "image") {
       return { type: WeChatMessageItemType.IMAGE, image_item: { media, mid_size: uploaded.ciphertextSize } } satisfies WeChatMessageItem;
-    }
-    if (params.item.kind === "video") {
-      return { type: WeChatMessageItemType.VIDEO, video_item: { media, video_size: file.size, video_md5: rawFileMd5 } } satisfies WeChatMessageItem;
     }
     if (params.item.kind === "voice") {
       return { type: WeChatMessageItemType.VOICE, voice_item: { media } } satisfies WeChatMessageItem;

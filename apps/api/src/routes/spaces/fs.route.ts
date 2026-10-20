@@ -5,6 +5,7 @@ import { createLogger } from "@cohub/infra/logging";
 import { buildSpaceFsCopyId, isValidSpaceFsCopyId, type SpaceFsCopyJobSource, type SpaceFsVisibility } from "@cohub/core/space-fs";
 import { isUuid } from "@cohub/protocol/identifiers";
 import { Hono, type Context } from "hono";
+import { parseFsPagination } from "../../fs-pagination.js";
 import { bodyLimit } from "hono/body-limit";
 import { readFile } from "node:fs/promises";
 import { ensureFsCdnManifest, shouldUseFsCdnForMeta } from "../../space-fs-cdn-cache.js";
@@ -46,7 +47,7 @@ import {
   type SpaceUploadDestination,
   type SpaceUploadManifestEntry,
 } from "../../space-upload-storage.js";
-import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse } from "../../upload-quota.js";
 import { getSpaceFsCopy, startSpaceFsCopy, type SpaceFsCopyState } from "../../space-fs-copy-queue.js";
 import { redisCommandClient } from "../../redis.js";
 import {
@@ -58,6 +59,9 @@ import {
 import { isAllowedPublicAssetDownloadUrl } from "../../public-asset-storage.js";
 import {
   INLINE_WRITE_MAX_BYTES,
+  UPLOAD_ERROR_BATCH_TOO_LARGE,
+  UPLOAD_ERROR_FILE_TOO_LARGE,
+  UPLOAD_ERROR_TOO_MANY_FILES,
   UPLOAD_MAX_BATCH_BYTES,
   UPLOAD_MAX_BATCH_FILES,
   UPLOAD_MAX_FILE_BYTES,
@@ -214,7 +218,7 @@ router.get("/tree", async (c) => {
 
   const path = c.req.query("path") ?? "";
   try {
-    return c.json(await listSpaceDirectory(spaceId, path, { visibility }));
+    return c.json(await listSpaceDirectory(spaceId, path, { visibility, ...parseFsPagination(c.req.query()) }));
   } catch (error) {
     const { status, body } = spaceFsJsonError(error);
     return c.json(body, status as never);
@@ -550,7 +554,7 @@ router.post("/uploads", async (c) => {
 
   const body = await c.req.json<SpaceFsCreateUploadInput>().catch(() => null);
   if (!body?.entries?.length) return c.json({ message: "entries are required" }, 400);
-  if (body.entries.length > UPLOAD_MAX_BATCH_FILES) return c.json({ message: "too many files" }, 413);
+  if (body.entries.length > UPLOAD_MAX_BATCH_FILES) return c.json({ code: UPLOAD_ERROR_TOO_MANY_FILES, message: "too many files" }, 413);
 
   const uploadId = createSpaceUploadId();
   const seenIds = new Set<string>();
@@ -572,7 +576,7 @@ router.post("/uploads", async (c) => {
         return c.json({ message: "invalid upload path" }, 400);
       }
       if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > UPLOAD_MAX_FILE_BYTES) {
-        return c.json({ message: "file too large" }, 413);
+        return c.json({ code: UPLOAD_ERROR_FILE_TOO_LARGE, message: "file too large" }, 413);
       }
       if (entry.mimeType != null && (typeof entry.mimeType !== "string" || entry.mimeType.length > 255)) {
         return c.json({ message: "invalid mime type" }, 400);
@@ -585,7 +589,7 @@ router.post("/uploads", async (c) => {
         return c.json({ message: "invalid download url" }, 400);
       }
       totalBytes += entry.size;
-      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ message: "upload too large" }, 413);
+      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ code: UPLOAD_ERROR_BATCH_TOO_LARGE, message: "upload too large" }, 413);
       const relativePath = normalizeUploadRelativePath(entry.relativePath || entry.name);
       if (seenPaths.has(relativePath)) return c.json({ message: "duplicate upload path" }, 400);
       seenPaths.add(relativePath);
@@ -637,10 +641,7 @@ router.post("/uploads", async (c) => {
     });
     return c.json({ uploadId, expiresAt, entries: planned });
   } catch (error) {
-    if (error instanceof UploadRateLimitError) {
-      c.header("Retry-After", String(error.retryAfterSeconds));
-      return c.json({ message: error.message, retryAfterSeconds: error.retryAfterSeconds }, 429);
-    }
+    if (error instanceof UploadRateLimitError) return uploadRateLimitedResponse(c, error);
     if (error instanceof SpaceFsError || (error instanceof Error && error.name === "SandboxOfflineError")) {
       const mapped = spaceFsJsonError(error);
       return c.json(mapped.body, mapped.status as never);
