@@ -24,6 +24,15 @@ test("sandbox pod mounts search index storage without extra provisioning", () =>
   const container = pod.spec?.containers?.[0];
   assert.ok(container);
   assert.deepEqual(
+    container.volumeMounts?.find((mount) => mount.mountPath === "/configs/user/.cohub"),
+    {
+      name: "space-storage",
+      mountPath: "/configs/user/.cohub",
+      subPath: "configs/dev/users/user-1/.sandbox-setup",
+      readOnly: true,
+    },
+  );
+  assert.deepEqual(
     container.volumeMounts?.find((mount) => mount.name === "system-storage"),
     {
       name: "system-storage",

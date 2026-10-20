@@ -6,7 +6,10 @@ import {
 	readTurnStats,
 	requestMetricSchema,
 } from "@cohub/protocol/model";
-import { resolveHarness } from "@neta-art/cohub";
+import {
+	harnessLabel as labelForHarness,
+	resolveHarness,
+} from "@neta-art/cohub";
 import {
 	Archive,
 	ArrowDownLeft,
@@ -17,6 +20,7 @@ import {
 	Loader2,
 	TriangleAlert,
 } from "lucide-svelte";
+import HarnessIcon from "$lib/components/composer/HarnessIcon.svelte";
 import MessageContentFlow from "$lib/components/MessageContentFlow.svelte";
 import RelatedSessionLink from "$lib/components/RelatedSessionLink.svelte";
 import StatsContent from "$lib/components/StatsContent.svelte";
@@ -207,7 +211,7 @@ const messageBubbleClass = $derived.by(() => {
 			return `${user} rounded-xl rounded-br-md bg-bg-hover/60 text-text-tertiary`;
 		if (isBackgroundTaskUserMessage)
 			return `${user} rounded-xl rounded-br-md border border-border-subtle/70 bg-bg-hover/45 text-text-secondary`;
-		return `${user} rounded-[var(--chat-user-message-radius)] rounded-br-[var(--chat-user-message-tail-radius)] bg-[var(--chat-user-message-bg)] text-[var(--chat-user-message-fg)]`;
+		return `${user} rounded-[var(--chat-user-message-radius)] rounded-br-[var(--chat-user-message-tail-radius)] bg-[var(--chat-user-message-bg)] text-[var(--chat-user-message-fg)] ring-1 ring-inset ring-[color:var(--chat-user-message-border)]`;
 	}
 	if (message.role === "assistant") {
 		return assistantErrorMessage
@@ -314,7 +318,7 @@ const requestedThinkingLevelShort = $derived(
 // Local Harness runs (Pi / Codex) mark the execution origin; cloud turns stay unlabelled.
 const harness = $derived(resolveHarness(turnMeta));
 const harnessLabel = $derived(
-	harness === "pi" ? "Pi" : harness === "codex" ? "Codex" : "",
+	harness === "cohub" ? "" : labelForHarness(harness),
 );
 const harnessTitle = $derived(
 	`${harnessLabel} · ${m.runtime_local({}, { locale })}`,
@@ -680,7 +684,7 @@ function handleCopy() {
           {/if}
         {:else}
           {#if harnessLabel}
-            <span class="shrink-0 rounded-[3px] bg-bg-hover-strong px-1.5 py-px text-[10px] font-medium leading-none text-text-tertiary" title={harnessTitle}>{harnessLabel}</span>
+            <span class="inline-flex shrink-0 items-center gap-1 rounded-[3px] bg-bg-hover-strong px-1.5 py-px text-[10px] font-medium leading-none text-text-tertiary" title={harnessTitle}><HarnessIcon {harness} size={10} />{harnessLabel}</span>
           {/if}
           {#if archiveLabel}
             <span class="shrink-0 text-text-tertiary" title={archiveLabel} aria-label={archiveLabel} role="img">

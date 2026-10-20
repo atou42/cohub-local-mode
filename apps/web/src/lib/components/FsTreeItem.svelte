@@ -1,6 +1,8 @@
 <script lang="ts">
+import { isModelMime, mimeTypeForPath } from "@cohub/protocol/fs";
 import {
 	AppWindow,
+	Box,
 	ChevronDown,
 	Download,
 	File as FileIcon,
@@ -90,6 +92,7 @@ const markLabel = $derived.by(() => {
 });
 const isActive = $derived(selectedPath === node.path);
 const isDir = $derived(node.type === "dir");
+const isModel = $derived(!isDir && isModelMime(mimeTypeForPath(node.name)));
 let isDragOver = $state(false);
 let isMoveTarget = $state(false);
 let rowEl: HTMLDivElement | null = $state(null);
@@ -391,6 +394,8 @@ $effect(() => {
   <span class="icon shrink-0" class:twisty={isDir}>
     {#if isDir}
       <ChevronDown class="h-3 w-3 transition-transform {node.isOpen ? '' : '-rotate-90'}" />
+    {:else if isModel}
+      <Box class="w-3.5 h-3.5" />
     {:else}
       <FileIcon class="w-3.5 h-3.5" />
     {/if}

@@ -375,7 +375,7 @@ const readonlyClass =
 						{#if row.type === "boolean"}
 							<button
 								type="button"
-								class="h-9 min-w-[72px] flex-1 rounded-[6px] border border-border-subtle bg-bg-input px-3 text-[13px] font-medium text-text-primary transition-colors hover:bg-bg-hover disabled:opacity-60"
+								class="secondary-key h-9 min-w-[72px] flex-1 px-3 text-[13px]"
 								onclick={() => (row.value = row.value === "true" ? "false" : "true")}
 								disabled={busy}
 							>

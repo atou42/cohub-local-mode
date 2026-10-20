@@ -1,3 +1,4 @@
+import { resolveWalletMessageEligibility } from "@cohub/core/space-wallet";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { ContentBlock, Usage } from "@cohub/protocol/core";
@@ -393,7 +394,7 @@ async function persistMessageNode(input: PersistMessageInput & { message: Persis
     role: messageRole,
     content,
     text,
-    meta: sanitizePostgresJsonValue({ ...input.message.meta, messageKind, anchorUserMessageId, actorUserId: input.userId ?? null, providerResponseId: input.message.meta?.responseId ?? null }),
+    meta: sanitizePostgresJsonValue({ ...input.message.meta, walletBillingEligible: resolveWalletMessageEligibility(), messageKind, anchorUserMessageId, actorUserId: input.userId ?? null, providerResponseId: input.message.meta?.responseId ?? null }),
     idempotencyKey: input.idempotencyKey,
     sequence,
     provider: input.message.provider ?? null,
@@ -1192,6 +1193,7 @@ export async function persistCompactionEvent(
           turnId: messageTurnId,
           actorUserId: input.actorUserId,
           ...compactionMeta,
+          walletBillingEligible: resolveWalletMessageEligibility(),
         },
         startedAt,
         completedAt,

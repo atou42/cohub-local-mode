@@ -207,7 +207,7 @@ $effect(() => {
 										</span>
 										<span class="flex shrink-0 items-center gap-2">
 											{#if commandScopeLabel(entry.item)}
-												<span class="rounded-full border border-border-subtle px-1.5 py-0.5 text-[10px] leading-3 text-text-tertiary">{commandScopeLabel(entry.item)}</span>
+												<span class="tag">{commandScopeLabel(entry.item)}</span>
 											{/if}
 											<span class={`flex h-5 w-5 items-center justify-center rounded border border-border-subtle text-text-tertiary transition-opacity ${active ? 'opacity-100' : 'opacity-0'}`}>
 												<CornerDownLeft class="h-3 w-3" />
@@ -271,7 +271,7 @@ $effect(() => {
 								<span class="mt-0.5 block truncate text-[11px] text-text-tertiary">{item.description}</span>
 							</span>
 							{#if commandScopeLabel(item)}
-								<span class="shrink-0 rounded-full border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-tertiary">{commandScopeLabel(item)}</span>
+								<span class="tag">{commandScopeLabel(item)}</span>
 							{/if}
 						</button>
 					{/each}

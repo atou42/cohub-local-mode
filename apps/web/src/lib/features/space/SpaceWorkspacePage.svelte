@@ -1,10 +1,10 @@
 <script lang="ts">
 import {
-	resourceAppLaunch,
-	resourceAppRef,
 	type ResourceAppTarget,
 	readResourceAppLaunch,
 	readResourceAppTarget,
+	resourceAppLaunch,
+	resourceAppRef,
 	SPACE_INSTALLED_APPS_PATH,
 	writeResourceAppTarget,
 } from "@cohub/protocol";
@@ -106,6 +106,7 @@ import {
 	getSessionTitle,
 	subscribeSpaceChannel,
 } from "$lib/features/session-chat";
+import { createSessionRenameController } from "$lib/features/session-chat/session-rename-controller.svelte";
 import SessionChatPanel from "$lib/features/session-chat/SessionChatPanel.svelte";
 import { pushHostShortcut } from "$lib/host-bridge";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -140,7 +141,7 @@ import {
 } from "$lib/space-routes";
 import { authStore } from "$lib/stores/auth.svelte";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
-import { startSessionSync } from "$lib/stores/session-store";
+import { sessionStore, startSessionSync } from "$lib/stores/session-store";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
 import { mergeCachedTaskRun } from "$lib/stores/task-runs-cache";
 import {
@@ -438,10 +439,25 @@ const appShell = $derived.by<AppRuntimeShellContext>(() => {
 		turn: currentTurn ? { id: currentTurn } : null,
 	};
 });
-// Session rename (header inline edit)
-let sessionRenaming = $state(false);
-let sessionRenameValue = $state("");
-let sessionRenameSaving = $state(false);
+const sessionRename = createSessionRenameController({
+	getTarget: () => {
+		const session = sessionChat.activeSession;
+		return session && session.spaceId === spaceId && session.id === routeSessionId
+			? {
+					spaceId,
+					sessionId: session.id,
+					title: session.title ?? getSessionTitle(session),
+				}
+			: null;
+	},
+	rename: async (target, title) => {
+		const result = await sdk
+			.space(target.spaceId)
+			.session(target.sessionId)
+			.rename(title);
+		sessionStore.merge(result.session);
+	},
+});
 
 let resourceActionMenuOpen = $state(false);
 let labelPickerResource = $state<{
@@ -1141,18 +1157,7 @@ const openAppPublish = (
 ) => {
 	appPublishTarget = { targetType, targetRef };
 };
-const inlineFileIsMarkdown = $derived(fileWorkspace.inlineFileIsMarkdown);
-const inlineFileIsCsv = $derived(fileWorkspace.inlineFileIsCsv);
-const inlineFileIsHtml = $derived(fileWorkspace.inlineFileIsHtml);
-const inlineFileHasRenderedPreview = $derived(
-	fileWorkspace.inlineFileHasRenderedPreview,
-);
-const inlineFileIsImage = $derived(fileWorkspace.inlineFileIsImage);
-const inlineFileIsVideo = $derived(fileWorkspace.inlineFileIsVideo);
-const inlineFileIsAudio = $derived(fileWorkspace.inlineFileIsAudio);
-const inlineFileIsPdf = $derived(fileWorkspace.inlineFileIsPdf);
-const inlineFileIsText = $derived(fileWorkspace.inlineFileIsText);
-const inlineFileDataUrl = $derived(fileWorkspace.inlineFileDataUrl);
+const inlineFilePreview = $derived(fileWorkspace.inlineFilePreview);
 let previewApps = $state<AppRecord[]>([]);
 let previewAppsLoadedFor = $state<string | null>(null);
 /** Realtime mutations seen while the full list request is in flight. */
@@ -1832,40 +1837,6 @@ function userTitle(
 	return [displayUserName(profile, userUuid), userUuid]
 		.filter(Boolean)
 		.join(" · ");
-}
-// ── Session rename (header inline edit) ────────────────────────────────
-function startSessionRename() {
-	const session = activeSessionState?.session;
-	if (!session) return;
-	sessionRenaming = true;
-	sessionRenameValue = session.title ?? getSessionTitle(session);
-}
-function cancelSessionRename() {
-	sessionRenaming = false;
-	sessionRenameValue = "";
-}
-async function submitSessionRename() {
-	if (sessionRenameSaving || !activeSessionId) return;
-	const trimmed = sessionRenameValue.trim();
-	if (!trimmed) {
-		cancelSessionRename();
-		return;
-	}
-	const session = activeSessionState?.session;
-	if (!session) return;
-	if (trimmed === (session.title ?? getSessionTitle(session))) {
-		cancelSessionRename();
-		return;
-	}
-	sessionRenameSaving = true;
-	try {
-		await sessionChat.renameActiveSession(trimmed);
-	} catch {
-		// Silently fail
-	} finally {
-		sessionRenameSaving = false;
-		cancelSessionRename();
-	}
 }
 function themeCssChanged(
 	changes: Array<{ path?: string; oldPath?: string }> | undefined,
@@ -3353,20 +3324,11 @@ const spaceFileDomainProps = $derived.by<
 	previewEndpoints,
 	inlineFileDownloadUrl,
 	inlineFileDownloadName,
-	inlineFileIsText,
-	inlineFileHasRenderedPreview,
+	inlineFilePreview,
 	inlineFileDiff: fileWorkspace.inlineFileDiff,
 	inlineFileDiffLoading: fileWorkspace.inlineFileDiffLoading,
 	inlineFileDiffError: fileWorkspace.inlineFileDiffError,
-	inlineFileIsMarkdown,
-	inlineFileIsCsv,
-	inlineFileIsHtml,
 	inlineFileCopied,
-	inlineFileIsImage,
-	inlineFileIsVideo,
-	inlineFileIsAudio,
-	inlineFileIsPdf,
-	inlineFileDataUrl,
 	inlineFileApp,
 	inlineFileDragging: fileWorkspace.inlineFileDragging,
 	uploadPaneVisible: fileWorkspace.uploadPaneVisible,
@@ -3524,11 +3486,7 @@ $effect(() => {
 	if (!session || !scope.onActiveSession) return;
 	untrack(() => scope.onActiveSession?.(session, currentSpace));
 });
-const sessionRenameState = $derived({
-	renaming: sessionRenaming,
-	value: sessionRenameValue,
-	saving: sessionRenameSaving,
-});
+const sessionRenameState = $derived(sessionRename.state);
 const resourceActionState = $derived({
 	open: resourceActionMenuOpen,
 	available: hasResourceActions(),
@@ -3539,12 +3497,10 @@ const headerActions = {
 		if (filesColumnHidden) previewLayout.setFilesColumnHidden(false);
 		windowManager.openDisplay(displayId);
 	},
-	startSessionRename,
-	cancelSessionRename,
-	submitSessionRename,
-	setSessionRenameValue: (value: string) => {
-		sessionRenameValue = value;
-	},
+	startSessionRename: sessionRename.start,
+	cancelSessionRename: sessionRename.cancel,
+	submitSessionRename: sessionRename.submit,
+	setSessionRenameValue: sessionRename.setValue,
 	toggleResourceActionMenu: () => {
 		resourceActionMenuOpen = !resourceActionMenuOpen;
 	},
@@ -3614,7 +3570,7 @@ const headerActions = {
 	/>
 {/if}
 {#if workspaceNotice}
-	<div class="workspace-notice pointer-events-none">
+	<div class="workspace-notice toast-surface pointer-events-none">
 		{workspaceNotice}
 	</div>
 {/if}
@@ -4014,10 +3970,6 @@ const headerActions = {
     bottom: 1rem;
     z-index: var(--z-workspace-toast);
     max-width: min(22rem, calc(100vw - 2rem));
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 0.75rem;
-    background: var(--color-bg-elevated);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 18%);
     color: var(--color-text-secondary);
     font-size: 0.75rem;
     line-height: 1rem;
@@ -4036,11 +3988,7 @@ const headerActions = {
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    border-radius: 10px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-elevated);
     padding: 9px 10px 9px 12px;
-    box-shadow: 0 10px 30px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
   }
   :global(.port-ready-action) {
     display: inline-flex;

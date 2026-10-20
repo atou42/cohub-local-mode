@@ -58,15 +58,14 @@ const SCALE_TRANSITION_OUT = { ...TRANSITION_OUT, start: 0.95 };
 {#if open}
   <div
     use:portal
-    class="fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center p-0 lg:items-center lg:p-4"
+    class="dialog-backdrop fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center p-0 lg:items-center lg:p-4"
     in:fade={TRANSITION_IN}
     out:fade={TRANSITION_OUT}
     role="dialog"
     aria-modal="true"
   >
-    <!-- Backdrop -->
     <div
-      class="absolute inset-0 bg-overlay-scrim"
+      class="absolute inset-0"
       onclick={onClose}
       aria-hidden="true"
     ></div>
@@ -74,7 +73,7 @@ const SCALE_TRANSITION_OUT = { ...TRANSITION_OUT, start: 0.95 };
     {#if mobile}
       <!-- Desktop: centered modal -->
       <div
-        class="hidden lg:block relative w-full rounded-xl border border-border-subtle bg-bg-primary shadow-2xl overflow-hidden"
+        class="dialog-surface relative hidden w-full lg:block"
         style="max-width: {maxWidth}"
         in:scale|local={SCALE_TRANSITION_IN}
         out:scale|local={SCALE_TRANSITION_OUT}
@@ -84,7 +83,7 @@ const SCALE_TRANSITION_OUT = { ...TRANSITION_OUT, start: 0.95 };
 
       <!-- Mobile: bottom sheet -->
       <div
-        class="lg:hidden relative w-full max-w-[480px] rounded-t-xl border-t border-border-subtle bg-bg-primary shadow-2xl overflow-hidden"
+        class="dialog-surface is-sheet relative w-full max-w-[480px] lg:hidden"
         in:slide|local={{ axis: "y", ...TRANSITION_IN }}
         out:slide|local={{ axis: "y", ...TRANSITION_OUT }}
       >
@@ -93,7 +92,7 @@ const SCALE_TRANSITION_OUT = { ...TRANSITION_OUT, start: 0.95 };
     {:else}
       <!-- Desktop-only modal -->
       <div
-        class="relative w-full rounded-xl border border-border-subtle bg-bg-primary shadow-2xl overflow-hidden"
+        class="dialog-surface relative w-full"
         style="max-width: {maxWidth}"
         in:scale|local={SCALE_TRANSITION_IN}
         out:scale|local={SCALE_TRANSITION_OUT}

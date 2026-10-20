@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { DOMAdapter } from "pixi.js";
 import type { BoardDocument } from "@cohub/protocol";
 import {
   type BoardNodeRenderer,
@@ -74,6 +75,41 @@ describe("Node board export", { skip: available ? false : "@napi-rs/canvas is no
 
   after(() => {
     renderer?.destroy();
+  });
+
+  test("releases intermediate native canvases on success and encoding failure", async (t) => {
+    const native = await import("@napi-rs/canvas");
+    const adapter = DOMAdapter.get();
+    const canvases: Array<ReturnType<typeof native.createCanvas>> = [];
+    let failEncoding = false;
+    const isolated = await createNodeBoardRenderer({ canvasModule: {
+      ...native,
+      createCanvas(width, height) {
+        const canvas = native.createCanvas(width, height);
+        const toBuffer = canvas.toBuffer.bind(canvas);
+        Object.defineProperty(canvas, "toBuffer", { value: (...args: Parameters<typeof toBuffer>) => {
+          if (failEncoding) throw new Error("Encoding failed");
+          return toBuffer(...args);
+        } });
+        canvases.push(canvas);
+        return canvas;
+      },
+    } });
+    try {
+      for (let index = 0; index < 5; index++) {
+        assert.ok(exportBoardImageBytes(isolated, document, { scale: 1 }));
+        assert.ok(canvases.every((canvas) => canvas.width < 664 || canvas.height < 464), "Frame-sized native surfaces must be released without waiting for GC.");
+      }
+      failEncoding = true;
+      assert.throws(() => exportBoardImageBytes(isolated, document, { scale: 1 }), /Encoding failed/);
+      assert.ok(canvases.every((canvas) => canvas.width < 664 || canvas.height < 464));
+      t.mock.method(isolated.renderer.texture, "generateCanvas", () => { throw new Error("Extraction failed"); });
+      assert.throws(() => exportBoardImageBytes(isolated, document, { scale: 1 }), /Extraction failed/);
+      assert.ok(canvases.every((canvas) => canvas.width < 664 || canvas.height < 464));
+    } finally {
+      isolated.destroy();
+      DOMAdapter.set(adapter);
+    }
   });
 
   test("renders a document to PNG bytes", () => {

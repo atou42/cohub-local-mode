@@ -146,7 +146,7 @@ function tickLeft(entryIndex: number): string {
 	aria-label={m.board_replay_title({}, { locale })}
 >
 	<div class="replay-head">
-		<span class="replay-badge">{m.board_replay_title({}, { locale })}</span>
+		<span class="tag font-semibold uppercase tracking-wider" data-tone="brand">{m.board_replay_title({}, { locale })}</span>
 		<div class="replay-status" aria-live="polite">
 			{#if current}
 				{#if current.kind === "human"}
@@ -336,18 +336,6 @@ function tickLeft(entryIndex: number): string {
 		min-width: 0;
 		font-size: 11px;
 		color: var(--text-secondary);
-	}
-
-	.replay-badge {
-		flex-shrink: 0;
-		border-radius: 5px;
-		background: color-mix(in srgb, var(--brand) 14%, transparent);
-		padding: 2px 6px;
-		color: var(--brand);
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
 	}
 
 	.replay-status {

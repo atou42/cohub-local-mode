@@ -1,12 +1,12 @@
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { lstat, readFile, readlink, readdir } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, normalize, relative } from "node:path";
+import { isAbsolute, join, normalize, relative } from "node:path";
 import {
   CHECKPOINT_HARD_EXCLUDES,
   CHECKPOINT_PLATFORM_IGNORE,
 } from "@cohub/core/checkpoint/ignore";
-import { BOARD_EXTENSION, BOARD_MIME_TYPE } from "@cohub/protocol";
+import { mimeTypeForPath } from "@cohub/protocol/fs";
 import ignore, { type Ignore } from "ignore";
 
 export type DiscoveredGitRepo = {
@@ -35,31 +35,6 @@ type IgnoreMatcher = {
   matcher: Ignore;
 };
 
-const mimeByExt: Record<string, string> = {
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".json": "application/json",
-  [BOARD_EXTENSION]: BOARD_MIME_TYPE,
-  ".js": "text/javascript",
-  ".ts": "text/typescript",
-  ".tsx": "text/tsx",
-  ".jsx": "text/jsx",
-  ".css": "text/css",
-  ".html": "text/html",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mov": "video/quicktime",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-};
-
-const getMimeType = (path: string) => mimeByExt[extname(path.toLowerCase())] ?? null;
 const normalizeRel = (root: string, absPath: string) => relative(root, absPath).replace(/\\/g, "/");
 const pathForIgnore = (path: string, isDirectory: boolean) => (isDirectory && !path.endsWith("/") ? `${path}/` : path);
 
@@ -133,7 +108,7 @@ export async function scanWorkspace(root: string) {
           type: "file",
           size: st.size,
           executable: (st.mode & 0o111) !== 0,
-          mimeType: getMimeType(basename(rel)),
+          mimeType: mimeTypeForPath(rel),
         });
         return;
       }

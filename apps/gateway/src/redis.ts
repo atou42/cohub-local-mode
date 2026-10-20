@@ -33,15 +33,6 @@ redisCommandClient.on("reconnecting", () => {
 
 export const getGatewayNodeOutboundStreamKey = (nodeId: string) => `stream:gateway:node:${nodeId}:outbound`;
 export { REALTIME_OUTBOUND_CHANNEL, AGENT_REALTIME_PATCH_CHANNEL } from "@cohub/protocol/realtime";
-export const STREAM_MAXLEN = 2000;
-export const STREAM_APPROX = "~";
-
-export const xaddWithMaxlen = async (
-  client: Redis,
-  streamKey: string,
-  ...args: (string | number)[]
-) => client.xadd(streamKey, "MAXLEN", STREAM_APPROX, STREAM_MAXLEN, ...args);
-
 export const createBlockingRedisClient = () => {
   const client = redisCommandClient.duplicate({ lazyConnect: true });
 

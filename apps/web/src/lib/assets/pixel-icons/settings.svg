@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="32" height="32" shape-rendering="crispEdges" role="img" aria-label="Setting gear pixel icon">
+  <path fill="#526168" d="M6 1h4v1H6zM3 2h2v1H3zM6 2h4v1H6zM11 2h2v1h-2zM2 3h3v1H2zM6 3h4v1H6zM11 3h3v1h-3zM2 4h12v1H2zM3 5h10v1H3zM1 6h14v4H1zM3 10h10v1H3zM2 11h12v1H2zM2 12h3v1H2zM6 12h4v1H6zM11 12h3v1h-3zM3 13h2v1H3zM6 13h4v1H6zM11 13h2v1h-2zM6 14h4v1H6z"/>
+  <path fill="#8B989E" d="M7 2h2v2H7zM3 4h10v1H3zM4 5h8v1H4zM2 6h12v4H2zM4 10h8v1H4zM3 11h10v1H3zM7 12h2v2H7zM3 3h1v1H3zM12 3h1v1H12zM3 12h1v1H3zM12 12h1v1H12z"/>
+  <path fill="#BBC5C8" d="M3 4h5v1H3zM4 5h2v1H4zM2 6h2v3H2zM7 2h2v1H7zM3 3h1v1H3z"/>
+  <path fill="#68777D" d="M12 7h2v3h-1v2h-2v1H9v1H7v-1h2v-1h1v-1h1V9h1zM12 12h1v1h-1z"/>
+  <path fill="#526168" d="M6 5h4v1h1v4h-1v1H6v-1H5V6h1z"/>
+  <path fill="#F4F6F7" d="M7 6h2v1h1v2H9v1H7V9H6V7h1z"/>
+  <path fill="#D7E0E3" d="M9 7h1v2H9zM7 9h2v1H7z"/>
+</svg>

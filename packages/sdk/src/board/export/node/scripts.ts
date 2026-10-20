@@ -18,11 +18,13 @@ import {
 } from "../../render/script-runtime.js";
 import type { BoardScriptHost } from "../../render/renderers/board-renderer-registry.js";
 import type { BoardNodeRenderer } from "./index.js";
+import { initializeBoardFonts } from "./fonts.js";
 
 const WORKER = `
 const {parentPort, workerData} = require('node:worker_threads');
 const {createContext, Script, SourceTextModule} = require('node:vm');
-const {createCanvas} = require(workerData.canvasModule);
+const {createCanvas, GlobalFonts} = require(workerData.canvasModule);
+(${initializeBoardFonts.toString()})(GlobalFonts, workerData.fonts);
 const instances = new Map();
 const graphs = new Map();
 const update = new Script('__runtime.update(JSON.parse(__inputJson)); __runtime.step(__time)');
@@ -31,7 +33,10 @@ const output = new Script('JSON.stringify(__runtime.output())');
 const dispose = new Script('__runtime.destroy()');
 function release(id) {
  const entry=instances.get(id);instances.delete(id);
- if(entry) {try {dispose.runInContext(entry.context,{timeout:workerData.timeout});} catch {}}
+ if(entry) {
+  try {dispose.runInContext(entry.context,{timeout:workerData.timeout});} catch {}
+  if(entry.canvas) {entry.canvas.width=1;entry.canvas.height=1;}
+ }
 }
 async function create(data) {
  const context = createContext({console:{log(){},warn(){},error(){}},structuredClone},{codeGeneration:{strings:false,wasm:false}});
@@ -81,13 +86,18 @@ parentPort.on('message',async data=>{
    const width=Math.max(1,Math.round(data.input.width*data.scale));
    const height=Math.max(1,Math.round(data.input.height*data.scale));
    const canvas=entry.canvas??=createCanvas(width,height);
-   canvas.width=width;canvas.height=height;
-   const drawing=canvas.getContext('2d');drawing.scale(data.scale,data.scale);
-   context.__drawing=drawing;draw.runInContext(context,{timeout:workerData.timeout});
-   png=canvas.toBuffer('image/png');delete context.__drawing;
+   if(canvas.width!==width || canvas.height!==height) {canvas.width=width;canvas.height=height;}
+   const drawing=canvas.getContext('2d');drawing.reset();drawing.scale(data.scale,data.scale);
+   context.__drawing=drawing;
+   try {
+    draw.runInContext(context,{timeout:workerData.timeout});
+    png=canvas.toBuffer('image/png');
+   } finally {
+    delete context.__drawing;canvas.width=1;canvas.height=1;
+   }
   }
   parentPort.postMessage({png,output:JSON.parse(output.runInContext(context,{timeout:workerData.timeout}))});
- } catch(error) { instances.delete(data.input?.id);parentPort.postMessage({error:String(error.stack||error)}); }
+ } catch(error) { release(data.input?.id);parentPort.postMessage({error:String(error.stack||error)}); }
 });
 `;
 
@@ -100,6 +110,7 @@ type Lane = {
 };
 export type BoardNodeScriptOptions = {
   readModule(src: string): Promise<string>;
+  concurrency?: number;
   timeoutMs?: number;
   readTimeoutMs?: number;
 };
@@ -116,12 +127,14 @@ export function createNodeBoardScriptHost(
   clearFrames(): void;
   destroy(): void;
 } {
+  const concurrency = options.concurrency ?? 4;
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error("Script concurrency must be an integer between 1 and 4.");
   const textures = new Map<string, Texture>();
   const outputs = new Map<number, Map<string, BoardScriptOutput>>();
   const errors = new Map<string, string>();
   const sources = new Map<string, Promise<BoardScriptSources>>();
   const modules = createBoardScriptModuleReader(options.readModule, options.readTimeoutMs);
-  const lanes: Lane[] = Array.from({ length: 4 }, () => ({
+  const lanes: Lane[] = Array.from({ length: concurrency }, () => ({
     worker: null,
     tail: Promise.resolve(),
     graphs: new Set(),
@@ -174,6 +187,7 @@ export function createNodeBoardScriptHost(
             workerData: {
               runtime: createScriptRuntime.toString(),
               timeout,
+              fonts: renderer.fonts ?? [],
               canvasModule: fileURLToPath(
                 import.meta.resolve("@napi-rs/canvas"),
               ),

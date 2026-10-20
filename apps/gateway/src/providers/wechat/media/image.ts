@@ -5,7 +5,7 @@ import { WeChatMessageItemType, WeChatUploadMediaType, type WeChatImageItem, typ
 import { aesEcbPaddedSize } from "./crypto.js";
 import { downloadWeChatCdnImage, uploadWeChatCdnBuffer } from "./cdn.js";
 import { detectImageMimeType } from "./mime.js";
-import { safeFetch } from "@cohub/infra/safe-fetch";
+import { readResponseBufferLimited, safeFetch } from "@cohub/infra/safe-fetch";
 
 export const WECHAT_INBOUND_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 export const WECHAT_INBOUND_IMAGE_MAX_COUNT = 4;
@@ -40,19 +40,15 @@ export async function downloadImageItem(params: {
   return { buffer, mediaType, encryptedQueryParam: media.encrypt_query_param ?? null };
 }
 
-async function fetchImageSource(source: Extract<ContentBlock, { type: "image" }>["source"]) {
+async function fetchImageSource(source: Extract<ContentBlock, { type: "image" }>["source"], signal?: AbortSignal) {
   if (source.type === "base64") {
     if (source.data.length > BASE64_MAX_CHARS) throw new Error(`WeChat outbound image exceeds ${WECHAT_OUTBOUND_IMAGE_MAX_BYTES} bytes`);
     return Buffer.from(source.data, "base64");
   }
 
-  const response = await safeFetch({ url: source.url, label: "wechat outbound image" });
+  const response = await safeFetch({ url: source.url, label: "wechat outbound image", init: { signal } });
   if (!response.ok) throw new Error(`WeChat outbound image download failed ${response.status}`);
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (contentLength > WECHAT_OUTBOUND_IMAGE_MAX_BYTES) throw new Error(`WeChat outbound image exceeds ${WECHAT_OUTBOUND_IMAGE_MAX_BYTES} bytes`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > WECHAT_OUTBOUND_IMAGE_MAX_BYTES) throw new Error(`WeChat outbound image exceeds ${WECHAT_OUTBOUND_IMAGE_MAX_BYTES} bytes`);
-  return buffer;
+  return readResponseBufferLimited(response, WECHAT_OUTBOUND_IMAGE_MAX_BYTES, "wechat outbound image");
 }
 
 export async function uploadImageContentBlock(params: {
@@ -61,8 +57,9 @@ export async function uploadImageContentBlock(params: {
   cdnBaseUrl: string;
   token: string;
   to: string;
+  signal?: AbortSignal;
 }) {
-  const buffer = await fetchImageSource(params.block.source);
+  const buffer = await fetchImageSource(params.block.source, params.signal);
   if (buffer.length === 0) throw new Error("WeChat outbound image is empty");
   if (buffer.length > WECHAT_OUTBOUND_IMAGE_MAX_BYTES) throw new Error(`WeChat outbound image exceeds ${WECHAT_OUTBOUND_IMAGE_MAX_BYTES} bytes`);
   if (!detectImageMimeType(buffer)) throw new Error("WeChat outbound image type is unsupported");
@@ -82,6 +79,7 @@ export async function uploadImageContentBlock(params: {
     rawFileMd5,
     fileSize,
     aesKeyHex: aesKey.toString("hex"),
+    signal: params.signal,
   });
 
   const uploaded = await uploadWeChatCdnBuffer({
@@ -92,6 +90,7 @@ export async function uploadImageContentBlock(params: {
     cdnBaseUrl: params.cdnBaseUrl,
     aesKey,
     label: `wechat:${params.to}:image-upload`,
+    signal: params.signal,
   });
 
   return {

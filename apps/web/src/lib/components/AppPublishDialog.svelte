@@ -262,12 +262,12 @@ async function copyUrl() {
 				</div>
 			</div>
 			<div class="button-row">
-				<button type="button" class="secondary-btn" onclick={() => void copyUrl()}>
+				<button type="button" class="key-btn secondary-key" onclick={() => void copyUrl()}>
 					{#if copied}<Check class="h-3.5 w-3.5" />{:else}<Copy class="h-3.5 w-3.5" />{/if}
 					Copy
 				</button>
-				<a class="secondary-btn" href={publishedUrl} target="_blank" rel="noreferrer"><ExternalLink class="h-3.5 w-3.5" />Open</a>
-				<button type="button" class="primary-btn primary-key" onclick={onClose}>Done</button>
+				<a class="key-btn secondary-key" href={publishedUrl} target="_blank" rel="noreferrer"><ExternalLink class="h-3.5 w-3.5" />Open</a>
+				<button type="button" class="key-btn primary-key" onclick={onClose}>Done</button>
 			</div>
 		{:else}
 			<section class="address-section">
@@ -342,7 +342,7 @@ async function copyUrl() {
 						<span class="presentation-copy">{m.app_publish_hide_cohub_bar_detail({}, { locale })}</span>
 					</span>
 					{#if !hideCohubBarAllowed && !hideCohubBarLoading}
-						<span class="plan-badge">Pro / Max</span>
+						<span class="tag">Pro / Max</span>
 					{/if}
 				</label>
 				{#if !hideCohubBarAllowed && !hideCohubBarLoading}
@@ -352,8 +352,8 @@ async function copyUrl() {
 
 			{#if error}<div class="error-box">{error}</div>{/if}
 			<div class="button-row footer-row">
-				<button type="button" class="secondary-btn" onclick={onClose}>{m.common_cancel({}, { locale })}</button>
-				<button type="button" class="primary-btn primary-key" onclick={() => void publish()} disabled={!canPublish}>
+				<button type="button" class="key-btn secondary-key" onclick={onClose}>{m.common_cancel({}, { locale })}</button>
+				<button type="button" class="key-btn primary-key" onclick={() => void publish()} disabled={!canPublish}>
 					{#if publishing}<Spinner class="h-3.5 w-3.5" />{:else}<Rocket class="h-3.5 w-3.5" />{/if}
 					Publish
 				</button>
@@ -399,14 +399,11 @@ async function copyUrl() {
 	.presentation-title { display: block; font-weight: 500; color: var(--text-primary); }
 	.presentation-copy { display: block; margin-top: 2px; color: var(--text-tertiary); }
 	.presentation-hint { font-size: 11px; color: var(--text-tertiary); }
-	.plan-badge { flex-shrink: 0; border-radius: 9999px; border: 1px solid var(--border-subtle); padding: 3px 8px; font-size: 10px; line-height: 1; color: var(--text-tertiary); }
 	.disabled-option { opacity: .6; }
 	.error-box { border-radius: 6px; border: 1px solid color-mix(in srgb, var(--color-error-soft) 30%, transparent); background: var(--color-error-bg); padding: 8px 10px; font-size: 12px; color: var(--color-error-soft); }
 	.button-row { display: flex; justify-content: flex-end; gap: 8px; }
 	.footer-row { position: sticky; bottom: 0; z-index: 2; margin: 0 -16px -16px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-primary) 94%, transparent); padding: 12px 16px 16px; backdrop-filter: blur(10px); }
-	.primary-btn, .secondary-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; border-radius: 6px; padding: 0 12px; font-size: 12px; font-weight: 500; transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease; }
-	.secondary-btn { border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); }
-	.secondary-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+	.key-btn { gap: 7px; min-height: 34px; padding: 0 12px; font-size: 12px; text-decoration: none; }
 	.success-block { display: flex; align-items: center; gap: 10px; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-surface); padding: 12px; }
 	.success-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--brand); color: var(--brand-contrast-fg); }
 
@@ -415,6 +412,6 @@ async function copyUrl() {
 		.permission-row { min-height: 40px; align-items: center; }
 		.permission-row input, .access-row input { width: 16px; height: 16px; }
 		.button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
-		.primary-btn, .secondary-btn { width: 100%; min-height: 44px; font-size: 13px; }
+		.key-btn { width: 100%; min-height: 44px; font-size: 13px; }
 	}
 </style>

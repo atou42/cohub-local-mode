@@ -81,7 +81,7 @@ async function confirmStopped() {
 				<input type="checkbox" bind:checked={confirmed} disabled={busy} />
 				<span>{m.runtime_confirm_stopped({}, { locale })}</span>
 			</label>
-			<button type="button" class="inline-flex min-h-9 items-center gap-2 rounded-md border border-error-soft/30 px-3 text-error-soft disabled:opacity-50" disabled={!confirmed || busy} onclick={confirmStopped}>
+			<button type="button" class="danger-key min-h-9 gap-2 px-3" disabled={!confirmed || busy} onclick={confirmStopped}>
 				{#if busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Square class="h-3.5 w-3.5" />{/if}
 				{m.runtime_end_unknown({}, { locale })}
 			</button>

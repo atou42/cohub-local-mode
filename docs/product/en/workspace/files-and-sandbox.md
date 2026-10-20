@@ -136,11 +136,25 @@ A cloud sandbox can run a virtual screen. Choose the screen button in the Space 
 **Start virtual screen**: programs started in the sandbox from then on show on it — a browser an
 Agent opens, for example — and you can watch and steer them live. Stop it from the same place; it
 also ends when the sandbox stops. A sandbox created before virtual screens existed asks to be
-updated with **Force recovery** in the Space settings.
+updated with **Restart sandbox** in the Space settings.
 
 This is how to watch an Agent at work in a browser and take over when it needs you — to sign in, for
 example: ask it to use the virtual screen, open the screen from the link it gives you, and type
 yourself. What you type goes to the screen, not to the chat.
+
+## Game development environments
+
+When the deployment provides a game image, choose it under **Space settings → Sandbox → Environment**. It includes Godot, Blender and CPU software-rendering tools; it does not provide a GPU. Compute remains limited by the Space owner's plan. Both images include NumPy. For Blender Cycles rendering, set `scene.cycles.device = 'CPU'` and `scene.cycles.use_denoising = False`: this build does not include OpenImageDenoise.
+
+Projects and mods can recommend an environment with `.cohub/sandbox.json`:
+
+```json
+{ "version": 1, "image": "game", "spec": "boost" }
+```
+
+Explicit Space settings override the project file, which overrides enabled mods in their configured order. Choose **Follow configuration** to remove an image override, or **Use configured compute preference** to remove a compute override. Existing Spaces keep their saved compute selection. Mod changes must be published as a Save before they can apply.
+
+Environment changes apply when the sandbox is next created or restarted; file edits do not interrupt running tasks. Unavailable preferences fall back to an available environment without erasing the original request. Configuration details show the request, available and running environment, sources and any limitations. Invalid files must be fixed, or both image and compute explicitly selected, before restarting. Workspace files remain on persistent storage; temporary software installations outside it do not survive replacement. Cloud environment choices do not change local sandboxes.
 
 ## Practical tips
 

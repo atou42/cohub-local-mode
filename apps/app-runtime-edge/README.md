@@ -7,7 +7,48 @@ Cloudflare Worker for the Cohub App runtime. It injects a small classic deferred
 | Dev | `cohub-app-runtime-dev` | `https://works.cohub.live/dev/w/*` | `https://works.cohub.live/__cohub_dev/*` |
 | Production | `cohub-app-runtime` | `https://works.cohub.live/w/*` | `https://works.cohub.live/__cohub/*` |
 
-The fixed entries are `/__cohub_dev/runtime.js` and `/__cohub/runtime.js`. The bootstrap initializes an empty `window.__cohub` when absent and prints one styled `cohub.runtime` banner per document. It does not yet implement navigation interception or host negotiation.
+The fixed entries are `/__cohub_dev/runtime.js` and `/__cohub/runtime.js`. The bootstrap initializes an empty `window.__cohub` when absent and prints one styled `cohub.runtime` banner per document. Embedded documents support the opt-in lifecycle channel below. Navigation interception and the SDK authorization/context bridge remain separate.
+
+## Embedded document lifecycle protocol
+
+The private browser runtime implements version 1 of `cohub.runtime.lifecycle`. Any direct parent container can subscribe without using the Cohub SDK or a specific host domain. This channel carries document lifecycle measurements only; it carries no URLs, credentials, authorization, App context, or request IDs.
+
+Parent → runtime:
+
+```ts
+{
+  type: "cohub.runtime.lifecycle",
+  version: 1,
+  action: "subscribe" | "unsubscribe",
+  subscriptionId: string
+}
+```
+
+Runtime → parent:
+
+```ts
+{
+  type: "cohub.runtime.lifecycle",
+  version: 1,
+  action: "state",
+  subscriptionId: string,
+  documentId: string,
+  timeOrigin: number,
+  milestones: Array<{ name: string; startTime: number }>
+}
+```
+
+`subscriptionId` must contain a non-whitespace character and be at most 128 characters long. The parent creates a fresh ID for each iframe navigation, installs its message listener before subscribing, and accepts states only from that iframe's `contentWindow`, its expected origin, and the active subscription. The runtime accepts requests only from `window.parent` with an HTTP(S) origin, ignores malformed or unsupported messages, and sends replies to that exact origin. Opaque origins are unsupported. The subscription ID correlates the lifecycle exchange; it is not an authorization token.
+
+Every valid `subscribe` immediately returns the current snapshot, including an empty snapshot before paint. Later milestones produce updated snapshots. Repeating `subscribe` replays the snapshot, including after FCP, so a late listener can recover. A new subscription replaces the previous one: the runtime retains at most one direct-parent subscription. `unsubscribe` stops notifications only when both ID and origin match; it does not discard the document's recorded milestone. Containers may retry subscribing while the deferred runtime starts, then stop retries after the first valid state and unsubscribe when disposing the frame.
+
+`documentId` is randomly generated once per document and is a non-empty string of at most 128 characters. `timeOrigin` is that document's `performance.timeOrigin`, in milliseconds since the Unix epoch. Each milestone's `startTime` is milliseconds relative to that document's time origin, not the parent's clock. A new document gets a new ID even if its URL is unchanged.
+
+Snapshots contain at most 32 milestones with unique names. Each name is a non-whitespace string of at most 128 characters; timing values are finite and nonnegative.
+
+This implementation produces only `first-contentful-paint`, once per document, using `PerformanceObserver.observe({ type: "paint", buffered: true })`. The observer disconnects after FCP. Missing or failing Paint Timing support leaves the snapshot empty and does not interrupt the App. Version 1 permits additional milestone names: hosts must ignore unknown names without rejecting the snapshot or treating those names as readiness. An empty snapshot acknowledges subscription; it does not mean the content is ready. FCP means the document painted its first content and does not promise that App data, images, or interactions are fully ready.
+
+This is a direct-parent channel. A public Cohub App page that embeds the published HTML needs an explicit relay before an outer container can receive the inner document's milestones; no relay is implemented here. Containers must retain a load/timeout fallback for old runtimes, blocked injection, unsupported browsers, and pages that do not paint. Keep the iframe renderable while an opaque loading overlay covers it, since hiding its rendering can prevent the paint being awaited. SDK `cohub.app.runtime` ready and surface RPC readiness have different semantics.
 
 ## Loading and caching
 

@@ -1,3 +1,5 @@
+export * from "./mime.js";
+
 export type SpaceFsChange = {
   path?: string;
   oldPath?: string;
@@ -28,6 +30,18 @@ export type SpaceFsEntry = {
 export type SpaceFsTreeResponse = {
   path: string;
   entries: SpaceFsEntry[];
+};
+
+export type SpaceFsListOptions = {
+  pagination: true;
+  limit?: number;
+  cursor?: string;
+};
+
+export type SpaceFsTreePage = SpaceFsTreeResponse & {
+  nextCursor: string | null;
+  /** Entries omitted by a legacy backend, not entries available on subsequent pages. */
+  truncated: boolean;
 };
 
 export type SpaceFsFileKind = "text" | "binary";

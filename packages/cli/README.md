@@ -55,6 +55,36 @@ and, if needed, `COHUB_AUTH_RESOURCE` and `COHUB_AUTH_SCOPE`. Stored login sessi
 Home Space caches, and Runtime directory bindings are scoped to the API base URL.
 Sign in once for each custom server, or supply `COHUB_EXECUTION_TOKEN`.
 
+## Board export resources
+
+Board exports keep the requested resolution and source image quality. Before rendering,
+`boards export` prints the output dimensions and frame count (except with `--json`).
+Decoded image textures, including background and script output images, share a 256 MiB
+budget. Oversized images fail before native decoding rather than silently becoming
+placeholders. Use `--image-memory <MiB>` to raise the budget when the environment has
+sufficient memory; it is an image budget, not a limit on total process memory.
+`--size` controls the viewport only with `--camera`.
+
+```bash
+cohub boards export lesson.board --animation lecture --at 0:92s:40ms --camera --size 1600x900 -o lecture.mp4
+NODE_DEBUG=cohub:board-export cohub boards export lesson.board --animation lecture --at 0:92s:40ms -o lecture.mp4
+```
+
+Debug output reports render stages, RSS, heap, external buffers, reserved image bytes,
+and available/constrained process memory. Video encoding is reported separately.
+MP4 exports require even output dimensions and fail before rendering if the initial
+export dimensions are odd. Video frame dimensions must remain constant.
+
+For a repeatable 2,301-frame native export memory benchmark, run from the repository root:
+
+```bash
+node --import tsx packages/cli/scripts/bench-board-export.ts
+```
+
+Set `BOARD_EXPORT_BENCH_FRAMES`, `BOARD_EXPORT_BENCH_WIDTH`, or
+`BOARD_EXPORT_BENCH_HEIGHT` to change the workload. The benchmark discards PNGs
+as they are produced and stops if RSS exceeds 1 GiB.
+
 ## Usage
 
 Use `--json` when reading output for decisions, extracting IDs, or chaining commands.
@@ -107,7 +137,9 @@ cohub -s home spaces files ls
 
 ## Local Runtime
 
-Connect one local workspace to a Space and select Pi or Codex per turn.
+Connect one local workspace to a Space and select Pi, Codex, Claude Code or WorkBuddy per turn.
+Claude Code (`claude`) and WorkBuddy (`codebuddy`) run Cohub Turns only; terminal sync covers Pi and Codex.
+Without `--harness`, every installed harness is tried; one that cannot start is skipped with a warning.
 
 To keep using native terminals with ordinary Cohub Chats / Turns:
 
@@ -149,7 +181,7 @@ are never uploaded automatically. Use `runtime logs --json` to export a failure 
 events carry the local `runtimeId` plus server `requestId` / `traceparent` when a turn has
 reached the Agent trace.
 
-The Runtime uses WebSockets, native Pi RPC / Codex app-server, and existing cloud
+The Runtime uses WebSockets, native Pi RPC / Codex app-server / Claude Code stream-json, and existing cloud
 streaming. Local executables and credentials are required. `sandbox up` has been
 removed. Reconnection and result reconciliation are automatic; no recovery command is needed.
 When a result genuinely cannot be determined, the affected Chat offers an explicit stop
@@ -251,6 +283,20 @@ cohub -s <spaceId> spaces activity
 cohub -s <spaceId> spaces activity 7
 cohub -s <spaceId> spaces activity 365 --json
 ```
+
+## Space wallet
+
+```bash
+cohub -s <spaceId> spaces wallet balance
+cohub -s <spaceId> spaces wallet catalog
+cohub -s <spaceId> spaces wallet recharge <productKey> --request-id <uuid>
+cohub -s <spaceId> spaces wallet confirm <orderId>
+cohub -s <spaceId> spaces wallet activity --page 1 --json
+```
+
+Recharge prints a payment URL. Reuse the request UUID when retrying the same
+recharge. Any signed-in user with access to the Space may contribute; payment
+does not grant additional permissions. Transfers and withdrawals are not supported.
 
 ## Boards
 
@@ -358,6 +404,8 @@ cohub generate "Lip-sync to this spoken take" \
   --image reference_image=https://example.com/portrait.png \
   --audio reference_audio=https://example.com/speech.mp3
 
+cohub generate -m song2 --text "prompt=upbeat synthwave" --text "lyrics=[Verse] Neon lights" --param seed=42
+
 cohub generate "a calm lake" \
   --model <model> \
   --async
@@ -368,6 +416,7 @@ cohub tasks get <taskRunId> --json
 Supported inputs:
 
 ```bash
+--text <role>=<text>
 --image <path-or-url>
 --image first_frame=<path-or-url>
 --image last_frame=<path-or-url>
@@ -378,7 +427,7 @@ Supported inputs:
 --audio reference_audio=<path-or-url>
 ```
 
-Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request.
+Role-qualified values add `meta.role` to that content block. Text roles come from the model's text inputs (`cohub models show <model>`); repeat `--text <role>=<text>` for each text block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request.
 
 Pass generation parameters with `--param key=value` or `--parameters '<json>'`.
 

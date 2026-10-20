@@ -53,6 +53,7 @@ import {
 import type { BoardAssetManager } from "./assets.js";
 import { scheduleBoardMaintenance } from "./maintenance.js";
 import { toBoardPointerEvent } from "./pointer.js";
+import { createBoardPointerGestures } from "./pointer-gestures.js";
 import { createBoardScriptPointerRouter } from "./script-pointer.js";
 import { type BoardLiveStroke, createBoardScene } from "./scene.js";
 import { drawBoardOverlay } from "./overlay.js";
@@ -735,7 +736,7 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 		}
 		const consumed = scriptPointers.owner(event.pointerId) === "script";
 		const { recipient, click } = scriptPointers.route(type, event.pointerId, target, { x: event.clientX, y: event.clientY }, event.type !== "pointerup");
-		if (type === "down" && recipient) { host.setPointerCapture(event.pointerId); host.focus({ preventScroll: true }); }
+		if (type === "down" && recipient) host.focus({ preventScroll: true });
 		if (recipient && type !== "leave") sendScriptEvent(recipient, input.cancelled ? "pointercancel" : `pointer${type}`, event, input);
 		if (click) sendScriptEvent(click, "click", event, input);
 		return consumed || recipient !== null;
@@ -748,18 +749,27 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 		event.stopPropagation();
 	}
 
+	const pointers = createBoardPointerGestures(host, { move: routePointerMove, end: handlePointerUp });
+
 	function handlePointerDown(event: PointerEvent) {
-		if (inViews(event)) return;
+		if (!active || inViews(event)) return;
 		editor.takeCameraControl();
 		const input = toInput(event);
-		if (scriptPointer("down", event, input)) return;
+		if (scriptPointer("down", event, input)) {
+			pointers.start(event);
+			return;
+		}
 		if (options.onPointer?.("down", event, input) === false) return;
-		host.setPointerCapture(event.pointerId);
+		pointers.start(event);
 		editor.pointerDown(input);
 	}
 
 	function handlePointerMove(event: PointerEvent) {
-		if (inViews(event)) return;
+		if (!active || pointers.has(event.pointerId) || inViews(event)) return;
+		routePointerMove(event);
+	}
+
+	function routePointerMove(event: PointerEvent) {
 		const input = toInput(event);
 		if (scriptPointer("move", event, input)) return;
 		if (options.onPointer?.("move", event, input) === false) return;
@@ -767,7 +777,6 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 	}
 
 	function handlePointerUp(event: PointerEvent) {
-		if (inViews(event)) return;
 		const input = toInput(event);
 		if (scriptPointer("up", event, input)) return;
 		if (options.onPointer?.("up", event, input) === false) return;
@@ -811,9 +820,6 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 		["keyup", handleScriptKey],
 		["pointerdown", handlePointerDown],
 		["pointermove", handlePointerMove],
-		["pointerup", handlePointerUp],
-		["pointercancel", handlePointerUp],
-		["lostpointercapture", handlePointerUp],
 		["pointerleave", handlePointerLeave],
 		["wheel", handleWheel, { passive: false }],
 		["dblclick", handleDoubleClick],
@@ -897,6 +903,7 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 			if (active === next) return;
 			active = next;
 			if (!active) {
+				pointers.cancel();
 				stopMarch();
 				cancelScriptPointers();
 				cancelAnimationFrame(renderFrame);
@@ -925,6 +932,7 @@ export function mountBoardStage(host: HTMLElement, options: BoardStageOptions): 
 		toWorld: (clientX, clientY) => screenToWorld(clientX, clientY, rectOf(), renderCamera()),
 		destroy() {
 			disposed = true;
+			pointers.cancel();
 			stopMarch();
 			scriptPointers.clear();
 			stopTransforms?.();

@@ -7,15 +7,55 @@ import {
 	isSupportedComposerAttachmentFile,
 	isSupportedComposerImageFile,
 	MAX_COMPOSER_ATTACHMENTS,
+	MAX_COMPOSER_TEXT_ATTACHMENT_BYTES,
 	readComposerTextAttachment,
 } from "$lib/composer-attachments";
+import type { Locale } from "$lib/i18n/locale";
+import { getLocale } from "$lib/i18n/locale.svelte";
+import { m } from "$lib/paraglide/messages.js";
 import { prepareChatImageAttachment } from "$lib/public-asset-images";
 import { entriesFromFiles, type LocalUploadEntry } from "$lib/upload-entries";
+import {
+	exceedsUploadFileLimit,
+	uploadFileLimitLabel,
+} from "$lib/upload-errors";
 
 export function revokeComposerAttachmentPreview(
 	attachment: ComposerAttachment,
 ) {
 	if (attachment.kind === "image") URL.revokeObjectURL(attachment.previewUrl);
+}
+
+function rejectionNotices(
+	tooLarge: LocalUploadEntry[],
+	empty: LocalUploadEntry[],
+	locale: Locale,
+) {
+	const limit = uploadFileLimitLabel();
+	const notices: string[] = [];
+	if (tooLarge.length === 1)
+		notices.push(
+			m.attach_rejected_too_large_one(
+				{ name: tooLarge[0].file.name, limit },
+				{ locale },
+			),
+		);
+	else if (tooLarge.length > 1)
+		notices.push(
+			m.attach_rejected_too_large_many(
+				{ count: tooLarge.length, limit },
+				{ locale },
+			),
+		);
+	if (empty.length === 1)
+		notices.push(
+			m.attach_rejected_empty_one({ name: empty[0].file.name }, { locale }),
+		);
+	else if (empty.length > 1)
+		notices.push(
+			m.attach_rejected_empty_many({ count: empty.length }, { locale }),
+		);
+	return notices;
 }
 
 export function createSessionComposerController() {
@@ -121,6 +161,7 @@ export function createSessionComposerController() {
 		files: FileList | File[] | LocalUploadEntry[] | null,
 	) {
 		if (!files) return;
+		const locale = getLocale();
 		let pickedEntries: LocalUploadEntry[];
 		try {
 			pickedEntries =
@@ -129,24 +170,41 @@ export function createSessionComposerController() {
 					? (files as LocalUploadEntry[])
 					: entriesFromFiles(Array.from(files as FileList | File[]));
 		} catch {
-			setError("Invalid upload path.");
+			setError(m.attach_invalid_path({}, { locale }));
 			return;
 		}
 		if (pickedEntries.length === 0) return;
 
+		// Reject files that can never upload before they take an attachment slot.
+		const tooLarge = pickedEntries.filter((entry) =>
+			exceedsUploadFileLimit(entry.file),
+		);
+		const empty = pickedEntries.filter((entry) => entry.file.size === 0);
+		const attachable = pickedEntries.filter(
+			(entry) => entry.file.size > 0 && !exceedsUploadFileLimit(entry.file),
+		);
+		const notices = rejectionNotices(tooLarge, empty, locale);
+
 		const remainingSlots = MAX_COMPOSER_ATTACHMENTS - attachments.length;
-		if (remainingSlots <= 0) {
-			setError(`You can attach up to ${MAX_COMPOSER_ATTACHMENTS} files.`);
-			return;
-		}
-		const acceptedEntries = pickedEntries.slice(0, remainingSlots);
-		if (acceptedEntries.length < pickedEntries.length) {
-			setError(
-				`Only the first ${remainingSlots} file${remainingSlots === 1 ? "" : "s"} were attached.`,
+		if (attachable.length > 0 && remainingSlots <= 0) {
+			notices.unshift(
+				m.attach_limit_reached({ max: MAX_COMPOSER_ATTACHMENTS }, { locale }),
 			);
-		} else {
-			clearError();
+		} else if (attachable.length > remainingSlots) {
+			notices.unshift(
+				remainingSlots === 1
+					? m.attach_partial_one({ max: MAX_COMPOSER_ATTACHMENTS }, { locale })
+					: m.attach_partial_many(
+							{ max: MAX_COMPOSER_ATTACHMENTS, count: remainingSlots },
+							{ locale },
+						),
+			);
 		}
+		if (notices.length > 0) setError(notices.join(" "));
+		else clearError();
+
+		const acceptedEntries = attachable.slice(0, Math.max(0, remainingSlots));
+		if (acceptedEntries.length === 0) return;
 
 		try {
 			const nextAttachments = await Promise.all(
@@ -162,17 +220,12 @@ export function createSessionComposerController() {
 						size: file.size,
 						status: "ready",
 					});
-					if (file.size === 0) throw new Error(`File "${file.name}" is empty.`);
 					if (!isSupportedComposerAttachmentFile(file))
 						return fallbackFileAttachment();
 					if (!isComposerImageFile(file)) {
-						try {
-							return await readComposerTextAttachment(file);
-						} catch (error) {
-							if (error instanceof Error && !error.message.includes("exceeds"))
-								throw error;
-							return fallbackFileAttachment();
-						}
+						return file.size > MAX_COMPOSER_TEXT_ATTACHMENT_BYTES
+							? fallbackFileAttachment()
+							: await readComposerTextAttachment(file);
 					}
 					if (!isSupportedComposerImageFile(file))
 						return fallbackFileAttachment();
@@ -201,9 +254,8 @@ export function createSessionComposerController() {
 			);
 			attachments = [...attachments, ...nextAttachments];
 		} catch (error) {
-			setError(
-				error instanceof Error ? error.message : "Failed to read attachment",
-			);
+			console.warn("[composer] failed to read attachment", error);
+			setError(m.attach_read_failed({}, { locale }));
 		}
 	}
 

@@ -35,7 +35,10 @@ export const renderSandboxPodTemplate = (vars: TemplateVars) => {
   const pod = replaceInValue(SANDBOX_POD_TEMPLATE, validated) as Record<string, unknown>;
   const specId = validated.SANDBOX_SPEC_ID ?? "standard";
   const resources = SANDBOX_SPECS[specId]?.resources ?? SANDBOX_SPECS.standard.resources;
-  const podSpec = pod.spec as { containers?: Array<{ resources?: unknown }> } | undefined;
-  if (podSpec?.containers?.[0]) podSpec.containers[0].resources = resources;
+  const podSpec = pod.spec as { containers?: Array<{ resources?: unknown; image?: string }> } | undefined;
+  if (podSpec?.containers?.[0]) {
+    podSpec.containers[0].resources = resources;
+    if (validated.SANDBOX_IMAGE) podSpec.containers[0].image = validated.SANDBOX_IMAGE;
+  }
   return pod;
 };

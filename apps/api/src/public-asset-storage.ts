@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { AVATAR_MAX_FILE_BYTES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+import { AVATAR_MAX_FILE_BYTES, UPLOAD_ERROR_FILE_TOO_LARGE, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+import { mimeTypeForPath } from "@cohub/protocol/fs";
 import { config } from "./config.js";
 import { createPresignedPutObjectUrl } from "./object-presign.js";
 import { buildPublicAssetCdnUrl, requirePublicAssetOssStorage } from "./public-file-storage.js";
@@ -33,7 +34,7 @@ export type CreatePublicAssetUploadInput = {
   file: {
     size: number;
     mimeType: string;
-    /** Optional original name — used only for chat_attachment object key extension. */
+    /** Optional original name: gives the object key its extension and identifies 3D model generation inputs. */
     filename?: string;
   };
 };
@@ -101,6 +102,9 @@ export class PublicAssetConfigError extends Error {
 
 export class PublicAssetValidationError extends Error {
   override name = "PublicAssetValidationError";
+  constructor(message: string, readonly code?: typeof UPLOAD_ERROR_FILE_TOO_LARGE) {
+    super(message);
+  }
 }
 
 const envPrefix = () => (config.env === "prod" ? "" : `${config.env}/`);
@@ -147,26 +151,51 @@ const normalizeChatMimeType = (mimeType: unknown) => {
   return value;
 };
 
+/**
+ * Media a public asset may serve inline. Browsers render any `+xml` type as an XML document that can run scripts,
+ * whatever its top-level type, so inline media excludes them.
+ */
+const isInlineMediaType = (value: string, family: RegExp) => family.test(value) && !value.endsWith("+xml");
+
 const normalizeSessionImageMimeType = (mimeType: unknown) => {
   const value = normalizeChatMimeType(mimeType);
-  if (!value.startsWith("image/")) throw new PublicAssetValidationError("session images must be raster images");
+  if (!isInlineMediaType(value, /^image\//)) throw new PublicAssetValidationError("session images must be raster images");
   return value;
 };
 
-/** Generation inputs are media a provider fetches by URL; active types were already neutralized. */
-const normalizeGenerationInputMimeType = (mimeType: unknown) => {
+/**
+ * 3D model formats generation providers fetch by URL (Meshy takes GLB, glTF, OBJ, FBX and STL). Providers read the
+ * format from the URL extension, so a model input is recognized by its filename extension and stored with that
+ * extension's type; FBX has no registered type and stays `application/octet-stream`.
+ */
+const GENERATION_INPUT_MODEL_EXTENSIONS = new Set(["glb", "gltf", "obj", "fbx", "stl"]);
+const UNKNOWN_BINARY_TYPE = "application/octet-stream";
+
+const generationInputModelType = (mimeType: string, filename: string | undefined) => {
+  const extension = safeExtensionFromFilename(filename);
+  if (!extension || !GENERATION_INPUT_MODEL_EXTENSIONS.has(extension)) return null;
+  const modelType = mimeTypeForPath(`model.${extension}`) ?? UNKNOWN_BINARY_TYPE;
+  return mimeType === modelType || mimeType === UNKNOWN_BINARY_TYPE ? modelType : null;
+};
+
+/** Generation inputs are media and 3D models a provider fetches by URL; they are served inline. */
+const normalizeGenerationInputMimeType = (mimeType: unknown, filename: string | undefined) => {
   const value = normalizeChatMimeType(mimeType);
-  if (!/^(image|video|audio)\//.test(value)) {
-    throw new PublicAssetValidationError("generation inputs must be image, video, or audio");
+  if (isInlineMediaType(value, /^(image|video|audio)\//)) return value;
+  const modelType = generationInputModelType(value, filename);
+  if (!modelType) {
+    throw new PublicAssetValidationError(
+      "generation inputs must be image, video, or audio, or a GLB, glTF, OBJ, FBX, or STL model named with its extension",
+    );
   }
-  return value;
+  return modelType;
 };
 
-const normalizeUploadMimeType = (purpose: PublicAssetPurpose, mimeType: string) => {
-  if (purpose === "chat_attachment") return normalizeChatMimeType(mimeType);
-  if (purpose === "generation_input") return normalizeGenerationInputMimeType(mimeType);
-  if (purpose === "session_image") return normalizeSessionImageMimeType(mimeType);
-  return mimeType;
+const normalizeUploadMimeType = (purpose: PublicAssetPurpose, file: { mimeType: string; filename?: string }) => {
+  if (purpose === "chat_attachment") return normalizeChatMimeType(file.mimeType);
+  if (purpose === "generation_input") return normalizeGenerationInputMimeType(file.mimeType, file.filename);
+  if (purpose === "session_image") return normalizeSessionImageMimeType(file.mimeType);
+  return file.mimeType;
 };
 
 const chatAttachmentContentDisposition = (filename?: string) => {
@@ -273,12 +302,12 @@ export const assertPublicAssetUploadFile = (input: {
   if (!Number.isSafeInteger(file.size) || file.size <= 0) throw new PublicAssetValidationError("invalid file size");
 
   if (input.purpose === "chat_attachment" || input.purpose === "app_source" || input.purpose === "generation_input" || input.purpose === "session_image") {
-    normalizeUploadMimeType(input.purpose, file.mimeType);
     if (file.filename != null && (typeof file.filename !== "string" || file.filename.length > 255)) {
       throw new PublicAssetValidationError("invalid filename");
     }
+    normalizeUploadMimeType(input.purpose, file);
     if (file.size > UPLOAD_MAX_FILE_BYTES) {
-      throw new PublicAssetValidationError(`${input.purpose.replace("_", " ")} is too large`);
+      throw new PublicAssetValidationError(`${input.purpose.replace("_", " ")} is too large`, UPLOAD_ERROR_FILE_TOO_LARGE);
     }
     return;
   }
@@ -286,7 +315,7 @@ export const assertPublicAssetUploadFile = (input: {
   if (!IMAGE_MIME_TYPES.has(file.mimeType)) {
     throw new PublicAssetValidationError("avatar images must be WebP, JPEG, PNG, or GIF");
   }
-  if (file.size > AVATAR_MAX_FILE_BYTES) throw new PublicAssetValidationError("avatar image is too large");
+  if (file.size > AVATAR_MAX_FILE_BYTES) throw new PublicAssetValidationError("avatar image is too large", UPLOAD_ERROR_FILE_TOO_LARGE);
 };
 
 /**
@@ -333,7 +362,7 @@ const signPutUrl = (input: PublicAssetPlanInput, objectKey: string, mimeType: st
 
 const createPutPlan = (input: PublicAssetPlanInput): CreateInternalPublicAssetUploadResponse => {
   assertPublicAssetUploadFile({ purpose: input.purpose, file: input.file });
-  const mimeType = normalizeUploadMimeType(input.purpose, input.file.mimeType);
+  const mimeType = normalizeUploadMimeType(input.purpose, input.file);
   const objectKey = buildPublicAssetObjectKey({
     purpose: input.purpose,
     userUuid: input.userUuid,

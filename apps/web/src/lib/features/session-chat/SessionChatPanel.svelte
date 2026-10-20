@@ -301,7 +301,15 @@ async function handleDraftDrop(event: DragEvent) {
 {:else}
 	{#if activeSessionState.error}
 		<div class="m-4">
-			<AccessStateView state={activeSessionState.error} size="compact" />
+			<AccessStateView
+				state={activeSessionState.error}
+				size="compact"
+				retry={() => {
+					if (host.activeSessionId && !host.activeSessionState?.loading) {
+						void host.loadSessionState(host.activeSessionId, true);
+					}
+				}}
+			/>
 		</div>
 	{/if}
 	<div

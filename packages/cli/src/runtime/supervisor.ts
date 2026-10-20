@@ -1,15 +1,16 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Readable } from "node:stream";
-import { resolveWebsocketUrl, type RuntimeCapabilities } from "@neta-art/cohub";
+import { PassThrough, type Readable } from "node:stream";
+import { resolveWebsocketUrl, type LocalHarness, type RuntimeCapabilities } from "@neta-art/cohub";
 import { AuthRequiredError, resolveAccessToken } from "../auth.js";
 import { createClient } from "../client.js";
 import { currentIdentityKey } from "../space.js";
 import { ensureSandboxdBinary } from "../commands/sandboxd-binary.js";
 import { serveRuntime } from "./connection.js";
-import { discoverHarnesses, type HarnessOptions } from "./harness.js";
+import { discoverHarnesses, type HarnessExecutables } from "./harnesses/index.js";
 import { RuntimeDiagnostics, serializeDiagnosticError, type RuntimeDiagnostic, type RuntimeDiagnosticLevel } from "./diagnostics.js";
 import { ownRuntimeInstance, runtimeInstanceDirectory } from "./instance.js";
 import { createDiagnosticConsole, type RuntimeSummary } from "./presentation.js";
@@ -22,8 +23,8 @@ export type RuntimeLaunch = {
   spaceId: string;
   root: string;
   identity: string;
-  harnesses: ("pi" | "codex")[];
-  executables: HarnessOptions;
+  harnesses: LocalHarness[];
+  executables: HarnessExecutables;
   capabilities?: RuntimeCapabilities;
   background: boolean;
   verbose?: boolean;
@@ -36,6 +37,25 @@ export function sandboxOutputLevel(value: unknown, stream: "stdout" | "stderr"):
   const level = typeof value === "string" ? value.toLowerCase() : "";
   if (["debug", "info", "warn", "error"].includes(level)) return level as RuntimeDiagnosticLevel;
   return stream === "stderr" ? "warn" : "debug";
+}
+
+/**
+ * Windows cannot hand sandboxd an extra inherited pipe, so control frames use a
+ * named pipe instead. Only the first client is accepted; the name is unguessable.
+ */
+async function listenWindowsControlPipe() {
+  const path = `\\\\.\\pipe\\cohub-sandboxd-${randomUUID()}`;
+  const stream = new PassThrough();
+  const server = createServer((socket) => {
+    server.close();
+    socket.on("error", () => stream.end());
+    socket.pipe(stream);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path, () => { server.removeListener("error", reject); resolve(); });
+  });
+  return { path, stream, close: () => { server.close(); stream.end(); } };
 }
 
 export async function runRuntime(config: RuntimeLaunch, onState: (status: RuntimeSummary) => void, externalSignal?: AbortSignal, onDiagnostic?: (event: RuntimeDiagnostic) => void) {
@@ -124,12 +144,15 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
         let bridgeDisconnected = false;
         let terminating = false;
         let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+        let controlPipe: Awaited<ReturnType<typeof listenWindowsControlPipe>> | null = null;
         try {
           const initialToken = await token();
           signal.throwIfAborted();
+          if (process.platform === "win32") controlPipe = await listenWindowsControlPipe();
           const bridge = spawn(binary, ["--local", "--space", config.spaceId, "--root", config.root, "--relay", process.env.COHUB_RELAY_URL?.trim() || relay.toString()], {
-            stdio: ["pipe", "pipe", "pipe", "pipe"],
-            env: { ...process.env, COHUB_RELAY_TOKEN: initialToken, COHUB_RUNTIME_ID: status.runtimeId, COHUB_LOG_FORMAT: "json", COHUB_RUNTIME_MANAGED: "1", COHUB_DISPLAY: config.display ?? "" },
+            stdio: controlPipe ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
+            windowsHide: true,
+            env: { ...process.env, COHUB_RELAY_TOKEN: initialToken, COHUB_RUNTIME_ID: status.runtimeId, COHUB_LOG_FORMAT: "json", COHUB_RUNTIME_MANAGED: "1", COHUB_DISPLAY: config.display ?? "", ...(controlPipe ? { COHUB_RUNTIME_CONTROL_PIPE: controlPipe.path } : {}) },
           });
           bridge.stdin?.on("error", () => undefined);
           const closed = new Promise<void>((resolve) => {
@@ -154,7 +177,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
               diagnostics.log(sandboxOutputLevel(parsed?.level, streamName), "sandboxd.log", { ...data, message: parsed?.msg ?? line }, { component: "sandboxd" });
             });
           }
-          const control = bridge.stdio[3] as Readable;
+          const control = controlPipe ? controlPipe.stream : bridge.stdio[3] as Readable;
           const events = createInterface({ input: control });
           events.on("line", (line) => {
             try {
@@ -194,7 +217,9 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
           const terminate = () => {
             if (terminating || childStopped) return;
             terminating = true;
-            bridge.kill("SIGTERM");
+            // Windows has no SIGTERM; closing the managed stdin lets sandboxd stop gracefully.
+            if (process.platform === "win32") bridge.stdin?.end();
+            else bridge.kill("SIGTERM");
             const timeout = setTimeout(() => bridge.kill("SIGKILL"), 3000);
             void closed.finally(() => clearTimeout(timeout));
           };
@@ -226,6 +251,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
         } finally {
           retryDisconnectedBridge = undefined;
           childStopped = true;
+          controlPipe?.close();
           clearTimeout(refreshTimer); clearTimeout(probeTimer);
           clearTimeout(recoveryTimer);
           update({ workspaceConnected: false });

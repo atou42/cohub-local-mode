@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
-import { basename, extname, relative, resolve } from "node:path";
-import type {
-  CohubHttpClient,
-  PublicFileListEntry,
-  PublicFileUploadPlanEntry,
+import { basename, relative, resolve } from "node:path";
+import {
+  isTextMime,
+  mimeTypeForPath,
+  type CohubHttpClient,
+  type PublicFileListEntry,
+  type PublicFileUploadPlanEntry,
 } from "@neta-art/cohub";
 import type { Command } from "commander";
 import { createClient } from "../client.js";
@@ -13,41 +15,6 @@ import { error, handleHttp, json as outJson, jsonRequested } from "../output.js"
 import { resolveSpace } from "../space.js";
 
 const UPLOAD_CONCURRENCY = 4;
-
-const MIME_TYPES: Record<string, string> = {
-  ".aac": "audio/aac",
-  ".avi": "video/x-msvideo",
-  ".avif": "image/avif",
-  ".css": "text/css; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8",
-  ".gif": "image/gif",
-  ".htm": "text/html; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".ico": "image/x-icon",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".m4a": "audio/mp4",
-  ".md": "text/markdown; charset=utf-8",
-  ".mov": "video/quicktime",
-  ".mp3": "audio/mpeg",
-  ".mp4": "video/mp4",
-  ".ogg": "audio/ogg",
-  ".ogv": "video/ogg",
-  ".pdf": "application/pdf",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".txt": "text/plain; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".wav": "audio/wav",
-  ".webm": "video/webm",
-  ".webp": "image/webp",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".xml": "application/xml; charset=utf-8",
-  ".zip": "application/zip",
-};
 
 type LocalPublicFile = {
   id: string;
@@ -90,8 +57,10 @@ function normalizePublicPath(input: string) {
   return parts.join("/");
 }
 
-function mimeTypeForPath(path: string) {
-  return MIME_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+function contentTypeForPath(path: string) {
+  const mimeType = mimeTypeForPath(path);
+  if (!mimeType) return "application/octet-stream";
+  return isTextMime(mimeType) ? `${mimeType}; charset=utf-8` : mimeType;
 }
 
 async function walkDirectory(root: string, directory: string, destination: string): Promise<LocalPublicFile[]> {
@@ -114,7 +83,7 @@ async function walkDirectory(root: string, directory: string, destination: strin
       localPath,
       publicPath,
       size: info.size,
-      mimeType: mimeTypeForPath(localPath),
+      mimeType: contentTypeForPath(localPath),
     });
   }
   return files;
@@ -144,7 +113,7 @@ export async function collectPublicUpload(source: string, destination?: string):
         localPath,
         publicPath,
         size: info.size,
-        mimeType: mimeTypeForPath(localPath),
+        mimeType: contentTypeForPath(localPath),
       }],
     };
   }

@@ -1,22 +1,20 @@
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
-import { billingOperations, COHUB_BILLING_FEATURES } from "@cohub/billing";
 import {
   DEFAULT_SANDBOX_SPEC_ID,
   SANDBOX_SPECS,
   buildInvalidatedSandboxEndpointMeta,
-  getSandboxSpecRank,
   isSandboxAwaitingEndpointReport,
   isSandboxDialable,
-  normalizeSandboxSpecId,
   resolveSpaceSandboxAutoDestroyPolicy,
   type SandboxSpecId,
 } from "@cohub/sandbox-controller";
 import { createSandboxRpcNonce, createSandboxRpcToken } from "@cohub/sandbox-client";
 import { db } from "./db/index.js";
-import { listEnabledSpaceMods, getSpaceModMountSignature } from "@cohub/core/space-mods";
+import { getSpaceModMountSignature } from "@cohub/core/space-mods";
 import { spaceSandboxes, spaces } from "@cohub/db";
 import { sessionsNamespace, config } from "./config.js";
 import { k8sCoreApi } from "./k8s.js";
+import { resolveSpaceSandboxPreferences } from "./space-sandbox-preferences.js";
 import { renderSandboxPodTemplate } from "./sandbox-template.js";
 import { deleteSandboxPublicNetwork, getSandboxPublicEndpoints, reconcileSandboxPublicNetwork } from "./sandbox-public-network.js";
 import { createSandboxReportToken, hashSandboxReportToken } from "./crypto.js";
@@ -49,27 +47,6 @@ const getK8sStatusCode = (error: unknown) => {
   return (error as { statusCode?: number; code?: number }).statusCode
     ?? (error as { statusCode?: number; code?: number }).code
     ?? null;
-};
-
-const getSpaceSandboxSpec = async (spaceId: string): Promise<SandboxSpecId> => {
-  const [space] = await db.select({ meta: spaces.meta }).from(spaces).where(eq(spaces.id, spaceId)).limit(1);
-  const meta = asMetaObject(space?.meta);
-  const config = asMetaObject(meta.config);
-  const sandbox = asMetaObject(config.sandbox);
-  return normalizeSandboxSpecId(sandbox.spec);
-};
-
-const getAllowedSandboxSpecId = async (userId: string): Promise<SandboxSpecId> => {
-  try {
-    const state = await billingOperations.getState({ userId });
-    const keys = new Set(state.entitlements.filter((entitlement) => entitlement.enabled).map((entitlement) => entitlement.key));
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecUltra)) return "ultra";
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecBoost)) return "boost";
-    return DEFAULT_SANDBOX_SPEC_ID;
-  } catch (error) {
-    logger.warn("[SandboxSpec] failed to check entitlement during reconcile", { userId, error });
-    return DEFAULT_SANDBOX_SPEC_ID;
-  }
 };
 
 const getK8sErrorMessage = (error: unknown) => {
@@ -467,6 +444,7 @@ async function recordProvisioningFailure(spaceId: string, lease: SandboxProvisio
   try {
     // A lost lease may fail its own unfinished generation, never a successor's row.
     const latest = await getSpaceSandboxBySpaceId(spaceId);
+    if (asMetaObject(latest?.meta).provisioningGeneration !== lease.generation) return;
     await updateSpaceSandbox({
       spaceId,
       expectedProvisioningGeneration: lease.generation,
@@ -503,6 +481,12 @@ async function reconcileSpaceSandboxLocked(
   lease: SandboxProvisioningLease,
   recovery?: { reason: string; source: string },
 ) {
+  const resolved = await resolveSpaceSandboxPreferences(input.spaceId, undefined, true);
+  const configuredSpec = resolved.requested.spec;
+  const allowedSpec = resolved.allowedSpec;
+  const desiredSpec = resolved.effective.spec;
+  const specEntitlementDowngraded = desiredSpec !== configuredSpec;
+  const desiredSpecConfig = SANDBOX_SPECS[desiredSpec];
   const podName = `sandbox-${input.spaceId}`;
   const existing = await getSpaceSandboxBySpaceId(input.spaceId);
   const existingSandbox = await claimSandboxProvisioning(input.spaceId, existing, lease);
@@ -567,11 +551,6 @@ async function reconcileSpaceSandboxLocked(
     }
   }
 
-  const configuredSpec = await getSpaceSandboxSpec(input.spaceId);
-  const allowedSpec = await getAllowedSandboxSpecId(input.ownerUserUuid ?? input.userUuid);
-  const desiredSpec = getSandboxSpecRank(configuredSpec) > getSandboxSpecRank(allowedSpec) ? allowedSpec : configuredSpec;
-  const specEntitlementDowngraded = desiredSpec !== configuredSpec;
-  const desiredSpecConfig = SANDBOX_SPECS[desiredSpec] ?? SANDBOX_SPECS[DEFAULT_SANDBOX_SPEC_ID];
   const reportToken = createSandboxReportToken();
   const reportTokenHash = hashSandboxReportToken(reportToken);
   const rpcTokenNonce = createSandboxRpcNonce();
@@ -588,6 +567,7 @@ async function reconcileSpaceSandboxLocked(
     ...(input.mode === "replace" ? { recreatedAt: nowIso } : {}),
     reconcileReason: input.reason,
     provisioningStartedAt: nowIso,
+    setup: null,
     reportTokenHash,
     rpcTokenNonce,
     reportTokenIssuedAt,
@@ -607,13 +587,18 @@ async function reconcileSpaceSandboxLocked(
     SPACE_SYSTEM_SUBPATH: config.spaceSystemSubpath,
     CONFIGS_SUBPATH: config.configsSubpath,
     SANDBOX_SPEC_ID: desiredSpec,
+    SANDBOX_IMAGE: resolved.imageRef,
   }) as V1Pod;
 
-  const enabledMods = await listEnabledSpaceMods(db, input.spaceId);
+  const enabledMods = resolved.enabledMods;
   const modMountSignature = getSpaceModMountSignature(enabledMods);
 
   if (pod.spec?.containers?.[0]) {
     const container = pod.spec.containers[0];
+    if (resolved.effective.image === "game") {
+      pod.spec.volumes = [...(pod.spec.volumes ?? []), { name: "game-shm", emptyDir: { medium: "Memory", sizeLimit: "256Mi" } }];
+      container.volumeMounts = [...(container.volumeMounts ?? []), { name: "game-shm", mountPath: "/dev/shm" }];
+    }
     container.volumeMounts = [
       ...(container.volumeMounts ?? []),
       ...enabledMods.map((mod) => ({
@@ -638,10 +623,11 @@ async function reconcileSpaceSandboxLocked(
       { name: "WORKSPACE_DIR", value: "/workspace" },
       { name: "PLATFORM_AGENTS_DIR", value: "/configs/platform/.agents" },
       { name: "USER_AGENTS_DIR", value: "/configs/user/.agents" },
+      { name: "USER_COHUB_DIR", value: "/configs/user/.cohub" },
       { name: "COHUB_SEARCH_ENABLED", value: String(config.sandboxSearchEnabled) },
       { name: "COHUB_SEARCH_VERSION", value: config.sandboxSearchVersion },
       { name: "COHUB_SEARCH_CDN_BASE_URL", value: config.sandboxSearchCdnBaseUrl },
-      { name: "COHUB_SANDBOX_VERSION", value: toSandboxImageVersion(config.sandboxImage) },
+      { name: "COHUB_SANDBOX_VERSION", value: toSandboxImageVersion(resolved.imageRef) },
       { name: "POD_IP", valueFrom: { fieldRef: { fieldPath: "status.podIP" } } },
       {
         name: "INTERNAL_API_BASE_URL",
@@ -657,6 +643,7 @@ async function reconcileSpaceSandboxLocked(
             ? `https://public.cohub.run/s/${input.spaceId}`
             : `https://public.cohub.run/dev/s/${input.spaceId}`,
       },
+      { name: "COHUB_MOD_PATHS", value: JSON.stringify(enabledMods.map((mod) => mod.mountPath)) },
       { name: "SANDBOX_REPORT_TOKEN", value: reportToken },
       { name: "SANDBOX_RPC_TOKEN", value: rpcToken },
     ];
@@ -677,9 +664,12 @@ async function reconcileSpaceSandboxLocked(
     status: "provisioning",
     runtimeStatus: "starting",
     podName,
-    desiredImage: toSandboxImageVersion(config.sandboxImage),
+    desiredImage: toSandboxImageVersion(resolved.imageRef),
     meta: {
       ...provisioningMeta,
+      sandboxPreferences: resolved,
+      appliedImage: resolved.effective.image,
+      appliedFingerprint: resolved.fingerprint,
       desiredSpec,
       configuredSpec,
       ...(specEntitlementDowngraded ? { specEntitlementDowngraded: true, specEntitlementAllowedSpec: allowedSpec, specEntitlementCheckedAt: nowIso } : { specEntitlementDowngraded: false }),

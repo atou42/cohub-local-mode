@@ -12,7 +12,7 @@ import { BOARD_DRAW_STROKE_SIZE } from "@cohub/protocol/board-constants";
 import { quantizeDrawCoordinate } from "../draw-input.js";
 import { filePreviewKind } from "../file-preview.js";
 import { type BoardFileSnapshotFacts, fileStem } from "../file-snapshot.js";
-import { getMediaResourceTitle as getResourceTitle, inferBoardMediaKind as inferMediaKind } from "../media.js";
+import { boardModelFormat, getMediaResourceTitle as getResourceTitle, inferBoardMediaKind as inferMediaKind } from "../media.js";
 import type { ShapeKind } from "../shape-types.js";
 import { featuredTaskArtifact } from "@cohub/protocol";
 import { DEFAULT_BOARD_TOOL_STYLES } from "../tool-styles.js";
@@ -26,6 +26,7 @@ const DEFAULT_TASK_MEDIA_SIZE = { width: 320, height: 180 };
 const DEFAULT_VIDEO_SIZE = { width: 320, height: 180 };
 const DEFAULT_AUDIO_SIZE = { width: 320, height: 112 };
 const DEFAULT_FILE_SIZE = { width: 260, height: 132 };
+const DEFAULT_MODEL_SIZE = { width: 264, height: 264 };
 const DEFAULT_FILE_COVER_SIZE = { width: 260, height: 208 };
 const DEFAULT_SHAPE_SIZE = { width: 200, height: 140 };
 const DEFAULT_FRAME_SIZE = { width: 480, height: 320 };
@@ -133,8 +134,9 @@ export function createMediaBoardItem(
 			}),
 		};
 	}
-	const size =
-		filePreviewKind(snapshot) === "cover"
+	const size = boardModelFormat(path, snapshot.mimeType)
+		? DEFAULT_MODEL_SIZE
+		: filePreviewKind(snapshot) === "cover"
 			? DEFAULT_FILE_COVER_SIZE
 			: DEFAULT_FILE_SIZE;
 	return {

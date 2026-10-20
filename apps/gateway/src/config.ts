@@ -12,7 +12,16 @@ export const resolveBullmqRedisUrl = (
   return value;
 };
 
+export const resolveOutboundConcurrency = (value = process.env.GATEWAY_OUTBOUND_CONCURRENCY) => {
+  const concurrency = value === undefined ? 16 : Number(value);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) {
+    throw new Error("GATEWAY_OUTBOUND_CONCURRENCY must be an integer between 1 and 64");
+  }
+  return concurrency;
+};
+
 export const gatewayConfig = {
+  outboundConcurrency: resolveOutboundConcurrency(),
   apiBaseUrl: normalizeBaseUrl(process.env.API_BASE_URL ?? "http://localhost:8787"),
   workerSecret: process.env.WORKER_SECRET ?? "",
   logtoEndpoint: resolveLogtoEndpoint({ endpoint: process.env.LOGTO_ENDPOINT, env }),

@@ -23,21 +23,19 @@ import {
 	CircleHelp,
 	Clock,
 	CreditCard,
-	Download,
 	FolderKanban,
 	Gift,
 	History,
 	Keyboard,
 	Loader2,
 	LogOut,
-	MessageSquare,
+	MessageSquareText,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Pencil,
 	Plus,
 	Rocket,
 	Save,
-	Search,
 	Settings,
 	Sparkles,
 	Tags,
@@ -61,6 +59,7 @@ import { openCommandPalette } from "$lib/command-palette/open";
 import { clearCachedPaletteOverview } from "$lib/command-palette/palette-overview";
 import { APP_AREA_ICONS, appAreaLabel } from "$lib/components/app-area";
 import ChannelProviderIcon from "$lib/components/ChannelProviderIcon.svelte";
+import EntityIcon from "$lib/components/EntityIcon.svelte";
 import NewLabelPopover from "$lib/components/NewLabelPopover.svelte";
 import SessionRow from "$lib/components/SessionRow.svelte";
 import SidebarFlyout from "$lib/components/SidebarFlyout.svelte";
@@ -75,7 +74,6 @@ import SidebarCheckpointRow from "$lib/components/sidebar/SidebarCheckpointRow.s
 import SidebarFallbackResourceRow from "$lib/components/sidebar/SidebarFallbackResourceRow.svelte";
 import SidebarFileRow from "$lib/components/sidebar/SidebarFileRow.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
-import { downloadCohubDebugBundle } from "$lib/debugger";
 import {
 	type CohubResourceDragPayload,
 	getCohubResourceDragData,
@@ -2671,10 +2669,10 @@ async function handleLogout() {
 	await signOut();
 }
 
-function saveDebugLog() {
+function openFeedback() {
 	showUserMenu = false;
 	onClose?.();
-	downloadCohubDebugBundle();
+	window.dispatchEvent(new CustomEvent("cohub:open-feedback"));
 }
 
 function handleGlobalSidebarKeydown(event: KeyboardEvent) {
@@ -2992,7 +2990,8 @@ $effect(() => {
 	const spaceId = routeSpaceId;
 	if (!userUuid || !spaceId) return;
 	untrack(() => {
-		const sessionId = activeSession?.id ?? null;
+		const sessionId =
+			activeSession?.spaceId === spaceId ? activeSession.id : null;
 		setRecentSpace(userUuid, spaceId, sessionId);
 	});
 });
@@ -3323,7 +3322,7 @@ $effect(() => {
 				onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); chatsCollapsed = !chatsCollapsed; } }}
 			>
 				<ChevronDown class="h-3 w-3 shrink-0 text-text-tertiary transition-transform duration-150 {chatsCollapsed ? 'rotate-180' : ''}" />
-				<MessageSquare class="h-3.5 w-3.5 shrink-0 text-text-placeholder" />
+				<EntityIcon name="chat" class="h-3.5 w-3.5 text-text-placeholder" />
 				<span class="text-[11px] text-text-placeholder select-none">{m.sidebar_chats({}, { locale })}</span>
 				{@render syncSpinner(refreshingSessions, "ml-auto")}
 			</div>
@@ -3522,12 +3521,11 @@ $effect(() => {
         aria-label={m.sidebar_search_everywhere({}, { locale })}
         title={m.sidebar_search_everywhere_shortcut({}, { locale })}
       >
-        <Search class="h-4 w-4" />
+        <EntityIcon name="search" class="h-4 w-4" />
       </button>
       <div class="mt-2 h-px w-6 bg-border-subtle/70"></div>
       <nav class="mt-2 flex flex-col items-center gap-1" aria-label={m.nav_tabs_aria({}, { locale })}>
         {#each DESKTOP_APP_AREAS as item (item)}
-          {@const Icon = APP_AREA_ICONS[item]}
           {@const current = isAppAreaPage(item, currentPath)}
           <a
             href={appAreaHref(item)}
@@ -3537,7 +3535,7 @@ $effect(() => {
             title={appAreaLabel(item, locale)}
             onclick={(event) => openArea(event, item)}
           >
-            <Icon class="h-4 w-4" />
+            <EntityIcon name={APP_AREA_ICONS[item]} class="h-4 w-4" />
           </a>
         {/each}
       </nav>
@@ -3583,7 +3581,7 @@ $effect(() => {
               aria-label={m.sidebar_space_settings({}, { locale })}
               title={m.sidebar_space_settings({}, { locale })}
             >
-              <Settings class="h-4 w-4" />
+              <EntityIcon name="settings" class="h-4 w-4" />
             </button>
             <button
               type="button"
@@ -3630,7 +3628,7 @@ $effect(() => {
             </SidebarFlyout>
             <SidebarFlyout label={m.sidebar_chats({}, { locale })} active={Boolean(activeSession)} onTriggerClick={() => uiState.setLeftSidebarCollapsed(false)}>
               {#snippet trigger()}
-                <MessageSquare class="h-4 w-4" />
+                <EntityIcon name="chat" class="h-4 w-4" />
               {/snippet}
               {@render chatsSection(false)}
             </SidebarFlyout>
@@ -3729,7 +3727,7 @@ $effect(() => {
             {/if}
             <a href="/trending" class="rail-menu-item" onclick={(e) => { e.preventDefault(); showUserMenu = false; handleNavigate('/trending'); }}><BarChart3 class="h-3.5 w-3.5" /><span>{m.sidebar_trending({}, { locale })}</span></a>
             <button type="button" class="rail-menu-item w-full" onclick={openHelpPanel}><Keyboard class="h-3.5 w-3.5" /><span>{m.sidebar_help({}, { locale })}</span></button>
-            <button type="button" class="rail-menu-item w-full" onclick={saveDebugLog}><Download class="h-3.5 w-3.5" /><span>{m.sidebar_save_debug_log({}, { locale })}</span></button>
+            <button type="button" class="rail-menu-item w-full" onclick={openFeedback}><MessageSquareText class="h-3.5 w-3.5" /><span>{m.sidebar_feedback({}, { locale })}</span></button>
             <button type="button" class="rail-menu-item w-full hover:text-error-soft" onclick={() => { showUserMenu = false; void handleLogout(); }}><LogOut class="h-3.5 w-3.5" /><span>{m.sidebar_sign_out({}, { locale })}</span></button>
           </div>
         {/if}
@@ -3764,7 +3762,6 @@ $effect(() => {
       {#if !isMobile}
         <nav class="mr-1 flex items-center gap-0.5" aria-label={m.nav_tabs_aria({}, { locale })}>
           {#each DESKTOP_APP_AREAS as item (item)}
-            {@const Icon = APP_AREA_ICONS[item]}
             {@const current = isAppAreaPage(item, currentPath)}
             <a
               href={appAreaHref(item)}
@@ -3774,7 +3771,7 @@ $effect(() => {
               title={appAreaLabel(item, locale)}
               onclick={(event) => openArea(event, item)}
             >
-              <Icon class="h-3.5 w-3.5" />
+              <EntityIcon name={APP_AREA_ICONS[item]} class="h-3.5 w-3.5" />
             </a>
           {/each}
         </nav>
@@ -3786,7 +3783,7 @@ $effect(() => {
         title={m.sidebar_search_everywhere_shortcut({}, { locale })}
         aria-label={m.sidebar_search_everywhere({}, { locale })}
       >
-        <Search class="h-3.5 w-3.5 transition-colors group-hover/search:text-brand {isMobile ? '' : 'text-text-placeholder'}" />
+        <EntityIcon name="search" class="h-3.5 w-3.5 transition-colors group-hover/search:text-brand {isMobile ? '' : 'text-text-placeholder'}" />
         {#if !isMobile}
           <span class="font-mono text-[11px] tracking-[0.02em]" aria-hidden="true">⌘K</span>
         {/if}
@@ -3802,7 +3799,7 @@ $effect(() => {
             void handleNavigate(buildSessionsRoute());
           }}
         >
-          <MessageSquare class="h-3.5 w-3.5" />
+          <EntityIcon name="chat" class="h-3.5 w-3.5" />
         </a>
       {:else}
         <button
@@ -3865,7 +3862,7 @@ $effect(() => {
           onclick={() => { void handleNavigate(buildSpaceSettingsRoute(currentSpaceId!)); }}
           title={m.sidebar_space_settings({}, { locale })}
         >
-          <Settings class="w-3.5 h-3.5 shrink-0" />
+          <EntityIcon name="settings" class="h-3.5 w-3.5" />
           <span class="text-[12px] font-medium">{m.nav_settings({}, { locale })}</span>
         </button>
         <button
@@ -4269,10 +4266,10 @@ $effect(() => {
 	        <button
 	          type="button"
 	          class="flex items-center gap-2 w-full px-2.5 py-[7px] text-[12px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors duration-100"
-	          onclick={saveDebugLog}
+	          onclick={openFeedback}
 	        >
-	          <Download class="w-3.5 h-3.5" />
-	          <span>{m.sidebar_save_debug_log({}, { locale })}</span>
+	          <MessageSquareText class="w-3.5 h-3.5" />
+	          <span>{m.sidebar_feedback({}, { locale })}</span>
 	        </button>
 	        <button
 	          type="button"

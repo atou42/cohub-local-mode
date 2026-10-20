@@ -1,9 +1,6 @@
+import { modelFormatForPath, normalizeMime } from "@cohub/protocol/fs";
 import type { SpaceFsFileResponse } from "@neta-art/cohub";
-import {
-	isCsvPath,
-	isTextFileResponse,
-	normalizeMime,
-} from "$lib/space-file-text";
+import { isCsvPath, isTextFileResponse } from "$lib/space-file-text";
 
 export type FilePreviewKind =
 	| "markdown"
@@ -14,6 +11,7 @@ export type FilePreviewKind =
 	| "video"
 	| "audio"
 	| "pdf"
+	| "model3d"
 	| "fallback";
 
 export type FilePreviewModel = {
@@ -57,6 +55,15 @@ export function filePreviewModel(
 			hasRenderedPreview: false,
 			language: "plaintext",
 			mediaUrl: null,
+		};
+	}
+	if (modelFormatForPath(file.path, file.mimeType)) {
+		return {
+			kind: "model3d",
+			isText: false,
+			hasRenderedPreview: false,
+			language: "plaintext",
+			mediaUrl: file.delivery === "url" ? (file.url ?? null) : null,
 		};
 	}
 	const mimeType = normalizeMime(file.mimeType);

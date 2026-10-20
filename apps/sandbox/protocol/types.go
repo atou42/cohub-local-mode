@@ -49,9 +49,12 @@ type SandboxCapabilities struct {
 	FSWriteSource      bool `json:"fsWriteSource,omitempty"`
 	FSEdit             bool `json:"fsEdit,omitempty"`
 	FSMkdir            bool `json:"fsMkdir,omitempty"`
+	FSDelete           bool `json:"fsDelete,omitempty"`
+	FSMove             bool `json:"fsMove,omitempty"`
 	FSStat             bool `json:"fsStat"`
 	FSLs               bool `json:"fsLs"`
 	FSTree             bool `json:"fsTree,omitempty"`
+	FSTreePagination   bool `json:"fsTreePagination,omitempty"`
 	FSFind             bool `json:"fsFind"`
 	FSGrep             bool `json:"fsGrep"`
 	FSSearch           bool `json:"fsSearch,omitempty"`
@@ -80,13 +83,27 @@ type SandboxHealthStats struct {
 	AttachedSessions   int `json:"attachedSessions,omitempty"`
 }
 
-type SandboxSetupInfo struct {
-	Ran      bool   `json:"ran"`
+type SandboxSetupStep struct {
+	Path     string `json:"path"`
+	Status   string `json:"status"`
 	ExitCode int    `json:"exitCode"`
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	Duration string `json:"duration"`
 	Error    string `json:"error,omitempty"`
+	LogDir   string `json:"logDir"`
+}
+
+type SandboxSetupInfo struct {
+	Status   string             `json:"status,omitempty"`
+	Steps    []SandboxSetupStep `json:"steps,omitempty"`
+	RunID    string             `json:"runId,omitempty"`
+	Ran      bool               `json:"ran"`
+	ExitCode int                `json:"exitCode"`
+	Stdout   string             `json:"stdout"`
+	Stderr   string             `json:"stderr"`
+	Duration string             `json:"duration"`
+	Error    string             `json:"error,omitempty"`
 }
 
 type SandboxMetadata struct {

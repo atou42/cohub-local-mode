@@ -86,6 +86,13 @@ The Web editor supports pasting media URLs, dropping links, and **Add from link*
 on desktop and mobile. Task cards offer **Add results to board**, which lays out
 their media results as items that keep their URLs.
 
+A `file` item whose source is a 3D model (`.glb`, `.gltf`, `.stl` or `.obj`) shows
+a still of the model; its corner key, double-click or Enter opens an orbitable view
+in place. glTF buffers and textures and OBJ materials resolve next to the model.
+The Web editor renders stills only for cards on screen, one at a time, and leaves
+models above 64 MB (16 MB on mobile) for the user to open. Other clients and
+exports draw a placeholder.
+
 A URL loads directly, without importing it into the Space. A Space path retains
 live file updates and resolves through the Space file API. Existing paths are not
 rewritten; temporary signed download URLs must not replace persistent paths.
@@ -193,8 +200,9 @@ generated tracks.
 - Each chapter must be a distinct manual animation without nested time tracks.
 - Chapters cannot share an additive track's target property, including vector/component
   overlaps. Use distinct items or combine those tracks first.
-- Optional, distinct frames control chapter visibility and camera focus. Other camera
-  tracks are retained; without a frame, the helper does not infer chapter membership.
+- Optional, distinct frames control chapter visibility and supply the starting camera
+  focus. Chapter camera tracks are retained and override that fallback when they start;
+  without a frame, the helper does not infer chapter membership.
 - Child markers are promoted. End pauses retain the outgoing chapter, with a 1 ms
   boundary before the next chapter.
 
@@ -273,11 +281,18 @@ cohub boards inspect lesson.board --animation lecture --at 1s,5s,9s --json
 cohub boards inspect lesson.board --items title,formula --json
 ```
 
-Results include world bounds, text dimensions and lines, and item-specific hints.
-`measureBoardText` uses the rendering font stack and layout rules. `inspectBoardScene`
-reports possible clipped or overlapping text, unavailable glyphs and unused `follow`
-parameters. Checks have work/output limits; hints are advisory and never block saving.
-Font availability affects measurements and glyph coverage.
+Results include `mode` (`static` or `animation`) and the sampled times. Without
+`--animation`, inspection uses the static document, not playback. Each item's
+`bounds` is its world-space frame (`x/y` at the top left, independent of text
+alignment); `worldBounds` is its axis-aligned box including rotation, and `opacity`
+includes parents. `--items` filters measurements and relevant diagnostics.
+
+The SDK's `inspectBoardItems` returns these measurements; `measureBoardText` uses
+the rendering font stack and layout rules. `inspectBoardScene` reports possible
+clipped or overlapping text, unavailable glyphs and unused `follow` parameters.
+Checks have work/output limits; hints are advisory and never block saving. They
+exclude camera cropping and content painted inside scripts. Font availability
+affects measurements and glyph coverage; review exported images as well.
 
 In the web export dialog, **Check layout** inspects the selected time. Select a hint
 to locate its item. This is a local inspection, not a shared playback command.

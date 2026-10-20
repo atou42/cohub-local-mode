@@ -14,7 +14,7 @@ import {
 	BoardTrackSchema,
 	isBuiltinItemType,
 } from "./board-model.js";
-import { listBoardProperties } from "./board-patch.js";
+import { listBoardProperties, resolveBoardProperty } from "./board-patch.js";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -41,7 +41,15 @@ export function boardJsonSchema(target: string): BoardJsonSchemaResult | null {
 	}
 	if (target === "track") return { schema: toJsonSchema(BoardTrackSchema) };
 	if (target === "script") return { schema: toJsonSchema(BoardScriptSchema) };
-	if (target === BOARD_CAMERA_TARGET) return { properties: listBoardProperties(BOARD_CAMERA_TARGET) };
+	if (target === BOARD_CAMERA_TARGET) {
+		const properties = listBoardProperties(target);
+		const fields = Object.fromEntries(properties.map(({ property }) => {
+			const result = resolveBoardProperty(target, property);
+			if (!result.ok) throw new Error(result.message);
+			return [property, result.spec.schema];
+		}));
+		return { schema: toJsonSchema(z.object(fields).partial().strict()), properties };
+	}
 	if (!isBuiltinItemType(target)) return null;
 	return {
 		schema: toJsonSchema(BOARD_ITEM_SCHEMAS[target] as unknown as z.ZodType),

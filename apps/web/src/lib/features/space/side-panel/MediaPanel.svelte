@@ -50,7 +50,7 @@ onMount(() => onVisible());
 				type="button"
 				role="radio"
 				aria-checked={filter === item.id}
-				class="h-6 rounded-[5px] px-2 text-[11px] transition-colors {filter === item.id ? 'bg-bg-elevated text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}"
+				class="tab-key h-6"
 				onclick={() => (filter = item.id)}
 			>
 				{item.label}

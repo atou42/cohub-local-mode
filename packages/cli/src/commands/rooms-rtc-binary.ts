@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 
 // Pin a global release tag after its helper artifacts are published.
-export const RTC_HELPER_VERSION: string = "v2.67.0";
+export const RTC_HELPER_VERSION: string = "v2.68.0";
 const MAX_BINARY_BYTES = 128 * 1024 * 1024;
 
 async function digest(path: string) {
