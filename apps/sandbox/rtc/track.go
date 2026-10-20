@@ -1,10 +1,10 @@
 package rtc
 
 import (
-	"math/rand/v2"
 	"sync"
 	"time"
 
+	"github.com/cohub/apps/sandbox/rtccore"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
@@ -15,7 +15,6 @@ const (
 
 	videoClockRate = 90_000
 	outboundMTU    = 1200
-	maxClockSkew   = time.Second
 )
 
 var playoutNow, _ = rtp.PlayoutDelayExtension{}.Marshal()
@@ -32,7 +31,7 @@ type videoTrack struct {
 	playout   uint8
 	payloader codecs.H264Payloader
 	sequence  rtp.Sequencer
-	clock     mediaClock
+	clock     rtccore.Clock
 }
 
 func newVideoTrack() (*videoTrack, error) {
@@ -40,7 +39,7 @@ func newVideoTrack() (*videoTrack, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &videoTrack{TrackLocalStaticRTP: track, bound: make(chan struct{}), sequence: rtp.NewRandomSequencer()}, nil
+	return &videoTrack{TrackLocalStaticRTP: track, bound: make(chan struct{}), sequence: rtp.NewRandomSequencer(), clock: rtccore.Clock{Rate: videoClockRate}}, nil
 }
 
 func (t *videoTrack) Bind(ctx webrtc.TrackLocalContext) (webrtc.RTPCodecParameters, error) {
@@ -73,7 +72,7 @@ func (t *videoTrack) WriteFrame(data []byte, pts uint64, key bool) error {
 	if !t.keyed {
 		return nil
 	}
-	timestamp := t.clock.timestamp(pts, time.Now())
+	timestamp := t.clock.Timestamp(pts, time.Now())
 	payloads := t.payloader.Payload(outboundMTU, data)
 	for i, payload := range payloads {
 		packet := rtp.Packet{
@@ -91,37 +90,4 @@ func (t *videoTrack) WriteFrame(data []byte, pts uint64, key bool) error {
 		}
 	}
 	return nil
-}
-
-// mediaClock follows capture time and bridges jumps with the wall clock.
-type mediaClock struct {
-	started   bool
-	base      uint32
-	basePTS   uint64
-	lastPTS   uint64
-	lastAt    time.Time
-	lastStamp uint32
-}
-
-func (c *mediaClock) timestamp(pts uint64, now time.Time) uint32 {
-	switch {
-	case !c.started:
-		c.started, c.base, c.basePTS = true, rand.Uint32(), pts
-	case pts < c.lastPTS || absDuration(time.Duration(pts-c.lastPTS)*time.Microsecond-now.Sub(c.lastAt)) > maxClockSkew:
-		c.base, c.basePTS = c.lastStamp+ticks(max(0, now.Sub(c.lastAt))), pts
-	}
-	c.lastPTS, c.lastAt = pts, now
-	c.lastStamp = c.base + ticks(time.Duration(pts-c.basePTS)*time.Microsecond)
-	return c.lastStamp
-}
-
-func ticks(d time.Duration) uint32 {
-	return uint32(d * videoClockRate / time.Second)
-}
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
 }

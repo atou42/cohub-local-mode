@@ -1,6 +1,6 @@
-import type { SpaceFsChangedPayload } from "@cohub/protocol/fs";
+import { normalizeMime, type SpaceFsChangedPayload } from "@cohub/protocol/fs";
 import type { SpaceFsEntry, SpaceFsFileResponse } from "@neta-art/cohub";
-import { isTextFileResponse, normalizeMime } from "$lib/space-file-text";
+import { isTextFileResponse } from "$lib/space-file-text";
 import type { SpaceFsNode } from "$lib/space-fs";
 
 export const isMarkdownPath = (path: string) => /\.md$/i.test(path);

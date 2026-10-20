@@ -3,6 +3,7 @@ package live.cohub.android.host
 import android.net.Uri
 import android.util.Log
 import android.webkit.ConsoleMessage
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -15,6 +16,10 @@ class CohubWebChromeClient(private val listener: SurfaceListener) : WebChromeCli
         filePathCallback: ValueCallback<Array<Uri>>,
         fileChooserParams: FileChooserParams,
     ): Boolean = listener.onShowFileChooser(filePathCallback, fileChooserParams)
+
+    override fun onPermissionRequest(request: PermissionRequest) = listener.onPermissionRequest(request)
+
+    override fun onPermissionRequestCanceled(request: PermissionRequest) = listener.onPermissionRequestCanceled(request)
 
     override fun onConsoleMessage(message: ConsoleMessage): Boolean {
         if (!BuildConfig.WEB_DEBUGGING) return false

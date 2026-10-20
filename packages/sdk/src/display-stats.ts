@@ -1,7 +1,6 @@
-export type DisplayConnectionStats = {
-  path: "direct" | "relay" | null;
-  relayProtocol: string | null;
-  rttMs: number | null;
+import { readRtcTransportStats, type RtcTransportStats, statNumber as num } from "./rtc/index.js";
+
+export type DisplayConnectionStats = RtcTransportStats & {
   fps: number | null;
   bitrate: number | null;
   width: number | null;
@@ -22,7 +21,6 @@ export type DisplayStatsCounters = {
 
 type Entry = Record<string, unknown>;
 
-const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
 function perFrame(seconds: number, previousSeconds: number, frames: number, previousFrames: number): number | null {
   const count = frames - previousFrames;
   return count > 0 ? Math.round(((seconds - previousSeconds) * 1000) / count) : null;
@@ -32,10 +30,10 @@ export function readDisplayStats(
   previous: DisplayStatsCounters | null,
   fallbackRttMs: number | null = null,
 ): { stats: DisplayConnectionStats; counters: DisplayStatsCounters | null } {
+  const transport = readRtcTransportStats(report);
   const stats: DisplayConnectionStats = {
-    path: null,
-    relayProtocol: null,
-    rttMs: fallbackRttMs,
+    ...transport,
+    rttMs: transport.rttMs ?? fallbackRttMs,
     fps: null,
     bitrate: null,
     width: null,
@@ -47,14 +45,6 @@ export function readDisplayStats(
   };
   let counters: DisplayStatsCounters | null = null;
   report.forEach((entry: Entry) => {
-    if (entry.type === "candidate-pair" && entry.nominated && entry.state === "succeeded") {
-      const local = report.get(String(entry.localCandidateId)) as Entry | undefined;
-      const remote = report.get(String(entry.remoteCandidateId)) as Entry | undefined;
-      stats.path = local?.candidateType === "relay" || remote?.candidateType === "relay" ? "relay" : "direct";
-      if (local?.candidateType === "relay" && typeof local.relayProtocol === "string") stats.relayProtocol = local.relayProtocol;
-      const rtt = num(entry.currentRoundTripTime);
-      if (rtt !== null) stats.rttMs = Math.round(rtt * 1000);
-    }
     if (entry.type === "inbound-rtp" && entry.kind === "video") {
       stats.fps = num(entry.framesPerSecond);
       stats.width = num(entry.frameWidth);

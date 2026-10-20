@@ -9,6 +9,14 @@ import {
   type AppNavigationCall,
   parseAppNavigationOpenResponse,
 } from "@cohub/protocol/app-navigation";
+import {
+  APP_DEVICES,
+  APP_DEVICES_REQUEST_TYPE,
+  type AppDevice,
+  type AppDevicesStatus,
+  parseAppDevices,
+  parseAppDevicesResult,
+} from "@cohub/protocol/app-devices";
 import { PERMISSIONS, type CreateSpaceInput, type Permission } from "./types.js";
 import { appAuthorizationRequestSchema, appAuthorizationResultSchema, type AppAuthorizationRequest as ProtocolAuthorizationRequest, type AppAuthorizationResult } from "@cohub/protocol";
 export type { AppAuthorizationResult } from "@cohub/protocol";
@@ -57,7 +65,7 @@ export type AppRuntimeGrantSummary = {
 
 export type AppRuntimeContext = {
   /** Host capabilities, independent of the viewer's granted permissions. */
-  capabilities?: { authorization: 2; serverGrants: true };
+  capabilities?: { authorization: 2; serverGrants: true; devices?: true };
   mode?: "bridge" | "broker";
   app: {
     id: string;
@@ -989,6 +997,20 @@ export class AppRuntimeApi {
         reason: response === null ? "timeout" : "unsupported",
       }
     );
+  }
+
+  /** Asks for devices declared with `<meta name="cohub:devices">`; allowing the camera or microphone reloads the App once. */
+  async requestDevices(devices: AppDevice[]): Promise<AppDevicesStatus> {
+    const wanted = parseAppDevices(devices);
+    if (wanted.length === 0) throw new AppRuntimeError("invalid_request", `Request at least one of: ${APP_DEVICES.join(", ")}.`);
+    const context = await this.context().catch(() => null);
+    if (!context || context.mode === "broker") return "granted";
+    if (!context.capabilities?.devices) return "unavailable";
+    const response = await this.transport.request<unknown>(
+      { type: APP_DEVICES_REQUEST_TYPE, devices: wanted },
+      { timeoutMs: 10 * 60_000 },
+    );
+    return parseAppDevicesResult(response)?.status ?? "unavailable";
   }
 
   /**

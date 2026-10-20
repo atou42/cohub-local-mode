@@ -2,6 +2,8 @@ package ws
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -108,6 +109,9 @@ func (s *Server) shouldResyncFSOnAttach() bool {
 }
 
 func (s *Server) Run() error {
+	if s.cfg.SandboxRPCToken == "" {
+		return fmt.Errorf("SANDBOX_RPC_TOKEN is required for the sandbox listener")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sandbox", s.handleSandbox)
 	mux.HandleFunc("/healthz", s.handleHealthz)
@@ -144,6 +148,18 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 const wsReadLimit = 50 * 1024 * 1024 // 50MB per websocket message
 
 func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.SandboxRPCToken == "" {
+		http.Error(w, "Sandbox RPC authentication is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authorization := r.Header.Get("Authorization")
+	provided := sha256.Sum256([]byte(strings.TrimPrefix(authorization, "Bearer ")))
+	expected := sha256.Sum256([]byte(s.cfg.SandboxRPCToken))
+	if !strings.HasPrefix(authorization, "Bearer ") || subtle.ConstantTimeCompare(provided[:], expected[:]) != 1 {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		s.logger.Error("failed to accept websocket", slog.String("error", err.Error()))
@@ -474,11 +490,4 @@ func (s *Server) maybeSelfHealOnStaleMount(request protocol.RPCRequest, failed p
 		s.logger.Warn("stale mount recovery report failed; falling back to self terminate")
 		s.selfTerminate("stale mount report failed")
 	}()
-}
-
-func (s *Server) selfTerminate(reason string) {
-	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
-		s.logger.Error("failed to signal sandbox for self-heal shutdown", slog.String("reason", reason), slog.String("error", err.Error()))
-		os.Exit(1)
-	}
 }

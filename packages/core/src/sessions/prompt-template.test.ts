@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { expandPromptContent } from "./prompt.js";
-import { renderPromptTemplate } from "./prompt-template.js";
+import { parsePromptCommand, renderPromptTemplate } from "./prompt-template.js";
 
 test("renders Cohub IDs and prompt arguments", () => {
   const rendered = renderPromptTemplate(
     "Session {{cohub.session.id}} in {{ cohub.space.id }} for {{cohub.user.uuid}}: $1 / $@",
-    ["first", "second"],
+    { args: ["first", "second"], argsText: "first second" },
     { sessionId: "session-1", spaceId: "space-1", userUuid: "user-1" },
   );
 
@@ -16,7 +16,7 @@ test("renders Cohub IDs and prompt arguments", () => {
 test("preserves unknown and unavailable system variables", () => {
   const rendered = renderPromptTemplate(
     "{{cohub.session.id}} {{cohub.space.name}} {{other.value}}",
-    [],
+    { args: [], argsText: "" },
     { sessionId: null },
   );
 
@@ -24,8 +24,14 @@ test("preserves unknown and unavailable system variables", () => {
 });
 
 test("does not interpret system variables introduced through arguments", () => {
-  const rendered = renderPromptTemplate("Value: $1", ["{{cohub.session.id}}"], { sessionId: "session-1" });
+  const rendered = renderPromptTemplate("Value: $1", { args: ["{{cohub.session.id}}"], argsText: "{{cohub.session.id}}" }, { sessionId: "session-1" });
   assert.equal(rendered, "Value: {{cohub.session.id}}");
+});
+
+test("renders $@ verbatim and positional arguments split", () => {
+  const command = parsePromptCommand('/plan\na "b  c"');
+  assert.ok(command);
+  assert.equal(renderPromptTemplate("$1|$2|$@", command), 'a|b  c|a "b  c"');
 });
 
 test("passes session context through prompt expansion", async () => {
@@ -185,4 +191,22 @@ test("local harness passes unknown-to-platform skills through when the service d
   assert.equal(result.promptTemplate, null);
   assert.equal(result.content[0]?.type, "text");
   assert.equal(result.content[0] && result.content[0].type === "text" ? result.content[0].text : "", "/skill:local-only");
+});
+
+test("expands the leading text block and keeps attachments", async () => {
+  const image = { type: "image", source: { type: "url", url: "https://example.com/a.webp" } } as const;
+  const result = await expandPromptContent({
+    expandPromptTemplate: async ({ text }) => ({
+      renderedText: "expanded",
+      template: { name: "plan", description: "d", scope: "user" as const },
+      args: [],
+      rawInput: text,
+    }),
+  }, {
+    content: [{ type: "text", text: "/plan" }, image],
+    userId: "user-1",
+    spaceId: "space-1",
+  });
+
+  assert.deepEqual(result.content, [{ type: "text", text: "expanded" }, image]);
 });

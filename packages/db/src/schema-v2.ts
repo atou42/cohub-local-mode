@@ -469,6 +469,7 @@ export const boardItems = v2.table(
       sql`box(point(${table.minX}, ${table.minY}), point(${table.maxX}, ${table.maxY}))`,
     ),
     srcIdx: index("v2_idx_board_items_src").on(table.boardId, table.src),
+    taskSrcIdx: index("v2_idx_board_items_task_src").on(table.src).where(sql`${table.type} = 'task'`),
     bindsIdx: index("v2_idx_board_items_binds").using("gin", table.binds),
   }),
 );

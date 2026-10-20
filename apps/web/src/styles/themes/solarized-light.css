@@ -79,9 +79,9 @@
 	--border-strong: var(--neutral-40);
 
 	/* Interactive states */
-	--bg-hover: oklch(94% 0.032 92 / 1);
-	--bg-hover-strong: oklch(90% 0.03 92 / 1);
-	--bg-active: oklch(86% 0.028 92 / 1);
+	--bg-hover: oklch(35% 0.03 80 / 0.07);
+	--bg-hover-strong: oklch(35% 0.03 80 / 0.14);
+	--bg-active: oklch(35% 0.03 80 / 0.21);
 
 	/* Scrollbar */
 	--scrollbar-thumb: var(--neutral-40);

@@ -1,7 +1,12 @@
 <script lang="ts">
 import type { PublicGenerationDeclaration } from "@cohub/protocol/generation";
 import type { BoardSceneItem } from "@neta-art/cohub/board";
-import { featuredTaskArtifact, worldPoint } from "@neta-art/cohub/board";
+import {
+	featuredTaskArtifact,
+	getMediaResourceTitle,
+	resolveBoardMediaUrl,
+	worldPoint,
+} from "@neta-art/cohub/board";
 import {
 	AudioLines,
 	Image,
@@ -19,6 +24,7 @@ import {
 	type BoardGenerationReference,
 	buildBoardGenerationContent,
 	defaultGenerationReferenceRole,
+	generationAspectRatio,
 	generationInputSpec,
 	modelAcceptsGenerationReferences,
 	normalizeGenerationReferenceUrl,
@@ -46,7 +52,6 @@ import {
 	getCachedGenerationModels,
 	loadGenerationModels,
 } from "$lib/stores/generation-models-cache";
-import { watchGenerationTask } from "$lib/stores/generation-task-watch";
 
 const {
 	editor,
@@ -170,9 +175,7 @@ function itemLabel(item: BoardSceneItem): string {
 		item.type === "audio" ||
 		item.type === "file"
 	) {
-		return (
-			item.props.snapshot?.title ?? item.props.src.split("/").pop() ?? item.props.src
-		);
+		return item.props.snapshot?.title ?? getMediaResourceTitle(item.props.src);
 	}
 	if (item.type === "task") return item.props.snapshot.title;
 	return m.board_reference({}, { locale });
@@ -190,7 +193,7 @@ async function resolveItemReference(
 		item.type === "audio" ||
 		item.type === "file"
 	) {
-		rawUrl = await assetSource.resolveFileUrl(item.props.src);
+		rawUrl = await resolveBoardMediaUrl(item.props.src, assetSource);
 	} else if (item.type === "task") {
 		const artifact = featuredTaskArtifact(item.props.snapshot.artifacts);
 		rawUrl = artifact?.type === "text" ? null : artifact?.url;
@@ -417,7 +420,6 @@ async function submit() {
 			...(Object.keys(snapshotParameters).length > 0
 				? { parameters: snapshotParameters }
 				: {}),
-			meta: { boardContext },
 		});
 		taskRunId = created.taskRunId;
 	} catch (cause) {
@@ -436,7 +438,6 @@ async function submit() {
 		submitting = false;
 		return;
 	}
-	watchGenerationTask(spaceId, taskRunId, submittingUserKey);
 
 	let nodeAdded = false;
 	try {
@@ -450,6 +451,7 @@ async function submit() {
 			taskPosition(),
 			sources,
 			{ generation: { boardContext } },
+			generationAspectRatio(snapshotModel, snapshotParameters),
 		);
 		if (!id) throw new Error(m.board_task_add_failed({}, { locale }));
 		nodeAdded = true;
@@ -746,13 +748,13 @@ onDestroy(() => {
 	}
 	.error-notice {
 		margin-bottom: 8px;
-		border: 1px solid color-mix(in srgb, var(--error-soft) 25%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-error-soft) 25%, transparent);
 		border-radius: 12px;
-		background: var(--error-bg);
+		background: var(--color-error-bg);
 		padding: 8px 12px;
 		font-size: 11px;
 		line-height: 1.4;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 		overflow-wrap: anywhere;
 	}
 	textarea {
@@ -896,7 +898,7 @@ onDestroy(() => {
 		color: var(--text-primary);
 		outline: none;
 	}
-	.parameter-row input[type="checkbox"] { justify-self: end; accent-color: var(--brand); }
+	.parameter-row input[type="checkbox"] { justify-self: end; }
 	@media (pointer: coarse) {
 		.generation-wrap { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
 		.icon-btn { width: 36px; height: 36px; }

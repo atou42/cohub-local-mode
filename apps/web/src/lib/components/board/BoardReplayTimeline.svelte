@@ -101,6 +101,7 @@ function relative(at: number): string {
 function actorName(entry: BoardReplayEntry): string {
 	if (entry.kind === "cli") return m.board_replay_actor_cli({}, { locale });
 	if (entry.kind === "agent") return m.board_replay_actor_agent({}, { locale });
+	if (entry.kind === "task") return m.board_replay_actor_task({}, { locale });
 	return profiles.get(entry.actorId)?.displayName ?? entry.actorId.slice(0, 8);
 }
 
@@ -145,7 +146,7 @@ function tickLeft(entryIndex: number): string {
 	aria-label={m.board_replay_title({}, { locale })}
 >
 	<div class="replay-head">
-		<span class="replay-badge">{m.board_replay_title({}, { locale })}</span>
+		<span class="tag font-semibold uppercase tracking-wider" data-tone="brand">{m.board_replay_title({}, { locale })}</span>
 		<div class="replay-status" aria-live="polite">
 			{#if current}
 				{#if current.kind === "human"}
@@ -337,18 +338,6 @@ function tickLeft(entryIndex: number): string {
 		color: var(--text-secondary);
 	}
 
-	.replay-badge {
-		flex-shrink: 0;
-		border-radius: 5px;
-		background: color-mix(in srgb, var(--brand) 14%, transparent);
-		padding: 2px 6px;
-		color: var(--brand);
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-	}
-
 	.replay-status {
 		display: flex;
 		min-width: 0;
@@ -390,7 +379,7 @@ function tickLeft(entryIndex: number): string {
 		text-underline-offset: 2px;
 	}
 	.replay-link:disabled { color: var(--text-tertiary); text-decoration: none; }
-	.replay-link--failed { color: var(--error-soft); }
+	.replay-link--failed { color: var(--color-error-soft); }
 
 	.replay-track {
 		position: relative;

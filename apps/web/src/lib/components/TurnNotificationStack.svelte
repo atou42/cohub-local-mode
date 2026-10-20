@@ -58,7 +58,7 @@ function handleCardKeydown(
 			<div
 				role="button"
 				tabindex="0"
-				class="turn-notification pointer-events-auto text-left"
+				class="turn-notification toast-surface pointer-events-auto text-left"
 				title={m.notif_open_turn({}, { locale })}
 				data-drawer-swipe-ignore
 				use:swipeDismiss={{
@@ -131,23 +131,17 @@ function handleCardKeydown(
 
 <style>
 	.turn-notification {
-		border: 1px solid var(--border-subtle);
-		border-radius: 8px;
-		background: var(--bg-surface);
-		box-shadow: 0 8px 24px rgb(0 0 0 / 0.08);
 		padding: 8px 8px 8px 10px;
 		/* Vertical scroll stays native; horizontal drags feed swipe-to-dismiss. */
 		touch-action: pan-y;
 		transition:
 			border-color 140ms ease,
-			background-color 140ms ease,
 			transform 140ms ease;
 	}
 
 	.turn-notification:hover,
 	.turn-notification:focus-visible {
 		border-color: var(--border-strong);
-		background: var(--bg-elevated);
 		outline: none;
 	}
 

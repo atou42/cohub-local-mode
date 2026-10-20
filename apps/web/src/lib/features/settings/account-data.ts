@@ -1,8 +1,5 @@
-import { CONFIG_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
-import { HttpError } from "@neta-art/cohub";
 import { AccountResource } from "$lib/features/settings/account-resource.svelte";
 import { sdk } from "$lib/sdk";
-import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
 
 export const BALANCE_ACTIVITY_PAGE_SIZE = 10;
 
@@ -24,20 +21,6 @@ export const channels = new AccountResource("channels", () =>
 	sdk.channels.list(),
 );
 
-async function findConfigSpace() {
-	try {
-		return await sdk.spaces.getOwnedBySlug(CONFIG_SPACE_SLUG);
-	} catch (error) {
-		if (error instanceof HttpError && error.status === 404) return null;
-		throw error;
-	}
-}
-
-export const rules = new AccountResource("rules", async () => {
-	const [published, configSpace] = await Promise.all([
-		sdk.user.getRules(),
-		findConfigSpace(),
-	]);
-	cacheSpaceRecordSoon(configSpace);
-	return { published, configSpace };
-});
+export const rules = new AccountResource("home-rules", () =>
+	sdk.user.getRules(),
+);

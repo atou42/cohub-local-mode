@@ -3,7 +3,7 @@ import type { BoardTextItem } from "@cohub/protocol";
 import { layoutBoardText } from "@cohub/protocol";
 import { boardFontFamily } from "../../model/text-metrics.js";
 import type { SceneItem } from "../../model/scene.js";
-import { itemColor } from "../palette.js";
+import { itemAlpha, itemColor } from "../palette.js";
 import { BOARD_FONT_STACKS } from "../text-measurement.js";
 import { syncTextResolution, textResolutionForZoom } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
@@ -48,6 +48,8 @@ function sync(container: Container, item: SceneItem<BoardTextItem>, context: Boa
   parts.body.position.set(item.frame.width * anchorX, 0);
   syncTextResolution(parts.body, parts, context.zoom * Math.max(1, previewScale));
 
+  parts.body.alpha = itemAlpha(context, item.style.fill);
+  parts.caret.alpha = parts.body.alpha;
   const ink = itemColor(context, item.style.fill, "neutral");
   const text = revealed(props.text, props.reveal);
   const contentSig = [text, ink, props.fontSize, props.fontWeight, props.font, props.align, props.lineHeight, props.width ?? ""].join("|");
@@ -87,7 +89,7 @@ export const textCardRenderer: BoardCardRenderer = {
   },
   renderFar: (graphics, item, context) => {
     if (item.type !== "text") return;
-    drawFarPlate(graphics, item.frame, { fill: itemColor(context, item.style.fill, "neutral"), fillAlpha: 0.35 });
+    drawFarPlate(graphics, item.frame, { fill: itemColor(context, item.style.fill, "neutral"), fillAlpha: 0.35 * itemAlpha(context, item.style.fill) });
   },
   destroy: (container) => {
     partsByContainer.get(container)?.root.destroy({ children: true });

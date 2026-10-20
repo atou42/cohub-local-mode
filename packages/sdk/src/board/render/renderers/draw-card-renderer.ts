@@ -9,7 +9,7 @@ import {
 	trimDrawPoints,
 } from "../../model/draw-geometry.js";
 import type { SceneItem } from "../../model/scene.js";
-import { itemColor } from "../palette.js";
+import { itemAlpha, itemColor } from "../palette.js";
 import { positionShell } from "./base-card-renderer.js";
 import type {
 	BoardCardRenderer,
@@ -109,6 +109,7 @@ function sync(
 	}
 	const stroke = parts.stroke;
 	if (!stroke) return;
+	stroke.alpha = itemAlpha(context, item.style.stroke);
 	// Opaque: the ribbon's caps and folds overlap.
 	if (stroke instanceof Mesh) stroke.tint = color;
 	const { box } = parts;
@@ -149,7 +150,7 @@ export const drawCardRenderer: BoardCardRenderer = {
 		drawFarStroke(graphics, samples.map((point) => applyMatrix(matrix, point)), {
 			color: itemColor(context, draw.style.stroke, "brand"),
 			width: draw.style.strokeWidth ?? BOARD_DRAW_STROKE_SIZE,
-			alpha: 1,
+			alpha: itemAlpha(context, draw.style.stroke),
 		});
 	},
 	destroy: (container) => {

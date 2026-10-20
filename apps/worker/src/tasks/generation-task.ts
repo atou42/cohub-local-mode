@@ -4,7 +4,6 @@ import {
   calculateGenerationUsageCharge,
   COHUB_BILLING_TOKEN_TYPES,
   contentTypesFromBlocks,
-  createBillingUsageGate,
   generationUsageKind,
   isGenerationModelDiscountFree,
   reconcileGenerationModelDiscountSnapshot,
@@ -32,21 +31,18 @@ import type { TaskPayload } from "@cohub/protocol/task";
 import { defaultJobRetention } from "@cohub/infra/bullmq";
 import { config } from "../config.js";
 import { recordGenerationUsageStatsHourly } from "../generation-usage-stats.js";
+import { createGenerationTaskFetch } from "../generation-task-fetch.js";
 import { redisCommandClient } from "../redis.js";
 import { enqueueTask } from "./enqueue.js";
 import { registerTask } from "./registry.js";
 import { finalizeGenerationSession, markGenerationSessionRunning } from "./generation-session.js";
+import { spaceWalletBilling } from "../space-wallet-billing.js";
 
 const loader = createGenerationDeclarationLoader({
   platformConfigRoot: config.platformConfigRoot,
   redis: redisCommandClient,
 });
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    console.warn("[BillingGate] worker generation billing evaluation failed", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -228,6 +224,7 @@ async function enqueueGenerationBillingRetry(input: {
 }
 
 async function recordGenerationUsageBilling(input: {
+  retryOnly: boolean;
   userId: string;
   taskRunId: string;
   model: string;
@@ -261,7 +258,9 @@ async function recordGenerationUsageBilling(input: {
   }
 
   try {
-    const result = await billingOperations.recordUsage({
+    const result = await spaceWalletBilling.recordUsage({
+      retryOnly: input.retryOnly,
+      spaceId: input.spaceId,
       userId: input.userId,
       amountUsd,
       tokenType: COHUB_BILLING_TOKEN_TYPES.usdMicroCent,
@@ -286,7 +285,7 @@ async function recordGenerationUsageBilling(input: {
       return {
         ...billingPricing,
         status: "skipped",
-        reason: result.status === "disabled" ? "billing_disabled" : "zero_amount",
+        reason: result.status === "disabled" ? "billing_disabled" : "record_failed",
       };
     }
     return {
@@ -392,6 +391,7 @@ registerTask(GENERATION_TASK_TYPE, async (job: Job, context) => {
       models: [declaration],
       includeBuiltinModels: false,
       apiKey: getGenerationApiKey(),
+      fetch: createGenerationTaskFetch(taskRunId, config.generationBaseUrl),
       ...(config.generationBaseUrl ? { baseUrl: config.generationBaseUrl } : {}),
     }).generateResult({
       model: data.model,
@@ -408,6 +408,7 @@ registerTask(GENERATION_TASK_TYPE, async (job: Job, context) => {
       ],
     });
     const billing = await recordGenerationUsageBilling({
+      retryOnly: job.attemptsMade > 0 || job.attemptsStarted > 1,
       userId,
       taskRunId,
       model: data.model,

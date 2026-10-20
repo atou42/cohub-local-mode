@@ -37,6 +37,7 @@ READINESS_TIMEOUT: "2"
 READINESS_FAILURE_THRESHOLD: "3"
 
 # ========== Gateway 配置 ==========
+GATEWAY_OUTBOUND_CONCURRENCY: "16"
 API_BASE_URL: "http://cohub-api-dev.cohub-dev.svc.cluster.local:8787"
 LOGTO_ENDPOINT: "https://auth-dev.example.com"
 

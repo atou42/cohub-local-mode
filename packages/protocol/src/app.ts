@@ -86,4 +86,5 @@ export type AppBoardArtifactManifest = {
   sourcePath: string;
   snapshot: BoardSnapshot;
   assets: AppBoardAsset[];
+  externalUrls?: string[];
 };

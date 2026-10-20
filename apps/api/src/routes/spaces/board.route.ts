@@ -16,11 +16,12 @@ import {
   applyBoard,
   applyBoardPlayback,
   createBoard,
-  deleteBoard,
   readBoard,
   readBoardHistory,
   restoreBoardVersion,
+  BOARD_TASK_MUTATION_PREFIX,
   type BoardApplyOutcome,
+  type BoardWriteInput,
 } from "@cohub/core/board";
 import { buildBoardCreateIdentity } from "../../board-create-idempotency.js";
 import {
@@ -30,9 +31,10 @@ import {
 } from "../../board-error.js";
 import { dispatchBoardChanged, dispatchBoardPlaybackChanged } from "../../board-events.js";
 import { db } from "../../db/index.js";
-import { authzDenied, getOptionalAuth, requireValidId, useAuth } from "../../lib/middleware.js";
+import { type AuthUser, authzDenied, getOptionalAuth, requireValidId, useAuth } from "../../lib/middleware.js";
 import { getRequestSource } from "../../lib/request-source.js";
-import { hasPermission } from "../../permissions.js";
+import { resolveRequestActor } from "../../lib/request-actor.js";
+import { hasPermission, isTaskRunOwner } from "../../permissions.js";
 import {
   assertSafeRelativePath,
   createSpaceFileExclusive,
@@ -86,25 +88,25 @@ function fail(c: Context, error: unknown) {
   return c.json(errorBody(response), response.status as never);
 }
 
+function taskViewer(user: AuthUser, spaceId: string): BoardWriteInput["taskViewer"] {
+  return async ({ sessionId, userUuid }) =>
+    isTaskRunOwner(user, { userUuid }) || hasPermission(user, "taskrun.view", { spaceId, sessionId: sessionId ?? undefined });
+}
+
+async function boardExists(spaceId: string, boardId: string) {
+  const [row] = await db.select({ id: boards.id }).from(boards).where(and(eq(boards.id, boardId), eq(boards.spaceId, spaceId))).limit(1);
+  return Boolean(row);
+}
+
 function boardParams(c: { req: { param: (name: string) => string | undefined } }) {
   const spaceId = c.req.param("id");
   const boardId = c.req.param("boardId");
   return spaceId && boardId && requireValidId(spaceId) && requireValidId(boardId) ? { spaceId, boardId } : null;
 }
 
-async function announce(spaceId: string, boardId: string, actorId: string, outcome: BoardApplyOutcome, source: ReturnType<typeof getRequestSource>) {
+async function announce(c: Context, spaceId: string, boardId: string, actorId: string, outcome: BoardApplyOutcome, source: ReturnType<typeof getRequestSource>) {
   if (!outcome.written) return;
-  await dispatchBoardChanged({
-    spaceId,
-    boardId,
-    actorId,
-    mutationId: outcome.result.mutationId,
-    baseVersion: outcome.written.baseVersion,
-    version: outcome.result.version,
-    changed: outcome.result.changed,
-    after: outcome.written.after,
-    source,
-  }).catch(() => undefined);
+  await dispatchBoardChanged({ spaceId, boardId, actorId, actor: await resolveRequestActor(c), outcome, source }).catch(() => undefined);
   if (outcome.written.playback !== undefined) {
     await dispatchBoardPlaybackChanged({ spaceId, boardId, playback: outcome.written.playback }).catch(() => undefined);
   }
@@ -134,10 +136,7 @@ router.post("/", writeBodyLimit, async (c) => {
   const boardId = identity?.boardId ?? crypto.randomUUID();
   const source = getRequestSource(c);
 
-  if (identity) {
-    const [existing] = await db.select({ id: boards.id }).from(boards).where(and(eq(boards.id, boardId), eq(boards.spaceId, spaceId))).limit(1);
-    if (existing) return c.json(await readBoard(db, { spaceId, boardId }));
-  }
+  if (identity && (await boardExists(spaceId, boardId))) return c.json(await readBoard(db, { spaceId, boardId }));
 
   let written: BoardManifestWrite | null = null;
   try {
@@ -152,19 +151,26 @@ router.post("/", writeBodyLimit, async (c) => {
       boardId,
       title,
       actorId: user.uuid,
+      taskViewer: taskViewer(user, spaceId),
       ...(body.document ? { document: body.document } : {}),
       ...(identity ? { mutationId: identity.transactionId } : {}),
       source,
     });
-    await dispatchSpaceFsChanged(spaceId, {
-      source: "api-fs",
-      mutationId: body.mutationId,
-      changes: buildFileMutationChanges(written),
-    }, written.executedBy === "sandbox" ? { skipHooks: true } : undefined).catch(() => undefined);
+  } catch (error) {
+    if (identity && (await boardExists(spaceId, boardId))) return c.json(await readBoard(db, { spaceId, boardId }));
+    if (written?.created) await deleteSpaceNode(spaceId, written.path).catch(() => undefined);
+    return fail(c, error);
+  }
+
+  await dispatchSpaceFsChanged(spaceId, {
+    source: "api-fs",
+    mutationId: body.mutationId,
+    changes: buildFileMutationChanges(written),
+  }, written.executedBy === "sandbox" ? { skipHooks: true } : undefined).catch(() => undefined);
+
+  try {
     return c.json(await readBoard(db, { spaceId, boardId }));
   } catch (error) {
-    await deleteBoard(db, { spaceId, boardId }).catch(() => undefined);
-    if (written?.created) await deleteSpaceNode(spaceId, written.path).catch(() => undefined);
     return fail(c, error);
   }
 });
@@ -172,7 +178,7 @@ router.post("/", writeBodyLimit, async (c) => {
 router.get("/:boardId", async (c) => {
   const params = boardParams(c);
   if (!params) return c.json(boardNotFound, 404);
-  if (!(await hasPermission(getOptionalAuth(c), "file.view", { spaceId: params.spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(getOptionalAuth(c), "file.view.filtered", { spaceId: params.spaceId }))) return authzDenied(c);
   const list = (name: string) => c.req.query(name)?.split(",").map((value) => value.trim()).filter(Boolean);
   const rect = list("rect")?.map(Number);
   const limit = c.req.query("limit");
@@ -206,10 +212,13 @@ router.post("/:boardId/apply", writeBodyLimit, async (c) => {
   if (!(await hasPermission(user, "file.edit", { spaceId: params.spaceId }))) return authzDenied(c);
   const parsed = BoardApplyInputSchema.safeParse(await c.req.json<unknown>().catch(() => null));
   if (!parsed.success) return c.json({ code: "INVALID_PATCH", message: "Board patch is invalid.", diagnostics: zodDiagnostics(parsed.error) }, 400);
+  if (parsed.data.mutationId?.startsWith(BOARD_TASK_MUTATION_PREFIX)) {
+    return c.json({ code: "INVALID_PATCH", message: `mutationId must not start with "${BOARD_TASK_MUTATION_PREFIX}".` }, 400);
+  }
   const source = getRequestSource(c);
   try {
-    const outcome = await applyBoard(db, { ...params, actorId: user.uuid, apply: parsed.data, source });
-    await announce(params.spaceId, params.boardId, user.uuid, outcome, source);
+    const outcome = await applyBoard(db, { ...params, actorId: user.uuid, apply: parsed.data, source, taskViewer: taskViewer(user, params.spaceId) });
+    await announce(c, params.spaceId, params.boardId, user.uuid, outcome, source);
     return c.json(outcome.result);
   } catch (error) {
     return fail(c, error);
@@ -219,7 +228,7 @@ router.post("/:boardId/apply", writeBodyLimit, async (c) => {
 router.get("/:boardId/history", async (c) => {
   const params = boardParams(c);
   if (!params) return c.json(boardNotFound, 404);
-  if (!(await hasPermission(getOptionalAuth(c), "file.view", { spaceId: params.spaceId }))) return authzDenied(c);
+  if (!(await hasPermission(getOptionalAuth(c), "file.view.filtered", { spaceId: params.spaceId }))) return authzDenied(c);
   const before = c.req.query("before");
   const limit = c.req.query("limit");
   const history = BoardHistoryInputSchema.safeParse({
@@ -246,7 +255,7 @@ router.post("/:boardId/restore", async (c) => {
   const source = getRequestSource(c);
   try {
     const outcome = await restoreBoardVersion(db, { ...params, actorId: user.uuid, version, source });
-    await announce(params.spaceId, params.boardId, user.uuid, outcome, source);
+    await announce(c, params.spaceId, params.boardId, user.uuid, outcome, source);
     return c.json(outcome.result);
   } catch (error) {
     return fail(c, error);

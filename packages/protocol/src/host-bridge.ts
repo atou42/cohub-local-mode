@@ -28,6 +28,7 @@ export const HOST_BRIDGE_CAPABILITIES = [
   "navigation.back",
   "shortcuts",
   "display",
+  "media.capture",
 ] as const;
 export type HostBridgeCapability = (typeof HOST_BRIDGE_CAPABILITIES)[number];
 export const hostBridgeCapabilitySchema = z.enum(HOST_BRIDGE_CAPABILITIES);

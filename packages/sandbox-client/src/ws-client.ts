@@ -13,6 +13,7 @@ import type { SpaceFsChangedPayload } from "@cohub/protocol/fs";
 import type { SpacePortsChangedPayload } from "@cohub/protocol/ports";
 import { AGENT_SANDBOX_PROTOCOL_VERSION } from "@cohub/protocol/sandbox";
 import { createLogger } from "@cohub/infra/logging";
+import type { SandboxConnectionOptions } from "./auth.js";
 import {
   SANDBOX_CONNECTION_LOST_MESSAGE,
   SandboxRpcError,
@@ -100,6 +101,8 @@ function isRefreshableConnectionError(error: unknown) {
     "socket hang up",
     "websocket closed before attach",
     "closed before attach",
+    "unexpected server response: 401",
+    "unexpected server response: 403",
   ].some((pattern) => text.includes(pattern));
 }
 
@@ -125,7 +128,7 @@ type SandboxStatusHooks = {
   onPortsChanged?: (payload: SpacePortsChangedPayload, broadcast: SandboxBroadcast) => void | Promise<void>;
   onDisconnected?: (input: { spaceId: string; reason?: string }) => void | Promise<void>;
   onConnectionError?: (input: { spaceId: string; error: Error }) => void | Promise<void>;
-  onRefreshWsUrl?: (input: { spaceId: string; currentWsUrl: string; error?: Error }) => string | null | Promise<string | null>;
+  onRefreshConnection?: (input: { spaceId: string; currentWsUrl: string; error?: Error }) => SandboxConnectionOptions | null | Promise<SandboxConnectionOptions | null>;
 };
 
 type SandboxClientRun = {
@@ -149,6 +152,7 @@ type SandboxClientRegistration = {
 };
 
 export class SandboxConnection {
+  heartbeat?: SandboxHeartbeat;
   private closed = false;
   private disposed = false;
 
@@ -273,7 +277,6 @@ export class SandboxConnection {
         method: pending.method,
         rpcErrorCode: message.error.code,
         retryable: message.error.retryable ?? false,
-        ...(message.error.code === "IO_ERROR" ? { transportReason: message.error.message } : {}),
         diagnostics: pending.diagnostics,
       }));
     }
@@ -531,19 +534,22 @@ async function runLoop(registration: SandboxClientRegistration, run: SandboxClie
       if (isRefreshableConnectionError(error) && now - lastRefreshAt >= 2_000) {
         lastRefreshAt = now;
         const currentWsUrl = registration.wsUrl;
-        const nextWsUrl = await Promise.resolve(registration.hooks?.onRefreshWsUrl?.({
+        const nextOptions = await Promise.resolve(registration.hooks?.onRefreshConnection?.({
           spaceId: registration.spaceId,
           currentWsUrl,
           error: error instanceof Error ? error : new Error(String(error)),
         })).catch((refreshError) => {
-          logger.warn(`[SandboxWS] wsUrl refresh failed spaceId=${registration.spaceId}:`, refreshError);
+          logger.warn(`[SandboxWS] connection refresh failed spaceId=${registration.spaceId}:`, refreshError);
           return null;
         });
         if (!isCurrentRun(registration, run)) return;
-        if (nextWsUrl && nextWsUrl !== currentWsUrl) {
-          registration.wsUrl = nextWsUrl;
-          attempt = 0;
-          logger.warn(`[SandboxWS] refreshed wsUrl spaceId=${registration.spaceId} oldHash=${hashString(currentWsUrl)} newHash=${hashString(nextWsUrl)}`);
+        if (nextOptions) {
+          registration.wsUrl = nextOptions.wsUrl;
+          registration.headers = nextOptions.headers;
+          if (nextOptions.wsUrl !== currentWsUrl) {
+            attempt = 0;
+            logger.warn(`[SandboxWS] refreshed wsUrl spaceId=${registration.spaceId} oldHash=${hashString(currentWsUrl)} newHash=${hashString(nextOptions.wsUrl)}`);
+          }
         }
       }
     }
@@ -630,8 +636,9 @@ async function connectOnce(registration: SandboxClientRegistration, run: Sandbox
             return;
           }
           heartbeat = message;
+          if (connection) connection.heartbeat = message;
           const setup = message.metadata?.setup;
-          if (setup) {
+          if (setup && setup.status !== "waiting" && setup.status !== "running") {
             if (setup.ran) {
               if (setup.exitCode === 0 && !setup.error) {
                 logger.debug(`[SandboxWS] setup.sh completed ok spaceId=${registration.spaceId} duration=${setup.duration}`);
@@ -667,6 +674,7 @@ async function connectOnce(registration: SandboxClientRegistration, run: Sandbox
           attached = true;
           const attachedSandboxId = heartbeat.sandboxId;
           connection = new SandboxConnection(registration.spaceId, attachedSandboxId, message.identity, message.connectionId, heartbeat.capabilities, socket, registration);
+          connection.heartbeat = heartbeat;
           setActiveConnection(registration.spaceId, connection);
           callHookSafely(registration.spaceId, "onAttached", () => registration.hooks?.onAttached?.({
             spaceId: registration.spaceId,

@@ -2,7 +2,8 @@ import { BOARD_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { BoardFrameItem } from "@cohub/protocol";
 import { Container, Graphics, type Text } from "pixi.js";
 import type { SceneItem } from "../../model/scene.js";
-import { itemColor } from "../palette.js";
+import { itemAlpha, itemColor } from "../palette.js";
+import { dashPattern, roundRectPoints, tracePolyline, trimPolyline } from "../stroke.js";
 import { syncTextResolution } from "../text-resolution.js";
 import { createLabel, positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
@@ -28,32 +29,36 @@ function sync(container: Container, item: SceneItem<BoardFrameItem>, context: Bo
 	positionShell(parts.root, item);
 	syncTextResolution(parts.label, parts, context.zoom);
 
-	const selected = context.selectedIds.has(item.id);
-	const hovered = context.hoveredId === item.id;
 	const fill = itemColor(context, style.fill ?? style.stroke, "neutral", "fill");
-	const fillAlpha = style.fillOpacity ?? (style.fill ? 1 : DEFAULT_WASH);
+	const fillAlpha = (style.fillOpacity ?? (style.fill ? 1 : DEFAULT_WASH)) * itemAlpha(context, style.fill ?? style.stroke);
 	const baseStroke = itemColor(context, style.stroke, "neutral");
-	const stroke = selected ? context.palette.brand : baseStroke;
-	const alpha = selected ? 1 : hovered ? 0.85 : 0.55;
+	const alpha = (style.stroke ? 1 : 0.55) * itemAlpha(context, style.stroke);
 	const radius = style.radius ?? 4;
 	const strokeWidth = style.strokeWidth ?? 1.5;
-	const visualSig = [frame.width, frame.height, selected, hovered, fill, fillAlpha, stroke, radius, strokeWidth].join("|");
+	const decorated = props.decoration !== "none";
+	const visualSig = [props.decoration, frame.width, frame.height, fill, fillAlpha, baseStroke, alpha, radius, strokeWidth, style.dash, style.trim].join("|");
 	if (visualSig !== parts.visualSig) {
 		parts.visualSig = visualSig;
 		parts.box.clear();
-		parts.box.roundRect(0, 0, frame.width, frame.height, radius).fill({ color: fill, alpha: fillAlpha });
-		if (strokeWidth > 0 || selected) {
-			parts.box.roundRect(0, 0, frame.width, frame.height, radius).stroke({ color: stroke, width: selected ? Math.max(2, strokeWidth) : strokeWidth, alpha });
+		if (decorated) parts.box.roundRect(0, 0, frame.width, frame.height, radius).fill({ color: fill, alpha: fillAlpha });
+		const pattern = dashPattern(style.dash, strokeWidth);
+		const trim = style.trim ?? 1;
+		if (decorated && strokeWidth > 0 && trim > 0) {
+			if (pattern || trim < 1) tracePolyline(parts.box, trimPolyline(roundRectPoints(frame.width, frame.height, radius), trim), pattern);
+			else parts.box.roundRect(0, 0, frame.width, frame.height, radius);
+			parts.box.stroke({ color: baseStroke, width: strokeWidth, alpha, cap: pattern || trim < 1 ? "round" : "butt", join: "round" });
 		}
 	}
 
-	const title = locked ? `🔒 ${props.label || "Frame"}` : props.label || "Frame";
+	parts.label.visible = decorated;
+	const title = locked ? `🔒 ${props.label}`.trim() : props.label;
 	const labelColor = style.stroke ? baseStroke : context.palette.muted;
-	const textSig = [title, labelColor].join("|");
+	const textSig = [title, labelColor, context.style.font].join("|");
 	if (textSig !== parts.textSig) {
 		parts.textSig = textSig;
 		parts.label.text = title;
 		parts.label.style.fill = labelColor;
+		parts.label.style.fontFamily = context.style.font;
 	}
 	parts.label.position.set(4, -18);
 }
@@ -74,10 +79,10 @@ export const frameCardRenderer: BoardCardRenderer = {
 		if (item.type === "frame") sync(container, item as SceneItem<BoardFrameItem>, context);
 	},
 	renderFar: (graphics, item, context) => {
-		if (item.type !== "frame") return;
+		if (item.type !== "frame" || item.props.decoration === "none") return;
 		drawFarPlate(graphics, item.frame, {
 			fill: itemColor(context, item.style.fill ?? item.style.stroke, "neutral", "fill"),
-			fillAlpha: Math.max(0.07, item.style.fillOpacity ?? (item.style.fill ? 1 : 0)),
+			fillAlpha: Math.max(0.07, item.style.fillOpacity ?? (item.style.fill ? 1 : 0)) * itemAlpha(context, item.style.fill ?? item.style.stroke),
 		});
 	},
 	destroy: (container) => {

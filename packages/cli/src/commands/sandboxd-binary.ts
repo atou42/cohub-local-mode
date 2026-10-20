@@ -8,9 +8,10 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
 // Pin only after all platform artifacts are published to the public CDN.
-export const SANDBOXD_VERSION = "v2.61.1";
+export const SANDBOXD_VERSION = "v2.68.0";
 
 const BINARY_NAME = "cohub-sandboxd";
+const binaryName = (goos: string) => goos === "windows" ? `${BINARY_NAME}.exe` : BINARY_NAME;
 
 // Public CDN prefix hosting the release archives (the repo is private, so the
 // GitHub Release assets are not publicly downloadable). Overridable for staging
@@ -22,7 +23,7 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
 const LOCK_STALE_MS = 5 * 60 * 1000;
 
 // Map Node's platform/arch to the Go GOOS/GOARCH used in release asset names.
-const GOOS_BY_PLATFORM: Record<string, string> = { darwin: "darwin", linux: "linux" };
+const GOOS_BY_PLATFORM: Record<string, string> = { darwin: "darwin", linux: "linux", win32: "windows" };
 const GOARCH_BY_ARCH: Record<string, string> = { x64: "amd64", arm64: "arm64" };
 
 export class SandboxdDownloadError extends Error {
@@ -43,7 +44,7 @@ const resolveTarget = (): Target => {
 };
 
 const cacheDir = (version: string): string => join(homedir(), ".cache", "cohub", "sandboxd", version);
-const cachedBinaryPath = (version: string): string => join(cacheDir(version), BINARY_NAME);
+const cachedBinaryPath = (version: string, target: Target): string => join(cacheDir(version), binaryName(target.goos));
 const archiveName = (version: string, target: Target): string =>
   `${BINARY_NAME}_${version}_${target.goos}_${target.goarch}.tar.gz`;
 
@@ -102,18 +103,26 @@ const fetchText = (url: string, accept: string): Promise<string> =>
   });
 
 // Every published release ships the binary alongside its LICENSE and NOTICE.
-const EXPECTED_ARCHIVE_ENTRIES = [BINARY_NAME, "LICENSE", "NOTICE"];
-export function validSandboxdArchiveEntries(entries: string[]): boolean {
+export function validSandboxdArchiveEntries(entries: string[], goos: string): boolean {
+  const expected = [binaryName(goos), "LICENSE", "NOTICE"];
   return (
-    entries.length === EXPECTED_ARCHIVE_ENTRIES.length &&
-    EXPECTED_ARCHIVE_ENTRIES.every((entry) => entries.includes(entry))
+    entries.length === expected.length &&
+    expected.every((entry) => entries.includes(entry))
   );
 }
+
+// Git for Windows puts GNU tar on PATH, which treats `C:\...` as a remote host.
+// Use the system bsdtar (Windows 10+) instead.
+const tarCommand = (): string => {
+  if (process.platform !== "win32") return "tar";
+  if (!process.env.SystemRoot) throw new SandboxdDownloadError("SystemRoot is not set; cannot locate tar.exe");
+  return join(process.env.SystemRoot, "System32", "tar.exe");
+};
 
 // Reject unexpected paths before extracting the checksum-verified release.
 const listTarGz = (archivePath: string, verbose = false): Promise<string[]> =>
   new Promise((res, rej) => {
-    const child = spawn("tar", [verbose ? "-tvzf" : "-tzf", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(tarCommand(), [verbose ? "-tvzf" : "-tzf", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -130,9 +139,9 @@ const listTarGz = (archivePath: string, verbose = false): Promise<string[]> =>
     );
   });
 
-export async function validateSandboxdArchive(archivePath: string): Promise<string[]> {
+export async function validateSandboxdArchive(archivePath: string, goos: string): Promise<string[]> {
   const entries = await listTarGz(archivePath);
-  if (!validSandboxdArchiveEntries(entries)) {
+  if (!validSandboxdArchiveEntries(entries, goos)) {
     throw new SandboxdDownloadError(`Unexpected sandbox archive contents: ${entries.join(", ") || "(empty)"}`);
   }
   const details = await listTarGz(archivePath, true);
@@ -146,7 +155,7 @@ export async function validateSandboxdArchive(archivePath: string): Promise<stri
 // macOS and Linux), keeping the CLI free of native archive dependencies.
 const extractTarGz = (archivePath: string, cwd: string): Promise<void> =>
   new Promise((res, rej) => {
-    const child = spawn("tar", ["-xzf", archivePath, "-C", cwd], { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(tarCommand(), ["-xzf", archivePath, "-C", cwd], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -206,20 +215,20 @@ const downloadAndVerify = async (version: string, target: Target): Promise<strin
       throw new SandboxdDownloadError(`Checksum mismatch for ${name} (expected ${expected}, got ${actual})`);
     }
 
-    const entries = await validateSandboxdArchive(archivePath);
+    const entries = await validateSandboxdArchive(archivePath, target.goos);
     await extractTarGz(archivePath, tempDir);
     for (const entry of entries) {
       if (!(await isSafeArchiveFile(join(tempDir, entry)))) {
         throw new SandboxdDownloadError(`Unsafe sandbox archive entry: ${entry}`);
       }
     }
-    const extractedBinary = join(tempDir, BINARY_NAME);
+    const extractedBinary = join(tempDir, binaryName(target.goos));
     if (!(await isSafeArchiveFile(extractedBinary))) {
-      throw new SandboxdDownloadError(`Archive ${name} did not contain ${BINARY_NAME}`);
+      throw new SandboxdDownloadError(`Archive ${name} did not contain ${binaryName(target.goos)}`);
     }
 
     // Atomically move into the version cache (fall back to copy across devices).
-    const dest = cachedBinaryPath(version);
+    const dest = cachedBinaryPath(version, target);
     await mkdir(dirname(dest), { recursive: true });
     await rename(extractedBinary, dest).catch(async (err) => {
       if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
@@ -249,10 +258,10 @@ export const ensureSandboxdBinary = async (options: EnsureSandboxdOptions = {}):
   }
 
   const version = options.version?.trim() || SANDBOXD_VERSION;
-  const cached = cachedBinaryPath(version);
+  const target = resolveTarget();
+  const cached = cachedBinaryPath(version, target);
   if (await isExecutableFile(cached)) return cached;
 
-  const target = resolveTarget();
   return withLock(version, async () => {
     // Re-check inside the lock: another process may have finished downloading.
     if (await isExecutableFile(cached)) return cached;

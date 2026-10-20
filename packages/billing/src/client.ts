@@ -47,6 +47,7 @@ export function configureBillingRuntime(input: {
   runtimeConfig = input.config ?? {};
   checkoutLockRedisRef.current = input.redis ?? null;
   defaultBillingOperations = null;
+  defaultSpaceWalletBillingOperations = null;
 }
 
 export class BillingConfigurationError extends Error {
@@ -64,6 +65,15 @@ export function resolveBillingClientConfig(
   const adminApiKey = config.talesofaiBillingAdminApiKey?.trim();
   if (!baseUrl || !businessKey || !adminApiKey) return null;
   return { baseUrl, businessKey, adminApiKey };
+}
+
+export function resolveSpaceWalletBillingClientConfig(
+  config: BillingRuntimeConfig = runtimeConfig,
+): BillingClientConfig | null {
+  const personal = resolveBillingClientConfig(config);
+  const businessKey = config.talesofaiBillingSpaceWalletBusinessKey?.trim();
+  if (!personal || !businessKey || businessKey === personal.businessKey) return null;
+  return { ...personal, businessKey };
 }
 
 export function isBillingConfigured(): boolean {
@@ -245,6 +255,10 @@ export function createDisabledBillingOperations(
 
     async getCreditStatus(): Promise<BillingCreditStatus> {
       return emptyCreditStatus();
+    },
+
+    async confirmSpaceWalletOrder() {
+      throw new BillingConfigurationError("Space wallet billing is not configured");
     },
 
     async getCatalog(input?: BillingUserRef): Promise<BillingCatalog> {
@@ -521,6 +535,24 @@ function lazyBusinessBillingOperations(
 }
 
 let defaultBillingOperations: BillingOperations | null = null;
+let defaultSpaceWalletBillingOperations: SpaceWalletBillingOperations | null = null;
+
+export type SpaceWalletBillingOperations = BillingOperations & { readonly businessKey: string | null };
+
+export function createSpaceWalletBillingOperations(config: BillingRuntimeConfig = runtimeConfig): SpaceWalletBillingOperations {
+  const clientConfig = resolveSpaceWalletBillingClientConfig(config);
+  const operations = clientConfig
+    ? createTalesofaiBillingOperations(clientConfig)
+    : createDisabledBillingOperations("A separate wallet billing business is required");
+  return Object.assign(operations, { businessKey: clientConfig?.businessKey ?? null });
+}
+
+export const spaceWalletBillingOperations = new Proxy({} as SpaceWalletBillingOperations, {
+  get(_target, property, receiver) {
+    defaultSpaceWalletBillingOperations ??= createSpaceWalletBillingOperations();
+    return Reflect.get(defaultSpaceWalletBillingOperations, property, receiver);
+  },
+});
 
 export function createTalesofaiBillingOperations(
   clientConfig: BillingClientConfig,

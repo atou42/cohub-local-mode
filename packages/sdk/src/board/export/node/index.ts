@@ -24,37 +24,15 @@ import {
   type BoardExportResult,
   renderBoardExport,
 } from "../index.js";
-import type { BoardSketchHost } from "../../render/renderers/board-renderer-registry.js";
+import type { BoardScriptHost } from "../../render/renderers/board-renderer-registry.js";
+import { initializeBoardFonts, type BoardFontRegistry, type BoardNodeFont } from "./fonts.js";
+
+export type { BoardNodeFont } from "./fonts.js";
 
 export type NodeCanvasModule = {
   createCanvas: (width: number, height: number) => unknown;
   Image: new () => unknown;
-  GlobalFonts: {
-    registerFromPath: (path: string, name?: string) => unknown;
-    has: (name: string) => boolean;
-    setAlias?: (fontName: string, alias: string) => boolean;
-  };
-};
-
-const SYSTEM_UI_FAMILIES = [
-  "Noto Sans",
-  "DejaVu Sans",
-  "Liberation Sans",
-  "FreeSans",
-  "Helvetica Neue",
-  "Arial",
-  "Segoe UI",
-];
-
-function aliasSystemUi(fonts: NodeCanvasModule["GlobalFonts"]): void {
-  if (!fonts.setAlias || fonts.has("system-ui")) return;
-  const family = SYSTEM_UI_FAMILIES.find((name) => fonts.has(name));
-  if (family) fonts.setAlias(family, "system-ui");
-}
-
-export type BoardNodeFont = {
-  path: string;
-  family?: string;
+  GlobalFonts: BoardFontRegistry;
 };
 
 export type BoardNodeRendererOptions = {
@@ -62,11 +40,15 @@ export type BoardNodeRendererOptions = {
   canvasModule?: NodeCanvasModule;
 };
 
-export type BoardNodeTexture = { readonly __boardTexture: unique symbol };
+export type BoardNodeTexture = {
+  readonly __boardTexture: unique symbol;
+  destroy: (destroySource?: boolean) => void;
+};
 
 export type BoardNodeRenderer = {
   renderer: Renderer;
   canvasModule: NodeCanvasModule;
+  fonts?: readonly BoardNodeFont[];
   decodeImage: (bytes: Uint8Array, mimeType?: string) => Promise<BoardNodeTexture>;
   destroy: () => void;
 };
@@ -134,10 +116,8 @@ export async function createNodeBoardRenderer(
     CanvasTextPipe,
   );
 
-  for (const font of options.fonts ?? []) {
-    canvasModule.GlobalFonts.registerFromPath(font.path, font.family ?? BOARD_TEXT_FONT_FAMILY);
-  }
-  aliasSystemUi(canvasModule.GlobalFonts);
+  const fonts = (options.fonts ?? []).map((font) => ({ ...font, family: font.family ?? BOARD_TEXT_FONT_FAMILY }));
+  initializeBoardFonts(canvasModule.GlobalFonts, fonts);
 
   function createCanvas(width = 1, height = 1) {
     const canvas = canvasModule.createCanvas(
@@ -184,20 +164,22 @@ export async function createNodeBoardRenderer(
   return {
     renderer: renderer as unknown as Renderer,
     canvasModule,
-    decodeImage: async (bytes, mimeType = "image/png") => {
+    fonts,
+    decodeImage: async (bytes) => {
       const image = new canvasModule.Image() as {
-        src: string;
+        src: Uint8Array | string;
         width: number;
         height: number;
         onload?: () => void;
         onerror?: (error: unknown) => void;
       };
-      const base64 = Buffer.from(bytes).toString("base64");
       await new Promise<void>((resolve, reject) => {
         image.onload = () => resolve();
         image.onerror = (error) => reject(error);
-        image.src = `data:${mimeType};base64,${base64}`;
+        image.src = bytes;
       });
+      image.onload = undefined;
+      image.onerror = undefined;
       return new Texture({
         source: new ImageSource({
           resource: image as never,
@@ -223,7 +205,7 @@ export type BoardNodeExportOptions = Omit<BoardExportOptions, "textures" | "back
     position: "center" | "top" | "bottom" | "left" | "right";
     opacity: number;
   };
-  sketches?: BoardSketchHost;
+  scripts?: BoardScriptHost;
   format?: BoardNodeExportFormat;
   quality?: number;
 };
@@ -239,7 +221,7 @@ const MIME: Record<BoardNodeExportFormat, string> = {
   webp: "image/webp",
 };
 
-export { createNodeBoardSketchHost } from "./sketch.js";
+export { createNodeBoardScriptHost } from "./scripts.js";
 
 export function boardImageMimeType(format: BoardNodeExportFormat): string {
   return MIME[format];
@@ -250,10 +232,10 @@ export function exportBoardImageBytes(
   document: BoardDocument,
   options: BoardNodeExportOptions = {},
 ): BoardNodeExportResult | null {
-  const { format = "png", quality = 0.92, textures, sketches, backgroundImage, ...rest } = options;
+  const { format = "png", quality = 0.92, textures, scripts, backgroundImage, ...rest } = options;
   const result = renderBoardExport(renderer.renderer, document, {
     ...rest,
-    ...(sketches ? { sketches } : {}),
+    ...(scripts ? { scripts } : {}),
     ...(textures ? { textures: textures as unknown as Map<string, Texture> } : {}),
     ...(backgroundImage
       ? {
@@ -266,11 +248,16 @@ export function exportBoardImageBytes(
   });
   if (!result) return null;
   const canvas = result.canvas as unknown as {
+    width: number;
+    height: number;
     toBuffer: (mime: string, quality?: number) => Buffer;
   };
-  const bytes =
-    format === "png"
-      ? canvas.toBuffer(MIME.png)
-      : canvas.toBuffer(MIME[format], Math.round(quality * 100));
-  return { bytes: new Uint8Array(bytes), plan: result.plan, warnings: result.warnings, format };
+  try {
+    const bytes = format === "png" ? canvas.toBuffer(MIME.png) : canvas.toBuffer(MIME[format], Math.round(quality * 100));
+    return { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), plan: result.plan, warnings: result.warnings, format };
+  } finally {
+    // Native canvas memory is not visible to V8's heap pressure. Release it eagerly.
+    canvas.width = 1;
+    canvas.height = 1;
+  }
 }

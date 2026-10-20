@@ -1,4 +1,6 @@
 <script lang="ts">
+import { resourceAppLaunch, resourceAppRef } from "@cohub/protocol";
+import { buildAppNavigationOpenMessage } from "@cohub/protocol/app-navigation";
 import type {
 	AppRecord,
 	BillingCreditStatus,
@@ -21,21 +23,19 @@ import {
 	CircleHelp,
 	Clock,
 	CreditCard,
-	Download,
 	FolderKanban,
 	Gift,
 	History,
 	Keyboard,
 	Loader2,
 	LogOut,
-	MessageSquare,
+	MessageSquareText,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Pencil,
 	Plus,
 	Rocket,
 	Save,
-	Search,
 	Settings,
 	Sparkles,
 	Tags,
@@ -46,6 +46,7 @@ import { onDestroy, onMount, tick, untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { floatNear } from "$lib/actions/portal";
+import { appHomeHref } from "$lib/app-entry";
 import { appDisplayTitle, appIconUrl } from "$lib/app-page-meta";
 import { sortAppsByRecentUpdate } from "$lib/app-sort";
 import { signOut } from "$lib/auth";
@@ -58,12 +59,12 @@ import { openCommandPalette } from "$lib/command-palette/open";
 import { clearCachedPaletteOverview } from "$lib/command-palette/palette-overview";
 import { APP_AREA_ICONS, appAreaLabel } from "$lib/components/app-area";
 import ChannelProviderIcon from "$lib/components/ChannelProviderIcon.svelte";
+import EntityIcon from "$lib/components/EntityIcon.svelte";
 import NewLabelPopover from "$lib/components/NewLabelPopover.svelte";
-import SessionRow, {
-	type SessionRowTree,
-} from "$lib/components/SessionRow.svelte";
+import SessionRow from "$lib/components/SessionRow.svelte";
 import SidebarFlyout from "$lib/components/SidebarFlyout.svelte";
 import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import {
 	SETTINGS_SECTION_ICONS,
 	settingsSectionLabel,
@@ -73,7 +74,6 @@ import SidebarCheckpointRow from "$lib/components/sidebar/SidebarCheckpointRow.s
 import SidebarFallbackResourceRow from "$lib/components/sidebar/SidebarFallbackResourceRow.svelte";
 import SidebarFileRow from "$lib/components/sidebar/SidebarFileRow.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
-import { downloadCohubDebugBundle } from "$lib/debugger";
 import {
 	type CohubResourceDragPayload,
 	getCohubResourceDragData,
@@ -83,6 +83,7 @@ import {
 	type LabelAssignableCohubResource,
 	setCohubResourceDragData,
 } from "$lib/drag/cohub-resource-drag";
+import { requestAppNavigation } from "$lib/features/app/app-navigation-request";
 import {
 	APPS_CHANGED_EVENT,
 	type AppsChangedDetail,
@@ -92,7 +93,7 @@ import {
 import ChatsPane from "$lib/features/sessions/ChatsPane.svelte";
 import { chatsInbox } from "$lib/features/sessions/chats-inbox.svelte";
 import { clearAccountSnapshots } from "$lib/features/settings/account-snapshots";
-import { appActionName } from "$lib/features/space/modules/task-run-utils";
+import { resourceFromUrl } from "$lib/features/space/modules/resource-app-route";
 import { withSidebarMainWindow } from "$lib/features/space/modules/window-route";
 import SpacesViewsNav from "$lib/features/spaces/SpacesViewsNav.svelte";
 import { extractGenerationPromptPreview } from "$lib/generation-task-media";
@@ -106,6 +107,7 @@ import {
 	removeResourceFromLabel,
 } from "$lib/labels/resource-label-actions";
 import { useCompactShell } from "$lib/layout/compact-shell.svelte";
+import { requestListScrollTop } from "$lib/layout/list-scroll-top";
 import { sameData } from "$lib/lists/live-list-core";
 import {
 	type AppArea,
@@ -116,6 +118,7 @@ import {
 } from "$lib/mobile-nav";
 import { m } from "$lib/paraglide/messages.js";
 import { createRefreshCoordinator } from "$lib/refresh-coordinator";
+import { appActionName } from "$lib/resource-kit/task-run";
 import { sdk } from "$lib/sdk";
 import {
 	buildSessionForkTree,
@@ -251,7 +254,6 @@ let sessionIds = $state<string[]>([]);
 type SidebarSessionItem = SessionTreeItem & {
 	title: string;
 	tooltip: string | undefined;
-	tree: SessionRowTree;
 };
 let sessionForks = $state<SessionListForkRecord[]>([]);
 let checkpoints = $state<CheckpointRecord[]>([]);
@@ -1458,6 +1460,7 @@ function isSessionActivityLabel(label: LabelListItem) {
 const seenSessionActivity = new Map<string, string>();
 
 $effect(() => {
+	if (!shown) return;
 	const spaceId = currentSpaceId;
 	if (!spaceId) return;
 	const active = sessions.filter(noteSessionActivity).map(({ id }) => id);
@@ -2191,9 +2194,26 @@ async function handleNavigate(
 	});
 }
 
-function openArea(event: MouseEvent, target: AppArea) {
-	if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)
+function isPlainLeftClick(event: MouseEvent) {
+	return (
+		!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0
+	);
+}
+
+function onHomeClick(event: MouseEvent) {
+	if (!isPlainLeftClick(event)) return;
+	event.preventDefault();
+	const href = appHomeHref();
+	if (page.url.pathname === href) {
+		onClose?.();
+		requestListScrollTop();
 		return;
+	}
+	void handleNavigate(href);
+}
+
+function openArea(event: MouseEvent, target: AppArea) {
+	if (!isPlainLeftClick(event)) return;
 	event.preventDefault();
 	if (target === "account") openSettings();
 	else void handleNavigate(appAreaHref(target));
@@ -2267,40 +2287,53 @@ async function handleNavigateToSession(sessionId: string) {
 	await goto(buildPreferredSessionRoute(currentSpaceId, sessionId));
 }
 
-async function handleNavigateToCheckpoint(checkpointId: string) {
+async function navigateToResource(path: string) {
 	onClose?.();
+	const resource = resourceFromUrl(new URL(path, page.url));
+	if (
+		resource &&
+		requestAppNavigation({
+			spaceId: resource.spaceId,
+			message: buildAppNavigationOpenMessage({
+				requestId: crypto.randomUUID(),
+				target: {
+					kind: "app",
+					ref: resourceAppRef(resource.target),
+					launch: resourceAppLaunch(resource.spaceId, resource.target),
+				},
+			}),
+			fallbackHref: `${path}?native=1`,
+		})
+	)
+		return;
+	await goto(mainRouteWithWindow(path));
+}
+
+async function handleNavigateToCheckpoint(checkpointId: string) {
 	if (!currentSpaceId) return;
-	await goto(
-		mainRouteWithWindow(
-			buildSpaceCheckpointRoute(currentSpaceId, checkpointId),
-		),
+	await navigateToResource(
+		buildSpaceCheckpointRoute(currentSpaceId, checkpointId),
 	);
 }
 
 async function handleNavigateToNewCheckpoint() {
-	onClose?.();
 	if (!currentSpaceId) return;
-	await goto(mainRouteWithWindow(buildSpaceCheckpointNewRoute(currentSpaceId)));
+	await navigateToResource(buildSpaceCheckpointNewRoute(currentSpaceId));
 }
 
 async function handleNavigateToCronjob(cronjobId: string) {
-	onClose?.();
 	if (!currentSpaceId) return;
-	await goto(
-		mainRouteWithWindow(buildSpaceCronjobRoute(currentSpaceId, cronjobId)),
-	);
+	await navigateToResource(buildSpaceCronjobRoute(currentSpaceId, cronjobId));
 }
 
 async function handleNavigateToNewCronjob() {
-	onClose?.();
 	if (!currentSpaceId) return;
-	await goto(mainRouteWithWindow(buildSpaceCronjobNewRoute(currentSpaceId)));
+	await navigateToResource(buildSpaceCronjobNewRoute(currentSpaceId));
 }
 
 async function handleNavigateToTask(taskId: string) {
-	onClose?.();
 	if (!currentSpaceId) return;
-	await goto(mainRouteWithWindow(buildSpaceTaskRoute(currentSpaceId, taskId)));
+	await navigateToResource(buildSpaceTaskRoute(currentSpaceId, taskId));
 }
 
 function getCurrentSpaceOwnerUsername() {
@@ -2313,9 +2346,8 @@ function getCurrentSpaceOwnerUsername() {
 }
 
 async function handleNavigateToApp(appId: string) {
-	onClose?.();
 	if (!currentSpaceId) return;
-	await goto(mainRouteWithWindow(buildSpaceAppRoute(currentSpaceId, appId)));
+	await navigateToResource(buildSpaceAppRoute(currentSpaceId, appId));
 }
 
 function handleWorksChanged(event: Event) {
@@ -2577,11 +2609,6 @@ function buildSidebarSessionItems(
 		...item,
 		title: getSessionTreeTitle(item) ?? m.sidebar_new_chat({}, { locale }),
 		tooltip: item.fork ? forkTooltip(item.fork) : undefined,
-		tree: {
-			depth: item.visualDepth,
-			last: item.isLastChild,
-			hasChildren: item.hasChildren,
-		},
 	}));
 }
 
@@ -2642,10 +2669,10 @@ async function handleLogout() {
 	await signOut();
 }
 
-function saveDebugLog() {
+function openFeedback() {
 	showUserMenu = false;
 	onClose?.();
-	downloadCohubDebugBundle();
+	window.dispatchEvent(new CustomEvent("cohub:open-feedback"));
 }
 
 function handleGlobalSidebarKeydown(event: KeyboardEvent) {
@@ -2677,6 +2704,18 @@ function handleGlobalSidebarKeydown(event: KeyboardEvent) {
 }
 
 onMount(() => {
+	if (isMobile) return;
+	window.addEventListener("keydown", handleGlobalSidebarKeydown);
+	return () =>
+		window.removeEventListener("keydown", handleGlobalSidebarKeydown);
+});
+
+$effect(() => {
+	if (!shown) return;
+	return untrack(subscribeSidebarUpdates);
+});
+
+function subscribeSidebarUpdates() {
 	const stopSessionSync = startSessionSync();
 	const offSessionForks = sdk.onUserEvent((event) => {
 		if (event.spaceId !== currentSpaceId || event.type !== "session.created")
@@ -2727,14 +2766,10 @@ onMount(() => {
 			tasks = runs;
 		},
 	);
-	if (!isMobile) {
-		window.addEventListener("keydown", handleGlobalSidebarKeydown);
-	}
 	window.addEventListener(
 		APPS_CHANGED_EVENT,
 		handleWorksChanged as EventListener,
 	);
-	void loadCurrentSpaceFromUrl();
 
 	window.addEventListener(
 		"cohub:checkpoints-updated",
@@ -2807,9 +2842,6 @@ onMount(() => {
 		offChannelLabelDisplayNamesUpdated();
 		offTaskRunsCacheUpdated();
 		document.removeEventListener("click", handleClickOutside);
-		if (!isMobile) {
-			window.removeEventListener("keydown", handleGlobalSidebarKeydown);
-		}
 		window.removeEventListener(
 			APPS_CHANGED_EVENT,
 			handleWorksChanged as EventListener,
@@ -2827,7 +2859,7 @@ onMount(() => {
 			handleLabelAssignmentsUpdated as EventListener,
 		);
 	};
-});
+}
 
 // Load only the space addressed by the current URL. The global space list is
 // owned by the picker and management page, not the workspace sidebar.
@@ -2848,7 +2880,7 @@ $effect(() => {
 });
 
 $effect(() => {
-	if (area !== "spaces") return;
+	if (!shown || area !== "spaces") return;
 	const id = currentSpaceId;
 	if (!id) return;
 
@@ -2858,7 +2890,7 @@ $effect(() => {
 });
 
 $effect(() => {
-	if (area !== "spaces") return;
+	if (!shown || area !== "spaces") return;
 	const id = currentSpaceId;
 	if (id) {
 		sessionIds = [];
@@ -2958,7 +2990,8 @@ $effect(() => {
 	const spaceId = routeSpaceId;
 	if (!userUuid || !spaceId) return;
 	untrack(() => {
-		const sessionId = activeSession?.id ?? null;
+		const sessionId =
+			activeSession?.spaceId === spaceId ? activeSession.id : null;
 		setRecentSpace(userUuid, spaceId, sessionId);
 	});
 });
@@ -3289,7 +3322,7 @@ $effect(() => {
 				onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); chatsCollapsed = !chatsCollapsed; } }}
 			>
 				<ChevronDown class="h-3 w-3 shrink-0 text-text-tertiary transition-transform duration-150 {chatsCollapsed ? 'rotate-180' : ''}" />
-				<MessageSquare class="h-3.5 w-3.5 shrink-0 text-text-placeholder" />
+				<EntityIcon name="chat" class="h-3.5 w-3.5 text-text-placeholder" />
 				<span class="text-[11px] text-text-placeholder select-none">{m.sidebar_chats({}, { locale })}</span>
 				{@render syncSpinner(refreshingSessions, "ml-auto")}
 			</div>
@@ -3459,11 +3492,13 @@ $effect(() => {
 	{/if}
 {/snippet}
 
+{#if shown}
 {#if collapsed && !isMobile}
   <aside class="list-compact h-screen w-[52px] shrink-0 overflow-visible bg-[var(--sidebar-bg)]">
     <div class="flex h-full flex-col items-center overflow-visible border-r border-border-subtle/70 px-2 pt-1 pb-2">
       <a
-        href="/"
+        href={appHomeHref()}
+        onclick={onHomeClick}
         class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[7px] bg-brand text-[11px] font-bold text-brand-contrast-fg transition-colors duration-100 hover:bg-brand-hover"
         aria-label={m.sidebar_cohub_home({}, { locale })}
         title={m.sidebar_home({}, { locale })}
@@ -3486,12 +3521,11 @@ $effect(() => {
         aria-label={m.sidebar_search_everywhere({}, { locale })}
         title={m.sidebar_search_everywhere_shortcut({}, { locale })}
       >
-        <Search class="h-4 w-4" />
+        <EntityIcon name="search" class="h-4 w-4" />
       </button>
       <div class="mt-2 h-px w-6 bg-border-subtle/70"></div>
       <nav class="mt-2 flex flex-col items-center gap-1" aria-label={m.nav_tabs_aria({}, { locale })}>
         {#each DESKTOP_APP_AREAS as item (item)}
-          {@const Icon = APP_AREA_ICONS[item]}
           {@const current = isAppAreaPage(item, currentPath)}
           <a
             href={appAreaHref(item)}
@@ -3501,7 +3535,7 @@ $effect(() => {
             title={appAreaLabel(item, locale)}
             onclick={(event) => openArea(event, item)}
           >
-            <Icon class="h-4 w-4" />
+            <EntityIcon name={APP_AREA_ICONS[item]} class="h-4 w-4" />
           </a>
         {/each}
       </nav>
@@ -3528,14 +3562,14 @@ $effect(() => {
           {#if currentSpace}
             <button
               type="button"
-              class="new-chat-collapsed relative flex h-8 w-8 items-center justify-center rounded-[6px] text-brand transition-colors duration-100 hover:bg-brand-muted hover:text-brand"
+              class="new-chat-collapsed primary-key relative flex h-8 w-8 items-center justify-center rounded-[6px] bg-transparent text-brand transition-colors duration-100 hover:bg-brand-muted hover:text-brand"
               onclick={() => { void handleCreateNewSession(); }}
               disabled={creatingSession}
               aria-label={m.sidebar_new_chat({}, { locale })}
               title={m.sidebar_new_chat_shortcut({}, { locale })}
             >
               {#if creatingSession}
-                <Loader2 class="h-4 w-4 animate-spin" />
+                <Spinner class="h-4 w-4" />
               {:else}
                 <Plus class="h-4 w-4" />
               {/if}
@@ -3547,7 +3581,7 @@ $effect(() => {
               aria-label={m.sidebar_space_settings({}, { locale })}
               title={m.sidebar_space_settings({}, { locale })}
             >
-              <Settings class="h-4 w-4" />
+              <EntityIcon name="settings" class="h-4 w-4" />
             </button>
             <button
               type="button"
@@ -3594,7 +3628,7 @@ $effect(() => {
             </SidebarFlyout>
             <SidebarFlyout label={m.sidebar_chats({}, { locale })} active={Boolean(activeSession)} onTriggerClick={() => uiState.setLeftSidebarCollapsed(false)}>
               {#snippet trigger()}
-                <MessageSquare class="h-4 w-4" />
+                <EntityIcon name="chat" class="h-4 w-4" />
               {/snippet}
               {@render chatsSection(false)}
             </SidebarFlyout>
@@ -3652,7 +3686,7 @@ $effect(() => {
         {#if showUserMenu}
           <div
             data-user-menu
-            class="w-56 overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-1 shadow-lg"
+            class="menu-surface w-56 overflow-hidden py-1"
             use:floatNear={{
               getAnchor: () => userMenuAnchorEl,
               placement: "top-start",
@@ -3693,7 +3727,7 @@ $effect(() => {
             {/if}
             <a href="/trending" class="rail-menu-item" onclick={(e) => { e.preventDefault(); showUserMenu = false; handleNavigate('/trending'); }}><BarChart3 class="h-3.5 w-3.5" /><span>{m.sidebar_trending({}, { locale })}</span></a>
             <button type="button" class="rail-menu-item w-full" onclick={openHelpPanel}><Keyboard class="h-3.5 w-3.5" /><span>{m.sidebar_help({}, { locale })}</span></button>
-            <button type="button" class="rail-menu-item w-full" onclick={saveDebugLog}><Download class="h-3.5 w-3.5" /><span>{m.sidebar_save_debug_log({}, { locale })}</span></button>
+            <button type="button" class="rail-menu-item w-full" onclick={openFeedback}><MessageSquareText class="h-3.5 w-3.5" /><span>{m.sidebar_feedback({}, { locale })}</span></button>
             <button type="button" class="rail-menu-item w-full hover:text-error-soft" onclick={() => { showUserMenu = false; void handleLogout(); }}><LogOut class="h-3.5 w-3.5" /><span>{m.sidebar_sign_out({}, { locale })}</span></button>
           </div>
         {/if}
@@ -3718,7 +3752,7 @@ $effect(() => {
 >
   <!-- Brand Header -->
   <div class="@container flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle pl-[var(--list-content-x)] lg:h-10 {isMobile ? 'pr-[calc(var(--list-content-x)-7px)]' : 'pr-[calc(var(--list-content-x)-6px)]'}">
-    <a href="/" class="group flex min-w-0 items-center gap-2" aria-label={m.sidebar_cohub_home({}, { locale })} title={m.sidebar_home({}, { locale })}>
+    <a href={appHomeHref()} onclick={onHomeClick} class="group flex min-w-0 items-center gap-2" aria-label={m.sidebar_cohub_home({}, { locale })} title={m.sidebar_home({}, { locale })}>
       <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] bg-brand text-[11px] font-bold text-brand-contrast-fg transition-colors group-hover:bg-brand-hover">
         C
       </div>
@@ -3728,7 +3762,6 @@ $effect(() => {
       {#if !isMobile}
         <nav class="mr-1 flex items-center gap-0.5" aria-label={m.nav_tabs_aria({}, { locale })}>
           {#each DESKTOP_APP_AREAS as item (item)}
-            {@const Icon = APP_AREA_ICONS[item]}
             {@const current = isAppAreaPage(item, currentPath)}
             <a
               href={appAreaHref(item)}
@@ -3738,7 +3771,7 @@ $effect(() => {
               title={appAreaLabel(item, locale)}
               onclick={(event) => openArea(event, item)}
             >
-              <Icon class="h-3.5 w-3.5" />
+              <EntityIcon name={APP_AREA_ICONS[item]} class="h-3.5 w-3.5" />
             </a>
           {/each}
         </nav>
@@ -3750,7 +3783,7 @@ $effect(() => {
         title={m.sidebar_search_everywhere_shortcut({}, { locale })}
         aria-label={m.sidebar_search_everywhere({}, { locale })}
       >
-        <Search class="h-3.5 w-3.5 transition-colors group-hover/search:text-brand {isMobile ? '' : 'text-text-placeholder'}" />
+        <EntityIcon name="search" class="h-3.5 w-3.5 transition-colors group-hover/search:text-brand {isMobile ? '' : 'text-text-placeholder'}" />
         {#if !isMobile}
           <span class="font-mono text-[11px] tracking-[0.02em]" aria-hidden="true">⌘K</span>
         {/if}
@@ -3766,7 +3799,7 @@ $effect(() => {
             void handleNavigate(buildSessionsRoute());
           }}
         >
-          <MessageSquare class="h-3.5 w-3.5" />
+          <EntityIcon name="chat" class="h-3.5 w-3.5" />
         </a>
       {:else}
         <button
@@ -3808,19 +3841,19 @@ $effect(() => {
       <div class="px-1.5 py-1.5 shrink-0 space-y-[2px]">
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-[var(--sidebar-primary-action-radius)] border border-[color:var(--sidebar-primary-action-border)] bg-[var(--sidebar-primary-action-bg)] px-1.5 py-1.5 text-[var(--sidebar-primary-action-fg)] transition-colors duration-100 hover:bg-[var(--sidebar-primary-action-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+          class="primary-key flex w-full items-center gap-2 rounded-[var(--sidebar-primary-action-radius)] border border-[color:var(--sidebar-primary-action-border)] bg-[var(--sidebar-primary-action-bg)] px-1.5 py-1.5 text-[var(--sidebar-primary-action-fg)] transition-colors duration-100 hover:bg-[var(--sidebar-primary-action-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           onclick={() => { void handleCreateNewSession(); }}
           disabled={creatingSession}
           title={m.sidebar_new_chat_shortcut({}, { locale })}
           aria-label={m.sidebar_new_chat_shortcut({}, { locale })}
         >
           {#if creatingSession}
-            <Loader2 class="w-3.5 h-3.5 animate-spin shrink-0" />
+            <Spinner class="h-3.5 w-3.5" />
             <span class="text-[12px] font-medium">{m.sidebar_creating({}, { locale })}</span>
           {:else}
             <Plus class="w-3.5 h-3.5 shrink-0" />
             <span class="text-[12px] font-medium">{m.sidebar_new_chat({}, { locale })}</span>
-            <span class="new-chat-shortcut ml-auto hidden rounded-[4px] border border-brand/20 bg-bg-primary/70 px-1.5 py-px font-mono text-[10px] text-brand/80 xl:inline">⌘O</span>
+            <span class="ml-auto hidden rounded-[4px] border border-[color:var(--sidebar-primary-action-fg)]/20 px-1.5 py-px font-mono text-[10px] text-[color:var(--sidebar-primary-action-fg)]/80 xl:inline">⌘O</span>
           {/if}
         </button>
         <button
@@ -3829,7 +3862,7 @@ $effect(() => {
           onclick={() => { void handleNavigate(buildSpaceSettingsRoute(currentSpaceId!)); }}
           title={m.sidebar_space_settings({}, { locale })}
         >
-          <Settings class="w-3.5 h-3.5 shrink-0" />
+          <EntityIcon name="settings" class="h-3.5 w-3.5" />
           <span class="text-[12px] font-medium">{m.nav_settings({}, { locale })}</span>
         </button>
         <button
@@ -4120,9 +4153,7 @@ $effect(() => {
     {/if}
   {:else if area === "chats"}
     <div class="min-h-0 flex-1">
-      {#if shown}
-        <ChatsPane variant="sidebar" activeSessionId={activeInboxSessionId} />
-      {/if}
+      <ChatsPane variant="sidebar" activeSessionId={activeInboxSessionId} />
     </div>
   {:else}
     <div class="px-1.5 pt-2 pb-1">
@@ -4159,7 +4190,7 @@ $effect(() => {
     {#if showUserMenu}
       <div
         data-user-menu
-        class="w-[calc(100%-0px)] overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-0 shadow-lg"
+        class="menu-surface w-[calc(100%-0px)] overflow-hidden py-0"
         use:floatNear={{
           getAnchor: () => expandedUserMenuAnchorEl,
           placement: "top-start",
@@ -4235,10 +4266,10 @@ $effect(() => {
 	        <button
 	          type="button"
 	          class="flex items-center gap-2 w-full px-2.5 py-[7px] text-[12px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors duration-100"
-	          onclick={saveDebugLog}
+	          onclick={openFeedback}
 	        >
-	          <Download class="w-3.5 h-3.5" />
-	          <span>{m.sidebar_save_debug_log({}, { locale })}</span>
+	          <MessageSquareText class="w-3.5 h-3.5" />
+	          <span>{m.sidebar_feedback({}, { locale })}</span>
 	        </button>
 	        <button
 	          type="button"
@@ -4268,7 +4299,7 @@ $effect(() => {
       <div class="relative shrink-0" bind:this={helpMenuAnchorEl} data-help-menu>
         {#if showHelpMenu}
           <div
-            class="w-64 overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-1 shadow-lg"
+            class="menu-surface w-64 overflow-hidden py-1"
             data-help-menu
             use:floatNear={{
               getAnchor: () => helpMenuAnchorEl,
@@ -4320,6 +4351,7 @@ $effect(() => {
   </div>
 </aside>
 {/if}
+{/if}
 
 {#if showNewLabelPopover && currentSpaceId && canManageLabels}
 	<NewLabelPopover
@@ -4331,33 +4363,6 @@ $effect(() => {
 {/if}
 
 <style>
-	:global([data-theme="neta-studio"]) .new-chat-collapsed {
-		border: 1px solid var(--sidebar-primary-action-border);
-		border-radius: var(--sidebar-primary-action-radius);
-		background: var(--sidebar-primary-action-bg);
-		color: var(--sidebar-primary-action-fg);
-		box-shadow: 0 6px 16px rgb(0 0 0 / 18%);
-	}
-
-	:global([data-theme="neta-studio"]) .new-chat-collapsed:hover {
-		background: var(--sidebar-primary-action-bg-hover);
-		color: var(--sidebar-primary-action-fg);
-	}
-
-	:global([data-theme="neta-studio"]) .new-chat-shortcut {
-		border-color: color-mix(
-			in srgb,
-			var(--sidebar-primary-action-fg) 20%,
-			transparent
-		);
-		background: transparent;
-		color: color-mix(
-			in srgb,
-			var(--sidebar-primary-action-fg) 70%,
-			transparent
-		);
-	}
-
 	.label-tree-row {
 		position: relative;
 		display: flex;

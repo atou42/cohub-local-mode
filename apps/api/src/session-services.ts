@@ -1,4 +1,3 @@
-import { billingOperations, createBillingUsageGate } from "@cohub/billing";
 import { COHUB_AGENT_TURNS_QUEUE, createBullmqQueue, defaultJobRetention } from "@cohub/infra/bullmq";
 import { getCurrentRequestId, getOrCreateRequestId } from "@cohub/infra/tracing";
 import { injectTrace } from "@cohub/infra/tracing/propagator";
@@ -10,7 +9,7 @@ import { config } from "./config.js";
 import { redisCommandClient } from "./redis.js";
 import { expandPromptTemplate, type LoadPromptTemplatesOptions, type ExpandedPromptTemplate } from "./prompt-templates.js";
 import { expandSkillCommand, type ExpandedSkill, type LoadSkillsOptions } from "./skills.js";
-import { ensureSpaceSandbox, recoverSpaceSandbox } from "./space-sandboxes.js";
+import { recoverSpaceSandbox } from "./space-sandboxes.js";
 import { assignSessionUserLabelsAndDispatch, getSpaceSessionById, getSpaceById } from "./space-sessions.js";
 import { touchSpaceActivity } from "./space-activity.js";
 import { dispatchSessionUpdated, dispatchTurnCreated } from "./realtime-events.js";
@@ -20,6 +19,7 @@ import { createLogger } from "@cohub/infra/logging";
 import { validatePromptModel } from "./llm/models.js";
 import { enqueueReferences } from "./reference-index-queue.js";
 import { getRuntimeRegistration } from "./runtime.js";
+import { spaceWalletBilling } from "./space-wallet-billing.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
@@ -53,12 +53,7 @@ const agentTurnQueue = createBullmqQueue<{
 });
 
 const sandboxLifecycle = createSandboxLifecycleController({ db, infra: null });
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    logger.warn("[BillingGate] fail-open after billing evaluation error", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 let defaultSessionDomainServices: ReturnType<typeof createSessionServices> | null = null;
 
@@ -93,10 +88,6 @@ export function getSessionDomainServices(input?: {
 
         const space = await getSpaceById(spaceId);
         if (!space) return;
-        if (reason === "missing") {
-          await ensureSpaceSandbox({ spaceId, status: "pending", runtimeStatus: "unknown" });
-        }
-
         void recoverSpaceSandbox({
           spaceId,
           userUuid: userId,

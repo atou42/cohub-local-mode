@@ -3,7 +3,7 @@ import { AuthorizationError, verifyUserAccessToken } from "@cohub/identity";
 import { buildTraceHeaders, getTraceResponseHeaders, type TraceIdentifiers } from "@cohub/infra/tracing";
 import type { ContentBlock } from "@cohub/protocol/core";
 import type { RealtimeRoom, RealtimeRoomDescriptor } from "@cohub/protocol/realtime";
-import type { BillingPayload } from "@cohub/protocol";
+import type { BillingPayload, HarnessKind } from "@cohub/protocol";
 import type { GatewayAuthUser } from "./config.js";
 import { gatewayConfig } from "./config.js";
 import { verifyLocalSandboxAccessToken } from "./local-sandbox-auth.js";
@@ -157,6 +157,28 @@ export const authorizeAppRoom = async (input: {
   return { room: data.room, participantId: data.participantId, userKey: data.userKey };
 };
 
+export const authorizeHostedRoom = async (input: {
+  authToken: string;
+  roomId: string;
+  ticket: string;
+}): Promise<{ room: RealtimeRoomDescriptor; participantId: string }> => {
+  const response = await fetch(`${gatewayConfig.apiBaseUrl}/internal/gateway/authorize-hosted-room`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-worker-secret": gatewayConfig.workerSecret,
+      authorization: `Bearer ${input.authToken}`,
+      ...buildTraceHeaders(),
+    },
+    body: JSON.stringify({ roomId: input.roomId, ticket: input.ticket }),
+  });
+  const data = await parseJson<{ ok?: boolean; room?: RealtimeRoomDescriptor; participantId?: string; message?: string }>(response);
+  if (!response.ok || !data?.ok || !data.room || !data.participantId) {
+    throw new Error(data?.message || `Hosted room authorization failed ${response.status}`);
+  }
+  return { room: data.room, participantId: data.participantId };
+};
+
 export const authorizeBoardAwareness = async (input: {
   authToken: string;
   boardId: string;
@@ -237,7 +259,7 @@ export const submitInternalSessionPrompt = async (input: {
   source: string;
   model?: string | null;
   provider?: string | null;
-  harness?: "cohub" | "pi" | "codex";
+  harness?: HarnessKind;
   thinkingLevel?: string | null;
   context?: Record<string, unknown> | null;
 }): Promise<{ ok: true; turnId: string; userMessageId: string; trace: TraceIdentifiers }> => {

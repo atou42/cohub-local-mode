@@ -90,6 +90,10 @@ func (s *Server) serveSession(parentCtx context.Context, conn *websocket.Conn, r
 				s.logger.Warn("failed to parse rpc.request", slog.String("connectionId", session.id), slog.String("error", err.Error()))
 				continue
 			}
+			if request.SpaceID != session.spaceID || request.SandboxID != s.hostname {
+				conn.Close(websocket.StatusPolicyViolation, "sandbox resource mismatch")
+				return
+			}
 			s.logger.Debug("rpc:request received", slog.String("connectionId", session.id), slog.String("identity", session.identity), slog.String("method", request.Method), slog.String("requestId", request.RequestID))
 			go s.handleRPCRequest(session, request)
 		default:
@@ -99,6 +103,11 @@ func (s *Server) serveSession(parentCtx context.Context, conn *websocket.Conn, r
 }
 
 func (s *Server) handleSessionAttach(session *connectionSession, attach protocol.SessionAttach) {
+	if attach.SpaceID != session.spaceID || attach.SandboxID != s.hostname {
+		session.conn.Close(websocket.StatusPolicyViolation, "sandbox resource mismatch")
+		session.cancel()
+		return
+	}
 	identity := attach.Identity
 	if identity == "" {
 		s.logger.Warn("session.attach missing identity", slog.String("connectionId", session.id))
@@ -220,9 +229,12 @@ func (s *Server) sendHeartbeat(session *connectionSession, includeSnapshot bool)
 			FSWriteSource:      true,
 			FSEdit:             true,
 			FSMkdir:            true,
+			FSDelete:           nativeFSMutations,
+			FSMove:             nativeFSMutations,
 			FSStat:             true,
 			FSLs:               true,
 			FSTree:             true,
+			FSTreePagination:   true,
 			FSFind:             true,
 			FSGrep:             true,
 			FSSearch:           s.isSearchEnabled(),
@@ -240,13 +252,16 @@ func (s *Server) sendHeartbeat(session *connectionSession, includeSnapshot bool)
 			Notes: []string{
 				"sandbox paths follow host-like semantics; cwd defaults to /workspace",
 				"/configs/platform/.agents is mounted read-only for platform skills",
-				"/configs/user/.agents is mounted read-only for user skills and setup.sh",
-				"if /configs/user/.agents/setup.sh exists, sandbox runs it on startup",
+				"/configs/user/.agents is mounted read-only for user skills",
+				"/configs/user/.cohub is mounted read-only for user setup",
+				"cloud sandboxes run user, mod, then workspace .cohub/setup.sh after workspace bootstrap",
+				"local sandboxes never run setup scripts automatically",
 			},
 			Roots: []protocol.SandboxFilesystemRoot{
 				{Path: s.cfg.WorkspaceDir, Writable: true, Label: "cwd"},
 				{Path: s.cfg.PlatformAgentsDir, Writable: false, Label: "platform-skills"},
 				{Path: s.cfg.UserAgentsDir, Writable: false, Label: "user-agents"},
+				{Path: s.cfg.UserCohubDir, Writable: false, Label: "user-cohub"},
 				{Path: "/tmp", Writable: true, Label: "tmp"},
 			},
 		}

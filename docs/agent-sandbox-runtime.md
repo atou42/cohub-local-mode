@@ -41,14 +41,31 @@ turns a user's local folder into the sandbox of a Space:
 `cohub-sandboxd` is the same code as the cloud sandbox, run only as a `--local` dial-out.
 CI (`.github/workflows/sandbox-binaries-build.yml`) cross-compiles common platforms when a `v*` tag is pushed:
 
-- `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`
+- `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`, `windows/arm64`
 - Each platform produces `cohub-sandboxd_<version>_<os>_<arch>.tar.gz` + `.sha256`, plus an aggregated `SHA256SUMS.txt`
 - The version is injected via `-ldflags -X main.buildVersion=<tag>`; inside containers the `COHUB_SANDBOX_VERSION` env var takes precedence and the legacy `IMAGE_VERSION` is accepted
-- Windows is not supported yet (process group management depends on Unix syscalls; platform support to follow)
+- Windows archives contain `cohub-sandboxd.exe`; `verify:sandboxd` requires all six platforms before the CLI can publish
 - Android is built by the app's Gradle build, not this workflow: `:app:buildSandboxd` cross-compiles
   `apps/sandbox` with Go and the NDK (cgo, for bionic's resolver) into the APK's native library
   directory, the one place an app may execute its own binaries. See [Local Runtime](local-runtime.md#android-device--android-设备)
 - Artifacts are attached to the GitHub Release (private repo, internal downloads only) and uploaded to the public CDN `https://public.cohub.live/sandboxd/<version>/` (the CLI download source)
+
+### Windows
+
+Windows-only behavior lives in `*_windows.go` files and `win32` CLI branches; Unix paths are unchanged.
+
+- Shell commands run through Git Bash (`COHUB_BASH`, then the Git installation next to `git.exe`, then the standard
+  install locations). `bash` is never looked up on PATH because it commonly resolves to WSL. `LANG=C.UTF-8` is set
+  when no locale is configured; native Windows programs may still write their own code page.
+- Each command runs in a Job Object: abort/timeout terminates the whole tree, a normal exit leaves background
+  descendants running (matching the Unix process group).
+- Pi/Codex tool processes are not in a Job Object: cancelling a turn stops them with `taskkill /T`, which follows
+  parent links, so a descendant whose parent already exited (a detached background job) can outlive the turn.
+  On Unix the process group covers it.
+- Rooted paths such as `/workspace/...` are sandbox paths. The fence compares case-insensitively and rejects
+  UNC/device paths, drive-relative paths and alternate data streams.
+- The managed control channel uses a per-launch named pipe (`COHUB_RUNTIME_CONTROL_PIPE`) instead of fd 3.
+- `fs.delete` / `fs.move` (capabilities `fsDelete` / `fsMove`) replace the `rm` / `mv` argv fallback.
 
 ### Managed download (CLI)
 
@@ -83,7 +100,10 @@ The system keeps a single mode:
 
 - `apps/sandbox` exposes a WebSocket server (listens on `0.0.0.0:8788` by default)
 - `apps/agent` connects to the sandbox as a client
-- On connect, the sandbox immediately sends a first `sandbox.heartbeat` frame with capabilities / filesystem / metadata snapshots
+- On authenticated connect, the sandbox sends a first `sandbox.heartbeat` frame with capabilities / filesystem / metadata snapshots
+- Cloud listeners require `Authorization: Bearer <SANDBOX_RPC_TOKEN>` before Upgrade; health probes remain unauthenticated.
+- Clients derive per-instance credentials using the platform key and metadata nonce. Legacy cloud instances without a nonce remain anonymous until recreated; Pod-IP-only metadata is still supported.
+- See [RPC auth rollout](sandbox-rpc-auth-rollout.md) for deployment, rollback and key rotation.
 - All tools are forwarded to the sandbox over WebSocket RPC
 
 ## Current sandbox filesystem semantics
@@ -116,6 +136,7 @@ The system keeps a single mode:
 
 - `LOCAL_SANDBOX_SPACE_ID` — Space ID of the sandbox during local debugging
 - `LOCAL_SANDBOX_WS_URL` — WebSocket address of the sandbox during local debugging (e.g. `ws://127.0.0.1:8788/sandbox`)
+- `SANDBOX_RPC_TOKEN` — The same token configured on the listen-mode development sandbox
 - `SPACE_ID`
 - `REDIS_URL`
 - `SPACE_DIR`
@@ -125,13 +146,11 @@ The system keeps a single mode:
 
 ### Sandbox
 
-- `SANDBOX_WS_HOST=0.0.0.0`
-- `SANDBOX_WS_PORT=8788`
-- `SPACE_ID`
-- `SANDBOX_ID`
+- `COHUB_SPACE_ID`
+- `SANDBOX_RPC_TOKEN` — Required for cloud/listen mode; retained in Config, removed from inherited environments
+- `SANDBOX_REPORT_TOKEN` — Separate report credential; retained in Config, removed from inherited environments
 - `WORKSPACE_DIR`
 - `PLATFORM_AGENTS_DIR=/configs/platform/.agents`
-- `HEARTBEAT_INTERVAL_SECS`
 - `COHUB_SANDBOX_VERSION` (accepts legacy `IMAGE_VERSION`)
 
 ## Local development
@@ -140,10 +159,8 @@ The system keeps a single mode:
 
 ```bash
 cd apps/sandbox
-SANDBOX_WS_HOST=0.0.0.0 \
-SANDBOX_WS_PORT=8788 \
-SPACE_ID=00000000-0000-0000-0000-000000000001 \
-SANDBOX_ID=sandbox-dev \
+export SANDBOX_RPC_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+COHUB_SPACE_ID=00000000-0000-0000-0000-000000000001 \
 WORKSPACE_DIR=/tmp/cohub-sandbox-workspace \
 PLATFORM_AGENTS_DIR=/configs/platform/.agents \
 go run .
@@ -152,6 +169,8 @@ go run .
 Default listen address: `ws://0.0.0.0:8788/sandbox`
 
 ### Start the agent (client)
+
+Set the same `SANDBOX_RPC_TOKEN` in this terminal; do not generate a second token.
 
 ```bash
 cd apps/agent

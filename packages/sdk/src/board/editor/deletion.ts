@@ -23,15 +23,15 @@ export function createDeletionModule(ctx: EditorContext) {
 		const { scene, base } = state;
 		const doomed = new Set<string>();
 		for (const id of ids) {
-			if (!scene.get(id)) continue;
+			if (!base.items[id]) continue;
 			doomed.add(id);
-			for (const child of scene.descendants(id)) doomed.add(child);
+			for (const child of scene.descendants(id)) if (base.items[child]) doomed.add(child);
 		}
 		const changes = new Map<string, BoardItem | null>();
 		for (const id of doomed) changes.set(id, null);
 		for (const id of doomed) {
 			for (const arrowId of scene.binders(id)) {
-				if (doomed.has(arrowId) || changes.has(arrowId)) continue;
+				if (!base.items[arrowId] || doomed.has(arrowId) || changes.has(arrowId)) continue;
 				const arrow = scene.get(arrowId) as SceneItem<BoardArrowItem> | undefined;
 				if (!arrow) continue;
 				const resolved = resolveSceneArrow(arrow, scene);

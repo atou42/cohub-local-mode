@@ -76,6 +76,18 @@ function firstMatch(base) {
 }
 
 export function resolve(specifier, context, next) {
+	// `$messages` and `$kit/...` are how `resource-kit` and the resource Apps
+	// reach the shared catalog and helpers.
+	if (specifier === "$messages") {
+		const url = firstMatch(resolvePath(libRoot, "paraglide/messages.js"));
+		if (url) return { url, shortCircuit: true };
+	}
+	if (specifier.startsWith("$kit/")) {
+		const url = firstMatch(
+			resolvePath(libRoot, "resource-kit", specifier.slice("$kit/".length)),
+		);
+		if (url) return { url, shortCircuit: true };
+	}
 	if (specifier.startsWith("$lib/")) {
 		const url = firstMatch(
 			resolvePath(libRoot, specifier.slice("$lib/".length)),

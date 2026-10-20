@@ -1,4 +1,6 @@
 import type { SpaceRecord } from "@neta-art/cohub";
+import { useCompactShell } from "$lib/layout/compact-shell.svelte";
+import { appAreaHref } from "$lib/mobile-nav";
 import { sdk } from "$lib/sdk";
 import { buildSpaceLandingRoute } from "$lib/space-routes";
 import { authStore } from "$lib/stores/auth.svelte";
@@ -30,19 +32,20 @@ function rememberSpace(space: SpaceRecord) {
 	}
 }
 
-/**
- * Resolve where an authenticated user should land.
- * Prefers local recent/cache, then GET /api/spaces/default.
- */
-export async function resolveAppEntryRoute(): Promise<string | null> {
-	const userKey = authStore.userUuid;
-	if (userKey) {
-		const recent = getRecentSpace(userKey);
-		if (recent?.spaceId) return buildSpaceLandingRoute(recent.spaceId);
-	}
+const PUBLIC_HOME = "/";
 
+function localSpaceEntryRoute(): string | null {
+	const userKey = authStore.userUuid;
+	const recent = userKey ? getRecentSpace(userKey) : null;
+	if (recent?.spaceId) return buildSpaceLandingRoute(recent.spaceId);
 	const cached = getCachedSpaceList();
-	if (cached?.[0]?.id) return buildSpaceLandingRoute(cached[0].id);
+	return cached?.[0]?.id ? buildSpaceLandingRoute(cached[0].id) : null;
+}
+
+/** Local recent/cache first, then GET /api/spaces/default (ensures Home). */
+export async function resolveSpaceEntryRoute(): Promise<string | null> {
+	const local = localSpaceEntryRoute();
+	if (local) return local;
 
 	try {
 		const defaultResult = await sdk.spaces.getDefault();
@@ -56,4 +59,17 @@ export async function resolveAppEntryRoute(): Promise<string | null> {
 	}
 
 	return null;
+}
+
+/** Compact shells open Chats, except first-run accounts that land in Home. */
+export async function resolveAppHomeRoute(): Promise<string> {
+	const chats = appAreaHref("chats");
+	if (useCompactShell() && localSpaceEntryRoute()) return chats;
+	return (await resolveSpaceEntryRoute()) ?? chats;
+}
+
+export function appHomeHref(): string {
+	if (!authStore.isAuthenticated) return PUBLIC_HOME;
+	if (useCompactShell()) return appAreaHref("chats");
+	return localSpaceEntryRoute() ?? PUBLIC_HOME;
 }

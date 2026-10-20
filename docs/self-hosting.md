@@ -112,6 +112,14 @@ Without configuration viewers use a public STUN server; for networks that block 
 set a Cloudflare Realtime TURN key on the API (`RTC_TURN_KEY_ID`, `RTC_TURN_KEY_API_TOKEN`). See
 [Displays](displays.md).
 
+## App room RTC
+
+App realtime rooms can add a WebRTC connection relayed by the Cloudflare Realtime SFU: named data
+channels and media tracks between a room's viewers. Set an SFU app on the API and the worker
+(`RTC_SFU_APP_ID`, `RTC_SFU_APP_SECRET`); without it, `room.rtc()` reports RTC as unavailable and
+rooms keep working over WebSocket events. The API schedules every room's SFU session, and the worker
+sweeps sessions whose owner left so none keeps billing.
+
 ## Security reports
 
 See `SECURITY.md`. Prefer GitHub Private Vulnerability Reporting or email `dev@talesof.ai`.

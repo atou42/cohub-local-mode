@@ -10,12 +10,14 @@ export type AppConfig = {
   redisUrl: string;
   talesofaiBillingBaseUrl?: string;
   talesofaiBillingBusinessKey?: string;
+  talesofaiBillingSpaceWalletBusinessKey?: string;
   talesofaiBillingAdminApiKey?: string;
   env: "dev" | "prod";
   appEncryptionKey: string;
   /** Optional checkpoint to bootstrap first-time Home spaces from; blank when unset. */
   homeBootstrapCheckpointId?: string;
   sandboxImage: string;
+  sandboxGameImage?: string;
   sandboxImagePullSecret?: string;
   sandboxSearchEnabled: boolean;
   sandboxSearchVersion: string;
@@ -37,6 +39,8 @@ export type AppConfig = {
   platformConfigRoot: string;
   rtcTurnKeyId?: string;
   rtcTurnKeyApiToken?: string;
+  rtcSfuAppId?: string;
+  rtcSfuAppSecret?: string;
   turnObjectS3Endpoint?: string;
   turnObjectS3PublicEndpoint?: string;
   turnObjectS3Region: string;
@@ -187,12 +191,14 @@ export const config: AppConfig = {
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(/\/+$/, ""),
   talesofaiBillingBusinessKey: process.env.TALESOFAI_BILLING_BUSINESS_KEY,
+  talesofaiBillingSpaceWalletBusinessKey: process.env.TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY,
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
   homeBootstrapCheckpointId: process.env.HOME_BOOTSTRAP_CHECKPOINT_ID?.trim() || undefined,
   sandboxImage:
     process.env.SANDBOX_IMAGE ?? getDefaultSandboxImage(env),
+  sandboxGameImage: process.env.SANDBOX_GAME_IMAGE?.trim() || undefined,
   sandboxImagePullSecret: (process.env.SANDBOX_IMAGE_PULL_SECRET ?? "gitea-registry").trim() || undefined,
   sandboxSearchEnabled: process.env.SANDBOX_SEARCH_ENABLED?.trim().toLowerCase() !== "false",
   sandboxSearchVersion: process.env.SANDBOX_SEARCH_VERSION?.trim() || "latest",
@@ -216,6 +222,8 @@ export const config: AppConfig = {
   platformConfigRoot: process.env.PLATFORM_CONFIG_ROOT ?? "/configs",
   rtcTurnKeyId: process.env.RTC_TURN_KEY_ID?.trim() || undefined,
   rtcTurnKeyApiToken: process.env.RTC_TURN_KEY_API_TOKEN?.trim() || undefined,
+  rtcSfuAppId: process.env.RTC_SFU_APP_ID?.trim() || undefined,
+  rtcSfuAppSecret: process.env.RTC_SFU_APP_SECRET?.trim() || undefined,
   turnObjectS3Endpoint: process.env.TURN_OBJECT_S3_ENDPOINT ?? "http://127.0.0.1:9000",
   turnObjectS3PublicEndpoint: process.env.TURN_OBJECT_S3_PUBLIC_ENDPOINT,
   turnObjectS3Region: process.env.TURN_OBJECT_S3_REGION ?? "us-west-1",

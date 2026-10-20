@@ -73,7 +73,7 @@ async function readUserRules(userId: string) {
     return {
       content,
       updatedAt: fileStat.mtime.toISOString(),
-      source: "config-space" as const,
+      source: "home-space" as const,
       path: USER_RULES_SANDBOX_PATH,
     };
   } catch (error) {
@@ -81,7 +81,7 @@ async function readUserRules(userId: string) {
       return {
         content: "",
         updatedAt: null,
-        source: "config-space" as const,
+        source: "home-space" as const,
         path: USER_RULES_SANDBOX_PATH,
       };
     }

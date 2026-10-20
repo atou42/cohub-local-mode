@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionTurnRecord } from "@cohub/protocol/model";
-import { buildSentTurnIndex, readSentFrom } from "../lib/sent-turns.ts";
+import {
+	buildSentTurnIndex,
+	readSentFrom,
+	summarizeSentSessions,
+} from "../lib/sent-turns.ts";
 
 const SPACE = "11111111-1111-4111-8111-111111111111";
 const OTHER_SPACE = "99999999-9999-4999-8999-999999999999";
@@ -55,4 +59,26 @@ test("a child names the Session that sent it, unless it sent itself", () => {
 		sessionId: CALLER,
 	});
 	assert.equal(readSentFrom(turn(CALLER, { origin })), null);
+});
+
+test("sent targets read as one localized list, folding past the limit", () => {
+	const render = (count: number, locale: string) =>
+		summarizeSentSessions(
+			Array.from({ length: count }, (_, i) => ({
+				spaceId: SPACE,
+				sessionId: id(i + 1),
+				count: 1,
+			})),
+			locale,
+		)
+			.map((entry) =>
+				entry.kind === "more"
+					? `[+${entry.count}${entry.separator}]`
+					: `[${entry.session.sessionId.slice(-1)}${entry.separator}]`,
+			)
+			.join("");
+	assert.equal(render(1, "en"), "[1]");
+	assert.equal(render(2, "en"), "[1 and ][2]");
+	assert.equal(render(3, "zh-CN"), "[1、][2 和 ][3]");
+	assert.equal(render(5, "en"), "[1, ][2, and ][+3]");
 });

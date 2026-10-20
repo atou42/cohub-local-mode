@@ -51,7 +51,7 @@ let userToggled = $state(false);
 
 const statusTone = {
 	done: "success",
-	running: "brand",
+	running: "activity",
 	failed: "error",
 } as const;
 

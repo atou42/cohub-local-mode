@@ -4,8 +4,10 @@ import type { ContentBlock } from "@cohub/protocol/core";
 import { mergeStreamingDeltaBlocks } from "../lib/session-streaming";
 import {
 	buildStreamingPreviewBlocks,
-	buildTurnTimelineItems,
+	createTurnTimelineBuilder,
 } from "../lib/session-turn-render";
+
+const buildTurnTimelineItems = createTurnTimelineBuilder();
 
 test("mergeStreamingDeltaBlocks appends text deltas by stream index", () => {
 	const existing: ContentBlock[] = [

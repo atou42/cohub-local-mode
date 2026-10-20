@@ -38,7 +38,7 @@ export function trimPolyline(path: readonly WorldPoint[], trim: number | undefin
 	return out;
 }
 
-export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], pattern: [number, number] | null, closed = false) {
+export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], pattern: [number, number] | null, closed = false, offset = 0) {
 	const points = closed && path.length > 2 ? [...path, path[0] as WorldPoint] : path;
 	if (points.length < 2) return;
 	if (!pattern) {
@@ -52,9 +52,10 @@ export function tracePolyline(graphics: Graphics, path: readonly WorldPoint[], p
 		return;
 	}
 	const [dash, gap] = pattern;
-	let penDown = true;
-	let fresh = true;
-	let remaining = dash;
+	const phase = Math.max(0, offset) % (dash + gap);
+	let penDown = phase < dash;
+	let fresh = penDown;
+	let remaining = penDown ? dash - phase : dash + gap - phase;
 	for (let index = 1; index < points.length; index += 1) {
 		const a = points[index - 1] as WorldPoint;
 		const b = points[index] as WorldPoint;
@@ -97,4 +98,21 @@ export function endAngle(path: readonly WorldPoint[], atStart: boolean): number 
 		if (Math.hypot(tip.x - other.x, tip.y - other.y) > 1e-3) return Math.atan2(tip.y - other.y, tip.x - other.x);
 	}
 	return null;
+}
+
+export function roundRectPoints(width: number, height: number, radius: number): WorldPoint[] {
+	const r = Math.min(radius, width / 2, height / 2);
+	if (r <= 0) return [worldPoint(0, 0), worldPoint(width, 0), worldPoint(width, height), worldPoint(0, height), worldPoint(0, 0)];
+	const corner = (cx: number, cy: number, from: number) =>
+		Array.from({ length: 9 }, (_, index) => {
+			const angle = from + (index / 8) * (Math.PI / 2);
+			return worldPoint(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+		});
+	return [
+		...corner(width - r, r, -Math.PI / 2),
+		...corner(width - r, height - r, 0),
+		...corner(r, height - r, Math.PI / 2),
+		...corner(r, r, Math.PI),
+		worldPoint(width - r, 0),
+	];
 }

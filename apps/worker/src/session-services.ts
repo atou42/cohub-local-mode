@@ -1,4 +1,3 @@
-import { billingOperations, createBillingUsageGate } from "@cohub/billing";
 import { COHUB_AGENT_TURNS_QUEUE, createBullmqQueue, defaultJobRetention } from "@cohub/infra/bullmq";
 import { injectTrace } from "@cohub/infra/tracing/propagator";
 import { createSessionServices } from "@cohub/core/sessions";
@@ -11,15 +10,11 @@ import type { SkillService } from "./skills.js";
 import { dispatchLabelAssignmentsUpdated } from "./label-events.js";
 import { enqueueReferences } from "./reference-index-queue.js";
 import { dispatchTurnCreated, dispatchTurnUpdated } from "./realtime-events.js";
+import { spaceWalletBilling } from "./space-wallet-billing.js";
 
 const AGENT_TURN_JOB_NAME = "agent_turns";
 
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    console.warn("[BillingGate] fail-open after worker prompt billing evaluation error", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 const agentTurnQueue = createBullmqQueue<{
   spaceId: string;

@@ -7,6 +7,7 @@ import type {
   UpdateSessionInfoInput,
 } from "@cohub/protocol/model";
 import type { ContentBlock } from "@cohub/protocol/core";
+import type { HarnessKind } from "@cohub/protocol/runtime";
 import {
   getSpaceById,
   getSpaceSessionById,
@@ -26,7 +27,12 @@ import { verifyAppSessionToken } from "../../app-sessions.js";
 import { mergePromptContextAuth, promptAuthContextFromAppSession } from "../../prompt-auth-context.js";
 import { getSpaceSandboxBySpaceId, updateSpaceSandbox, recoverSpaceSandbox } from "../../space-sandboxes.js";
 import { isSandboxReportTokenValid } from "../../crypto.js";
-import { normalizeSandboxLifecycleStatus, normalizeSandboxRuntimeStatus } from "@cohub/sandbox-controller";
+import { sandboxWsEndpoint } from "@cohub/sandbox-client";
+import { k8sCoreApi } from "../../k8s.js";
+import { sessionsNamespace } from "../../config.js";
+import { getSandboxBootstrapGate, normalizeSandboxLifecycleStatus, normalizeSandboxRuntimeStatus } from "@cohub/sandbox-controller";
+import { sandboxSetupInfoSchema } from "@cohub/protocol/sandbox";
+import { dispatchSpaceListChanged } from "../../space-list-events.js";
 import {
   ensureInternalRequest,
   getRequestRemoteAddress,
@@ -68,6 +74,8 @@ function sanitizeSandboxMeta(input: Record<string, unknown> | null | undefined) 
       output[key] = value;
     }
   }
+  const setup = sandboxSetupInfoSchema.safeParse(input.setup);
+  if (setup.success) output.setup = setup.data;
   return Object.keys(output).length > 0 ? output : null;
 }
 
@@ -158,20 +166,45 @@ router.post("/:id/sandbox-report", async (c) => {
     return c.json({ message: "forbidden" }, 403);
   }
 
+  if (sandbox.provider !== "cloud" || !sandbox.podName) return c.json({ message: "forbidden" }, 403);
+  if (body.meta?.setup !== undefined && !sandboxSetupInfoSchema.safeParse(body.meta.setup).success) {
+    return c.json({ message: "invalid sandbox setup report" }, 400);
+  }
+  let pod: Awaited<ReturnType<typeof k8sCoreApi.readNamespacedPod>>;
+  try {
+    pod = await k8sCoreApi.readNamespacedPod({ name: sandbox.podName, namespace: sessionsNamespace });
+  } catch (error) {
+    const statusCode = (error as { statusCode?: number; code?: number }).statusCode
+      ?? (error as { code?: number }).code;
+    if (statusCode === 404) return c.json({ message: "sandbox Pod is not ready" }, 409);
+    logger.warn("[SandboxReport] Pod lookup failed", { spaceId, podName: sandbox.podName, statusCode });
+    return c.json({ message: "sandbox Pod lookup is temporarily unavailable" }, 503);
+  }
+  if (pod.metadata?.labels?.["space-id"] !== spaceId || pod.metadata.labels.app !== "agent-sandbox") {
+    return c.json({ message: "sandbox instance mismatch" }, 403);
+  }
+  const podIp = pod.status?.podIP;
+  if (!podIp) return c.json({ message: "sandbox Pod IP is not ready" }, 409);
   const safeMeta = sanitizeSandboxMeta({
     ...(body.meta ?? {}),
-    podName: body.podName?.trim() || sandbox.podName || null,
-    sandboxId: body.sandboxId?.trim() || null,
+    podName: sandbox.podName,
+    sandboxId: sandbox.podName,
+    podIp,
+    wsEndpoint: sandboxWsEndpoint(podIp),
   });
   const reportedImageVersion = typeof safeMeta?.imageVersion === "string"
     ? safeMeta.imageVersion.trim() || null
     : null;
 
-  await updateSpaceSandbox({
+  const updatedSandbox = await updateSpaceSandbox({
     spaceId,
+    expectedReportTokenHash: expectedTokenHash,
+    expectedProvisioningGeneration: typeof sandboxMeta?.provisioningGeneration === "string"
+      ? sandboxMeta.provisioningGeneration
+      : null,
     status: normalizeSandboxLifecycleStatus(body.status),
     runtimeStatus: normalizeSandboxRuntimeStatus(body.status),
-    podName: body.podName?.trim() || sandbox.podName || `sandbox-${spaceId}`,
+    podName: sandbox.podName,
     reportedImageVersion,
     reportedAt: new Date(),
     lastHeartbeatAt: new Date(),
@@ -180,6 +213,10 @@ router.post("/:id/sandbox-report", async (c) => {
       ...(safeMeta ?? {}),
     },
   });
+  if (!updatedSandbox) return c.json({ message: "sandbox instance changed" }, 403);
+  if (safeMeta?.setup && JSON.stringify(sandboxMeta?.setup) !== JSON.stringify(safeMeta.setup)) {
+    await dispatchSpaceListChanged(spaceId).catch((error) => logger.warn("[SandboxSetup] failed to publish status change", { spaceId, error }));
+  }
 
   if (safeMeta?.requiresPodRecreate === true && safeMeta.errorClass === "stale_mount") {
     void recoverSpaceSandbox({
@@ -191,7 +228,7 @@ router.post("/:id/sandbox-report", async (c) => {
     }).catch((error) => logger.error(`[SandboxRecovery] auto recovery failed spaceId=${spaceId}`, error));
   }
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, bootstrap: getSandboxBootstrapGate(space.meta) });
 });
 
 // POST /internal/spaces/:id/sandbox/recover
@@ -396,7 +433,7 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
       source?: string | null;
       model?: string | null;
       provider?: string | null;
-      harness?: "cohub" | "pi" | "codex" | null;
+      harness?: HarnessKind | null;
       thinkingLevel?: string | null;
       accessMode?: PromptAccessMode | null;
       env?: unknown;

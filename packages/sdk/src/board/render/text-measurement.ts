@@ -6,7 +6,7 @@ import { boardFontFamily } from "../model/text-metrics.js";
 
 export const BOARD_FONT_STACKS = {
   sans: BOARD_FONT_STACK,
-  serif: 'ui-serif, Georgia, "Noto Serif CJK SC", "Songti SC", serif',
+  serif: 'ui-serif, Georgia, "Noto Serif CJK SC", "Songti SC", "Noto Sans Math", "DejaVu Sans", "Noto Sans CJK SC", "FreeSans", "FreeSerif", sans-serif',
   mono: BOARD_MONO_FONT_STACK,
 };
 

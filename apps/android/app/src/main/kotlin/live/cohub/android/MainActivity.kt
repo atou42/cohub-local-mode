@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.HapticFeedbackConstants
+import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
@@ -41,6 +42,7 @@ import live.cohub.android.auth.AuthSession
 import live.cohub.android.auth.AuthorizationRequest
 import live.cohub.android.auth.Pkce
 import live.cohub.android.files.FileChooser
+import live.cohub.android.media.MediaCapture
 import live.cohub.android.host.CancellationSignal
 import live.cohub.android.host.HostActions
 import live.cohub.android.host.HostBridge
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity(), HostActions {
     private lateinit var container: SurfaceContainer
     private lateinit var appearance: ShellAppearance
     private lateinit var fileChooser: FileChooser
+    private lateinit var mediaCapture: MediaCapture
     private lateinit var customTabs: ActivityResultLauncher<Intent>
     private lateinit var allFilesAccess: ActivityResultLauncher<Intent>
     private lateinit var notificationPermission: ActivityResultLauncher<String>
@@ -112,6 +115,10 @@ class MainActivity : ComponentActivity(), HostActions {
         override fun onShowFileChooser(callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean =
             fileChooser.show(callback, params)
 
+        override fun onPermissionRequest(request: PermissionRequest) = mediaCapture.onRequest(request)
+
+        override fun onPermissionRequestCanceled(request: PermissionRequest) = mediaCapture.onCanceled(request)
+
         override fun onDownload(url: String, contentDisposition: String?, mimeType: String?) =
             download(url, contentDisposition, mimeType)
     }
@@ -152,6 +159,7 @@ class MainActivity : ComponentActivity(), HostActions {
             display = app.display,
         )
         fileChooser = FileChooser(this)
+        mediaCapture = MediaCapture(this)
 
         // The authorization result returns as a redirect intent, not an activity
         // result; this launcher only opens the browser.

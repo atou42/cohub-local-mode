@@ -1,14 +1,18 @@
 <script lang="ts">
+import { boardItemOrigin, parseBoardMediaSource } from "@neta-art/cohub/board";
 import {
 	ArrowDownToLine,
 	ArrowUpToLine,
 	BoxSelect,
 	Clapperboard,
 	Copy,
+	Crosshair,
 	ExternalLink,
 	History,
 	ImageDown,
 	LayoutDashboard,
+	LayoutGrid,
+	Link,
 	LocateFixed,
 	Pencil,
 	RefreshCw,
@@ -26,6 +30,9 @@ const {
 	position,
 	onClose,
 	onOpenFile,
+	onAddLink,
+	onAddTaskResults,
+	onShowSource,
 	onOpenTask,
 	onRegenerateTask,
 	onAddToGeneration,
@@ -39,6 +46,9 @@ const {
 	position: { x: number; y: number };
 	onClose: () => void;
 	onOpenFile?: (path: string) => void | Promise<void>;
+	onAddLink?: () => void;
+	onAddTaskResults?: (itemId: string) => void;
+	onShowSource?: (itemId: string) => void;
 	onOpenTask?: (taskRunId: string) => void;
 	onRegenerateTask?: (itemId: string) => void;
 	onAddToGeneration?: () => void;
@@ -68,22 +78,28 @@ const singleText = $derived(
 const singleFile = $derived.by(() => {
 	if (editor.selectedItems.length !== 1) return null;
 	const item = editor.selectedItems[0];
-	return item?.type === "file" ? (item.props as { src: string }) : null;
+	return item && ["file", "image", "video", "audio"].includes(item.type)
+		? (item.props as { src: string })
+		: null;
 });
 
 const singleTask = $derived.by(() => {
 	if (editor.selectedItems.length !== 1) return null;
 	const item = editor.selectedItems[0];
 	if (item?.type !== "task") return null;
-	const props = item.props as {
-		taskRunId: string;
-		snapshot: { taskType: string };
-	};
+	const props = item.props;
 	return {
+		hasResults: props.snapshot.artifactCount > 0,
 		id: item.id,
 		taskRunId: props.taskRunId,
 		taskType: props.snapshot.taskType,
 	};
+});
+const singleOrigin = $derived.by(() => {
+	if (editor.selectedItems.length !== 1) return null;
+	const item = editor.selectedItems[0];
+	const origin = item ? boardItemOrigin(item) : null;
+	return item && origin ? { id: item.id, taskRunId: origin.taskRunId } : null;
 });
 
 type MenuAction = {
@@ -98,11 +114,36 @@ const actions = $derived.by<MenuAction[]>(() => {
 	const list: MenuAction[] = [];
 	const file = singleFile;
 	const task = singleTask;
+	if (onAddLink)
+		list.push({
+			label: m.board_add_link({}, { locale }),
+			icon: Link,
+			run: onAddLink,
+		});
 	if (canGenerate && onAddToGeneration)
 		list.push({
 			label: m.board_add_to_generation({}, { locale }),
 			icon: Sparkles,
 			run: onAddToGeneration,
+		});
+	if (task?.hasResults && onAddTaskResults)
+		list.push({
+			label: m.board_add_results({}, { locale }),
+			icon: LayoutGrid,
+			run: () => onAddTaskResults(task.id),
+		});
+	const origin = singleOrigin;
+	if (origin && onShowSource)
+		list.push({
+			label: m.board_show_source({}, { locale }),
+			icon: Crosshair,
+			run: () => onShowSource(origin.id),
+		});
+	if (origin && onOpenTask)
+		list.push({
+			label: m.board_open_task({}, { locale }),
+			icon: LayoutDashboard,
+			run: () => onOpenTask(origin.taskRunId),
 		});
 	if (task && onOpenTask)
 		list.push({
@@ -122,7 +163,10 @@ const actions = $derived.by<MenuAction[]>(() => {
 		});
 	if (file && onOpenFile)
 		list.push({
-			label: m.board_open_file({}, { locale }),
+			label:
+				parseBoardMediaSource(file.src)?.kind === "url"
+					? m.board_open_source({}, { locale })
+					: m.board_open_file({}, { locale }),
 			icon: ExternalLink,
 			run: () => {
 				void onOpenFile(file.src);
@@ -231,7 +275,7 @@ onDestroy(() => {
 <div
 	bind:this={menu}
 	use:portal
-	class="board-context-menu"
+	class="board-context-menu menu-surface"
 	class:board-context-menu--sheet={sheet}
 	style:left={sheet ? undefined : `${left}px`}
 	style:top={sheet ? undefined : `${top}px`}
@@ -259,11 +303,7 @@ onDestroy(() => {
 		position: fixed;
 		z-index: 130;
 		min-width: 168px;
-		border-radius: 9px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-elevated);
 		padding: 4px;
-		box-shadow: 0 12px 28px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
 	}
 
 	.ctx-scrim {
@@ -310,5 +350,5 @@ onDestroy(() => {
 	}
 	.ctx-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 	.ctx-item:disabled { cursor: default; opacity: 0.55; }
-	.ctx-item--danger:hover { background: var(--error-bg); color: var(--error-700); }
+	.ctx-item--danger:hover { background: var(--color-error-bg); color: var(--error-700); }
 </style>

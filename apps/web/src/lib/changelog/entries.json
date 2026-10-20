@@ -1,5 +1,171 @@
 [
 	{
+		"version": "2.73",
+		"date": "2026-10-20",
+		"tags": ["v2.73.0"],
+		"highlights": [
+			"**Pluggable local harness adapters**: Claude Code and WorkBuddy join Pi and Codex as first-class local executors behind per-harness adapters; a single protocol registry now drives CLI flags, Web picker labels and icons, API validation, read-only enforcement, and native archive formats, so new harnesses no longer require branches in the shared runtime.",
+			"**Streaming JSON harness integration**: Claude Code and WorkBuddy run one stream-json process per Turn, map read-only access to plan mode with only Read/Glob/Grep, project Cohub history into native transcripts (`~/.claude/projects`, `~/.codebuddy/projects`), and continue sessions with `--resume`; startup probes the CLI's flags so older or unrelated binaries are skipped.",
+			"**In-app feedback**: the debug log download is replaced by a cfeed feedback dialog with file attachments, paste-to-attach, an optional debug log, and automatic page, environment, viewport, and timezone context.",
+			"**Faster, leaner sandbox images**: runtime and game images now share one `base` build through Docker Bake, remove duplicate tooling layers, use BuildKit apt/npm/Go cache mounts, and pin Go, Chrome, Bun, and pnpm versions; CI builds and smoke-tests both profiles on a single builder.",
+			"**Isolated workspace setup**: sandbox startup scripts now come exclusively from `.cohub/setup.sh`; user config publishing exposes only that script through a dedicated read-only projection, so model credentials and other `.cohub` files never enter the sandbox."
+		],
+		"fixes": [
+			"Markdown autolinks now end at Chinese prose punctuation (，。、；：？！…—～「」《》（） etc.) while preserving Chinese path segments and ASCII punctuation inside URLs.",
+			"Sandbox images include NumPy for Python and Blender GLB asset exports; docs note that Cycles CPU rendering must disable denoising since OpenImageDenoise is not bundled.",
+			"Unrequested local harnesses that fail their startup check are skipped with a warning instead of aborting startup; explicit requests must all pass."
+		]
+	},
+	{
+		"version": "2.72",
+		"date": "2026-10-19",
+		"tags": ["v2.72.0"],
+		"highlights": [
+			"**Space wallets**: Spaces can now fund their own Cohub usage — recharge from billing, inspect ledger activity, and have charges settle against the Space balance when it covers the full amount, otherwise falling back to personal billing with no split payments. Exposed end to end via `/api/spaces/:id/wallet` routes, `client.space(id).wallet`, `cohub spaces wallet`, and a new web page; no database migrations required.",
+			"**Sandbox startup scripts**: Cloud sandboxes now run `.agents/setup.sh` in user → mod → Space order after workspace bootstrap, gated on durable bootstrap state so scripts never race an in-progress import. Each step streams bounded logs to `.cohub/system/setup/<run-id>/`, reports status, exit code, and duration through heartbeats, and is inspectable in Space settings → Sandbox, `cohub spaces setup`, or the SDK. Local Spaces never run them.",
+			"**Configurable sandbox environments**: New `default` and `game` images (Godot 4.5.2, Blender, Mesa/Vulkan, SDL tooling) with declarative `.cohub/sandbox.json` preferences merged across platform defaults, mods, project, and Space overrides. Images fall back safely when unavailable, compute is capped by entitlement, and the API surfaces requested vs. effective vs. applied state plus pending-restart hints.",
+			"**Cursor-paginated directory listings**: Space and checkpoint `fs/tree` now support `pagination`, `limit` (1–5000), and opaque cursors with deterministic name ordering, directory-revision binding (409 on change), and bounded stat concurrency. Legacy `files.list()` calls still aggregate all pages transparently, and the web file tree renders an early preview page instead of waiting for full enumeration.",
+			"**Reliability refactors across sync and billing**: Session and turn caches are now validated against their space/session context to prevent cross-space cache bleed, failed session loads retry on reconnect, and generation billing routes through a shared Space-wallet-aware path. Task fetches also stamp `X-Cohub-Task-Id` and block redirects."
+		],
+		"fixes": [
+			"Failed session loads no longer stay permanently stuck — they retry automatically on transport recovery and reconnect.",
+			"Sandbox provisioning no longer resets bootstrap state when the worker is already running, and stale provisioning leases can no longer fail a successor's record.",
+			"Session rename errors are now surfaced to the user instead of failing silently."
+		]
+	},
+	{
+		"version": "2.71",
+		"date": "2026-10-19",
+		"tags": ["v2.71.0"],
+		"highlights": [
+			"**Board pointer gestures SDK**: `createBoardPointerGestures` is exported from `board/stage` for draggable DOM item views. It tracks active pointers at the document level, keeps mouse drags alive when pointer capture is lost, and cancels gestures on window blur or page hide. Board stage drags and App cards now share the same implementation.",
+			"**Shorter sandbox idle defaults**: idle sandboxes auto-destroy after 1 hour in production instead of 12, and after 5 minutes in development instead of 10. The API Space policy, `cohub spaces create`, and the settings page all read `getDefaultSandboxIdleTtl`, while Spaces that already store an auto-destroy policy keep their TTL."
+		],
+		"fixes": [
+			"Board mouse drags finish when the pointer release is missed: a move with no buttons pressed ends the gesture at the last tracked position instead of leaving the drag stuck.",
+			"Pointer capture loss no longer aborts mouse drags on the Board stage or App cards, while touch and pen gestures still end on capture loss."
+		]
+	},
+	{
+		"version": "2.70",
+		"date": "2026-10-16",
+		"tags": ["v2.70.0"],
+		"highlights": [
+			"**3D models as generation inputs**: `generations.create` accepts `3d` content blocks, and `publicAssets.uploadGenerationInput` accepts GLB, glTF, OBJ, FBX, and STL files whose extension matches the filename. Uploads keep their extension so providers can read the format from the URL. Meshy 3D tasks bill under a new `generation.3d` usage type.",
+			"**Generation SDK 0.1.39**: upgrades the Generation SDK and adds the `newapi.audioGenerations` adapter for song generation from a style prompt, lyrics, and an optional ABC score.",
+			"**Provider error classification module**: retry rules for provider errors move out of `session-runtime.ts` into `runtime/provider-errors.ts` with dedicated tests. Generation request validation is also consolidated into one `resolveGenerationRequestParameters` helper shared by the API route and session execution.",
+			"**Compact side panel tabs**: when the side panel's tabs overflow, the tab bar scrolls horizontally and hides tab icons. A `compactOnOverflow` attachment built on `ResizeObserver` drives this without a re-render loop."
+		],
+		"fixes": [
+			"Agent turns retry upstream HTTP/2 stream failures, while quota, billing, and other terminal errors stay non-retryable.",
+			"Inline public assets reject `+xml` media types, which browsers can render as scripted XML documents.",
+			"GLB primitives without materials render with a neutral preview surface, so materialless models are visible. Authored materials keep their colors and surface properties.",
+			"Generation inputs accept only the 3D formats that providers fetch by URL, and validation errors name the accepted types."
+		]
+	},
+	{
+		"version": "2.69",
+		"date": "2026-10-16",
+		"tags": ["v2.69.0"],
+		"highlights": [
+			"**3D model previews**: Board file cards for .glb, .gltf, .stl and .obj draw a lazily loaded still and open in an in-place viewer. Model loading is size-bounded, abortable and supports Draco, and the SDK exposes `boardModelFormat`, `isBoardModelItem` and `modelPreviews`.",
+			"**Per-conversation gateway outbound delivery**: outbound replies move out of `bus.ts` into a dedicated consumer with a bounded scheduler. Each conversation's replies stay ordered while different conversations deliver in parallel, with separate media and per-provider concurrency limits. Each delivery step is checkpointed, so a retry does not resend completed items, and WeChat videos are sent as links.",
+			"**Single shared MIME table**: four duplicated MIME tables in the API, worker, CDN prewarm and CLI are replaced by `mimeTypeForPath` and `isTextMime` in `@cohub/protocol/fs`. The table now covers 3D formats, so CDN serving and public uploads share one source of truth.",
+			"**2 GiB uploads with structured errors**: the single-file limit rises from 1 GiB to 2 GiB. Rejections carry a machine-readable `code` (`file_too_large`, `upload_batch_too_large`, `upload_too_many_files`, `upload_rate_limited`), and rate-limit responses include `retryAfterSeconds` and a `Retry-After` header. The SDK exports `UPLOAD_ERROR_*` constants and `batchUploadEntries`, and the web app shows localized messages.",
+			"**Runtime lifecycle channel**: published Apps emit a versioned `cohub.runtime.lifecycle` message with first-contentful-paint snapshots. A direct parent can subscribe to it, and messages are scoped to the parent's exact HTTP(S) origin and the subscription ID. Containers can reveal content earlier and keep their native-load fallback when Paint Timing is unavailable."
+		],
+		"fixes": [
+			"Board media players stay positioned over their cards.",
+			"Chapter focus tracks are preserved when combining Board animations, with frame focus as the chapter-start fallback.",
+			"The mobile side panel tab bar aligns with the column header height.",
+			"Camera fields in `boards schema camera` describe value types, units and composition, and support field queries."
+		]
+	},
+	{
+		"version": "2.68",
+		"date": "2026-10-15",
+		"tags": ["v2.68.0"],
+		"highlights": [
+			"**Windows local runtime**: `cohub runtime up` now runs on Windows. The CLI downloads `cohub-sandboxd.exe`, launches npm-installed Pi/Codex through their Node entry instead of `.cmd` shims, and uses named pipes for the sandboxd control channel and Pi extension. It refuses to start from an elevated terminal, and `--display` shares the primary monitor by default. Git for Windows is required (or set `COHUB_BASH`).",
+			"**Bounded Board export memory**: Board exports release intermediate native Canvas surfaces eagerly and enforce a configurable decoded-image memory budget. Video dimensions are preflighted before rendering, and `NODE_DEBUG=cohub:board-export` exposes render-stage memory diagnostics."
+		],
+		"fixes": [
+			"Space file reads no longer treat sandbox `IO_ERROR` responses as offline; only locally detected transport failures trigger the offline path.",
+			"Directory delete on a non-empty directory returns a 400 `directory_not_empty` error instead of a generic server error.",
+			"Script workers initialize fonts the same way as native Board text, so script-drawn text matches exported output.",
+			"MP4 exports with odd dimensions and video frames with changing dimensions now fail early with a clear message instead of an opaque ffmpeg error."
+		]
+	},
+	{
+		"version": "2.67",
+		"date": "2026-10-15",
+		"tags": ["v2.67.0"],
+		"highlights": [
+			"**Live Room connections for CLI agents**: `cohub rooms connect` streams room events and members over realtime, accepts bidirectional NDJSON publish, send, and presence commands on stdin, replays retained events with `--after`, and keeps the participant's seat after disconnect.",
+			"**Optional RTC media for Rooms**: `cohub rooms rtc` moves media and data channels to an isolated Go/Pion helper (`cohub-rtc`), replacing the native RTC adapter. It supports PCM, Opus, I420, and VP8 inputs with bounded binary or file outputs, and the SDK exposes a pluggable PeerConnection factory with participant-scoped RTC authorization.",
+			"**Faster Web shell**: compact screens no longer mount or subscribe the hidden desktop Sidebar, the Chats list is windowed while keeping keyboard focus reachable, and chat timelines reuse message projections for unchanged turns, cutting build time by about 43–50% in a Node microbenchmark.",
+			"**Example Apps moved out of the repo**: NETA World and Campfire now live in the separate Cohub Example Apps Space, published at the latest SDK version, so their sources are no longer maintained here."
+		],
+		"fixes": [
+			"Sidebar App launches now share navigation and resolution, cancel stale opens when the workspace changes, and closed Save tabs can be reopened.",
+			"Session rows put the running, queued, and failed status back at the start of the preview line, so rows without a preview no longer look empty."
+		]
+	},
+	{
+		"version": "2.66",
+		"date": "2026-10-14",
+		"tags": ["v2.66.0"],
+		"highlights": [
+			"**Decision models**: the new `space.decision()` API answers `noul` (yes/no), `choice` and `score` questions about text, JSON or images with calibrated probabilities, configured separately in `.cohub/decisions.json` so decision models never appear in LLM pickers; `cohub decision` and `cohub spaces decision` accept inline JSON or a file and upload local images as WebP, while the server bills the upstream-reported cost, retries transient transport and 5xx failures once, and archives every call.",
+			"**Home Space as personal config**: User Rules, skills, prompts, model configuration and the `.cohub/theme.css` personal theme now publish from the account's Home Space through the existing Save pipeline (`User Rules` return `source: \"home-space\"`), and the web app resolves the theme from Home; existing config Spaces stay ordinary Spaces, with no automatic migration or fallback.",
+			"**Board render style layer**: themes now shape every card through a `BoardRenderStyle` layer (silhouette, radius, shadow, selection, media framing, progress, icons, motion and chrome font) over shared surface helpers, and selection and hover chrome moves to one stage overlay so pointer and selection changes redraw a single layer instead of every affected card — breaking for custom card renderers, which gain `style`, `themeKey` and `liftedIds` plus an `observesSelection` opt-in, with Neta Pixel Boards rendering pixel corners, mosaic progress and stepped motion.",
+			"**Four-level fork trees and calmer lists**: Chats and the Space sidebar share one fork tree that nests up to four levels with continuous ancestor rails (deeper forks flatten into the fourth), while session rows are redrawn around an end-of-line status pill, unread dots, denser rows and avatars, and a refreshed mobile tab bar that shows the account avatar.",
+			"**Ember App**: a new standalone Cohub App draws a shared night camp on a live Board — Board scripts render campers, fire and effects, room events fold into one camp state with bounded snapshots, proximity voice and budgeted camera media run over room RTC with relay fallback, and a fire-spirit App Action joins by invite and edits the camp only through camp events."
+		],
+		"fixes": [
+			"**Gemini 4 reasoning**: every `gemini-4-argon` turn failed with \"Google stream ended without a finish reason\" because pi-ai sent the `thinkingBudget` the model rejects; outgoing requests now translate it to the `thinkingLevel` the model expects, guarded by a test that flags when the upstream workaround can be removed.",
+			"**Turn stats and scroll**: the message stats popover opens on click only (Escape or an outside click still closes it), and the body is the single scroll region so the header stays fixed and only one scrollbar shows.",
+			"**Theme hover visibility**: command palette and space switcher hovers stay visible on every built-in theme."
+		]
+	},
+	{
+		"version": "2.65",
+		"date": "2026-10-13",
+		"tags": ["v2.65.0"],
+		"highlights": [
+			"**Server-synced Board task cards**: Board task items now carry only a `taskRunId` — the server resolves each run's snapshot on every write and, when the run finishes, writes the final state onto every Board in the Space that shows it; cards render queued, generating and failed states with elapsed time and fit their result's aspect ratio.",
+			"**Authenticated sandbox RPC**: cloud sandbox connections now require per-instance RPC credentials that are validated in constant time, bound to resource claims and refreshed with the endpoint, while concurrent instance provisioning is fenced behind a renewing per-space lease so stale claims, reports and results cannot overwrite a successor.",
+			"**Board explicit script input and scoped host events**: scripts declare their own hit targets with `hitRegions()`, observe host selection, view and transform events on demand, and anchor screen-space scenes to scoped items, while undeclared regions stay transparent to input and editor gestures keep their ownership.",
+			"**Shared theme primitives and Neta Pixel themes**: primary keys, menus, spinners and switches now come from one set of shared primitives that themes restyle in a single place, and the new light and dark Neta Pixel themes ship alongside a full contrast, translucency and token pass across every built-in theme.",
+			"**Configurable service endpoints**: the SDK (`webBaseUrl`) and CLI (`--base-url` plus environment overrides) can target any deployment while keeping production and development defaults, with CLI login sessions, Home Space caches and Runtime directory bindings isolated per API base URL."
+		],
+		"fixes": [
+			"**App management**: App save, publish and delete failed with 403 for `app_session` principals even after the viewer granted `app.manage`; the writes now use the same permission check as the read routes.",
+			"**Chat polish**: session rows show stopped turns again, the chat timeline no longer scrolls sideways on iOS, and the sent-to line under a Turn is readable.",
+			"**Board script performance**: dynamic script textures are reused safely across frames, script composition order is cached, and redundant accessibility DOM writes are avoided.",
+			"**Board patterns**: dot and grid patterns are visible again — dots centered in their tile in muted ink, grid lines in the theme hairline.",
+			"**Mentions and App errors**: the official Cohub space is pinned at the top of the @ mention picker with an Official badge, and a signed-out viewer is told to sign in instead of seeing a bare \"unauthorized\"."
+		]
+	},
+	{
+		"version": "2.64",
+		"date": "2026-10-13",
+		"tags": ["v2.64.0"],
+		"highlights": [
+			"**Unified Board scripts**: replaced the standalone Sketch item with shared script attachments and a `custom` content container, backed by one isolated module runtime and ESM loading contract shared across the browser, CLI and exports, with native scene effects, Canvas drawing, local input and explicit document commits.",
+			"**App room RTC and device access**: `room.rtc()` adds WebRTC data channels and media tracks relayed through a Cloudflare Realtime SFU (with simulcast, device switching via `replace()`, receiver reuse and per-peer events), plus per-App camera, microphone and screen grants declared with `<meta name=\"cohub:devices\">`.",
+			"**App rooms beyond the App**: rooms now retain the latest 1,000 published events (up to 512 KB) for replay and `room.history()`, members carry their `kind` and Agent model, `room.invite()` brings in Agents or terminal users, and new `cohub rooms` commands let an Agent hold a seat and await events in the background.",
+			"**Resource Apps and shared resource-kit**: task inspector, checkpoint explorer, schedule manager and App manager open in dedicated App tabs, rebuilt on a shared `resource-kit` with a matching UI kit, host appearance tokens, cache-first lists, realtime updates and protected drafts.",
+			"**Board performance and URL-first media**: isolated card rendering, batched placeholder graphics and eliminated idle frame loops and redundant awareness redraws, while Board media sources accept stable public HTTP(S) URLs alongside relative Space paths."
+		],
+		"fixes": [
+			"Render image `crop` on Boards and draw frame borders in their authored color with `dash` and `trim`, matching shapes.",
+			"Keep local Board script effects out of copied, cut and duplicated items, and publish script entry modules with their transitive ESM dependencies.",
+			"Keep concurrently created Boards intact when a create request fails alongside another request sharing the same mutation id.",
+			"Retry incomplete RTC subscriptions and respect room event limits."
+		]
+	},
+	{
 		"version": "2.63",
 		"date": "2026-10-10",
 		"tags": ["v2.63.0"],

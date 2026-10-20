@@ -7,8 +7,11 @@ import {
   type BoardCardRendererResolver,
   type BoardRenderContext,
   type BoardRenderPalette,
+  DEFAULT_BOARD_RENDER_LABELS,
+  type BoardRenderStyle,
   defaultBoardPalette,
   getBoardCardRenderer,
+  resolveBoardRenderStyle,
 } from "../render/index.js";
 import type { BoardSettings } from "@cohub/protocol";
 import type { BoardScene, BoardSceneItem } from "../model/scene.js";
@@ -20,13 +23,15 @@ export type BoardExportSceneInput = {
   scene: BoardScene;
   items: readonly BoardSceneItem[];
   time?: number;
+  frameAt?: BoardRenderContext["frameAt"];
   world: Rect;
   scale: number;
   colorScheme: "dark" | "light";
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
+  style?: Partial<BoardRenderStyle>;
   textures?: Map<string, Texture>;
-  sketches?: BoardRenderContext["sketches"];
+  scripts?: BoardRenderContext["scripts"];
   assetKey?: (item: BoardSceneItem) => string | null;
   /** Renderers for item types beyond the built-ins. */
   renderers?: BoardCardRendererResolver;
@@ -55,15 +60,22 @@ function buildContext(input: BoardExportSceneInput): {
     settings: input.settings,
     scene: input.scene,
     time: input.time ?? 0,
+    frameAt: input.frameAt,
     selectedIds: new Set(),
     hoveredId: null,
     resizingIds: new Set(),
+    liftedIds: new Set(),
     palette: { ...defaultBoardPalette(input.colorScheme), ...input.palette },
     colors: input.colors ?? buildFallbackShapeColors(input.colorScheme),
     colorScheme: input.colorScheme,
+    style: resolveBoardRenderStyle(input.colorScheme, input.style),
+    themeKey: "export",
     rendererType: "canvas",
     zoom: input.scale,
-    sketches: input.sketches,
+    reducedMotion: true,
+    labels: DEFAULT_BOARD_RENDER_LABELS,
+    taskRun: () => null,
+    scripts: input.scripts,
     assetKey: input.assetKey ?? imageAssetKey,
     getTexture: (key) => textures.get(key) ?? null,
     hasError: (key) => {
@@ -114,13 +126,26 @@ export function createBoardExportScene(input: BoardExportSceneInput): BoardExpor
 
   const resolve = input.renderers ?? getBoardCardRenderer;
   const groups = new Map<string, Container>();
-  for (const item of input.items) {
+  function hostFor(item: BoardSceneItem): Container {
     const clip = clippingAncestor(input.scene, item);
-    const host = (clip && groups.get(clip)) || world;
+    const ancestor = clip ? input.scene.get(clip) : undefined;
+    if (!ancestor) return world;
+    let group = groups.get(ancestor.id);
+    if (!group) {
+      group = syncClipGroup(undefined, ancestor).group;
+      hostFor(ancestor).addChild(group);
+      groups.set(ancestor.id, group);
+    }
+    return group;
+  }
+  for (const item of input.items) {
+    const opacity = input.scene.opacity(item.id);
+    if (opacity <= 0) continue;
+    const host = hostFor(item);
     const container = resolve(item, context).create(item, context);
-    container.alpha = input.scene.opacity(item.id);
+    container.alpha = opacity;
     host.addChild(container);
-    if (isClippingFrame(item)) {
+    if (isClippingFrame(item) && !groups.has(item.id)) {
       const { group } = syncClipGroup(undefined, item);
       host.addChild(group);
       groups.set(item.id, group);

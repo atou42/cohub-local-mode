@@ -1,6 +1,8 @@
 <script lang="ts">
+import { isModelMime, mimeTypeForPath } from "@cohub/protocol/fs";
 import {
 	AppWindow,
+	Box,
 	ChevronDown,
 	Download,
 	File as FileIcon,
@@ -90,6 +92,7 @@ const markLabel = $derived.by(() => {
 });
 const isActive = $derived(selectedPath === node.path);
 const isDir = $derived(node.type === "dir");
+const isModel = $derived(!isDir && isModelMime(mimeTypeForPath(node.name)));
 let isDragOver = $state(false);
 let isMoveTarget = $state(false);
 let rowEl: HTMLDivElement | null = $state(null);
@@ -391,6 +394,8 @@ $effect(() => {
   <span class="icon shrink-0" class:twisty={isDir}>
     {#if isDir}
       <ChevronDown class="h-3 w-3 transition-transform {node.isOpen ? '' : '-rotate-90'}" />
+    {:else if isModel}
+      <Box class="w-3.5 h-3.5" />
     {:else}
       <FileIcon class="w-3.5 h-3.5" />
     {/if}
@@ -420,7 +425,7 @@ $effect(() => {
             <MoreHorizontal class="w-3.5 h-3.5" />
           </button>
           {#if menuOpen}
-            <div class="dropdown" bind:this={menuEl}>
+            <div class="dropdown menu-surface" bind:this={menuEl}>
               {#if onUpload}
                 <button type="button" class="dropdown-item" onclick={stopAndCloseMenu(handleFolderUploadClick)}><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><path d="M12 10V16"/><path d="m15 13-3-3-3 3"/></svg> {m.files_upload_folder({}, { locale })}</button>
               {/if}
@@ -445,7 +450,7 @@ $effect(() => {
             <MoreHorizontal class="w-3.5 h-3.5" />
           </button>
           {#if menuOpen}
-            <div class="dropdown" bind:this={menuEl}>
+            <div class="dropdown menu-surface" bind:this={menuEl}>
               {#if onOpenWith}
                 <button type="button" class="dropdown-item" onclick={stopAndCloseMenu(() => onOpenWith(node))}><AppWindow class="w-3.5 h-3.5" /> {m.file_open_with({}, { locale })}</button>
                 <div class="dropdown-sep"></div>
@@ -651,10 +656,6 @@ $effect(() => {
     z-index: 30;
     min-width: 150px;
     padding: 4px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-primary);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   }
 
   .dropdown-item {
@@ -678,8 +679,8 @@ $effect(() => {
   }
 
   .dropdown-item.danger:hover {
-    color: var(--error-soft);
-    background: var(--error-bg);
+    color: var(--color-error-soft);
+    background: var(--color-error-bg);
   }
 
   .dropdown-sep {

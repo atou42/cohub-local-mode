@@ -4,6 +4,8 @@ export interface WorkerConfig {
   databaseUrl: string;
   workerSecret: string;
   appEncryptionKey: string;
+  rtcSfuAppId?: string;
+  rtcSfuAppSecret?: string;
   spaceStorageRoot: string;
   spaceSystemRoot: string;
   checkpointCacheRoot: string;
@@ -37,6 +39,7 @@ export interface WorkerConfig {
   checkpointAssetOssSecretAccessKey?: string;
   talesofaiBillingBaseUrl?: string;
   talesofaiBillingBusinessKey?: string;
+  talesofaiBillingSpaceWalletBusinessKey?: string;
   talesofaiBillingAdminApiKey?: string;
   env: "dev" | "prod";
   /** Author email for checkpoint git commits. */
@@ -63,6 +66,8 @@ export const config: WorkerConfig = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   workerSecret: process.env.WORKER_SECRET ?? "",
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
+  rtcSfuAppId: process.env.RTC_SFU_APP_ID?.trim() || undefined,
+  rtcSfuAppSecret: process.env.RTC_SFU_APP_SECRET?.trim() || undefined,
   spaceStorageRoot: process.env.SPACE_STORAGE_ROOT ?? "",
   spaceSystemRoot: process.env.SPACE_SYSTEM_ROOT ?? "",
   checkpointCacheRoot: process.env.CHECKPOINT_CACHE_ROOT ?? process.env.SPACE_STORAGE_ROOT ?? "",
@@ -96,6 +101,7 @@ export const config: WorkerConfig = {
   checkpointAssetOssSecretAccessKey: process.env.CHECKPOINT_ASSET_OSS_SECRET_ACCESS_KEY ?? process.env.TURN_OBJECT_S3_SECRET_ACCESS_KEY,
   talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(/\/+$/, ""),
   talesofaiBillingBusinessKey: process.env.TALESOFAI_BILLING_BUSINESS_KEY,
+  talesofaiBillingSpaceWalletBusinessKey: process.env.TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY,
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
   checkpointGitAuthorEmail: process.env.CHECKPOINT_GIT_AUTHOR_EMAIL?.trim() || "noreply@cohub.live",

@@ -2,7 +2,7 @@
 import { Container, Graphics } from "pixi.js";
 import type { BoardEffectItem } from "@cohub/protocol";
 import type { SceneItem } from "../../model/scene.js";
-import { itemColor } from "../palette.js";
+import { itemAlpha, itemColor } from "../palette.js";
 import { positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
@@ -111,7 +111,23 @@ function drawTrail(graphics: Graphics, parts: EffectParts, item: SceneItem<Board
 		parts.trail.length = 0;
 		return;
 	}
-	const head = { x: target.frame.x + target.frame.width / 2 - item.frame.x, y: target.frame.y + target.frame.height / 2 - item.frame.y, t: time };
+	const angle = item.frame.rotation * Math.PI / 180;
+	const localPoint = (frame: typeof target.frame, t: number) => {
+		const dx = frame.x + frame.width / 2 - item.frame.x - item.frame.width / 2;
+		const dy = frame.y + frame.height / 2 - item.frame.y - item.frame.height / 2;
+		return { x: dx * Math.cos(angle) + dy * Math.sin(angle) + item.frame.width / 2, y: -dx * Math.sin(angle) + dy * Math.cos(angle) + item.frame.height / 2, t };
+	};
+	const head = localPoint(target.frame, time);
+	if (context.frameAt) {
+		parts.trail.length = 0;
+		const start = Math.max(0, time - item.props.life);
+		const step = Math.max(1000 / 30, item.props.life / (TRAIL_SAMPLES - 1));
+		for (let t = Math.ceil(start / step) * step; t < time; t += step) {
+			const past = context.frameAt(target.id, t);
+			if (past) parts.trail.push(localPoint(past, t));
+		}
+		parts.trail.push(head);
+	}
 	const last = parts.trail.at(-1);
 	if (last && (time < last.t || time - last.t > item.props.life)) parts.trail.length = 0;
 	if (!last || Math.hypot(head.x - last.x, head.y - last.y) > 0.5) parts.trail.push(head);
@@ -137,6 +153,7 @@ function sync(container: Container, item: SceneItem<BoardEffectItem>, context: B
 	const seed = hashString(props.seed ?? item.id);
 	const time = Math.max(0, context.time);
 	const graphics = parts.graphics;
+	graphics.alpha = itemAlpha(context, item.style.fill ?? item.style.stroke);
 	graphics.clear();
 	switch (props.kind) {
 		case "particles":
@@ -154,9 +171,6 @@ function sync(container: Container, item: SceneItem<BoardEffectItem>, context: B
 		case "trail":
 			drawTrail(graphics, parts, item, context, color);
 			break;
-	}
-	if (context.selectedIds.has(item.id) || context.hoveredId === item.id) {
-		graphics.rect(0, 0, width, height).stroke({ color: context.palette.muted, width: 1, alpha: 0.6 });
 	}
 }
 

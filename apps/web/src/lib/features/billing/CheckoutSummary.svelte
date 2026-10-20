@@ -123,7 +123,7 @@ function submitCode(event: SubmitEvent) {
 
 		<button
 			type="button"
-			class="cta"
+			class="cta primary-key"
 			disabled={flow.checkoutLoading || flow.promotionLoading || (signedIn && !canBuy)}
 			onclick={onbuy}
 		>
@@ -235,7 +235,7 @@ function submitCode(event: SubmitEvent) {
 		color: var(--text-secondary);
 	}
 	.discount dd {
-		color: var(--success);
+		color: var(--color-success);
 	}
 	.total {
 		align-items: baseline;
@@ -267,31 +267,10 @@ function submitCode(event: SubmitEvent) {
 	}
 
 	.cta {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
 		gap: 8px;
 		min-height: 44px;
-		border-radius: 6px;
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
 		font-size: 13px;
 		font-weight: 600;
-		cursor: pointer;
-		transition: background-color 150ms;
-	}
-	.cta:hover:not(:disabled) {
-		background: var(--brand-hover);
-	}
-	.cta:disabled {
-		cursor: not-allowed;
-		opacity: 0.55;
-	}
-	.cta:focus-visible {
-		outline: none;
-		box-shadow:
-			0 0 0 2px var(--bg-primary),
-			0 0 0 4px var(--brand);
 	}
 
 	.blocked {
@@ -303,7 +282,7 @@ function submitCode(event: SubmitEvent) {
 		margin: -6px 0 0;
 		font-size: 11px;
 		line-height: 16px;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 	}
 
 	.code {
@@ -380,8 +359,8 @@ function submitCode(event: SubmitEvent) {
 		align-self: flex-start;
 		padding: 4px 6px 4px 8px;
 		border-radius: 5px;
-		background: var(--success-bg);
-		color: var(--success-soft);
+		background: var(--color-success-bg);
+		color: var(--color-success-soft);
 		font-size: 11px;
 	}
 	.mono {

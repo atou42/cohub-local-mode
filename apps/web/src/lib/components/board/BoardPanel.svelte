@@ -1,17 +1,32 @@
 <script lang="ts">
 import type {
+	BoardPatch,
 	BoardPlaybackCommand,
 	BoardPlaybackSnapshot,
 } from "@cohub/protocol";
 import {
+	type BoardMediaItemKind,
+	boardItemOrigin,
+	boardModelFormat,
+	boardOriginKey,
+	createMediaBoardItem,
+	createTaskResultItems,
+	inferBoardMediaKind,
+	isBoardModelItem,
+	normalizeBoardRemoteUrl,
 	parseBoardDocument,
+	parseBoardMediaSource,
 	screenToWorld,
-	taskRunToBoardTaskSnapshot as taskBoardSnapshot,
+	taskRunArtifacts,
+	type WorldPoint,
 	worldPoint,
 } from "@neta-art/cohub/board";
 import { defaultBoardTool } from "@neta-art/cohub/board/editor";
 import { nextLocalPlayback } from "@neta-art/cohub/board/player";
-import { createBoardAssetManager } from "@neta-art/cohub/board/stage";
+import {
+	type BoardStage as BoardStageController,
+	createBoardAssetManager,
+} from "@neta-art/cohub/board/stage";
 import { onDestroy, onMount, untrack } from "svelte";
 import { createBoardAppItemView } from "$lib/board/board-app-view.svelte";
 import { createSpaceBoardAssetSource } from "$lib/board/board-asset-source";
@@ -21,20 +36,14 @@ import {
 	createBoardAwarenessController,
 } from "$lib/board/board-awareness";
 import {
-	externalChangedIds,
-	fetchBoardChangeIds,
-	isExternalBoardWrite,
-	readBoardSeenVersion,
-	writeBoardSeenVersion,
-} from "$lib/board/board-changes";
-import {
 	generationPromptFromContent,
 	pendingGenerationTaskSnapshot,
 	regeneratedTaskPosition,
 	regenerationRequestFromTaskRun,
 } from "$lib/board/board-generation";
 import type { BoardStageExportBridge } from "$lib/board/board-image-export";
-import { playableBoardMedia } from "$lib/board/board-media-playback";
+import { opensInPlace } from "$lib/board/board-media-playback";
+import { createBoardModelPreviews } from "$lib/board/board-model";
 import type { BoardBackgroundLoadState } from "$lib/board/board-theme";
 import {
 	type BoardViewPreference,
@@ -54,8 +63,11 @@ import BoardEmptyState from "$lib/components/board/BoardEmptyState.svelte";
 import BoardExportDialog from "$lib/components/board/BoardExportDialog.svelte";
 import BoardFloatingToolbar from "$lib/components/board/BoardFloatingToolbar.svelte";
 import BoardGenerationComposer from "$lib/components/board/BoardGenerationComposer.svelte";
+import BoardLinkPopover from "$lib/components/board/BoardLinkPopover.svelte";
 import BoardMediaPlayer from "$lib/components/board/BoardMediaPlayer.svelte";
 import BoardMobileChrome from "$lib/components/board/BoardMobileChrome.svelte";
+import BoardModelViewer from "$lib/components/board/BoardModelViewer.svelte";
+import BoardScripts from "$lib/components/board/BoardScripts.svelte";
 import BoardSelectionToolbar from "$lib/components/board/BoardSelectionToolbar.svelte";
 import BoardStage from "$lib/components/board/BoardStage.svelte";
 import BoardTextEditor from "$lib/components/board/BoardTextEditor.svelte";
@@ -64,11 +76,7 @@ import BoardZoomMenu from "$lib/components/board/BoardZoomMenu.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import { sdk } from "$lib/sdk";
-import { watchGenerationTask } from "$lib/stores/generation-task-watch";
-import {
-	getCachedTaskRuns,
-	onTaskRunsCacheUpdated,
-} from "$lib/stores/task-runs-cache";
+import { mergeCachedTaskRun } from "$lib/stores/task-runs-cache";
 
 const {
 	path,
@@ -99,18 +107,27 @@ const {
 
 const locale = $derived(getLocale());
 
+let scriptStage = $state.raw<BoardStageController | null>(null);
 const readonly = $derived(mode === "view");
 const resolvedAssetSource = $derived(
 	assetSource ?? createSpaceBoardAssetSource(spaceId),
 );
 
-const assets = createBoardAssetManager({
-	loadVideoPreviews:
-		typeof navigator === "undefined" ||
-		!(navigator as Navigator & { connection?: { saveData?: boolean } })
+const saveData =
+	typeof navigator !== "undefined" &&
+	Boolean(
+		(navigator as Navigator & { connection?: { saveData?: boolean } })
 			.connection?.saveData,
+	);
+const assets = createBoardAssetManager({
+	loadVideoPreviews: !saveData,
 	resolveFileUrl: (path) =>
 		untrack(() => resolvedAssetSource).resolveFileUrl(path),
+	modelPreviews: saveData
+		? undefined
+		: createBoardModelPreviews(() => untrack(() => resolvedAssetSource), {
+				isMobile: untrack(() => isMobile),
+			}),
 });
 const itemViews = [
 	createBoardAppItemView({
@@ -125,6 +142,185 @@ let exportBridge = $state<BoardStageExportBridge | null>(null);
 let exportOpen = $state(false);
 let generationOpen = $state(false);
 let appearanceOpen = $state(false);
+let linkRequest = $state<{ url: string; at: WorldPoint } | null>(null);
+
+function openLink(url = "", at = editor.viewCenter()) {
+	contextMenu = null;
+	generationOpen = false;
+	appearanceOpen = false;
+	linkRequest = { url, at };
+}
+
+function toggleGeneration() {
+	linkRequest = null;
+	generationOpen = !generationOpen;
+	appearanceOpen = false;
+}
+
+function toggleAppearance() {
+	linkRequest = null;
+	appearanceOpen = !appearanceOpen;
+	generationOpen = false;
+}
+
+function toggleTimeline() {
+	linkRequest = null;
+	timelineOpen = !timelineOpen;
+	if (!timelineOpen) editor.setPlayhead(null);
+}
+
+function addLink(url: string, kind: BoardMediaItemKind) {
+	const at = linkRequest?.at ?? editor.viewCenter();
+	editor.setSelection([editor.addMedia(url, at, { kind })]);
+	linkRequest = null;
+}
+
+function addLinks(urls: string[], at = editor.viewCenter()) {
+	if (urls.length === 1) {
+		const url = urls[0] as string;
+		const kind = inferBoardMediaKind(url);
+		if ((kind === "file" || kind === "text") && !boardModelFormat(url)) {
+			openLink(url, at);
+			return;
+		}
+	}
+	editor.addItems(
+		urls.map((url, index) =>
+			createMediaBoardItem(url, at.x + index * 36, at.y),
+		),
+		{ select: true },
+	);
+}
+
+function pasteText(text: string) {
+	const url = normalizeBoardRemoteUrl(text);
+	if (url) addLinks([url]);
+	else editor.pasteClipboard(text);
+}
+
+function handlePaste(event: ClipboardEvent) {
+	if (
+		!active ||
+		readonly ||
+		generationOpen ||
+		replayOpen ||
+		linkRequest ||
+		editor.editingId ||
+		isEditableTarget(event.target)
+	)
+		return;
+	const text = event.clipboardData?.getData("text/plain");
+	if (!text) return;
+	event.preventDefault();
+	pasteText(text);
+}
+
+const checkedTasks = new Set<string>();
+$effect(() => {
+	if (readonly) return;
+	const unsettled = new Map<string, string[]>();
+	for (const item of editor.items) {
+		if (item.type !== "task" || checkedTasks.has(item.id)) continue;
+		const { status } = item.props.snapshot;
+		if (status !== "pending" && status !== "running") continue;
+		checkedTasks.add(item.id);
+		const ids = unsettled.get(item.props.taskRunId) ?? [];
+		unsettled.set(item.props.taskRunId, [...ids, item.id]);
+	}
+	if (unsettled.size) untrack(() => void recheckTasks(unsettled));
+});
+
+async function recheckTasks(cards: ReadonlyMap<string, readonly string[]>) {
+	const runIds = [...cards.keys()];
+	for (let start = 0; start < runIds.length; start += 100) {
+		const { runs } = await sdk.tasks
+			.getMany(runIds.slice(start, start + 100), { spaceId })
+			.catch(() => ({ runs: [] }));
+		const items: NonNullable<BoardPatch["items"]> = {};
+		for (const run of runs) {
+			mergeCachedTaskRun(spaceId, run);
+			if (run.status !== "completed" && run.status !== "failed") continue;
+			for (const id of cards.get(run.id) ?? [])
+				items[id] = { props: { taskRunId: run.id } };
+		}
+		if (Object.keys(items).length)
+			await boardClient.apply({ items }).catch(() => undefined);
+	}
+}
+
+async function addTaskResults(itemId: string) {
+	const task = editor.itemById(itemId);
+	if (task?.type !== "task") return;
+	const { taskRunId, snapshot } = task.props;
+	let artifacts = snapshot.artifacts;
+	if (snapshot.artifactCount > artifacts.length) {
+		try {
+			artifacts = taskRunArtifacts((await sdk.tasks.get(taskRunId)).run);
+		} catch {}
+	}
+	const current = editor.itemById(itemId);
+	if (current?.type !== "task") return;
+	const existing = new Map<string, string>();
+	for (const item of editor.items) {
+		const origin = boardItemOrigin(item);
+		if (origin?.taskRunId === taskRunId)
+			existing.set(boardOriginKey(origin), item.id);
+	}
+	const entries = createTaskResultItems({
+		taskRunId,
+		frame: current.frame,
+		artifacts,
+		existing: new Set(existing.keys()),
+	});
+	if (entries.length) editor.addItems(entries, { select: false });
+	const ids = [...existing.values(), ...entries.map((entry) => entry.id)];
+	if (!ids.length) return;
+	editor.setSelection(ids);
+	editor.focusItems(ids);
+}
+
+function showSource(itemId: string) {
+	const item = editor.itemById(itemId);
+	const origin = item ? boardItemOrigin(item) : null;
+	if (!origin) return;
+	const card = editor.items.find(
+		(candidate) =>
+			candidate.type === "task" &&
+			candidate.props.taskRunId === origin.taskRunId,
+	);
+	if (!card) {
+		void onOpenTask?.(origin.taskRunId);
+		return;
+	}
+	editor.setSelection([card.id]);
+	editor.focusItems([card.id]);
+}
+
+const relatedIds = $derived.by(() => {
+	const selected = editor.selectedItems;
+	if (selected.length !== 1 || !selected[0]) return [];
+	const item = selected[0];
+	const taskRunId =
+		item.type === "task"
+			? item.props.taskRunId
+			: boardItemOrigin(item)?.taskRunId;
+	if (!taskRunId) return [];
+	return editor.items.flatMap((other) =>
+		other.id !== item.id &&
+		(other.type === "task"
+			? other.props.taskRunId === taskRunId
+			: boardItemOrigin(other)?.taskRunId === taskRunId)
+			? [other.id]
+			: [],
+	);
+});
+
+function openMediaSource(src: string) {
+	const source = parseBoardMediaSource(src);
+	if (source?.kind === "url")
+		window.open(source.value, "_blank", "noopener,noreferrer");
+	else if (source?.kind === "file") void onOpenFile?.(source.value);
+}
 let replayOpen = $state(false);
 let timelineOpen = $state(false);
 let localPlayback = $state<BoardPlaybackSnapshot | null>(null);
@@ -138,10 +334,10 @@ function sendPlayback(command: BoardPlaybackCommand) {
 	localPlayback = nextLocalPlayback(localPlayback, command, editor.document);
 }
 let liveVersion = $state(0);
-let changedIds = $state<string[]>([]);
 let backgroundLoadState = $state<BoardBackgroundLoadState | null>(null);
 let generationSelectionRequest = $state(0);
 let playingId = $state<string | null>(null);
+let modelId = $state<string | null>(null);
 let regeneratingItemId = $state<string | null>(null);
 let regenerationError = $state<string | null>(null);
 let regenerationErrorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -152,24 +348,6 @@ let surfaceSize = $state<{ width: number; height: number }>({
 });
 let unsubscribeAwareness: (() => void) | null = null;
 const viewPreferenceUserKey = untrack(() => getCacheUserKey());
-const seenUserKey = viewPreferenceUserKey;
-let seenVersion = untrack(() =>
-	readonly || !seenUserKey
-		? null
-		: readBoardSeenVersion(seenUserKey, spaceId, boardId),
-);
-
-function markChangesSeen() {
-	changedIds = [];
-	seenVersion = liveVersion;
-	if (seenUserKey)
-		writeBoardSeenVersion(seenUserKey, spaceId, boardId, liveVersion);
-}
-
-function focusChanges() {
-	if (changedIds.length === 0) return;
-	editor.focusItems(changedIds, { padding: 96, maxZoom: 1.5 });
-}
 const viewPreferenceEnabled = untrack(
 	() => mode === "edit" && canUseUserScopedCache(viewPreferenceUserKey),
 );
@@ -187,14 +365,17 @@ function addSelectionToGeneration() {
 	generationSelectionRequest += 1;
 }
 
-function playMedia(itemId: string) {
+function openInPlace(itemId: string) {
 	const item = editor.itemById(itemId);
-	if (!playableBoardMedia(item, resolvedAssetSource)) return;
-	playingId = itemId;
+	if (!opensInPlace(item, resolvedAssetSource)) return;
+	const model = isBoardModelItem(item);
+	modelId = model ? itemId : null;
+	playingId = model ? null : itemId;
 }
 
-function closeMedia() {
+function closeInPlace() {
 	playingId = null;
+	modelId = null;
 }
 
 function openExport() {
@@ -235,7 +416,6 @@ async function regenerateTask(itemId: string) {
 			return;
 		}
 
-		watchGenerationTask(spaceId, created.taskRunId, submittingUserKey);
 		const snapshot = pendingGenerationTaskSnapshot({
 			prompt: generationPromptFromContent(request.content),
 			model: request.model,
@@ -453,14 +633,14 @@ function handleReadonlyKeydown(
 			const single =
 				editor.selectedItems.length === 1 ? editor.selectedItems[0] : null;
 			if (!single) return;
-			if (playableBoardMedia(single, resolvedAssetSource)) {
+			if (opensInPlace(single, resolvedAssetSource)) {
 				event.preventDefault();
-				playMedia(single.id);
+				openInPlace(single.id);
 				return;
 			}
 			if (single.type !== "file") return;
 			event.preventDefault();
-			void onOpenFile?.((single.props as { src: string }).src);
+			openMediaSource(single.props.src);
 			return;
 		}
 		case "Escape":
@@ -479,9 +659,16 @@ function handleReadonlyKeydown(
 
 function handleKeydown(event: KeyboardEvent) {
 	if (!active || generationOpen || replayOpen) return;
-	if (event.key === "Escape" && playingId) {
+	if (linkRequest) {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			linkRequest = null;
+		}
+		return;
+	}
+	if (event.key === "Escape" && (playingId || modelId)) {
 		event.preventDefault();
-		closeMedia();
+		closeInPlace();
 		return;
 	}
 	if (editor.editingId || isEditableTarget(event.target)) return;
@@ -541,7 +728,7 @@ function handleKeydown(event: KeyboardEvent) {
 		void (async () => {
 			const text = await readClipboardText();
 			if (text) {
-				editor.pasteClipboard(text);
+				pasteText(text);
 				return;
 			}
 			editor.pasteClipboard();
@@ -570,12 +757,12 @@ function handleKeydown(event: KeyboardEvent) {
 				editor.selectedItems.length === 1 ? editor.selectedItems[0] : null;
 			if (!single) return;
 			event.preventDefault();
-			if (playableBoardMedia(single, resolvedAssetSource)) {
-				playMedia(single.id);
+			if (opensInPlace(single, resolvedAssetSource)) {
+				openInPlace(single.id);
 				return;
 			}
 			if (single.type === "file") {
-				void onOpenFile?.((single.props as { src: string }).src);
+				openMediaSource(single.props.src);
 				return;
 			}
 			if (single.type === "task") {
@@ -697,75 +884,23 @@ function handleLongPress(point: { x: number; y: number }) {
 	openContextMenuAt(point.x, point.y);
 }
 
-let liveHydrated = false;
-
-function refreshChangedIds() {
-	if (readonly || !seenUserKey || liveHydrated) return;
-	liveHydrated = true;
-	if (seenVersion === null) {
-		void fetchBoardChangeIds(fetchHistory, 0, 1)
-			.then(({ latestVersion }) => {
-				liveVersion = Math.max(liveVersion, latestVersion);
-				seenVersion = liveVersion;
-				writeBoardSeenVersion(seenUserKey, spaceId, boardId, liveVersion);
-			})
-			.catch(() => undefined);
-		return;
-	}
-	if (changedIds.length > 0) return;
-	void fetchBoardChangeIds(fetchHistory, seenVersion, 60)
-		.then(({ ids, latestVersion }) => {
-			liveVersion = Math.max(liveVersion, latestVersion);
-			if (ids.length === 0) return;
-			const next = new Set(changedIds);
-			for (const id of ids) next.add(id);
-			changedIds = [...next];
-		})
-		.catch(() => undefined);
-}
-
 onMount(() => {
-	refreshChangedIds();
 	if (!readonly) {
 		unsubscribeAwareness = boardClient.subscribe({
 			awareness: (event) => awareness.receive(event),
 			changed: (event) => {
 				liveVersion = Math.max(liveVersion, event.payload.version);
-				if (isExternalBoardWrite(event.payload.source)) {
-					const ids = event.payload.changed.items;
-					if (ids.length > 0) {
-						const next = new Set(changedIds);
-						for (const id of ids) next.add(id);
-						changedIds = [...next];
-					}
-				}
 			},
 		});
 	}
-	const unsubscribeTaskCache = onTaskRunsCacheUpdated((event) => {
-		if (event.spaceId !== spaceId) return;
-		const taskRunIds = new Set(
-			editor.items.flatMap((item) =>
-				item.type === "task"
-					? [(item.props as { taskRunId: string }).taskRunId]
-					: [],
-			),
-		);
-		if (taskRunIds.size === 0) return;
-		const updatedRuns = event.runs.filter((run) => taskRunIds.has(run.id));
-		if (updatedRuns.length === 0) return;
-		const snapshots = new Map(
-			updatedRuns.map((run) => [run.id, taskBoardSnapshot(run)]),
-		);
-		editor.applyTaskSnapshots(snapshots);
-	});
+	window.addEventListener("paste", handlePaste);
 	window.addEventListener("keydown", handleKeydown);
 	window.addEventListener("keyup", handleKeyup);
 	window.addEventListener("blur", clearSpaceHeld);
 	window.addEventListener("pagehide", flushViewPreference);
 	document.addEventListener("visibilitychange", handleVisibilityChange);
 	return () => {
-		unsubscribeTaskCache();
+		window.removeEventListener("paste", handlePaste);
 		window.removeEventListener("keydown", handleKeydown);
 		window.removeEventListener("keyup", handleKeyup);
 		window.removeEventListener("blur", clearSpaceHeld);
@@ -780,16 +915,18 @@ onMount(() => {
 $effect(() => {
 	if (active) return;
 	contextMenu = null;
-	playingId = null;
+	closeInPlace();
 	exportOpen = false;
 	generationOpen = false;
 	replayOpen = false;
+	linkRequest = null;
 	clearSpaceHeld();
 });
 
 onDestroy(() => {
 	if (regenerationErrorTimer) clearTimeout(regenerationErrorTimer);
 	flushViewPreference();
+	window.removeEventListener("paste", handlePaste);
 	window.removeEventListener("keydown", handleKeydown);
 	window.removeEventListener("keyup", handleKeyup);
 	window.removeEventListener("blur", clearSpaceHeld);
@@ -831,19 +968,8 @@ onDestroy(() => {
 			</div>
 		{/if}
 
-		{#if !readonly && changedIds.length > 0}
-			<div class="board-changes-chip" role="status" aria-live="polite">
-				<span>{m.board_changes_since({ count: changedIds.length }, { locale })}</span>
-				<button type="button" class="board-changes-action" onclick={focusChanges}>
-					{m.board_changes_locate({}, { locale })}
-				</button>
-				<button type="button" class="board-changes-action" onclick={markChangesSeen}>
-					{m.board_changes_dismiss({}, { locale })}
-				</button>
-			</div>
-		{/if}
-
 		<BoardStage
+			onStageReady={(stage) => { scriptStage = stage; }}
 			{editor}
 			playback={activePlayback}
 			{assets}
@@ -853,16 +979,19 @@ onDestroy(() => {
 			{spaceId}
 			{readonly}
 			assetSource={resolvedAssetSource}
-			{onOpenFile}
-			onPlayMedia={playMedia}
+			onOpenFile={openMediaSource}
+			onAddLinks={addLinks}
+			onOpenInPlace={openInPlace}
 			onPointerPresence={(cursor) => { if (!readonly) awareness.setCursor(cursor); }}
 			views={itemViews}
 			onSurfaceChange={handleSurfaceChange}
 			onExportReady={(bridge) => { exportBridge = bridge; }}
 			onBackgroundLoadStateChange={(state) => { backgroundLoadState = state; }}
 			onLongPress={isMobile ? handleLongPress : undefined}
-			highlightedIds={changedIds}
+			{relatedIds}
 		/>
+
+		<BoardScripts {editor} {readonly} stage={scriptStage} />
 
 		{#if !readonly}
 			<BoardCollaboratorOverlay
@@ -893,47 +1022,60 @@ onDestroy(() => {
 			{playingId}
 			{active}
 			surface={surfaceSize}
-			onClose={closeMedia}
+			onClose={closeInPlace}
 		/>
+		{#if modelId}
+			<BoardModelViewer
+				{editor}
+				assetSource={resolvedAssetSource}
+				itemId={modelId}
+				{isMobile}
+				onOpenFile={openMediaSource}
+				onClose={closeInPlace}
+			/>
+		{/if}
 		{#if !readonly && !isMobile}
 			<BoardSelectionToolbar
 				{editor}
+				onAddTaskResults={addTaskResults}
+				onShowSource={showSource}
 				onRegenerateTask={regenerateTask}
 				onAddToGeneration={addSelectionToGeneration}
 				{regeneratingItemId}
 			/>
 			<BoardArrowToolbar {editor} />
 			<BoardFloatingToolbar
+				onAddLink={() => openLink()}
 				{editor}
 				{immersive}
 				{generationOpen}
 				{appearanceOpen}
 				{timelineOpen}
-				onToggleGeneration={() => { generationOpen = !generationOpen; appearanceOpen = false; }}
-				onToggleAppearance={() => { appearanceOpen = !appearanceOpen; generationOpen = false; }}
-				onToggleTimeline={() => {
-					timelineOpen = !timelineOpen;
-					if (!timelineOpen) editor.setPlayhead(null);
-				}}
+				onToggleGeneration={toggleGeneration}
+				onToggleAppearance={toggleAppearance}
+				onToggleTimeline={toggleTimeline}
 			/>
 		{/if}
 		{#if isMobile}
 			<BoardMobileChrome
+				onAddLink={() => openLink()}
 				{editor}
 				{readonly}
 				{appearanceOpen}
 				{generationOpen}
 				{timelineOpen}
-				onToggleAppearance={() => { appearanceOpen = !appearanceOpen; generationOpen = false; }}
-				onToggleGeneration={() => { generationOpen = !generationOpen; appearanceOpen = false; }}
-				onToggleTimeline={() => {
-					timelineOpen = !timelineOpen;
-					if (!timelineOpen) editor.setPlayhead(null);
-				}}
+				onToggleAppearance={toggleAppearance}
+				onToggleGeneration={toggleGeneration}
+				onToggleTimeline={toggleTimeline}
 				onExport={exportBridge ? openExport : undefined}
 				onReplay={() => { replayOpen = true; }}
 				contextMenuOpen={contextMenu !== null}
 			/>
+		{/if}
+		{#if !readonly && linkRequest}
+			{#key linkRequest}
+				<BoardLinkPopover initialUrl={linkRequest.url} onAdd={addLink} onClose={() => { linkRequest = null; }} />
+			{/key}
 		{/if}
 		{#if !readonly && generationOpen}
 			<BoardGenerationComposer
@@ -999,7 +1141,10 @@ onDestroy(() => {
 		{#if contextMenu}
 			<BoardContextMenu
 				{editor}
-				{onOpenFile}
+				onOpenFile={openMediaSource}
+				onAddLink={!readonly ? () => openLink() : undefined}
+				onAddTaskResults={!readonly ? addTaskResults : undefined}
+				onShowSource={showSource}
 				{onOpenTask}
 				onRegenerateTask={regenerateTask}
 				{regeneratingItemId}
@@ -1022,6 +1167,7 @@ onDestroy(() => {
 	bridge={exportBridge}
 	title={path}
 	selection={editor.selection}
+	onLocate={(id) => { editor.setSelection([id]); editor.focusItems([id]); }}
 />
 
 <style>
@@ -1057,51 +1203,13 @@ onDestroy(() => {
 		z-index: 32;
 		max-width: min(420px, calc(100% - 24px));
 		transform: translateX(-50%);
-		border: 1px solid var(--error-soft);
+		border: 1px solid var(--color-error-soft);
 		border-radius: 7px;
-		background: var(--error-bg);
+		background: var(--color-error-bg);
 		padding: 7px 10px;
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 		font-size: 11px;
 		box-shadow: 0 8px 20px color-mix(in srgb, var(--overlay-scrim-strong) 12%, transparent);
-	}
-
-	.board-changes-chip {
-		position: absolute;
-		top: 12px;
-		left: 50%;
-		z-index: 31;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		max-width: min(420px, calc(100% - 24px));
-		transform: translateX(-50%);
-		border-radius: 999px;
-		border: 1px solid var(--brand-border);
-		background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
-		padding: 4px 4px 4px 12px;
-		color: var(--text-secondary);
-		font-size: 11px;
-		box-shadow: 0 8px 20px color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
-		backdrop-filter: blur(12px);
-	}
-
-	.board-changes-action {
-		border-radius: 999px;
-		padding: 3px 8px;
-		color: var(--brand-muted-fg);
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-	}
-	.board-changes-action:hover { background: var(--brand-bg); }
-
-	@media (pointer: coarse) {
-		.board-changes-chip {
-			top: calc(8px + var(--safe-area-top));
-			padding: 6px 6px 6px 12px;
-		}
-		.board-changes-action { min-height: 32px; padding: 6px 10px; }
 	}
 
 	.board-sync-notice--immersive {
@@ -1110,7 +1218,7 @@ onDestroy(() => {
 		right: var(--preview-safe-right, 10px);
 		z-index: 30;
 		max-width: min(420px, calc(100% - var(--preview-safe-left, 10px) - var(--preview-safe-right, 10px)));
-		border: 1px solid var(--error-soft);
+		border: 1px solid var(--color-error-soft);
 		border-radius: 7px;
 		box-shadow: 0 8px 20px color-mix(in srgb, var(--overlay-scrim-strong) 12%, transparent);
 	}

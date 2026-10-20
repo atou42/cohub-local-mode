@@ -1,21 +1,20 @@
-import { asc, eq, isNull, ne, or, sql } from "drizzle-orm";
-import { billingOperations, COHUB_BILLING_FEATURES } from "@cohub/billing";
+import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import {
   DEFAULT_SANDBOX_SPEC_ID,
   SANDBOX_SPECS,
   buildInvalidatedSandboxEndpointMeta,
-  getSandboxSpecRank,
   isSandboxAwaitingEndpointReport,
   isSandboxDialable,
-  normalizeSandboxSpecId,
   resolveSpaceSandboxAutoDestroyPolicy,
   type SandboxSpecId,
 } from "@cohub/sandbox-controller";
+import { createSandboxRpcNonce, createSandboxRpcToken } from "@cohub/sandbox-client";
 import { db } from "./db/index.js";
-import { listEnabledSpaceMods, getSpaceModMountSignature } from "@cohub/core/space-mods";
+import { getSpaceModMountSignature } from "@cohub/core/space-mods";
 import { spaceSandboxes, spaces } from "@cohub/db";
 import { sessionsNamespace, config } from "./config.js";
 import { k8sCoreApi } from "./k8s.js";
+import { resolveSpaceSandboxPreferences } from "./space-sandbox-preferences.js";
 import { renderSandboxPodTemplate } from "./sandbox-template.js";
 import { deleteSandboxPublicNetwork, getSandboxPublicEndpoints, reconcileSandboxPublicNetwork } from "./sandbox-public-network.js";
 import { createSandboxReportToken, hashSandboxReportToken } from "./crypto.js";
@@ -24,6 +23,7 @@ import { publishSandboxLifecycleEvent } from "./sandbox-events.js";
 import { scheduleSandboxAutoDestroy } from "./sandbox-idle-scheduler.js";
 import type { SpaceSandboxRuntimeStatus, SpaceSandboxStatus, SpaceSandboxStopReason } from "./lib/sandbox/types.js";
 import { smokeVerifySandboxPod } from "./lib/sandbox/recovery.js";
+import { acquireSandboxProvisioningLease, type SandboxProvisioningLease } from "./lib/sandbox/provisioning-lock.js";
 import type { V1Pod } from "@kubernetes/client-node";
 import { createLogger } from "@cohub/infra/logging";
 
@@ -36,7 +36,6 @@ export const toSandboxImageVersion = (image: string) => {
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const RECOVERY_LOCK_TTL_MS = 180_000;
 const RECOVERY_COOLDOWN_MS = 60_000;
 
 const asMetaObject = (value: unknown): Record<string, unknown> => {
@@ -48,27 +47,6 @@ const getK8sStatusCode = (error: unknown) => {
   return (error as { statusCode?: number; code?: number }).statusCode
     ?? (error as { statusCode?: number; code?: number }).code
     ?? null;
-};
-
-const getSpaceSandboxSpec = async (spaceId: string): Promise<SandboxSpecId> => {
-  const [space] = await db.select({ meta: spaces.meta }).from(spaces).where(eq(spaces.id, spaceId)).limit(1);
-  const meta = asMetaObject(space?.meta);
-  const config = asMetaObject(meta.config);
-  const sandbox = asMetaObject(config.sandbox);
-  return normalizeSandboxSpecId(sandbox.spec);
-};
-
-const getAllowedSandboxSpecId = async (userId: string): Promise<SandboxSpecId> => {
-  try {
-    const state = await billingOperations.getState({ userId });
-    const keys = new Set(state.entitlements.filter((entitlement) => entitlement.enabled).map((entitlement) => entitlement.key));
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecUltra)) return "ultra";
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecBoost)) return "boost";
-    return DEFAULT_SANDBOX_SPEC_ID;
-  } catch (error) {
-    logger.warn("[SandboxSpec] failed to check entitlement during reconcile", { userId, error });
-    return DEFAULT_SANDBOX_SPEC_ID;
-  }
 };
 
 const getK8sErrorMessage = (error: unknown) => {
@@ -220,6 +198,35 @@ export const getSpaceSandboxBySpaceId = async (spaceId: string) => {
   return sandbox ?? null;
 };
 
+async function claimSandboxProvisioning(
+  spaceId: string,
+  existing: Awaited<ReturnType<typeof getSpaceSandboxBySpaceId>>,
+  lease: SandboxProvisioningLease,
+) {
+  await lease.assertOwned();
+  const previousGeneration = asMetaObject(existing?.meta).provisioningGeneration ?? null;
+  const marker = { provisioningGeneration: lease.generation };
+  const [claimed] = await db.insert(spaceSandboxes).values({
+    spaceId,
+    provider: "cloud",
+    status: "provisioning",
+    runtimeStatus: "starting",
+    podName: `sandbox-${spaceId}`,
+    meta: marker,
+  }).onConflictDoUpdate({
+    target: spaceSandboxes.spaceId,
+    set: {
+      meta: sql`coalesce(${spaceSandboxes.meta}, '{}'::jsonb) || ${JSON.stringify(marker)}::jsonb`,
+      updatedAt: new Date(),
+    },
+    // A late claim must not take ownership back from a newer generation.
+    setWhere: sql`${spaceSandboxes.meta}->>'provisioningGeneration' is not distinct from ${previousGeneration}`,
+  }).returning();
+  if (!claimed) throw new Error("Sandbox provisioning generation changed");
+  await lease.assertOwned();
+  return claimed;
+}
+
 export const ensureSpaceSandbox = async (input: {
   spaceId: string;
   provider?: "cloud" | "local";
@@ -286,6 +293,8 @@ export const deleteSpaceSandbox = async (spaceId: string) => {
 
 export const updateSpaceSandbox = async (input: {
   spaceId: string;
+  expectedReportTokenHash?: string;
+  expectedProvisioningGeneration?: string | null;
   status?: SpaceSandboxStatus;
   runtimeStatus?: SpaceSandboxRuntimeStatus;
   podName?: string | null;
@@ -314,7 +323,15 @@ export const updateSpaceSandbox = async (input: {
       ...(input.meta !== undefined ? { meta: input.meta } : {}),
       updatedAt: new Date(),
     })
-    .where(eq(spaceSandboxes.spaceId, input.spaceId))
+    .where(and(
+      eq(spaceSandboxes.spaceId, input.spaceId),
+      input.expectedReportTokenHash !== undefined
+        ? sql`${spaceSandboxes.meta}->>'reportTokenHash' = ${input.expectedReportTokenHash}`
+        : undefined,
+      input.expectedProvisioningGeneration !== undefined
+        ? sql`${spaceSandboxes.meta}->>'provisioningGeneration' is not distinct from ${input.expectedProvisioningGeneration}`
+        : undefined,
+    ))
     .returning();
 
   return sandbox ?? null;
@@ -391,7 +408,8 @@ const triggerSandboxPublicNetworkReconcile = (spaceId: string) => {
     });
 };
 
-const tryCreatePod = async (spaceId: string, pod: V1Pod, retry = 0): Promise<{ podName: string; created: boolean }> => {
+const tryCreatePod = async (spaceId: string, pod: V1Pod, lease: SandboxProvisioningLease): Promise<{ podName: string; created: boolean }> => {
+  await lease.assertOwned();
   try {
     await k8sCoreApi.createNamespacedPod({
       namespace: sessionsNamespace,
@@ -406,31 +424,81 @@ const tryCreatePod = async (spaceId: string, pod: V1Pod, retry = 0): Promise<{ p
     if (statusCode === 409 && message.includes("object is being deleted")) {
       const deleted = await waitForSandboxPodDeleted(podName);
       if (!deleted) throw new Error(`timed out waiting for deleted sandbox pod: ${podName}`);
-      return tryCreatePod(spaceId, pod, retry + 1);
+      return tryCreatePod(spaceId, pod, lease);
     }
 
-    if (statusCode === 409 && retry < 10) {
-      const backoffMs = Math.min(250 * 2 ** retry, 4000);
-      await sleep(backoffMs);
-      return tryCreatePod(spaceId, pod, retry + 1);
-    }
-    if (statusCode === 409) {
-      throw new Error(`sandbox pod already exists after retries: sandbox-${spaceId}`);
-    }
+    if (statusCode === 409) return { podName, created: false };
     throw error;
   }
 };
 
-export const reconcileSpaceSandbox = async (input: {
+type ReconcileSandboxInput = {
   spaceId: string;
   userUuid: string;
   ownerUserUuid?: string;
   mode: "ensure" | "replace";
   reason: "space_created" | "manual_recreate" | "auto_recover" | "auto_resume" | "space_mods_changed";
-}) => {
+};
+
+async function recordProvisioningFailure(spaceId: string, lease: SandboxProvisioningLease, error: unknown) {
+  try {
+    // A lost lease may fail its own unfinished generation, never a successor's row.
+    const latest = await getSpaceSandboxBySpaceId(spaceId);
+    if (asMetaObject(latest?.meta).provisioningGeneration !== lease.generation) return;
+    await updateSpaceSandbox({
+      spaceId,
+      expectedProvisioningGeneration: lease.generation,
+      status: "error",
+      runtimeStatus: "unhealthy",
+      meta: {
+        ...asMetaObject(latest?.meta),
+        recoveryStatus: "failed",
+        lastRecoveryFailedAt: new Date().toISOString(),
+        lastError: error instanceof Error ? error.message : String(error),
+        lastRecoveryError: error instanceof Error ? error.message : String(error),
+      },
+    });
+  } catch (cleanupError) {
+    logger.warn(`[SandboxProvisioning] skipped failure update spaceId=${spaceId}:`, cleanupError);
+  }
+}
+
+export const reconcileSpaceSandbox = async (input: ReconcileSandboxInput) => {
+  const lease = await acquireSandboxProvisioningLease(input.spaceId);
+  if (!lease) return;
+  try {
+    await reconcileSpaceSandboxLocked(input, lease);
+  } catch (error) {
+    await recordProvisioningFailure(input.spaceId, lease, error);
+    throw error;
+  } finally {
+    await lease.release().catch((error) => logger.warn("[SandboxProvisioning] lock release failed", error));
+  }
+};
+
+async function reconcileSpaceSandboxLocked(
+  input: ReconcileSandboxInput,
+  lease: SandboxProvisioningLease,
+  recovery?: { reason: string; source: string },
+) {
+  const resolved = await resolveSpaceSandboxPreferences(input.spaceId, undefined, true);
+  const configuredSpec = resolved.requested.spec;
+  const allowedSpec = resolved.allowedSpec;
+  const desiredSpec = resolved.effective.spec;
+  const specEntitlementDowngraded = desiredSpec !== configuredSpec;
+  const desiredSpecConfig = SANDBOX_SPECS[desiredSpec];
   const podName = `sandbox-${input.spaceId}`;
-  const existingSandbox = await getSpaceSandboxBySpaceId(input.spaceId);
-  const existingMeta = asMetaObject(existingSandbox?.meta);
+  const existing = await getSpaceSandboxBySpaceId(input.spaceId);
+  const existingSandbox = await claimSandboxProvisioning(input.spaceId, existing, lease);
+  const existingMeta = asMetaObject(existingSandbox.meta);
+  const recoveryMeta = recovery ? {
+    recoveryStatus: "recreating",
+    recoveryLevel: "L2",
+    recoverySource: recovery.source,
+    lastRecoveryReason: recovery.reason,
+    lastRecoveryStartedAt: new Date().toISOString(),
+    lastRecoveryError: null,
+  } : {};
 
   if (input.mode === "replace") {
     const generation = new Date().toISOString();
@@ -448,20 +516,29 @@ export const reconcileSpaceSandbox = async (input: {
 
     // Invalidate endpoint + report token immediately so agents stop dialing the
     // dying pod and it cannot re-publish the dead coordinates.
-    await updateSpaceSandbox({
+    await lease.assertOwned();
+    const invalidated = await updateSpaceSandbox({
       spaceId: input.spaceId,
+      expectedProvisioningGeneration: lease.generation,
       status: "provisioning",
       runtimeStatus: "starting",
-      meta: buildInvalidatedSandboxEndpointMeta(existingMeta, input.reason, generation),
-    }).catch((error) => {
-      logger.warn(`[SandboxRecover] failed to invalidate endpoint before replace spaceId=${input.spaceId}:`, error);
+      meta: {
+        ...buildInvalidatedSandboxEndpointMeta(existingMeta, input.reason, generation),
+        ...recoveryMeta,
+        provisioningGeneration: lease.generation,
+      },
     });
+    if (!invalidated) throw new Error("Sandbox provisioning generation changed");
 
-    const podToReplace = existingSandbox?.podName ?? podName;
+    const podToReplace = existingSandbox.podName ?? podName;
     try {
+      const pod = await k8sCoreApi.readNamespacedPod({ name: podToReplace, namespace: sessionsNamespace });
+      if (!pod.metadata?.uid) throw new Error("Sandbox Pod UID is missing");
+      await lease.assertOwned();
       await k8sCoreApi.deleteNamespacedPod({
         name: podToReplace,
         namespace: sessionsNamespace,
+        body: { preconditions: { uid: pod.metadata.uid } },
       });
     } catch (error: unknown) {
       const statusCode = getK8sStatusCode(error);
@@ -474,13 +551,10 @@ export const reconcileSpaceSandbox = async (input: {
     }
   }
 
-  const configuredSpec = await getSpaceSandboxSpec(input.spaceId);
-  const allowedSpec = await getAllowedSandboxSpecId(input.ownerUserUuid ?? input.userUuid);
-  const desiredSpec = getSandboxSpecRank(configuredSpec) > getSandboxSpecRank(allowedSpec) ? allowedSpec : configuredSpec;
-  const specEntitlementDowngraded = desiredSpec !== configuredSpec;
-  const desiredSpecConfig = SANDBOX_SPECS[desiredSpec] ?? SANDBOX_SPECS[DEFAULT_SANDBOX_SPEC_ID];
   const reportToken = createSandboxReportToken();
   const reportTokenHash = hashSandboxReportToken(reportToken);
+  const rpcTokenNonce = createSandboxRpcNonce();
+  const rpcToken = createSandboxRpcToken(config.appEncryptionKey, input.spaceId, rpcTokenNonce);
   const reportTokenIssuedAt = new Date().toISOString();
   const nowIso = new Date().toISOString();
   const baseMeta = input.mode === "replace"
@@ -488,30 +562,19 @@ export const reconcileSpaceSandbox = async (input: {
     : existingMeta;
   const provisioningMeta = {
     ...baseMeta,
+    ...recoveryMeta,
+    provisioningGeneration: lease.generation,
     ...(input.mode === "replace" ? { recreatedAt: nowIso } : {}),
     reconcileReason: input.reason,
     provisioningStartedAt: nowIso,
+    setup: null,
     reportTokenHash,
+    rpcTokenNonce,
     reportTokenIssuedAt,
     publicNetappStatus: "provisioning",
     publicNetworkLastError: null,
     publicEndpoints: getSandboxPublicEndpoints(input.spaceId),
   };
-
-  await ensureSpaceSandbox({
-    spaceId: input.spaceId,
-    status: "provisioning",
-    runtimeStatus: "starting",
-    podName,
-    desiredImage: toSandboxImageVersion(config.sandboxImage),
-    meta: {
-      ...provisioningMeta,
-      desiredSpec,
-      configuredSpec,
-      ...(specEntitlementDowngraded ? { specEntitlementDowngraded: true, specEntitlementAllowedSpec: allowedSpec, specEntitlementCheckedAt: nowIso } : { specEntitlementDowngraded: false }),
-      desiredSpecResources: desiredSpecConfig.resources,
-    },
-  });
 
   const pod = renderSandboxPodTemplate({
     SPACE_ID: input.spaceId,
@@ -524,13 +587,18 @@ export const reconcileSpaceSandbox = async (input: {
     SPACE_SYSTEM_SUBPATH: config.spaceSystemSubpath,
     CONFIGS_SUBPATH: config.configsSubpath,
     SANDBOX_SPEC_ID: desiredSpec,
+    SANDBOX_IMAGE: resolved.imageRef,
   }) as V1Pod;
 
-  const enabledMods = await listEnabledSpaceMods(db, input.spaceId);
+  const enabledMods = resolved.enabledMods;
   const modMountSignature = getSpaceModMountSignature(enabledMods);
 
   if (pod.spec?.containers?.[0]) {
     const container = pod.spec.containers[0];
+    if (resolved.effective.image === "game") {
+      pod.spec.volumes = [...(pod.spec.volumes ?? []), { name: "game-shm", emptyDir: { medium: "Memory", sizeLimit: "256Mi" } }];
+      container.volumeMounts = [...(container.volumeMounts ?? []), { name: "game-shm", mountPath: "/dev/shm" }];
+    }
     container.volumeMounts = [
       ...(container.volumeMounts ?? []),
       ...enabledMods.map((mod) => ({
@@ -555,10 +623,11 @@ export const reconcileSpaceSandbox = async (input: {
       { name: "WORKSPACE_DIR", value: "/workspace" },
       { name: "PLATFORM_AGENTS_DIR", value: "/configs/platform/.agents" },
       { name: "USER_AGENTS_DIR", value: "/configs/user/.agents" },
+      { name: "USER_COHUB_DIR", value: "/configs/user/.cohub" },
       { name: "COHUB_SEARCH_ENABLED", value: String(config.sandboxSearchEnabled) },
       { name: "COHUB_SEARCH_VERSION", value: config.sandboxSearchVersion },
       { name: "COHUB_SEARCH_CDN_BASE_URL", value: config.sandboxSearchCdnBaseUrl },
-      { name: "COHUB_SANDBOX_VERSION", value: toSandboxImageVersion(config.sandboxImage) },
+      { name: "COHUB_SANDBOX_VERSION", value: toSandboxImageVersion(resolved.imageRef) },
       { name: "POD_IP", valueFrom: { fieldRef: { fieldPath: "status.podIP" } } },
       {
         name: "INTERNAL_API_BASE_URL",
@@ -574,21 +643,37 @@ export const reconcileSpaceSandbox = async (input: {
             ? `https://public.cohub.run/s/${input.spaceId}`
             : `https://public.cohub.run/dev/s/${input.spaceId}`,
       },
+      { name: "COHUB_MOD_PATHS", value: JSON.stringify(enabledMods.map((mod) => mod.mountPath)) },
       { name: "SANDBOX_REPORT_TOKEN", value: reportToken },
+      { name: "SANDBOX_RPC_TOKEN", value: rpcToken },
     ];
   }
 
-  await tryCreatePod(input.spaceId, pod);
+  const created = await tryCreatePod(input.spaceId, pod, lease);
+  if (!created.created) {
+    if (input.mode === "ensure") return;
+    throw new Error(`Sandbox Pod already exists during replacement: ${podName}`);
+  }
 
+  // Lease ownership and the DB generation fence must both hold before publishing credentials.
+  await lease.assertOwned();
   const provisionedAt = new Date().toISOString();
-  await updateSpaceSandbox({
+  const published = await updateSpaceSandbox({
     spaceId: input.spaceId,
+    expectedProvisioningGeneration: lease.generation,
     status: "provisioning",
     runtimeStatus: "starting",
     podName,
-    desiredImage: toSandboxImageVersion(config.sandboxImage),
+    desiredImage: toSandboxImageVersion(resolved.imageRef),
     meta: {
       ...provisioningMeta,
+      sandboxPreferences: resolved,
+      appliedImage: resolved.effective.image,
+      appliedFingerprint: resolved.fingerprint,
+      desiredSpec,
+      configuredSpec,
+      ...(specEntitlementDowngraded ? { specEntitlementDowngraded: true, specEntitlementAllowedSpec: allowedSpec, specEntitlementCheckedAt: nowIso } : { specEntitlementDowngraded: false }),
+      desiredSpecResources: desiredSpecConfig.resources,
       modMountSignature,
       modMounts: enabledMods.map((mod) => ({
         modSpaceId: mod.modSpaceId,
@@ -603,9 +688,11 @@ export const reconcileSpaceSandbox = async (input: {
       lastProvisionedAt: provisionedAt,
     },
   });
+  if (!published) throw new Error("Sandbox provisioning generation changed");
+  await lease.assertOwned();
 
   triggerSandboxPublicNetworkReconcile(input.spaceId);
-};
+}
 
 export const provisionSpaceSandbox = async (input: {
   spaceId: string;
@@ -618,21 +705,6 @@ export const provisionSpaceSandbox = async (input: {
     ownerUserUuid: input.ownerUserUuid,
     mode: "ensure",
     reason: "space_created",
-  }).catch(async (error) => {
-    const existingSandbox = await getSpaceSandboxBySpaceId(input.spaceId);
-    const existingMeta = asMetaObject(existingSandbox?.meta);
-    await updateSpaceSandbox({
-      spaceId: input.spaceId,
-      status: "error",
-      runtimeStatus: "unhealthy",
-      podName: `sandbox-${input.spaceId}`,
-      desiredImage: toSandboxImageVersion(config.sandboxImage),
-      meta: {
-        ...existingMeta,
-        lastError: error instanceof Error ? error.message : String(error),
-      },
-    }).catch(() => undefined);
-    throw error;
   });
 };
 
@@ -655,10 +727,9 @@ export const recoverSpaceSandbox = async (input: {
       local: true,
     };
   }
-  const lockKey = `sandbox:recover:${input.spaceId}`;
   const cooldownKey = `sandbox:recover:cooldown:${input.spaceId}`;
-  const locked = await redisCommandClient.set(lockKey, `${process.pid}:${Date.now()}`, "PX", RECOVERY_LOCK_TTL_MS, "NX");
-  if (locked !== "OK") {
+  const lease = await acquireSandboxProvisioningLease(input.spaceId);
+  if (!lease) {
     const sandbox = await getSpaceSandboxBySpaceId(input.spaceId);
     // Another recover is in flight — ok only if already dialable.
     return {
@@ -686,34 +757,16 @@ export const recoverSpaceSandbox = async (input: {
         recovering: !dialable && awaitingReport,
       };
     }
+    await lease.assertOwned();
     await redisCommandClient.set(cooldownKey, "1", "PX", RECOVERY_COOLDOWN_MS).catch(() => undefined);
 
-    const startedAt = new Date().toISOString();
-    const existingSandbox = await getSpaceSandboxBySpaceId(input.spaceId);
-    const existingMeta = asMetaObject(existingSandbox?.meta);
-    const recoveryReason = input.reason ?? "recover";
-    await updateSpaceSandbox({
-      spaceId: input.spaceId,
-      status: "provisioning",
-      runtimeStatus: "starting",
-      meta: {
-        ...buildInvalidatedSandboxEndpointMeta(existingMeta, recoveryReason, startedAt),
-        recoveryStatus: "recreating",
-        recoveryLevel: "L2",
-        recoverySource: input.source ?? "auto",
-        lastRecoveryReason: recoveryReason,
-        lastRecoveryStartedAt: startedAt,
-        lastRecoveryError: null,
-      },
-    });
-
-    await reconcileSpaceSandbox({
+    await reconcileSpaceSandboxLocked({
       spaceId: input.spaceId,
       userUuid: input.userUuid,
       ownerUserUuid: input.ownerUserUuid,
       mode: "replace",
       reason: input.source === "manual" ? "manual_recreate" : "auto_recover",
-    });
+    }, lease, { reason: input.reason ?? "recover", source: input.source ?? "auto" });
 
     const podName = `sandbox-${input.spaceId}`;
     const ready = await waitForSandboxPodReady(podName);
@@ -726,9 +779,11 @@ export const recoverSpaceSandbox = async (input: {
     // Product choice: recover/resume resets the idle clock (full TTL from now),
     // rather than continuing prior idle progress. Keeps just-recovered sandboxes
     // from being immediately reaped off a stale lastActivityAt.
+    await lease.assertOwned();
     const recoveredAt = new Date();
-    await updateSpaceSandbox({
+    const recovered = await updateSpaceSandbox({
       spaceId: input.spaceId,
+      expectedProvisioningGeneration: lease.generation,
       status: "running",
       runtimeStatus: "healthy",
       lastActivityAt: recoveredAt,
@@ -741,6 +796,8 @@ export const recoverSpaceSandbox = async (input: {
         lastRecoveryError: null,
       },
     });
+    if (!recovered) throw new Error("Sandbox provisioning generation changed");
+    await lease.assertOwned();
 
     // Resume/recover is the common path that used to drop idle_check jobs.
     // Re-arm from now so a recovered sandbox always has a next check.
@@ -764,22 +821,10 @@ export const recoverSpaceSandbox = async (input: {
 
     return { ok: true as const, status: "running" as const, verified: input.verify !== false, checks };
   } catch (error) {
-    const latest = await getSpaceSandboxBySpaceId(input.spaceId);
-    await updateSpaceSandbox({
-      spaceId: input.spaceId,
-      status: "error",
-      runtimeStatus: "unhealthy",
-      meta: {
-        ...asMetaObject(latest?.meta),
-        recoveryStatus: "failed",
-        lastRecoveryFailedAt: new Date().toISOString(),
-        lastRecoveryReason: input.reason ?? "recover",
-        lastRecoveryError: error instanceof Error ? error.message : String(error),
-      },
-    }).catch(() => undefined);
+    await recordProvisioningFailure(input.spaceId, lease, error);
     throw error;
   } finally {
-    await redisCommandClient.del(lockKey).catch(() => undefined);
+    await lease.release().catch((error) => logger.warn("[SandboxProvisioning] lock release failed", error));
   }
 };
 

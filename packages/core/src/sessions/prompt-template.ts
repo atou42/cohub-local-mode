@@ -4,7 +4,16 @@ export type PromptTemplateContext = {
   userUuid?: string | null;
 };
 
+export type PromptCommand = {
+  name: string;
+  argsText: string;
+  args: string[];
+};
+
+type PromptArgs = Pick<PromptCommand, "args" | "argsText">;
+
 const SYSTEM_VARIABLE_PATTERN = /\{\{\s*(cohub\.(?:session|space)\.id|cohub\.user\.uuid)\s*\}\}/g;
+const ARGUMENT_PATTERN = /\$(?:(\d+)|\{@:(\d+)(?::(\d+))?\}|ARGUMENTS|@)/g;
 
 function substituteSystemVariables(content: string, context: PromptTemplateContext): string {
   const values: Record<string, string | null | undefined> = {
@@ -16,24 +25,43 @@ function substituteSystemVariables(content: string, context: PromptTemplateConte
   return content.replace(SYSTEM_VARIABLE_PATTERN, (match, name: string) => values[name] || match);
 }
 
-function substituteArgs(content: string, args: string[]): string {
-  let result = content.replace(/\$(\d+)/g, (_, num: string) => {
-    const index = Number.parseInt(num, 10) - 1;
-    return args[index] ?? "";
-  });
+function splitPromptArgs(argsText: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let quote: string | null = null;
 
-  result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, startText: string, lengthText?: string) => {
-    const start = Math.max(Number.parseInt(startText, 10) - 1, 0);
-    if (lengthText) {
-      return args.slice(start, start + Number.parseInt(lengthText, 10)).join(" ");
+  for (const char of argsText) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (current) args.push(current);
+      current = "";
+    } else {
+      current += char;
     }
-    return args.slice(start).join(" ");
-  });
+  }
 
-  const allArgs = args.join(" ");
-  return result.replace(/\$ARGUMENTS/g, allArgs).replace(/\$@/g, allArgs);
+  if (current) args.push(current);
+  return args;
 }
 
-export function renderPromptTemplate(content: string, args: string[], context: PromptTemplateContext = {}): string {
+export function parsePromptCommand(text: string): PromptCommand | null {
+  const [, name, argsText = ""] = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text) ?? [];
+  return name ? { name, argsText, args: splitPromptArgs(argsText) } : null;
+}
+
+function substituteArgs(content: string, { args, argsText }: PromptArgs): string {
+  return content.replace(ARGUMENT_PATTERN, (_, index?: string, start?: string, length?: string) => {
+    if (index) return args[Number.parseInt(index, 10) - 1] ?? "";
+    if (!start) return argsText;
+    const from = Math.max(Number.parseInt(start, 10) - 1, 0);
+    return args.slice(from, length ? from + Number.parseInt(length, 10) : undefined).join(" ");
+  });
+}
+
+export function renderPromptTemplate(content: string, args: PromptArgs, context: PromptTemplateContext = {}): string {
   return substituteArgs(substituteSystemVariables(content, context), args);
 }

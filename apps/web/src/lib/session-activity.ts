@@ -18,6 +18,18 @@ export type SessionRowStatus = {
 	startedAt: string | null;
 };
 
+export function getSessionStoppedLabel(
+	session: Pick<SessionRecord, "activeTurn" | "lastTurnIssue">,
+	locale: Locale,
+): string | null {
+	const issue = session.lastTurnIssue;
+	return !session.activeTurn &&
+		issue?.status === "interrupted" &&
+		issue.reason === "abort"
+		? m.session_activity_stopped({}, { locale })
+		: null;
+}
+
 export function getSessionRowStatus(
 	session: Pick<SessionRecord, "activeTurn" | "lastTurnIssue">,
 	unread: boolean,

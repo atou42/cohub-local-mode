@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Job } from "bullmq";
 import type { TaskPayload } from "@cohub/protocol/task";
 import { normalizeRequestSource } from "@cohub/protocol/provenance";
-import { CONFIG_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
+import { HOME_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
 import { checkpoints, spaces } from "@cohub/db";
 import { checkpointForkReference } from "@cohub/core/references";
 import { enqueueReferences } from "../reference-index-queue.js";
@@ -14,6 +14,7 @@ import { publishUserConfigFromWorkspace, publishConfigFromWorkspace } from "../c
 import { getGenerationsDir, publishGenerationsCacheFromDir } from "../generations-cache.js";
 import { publishModelsCacheFromFile } from "../models-cache.js";
 import { publishModelTasksCacheFromFile } from "../model-tasks-cache.js";
+import { publishDecisionsCacheFromFile } from "../decisions-cache.js";
 import { getPromptsDir, publishPromptsCacheFromDir } from "../prompts-cache.js";
 import { getSkillsDir, publishSkillsCacheFromDir } from "../skills-cache.js";
 import { publishSpaceEvent } from "../space-events.js";
@@ -45,7 +46,7 @@ type SaveCheckpointTimings = Record<string, number>;
 
 type ConfigPublishWarning = {
   scope: "platform" | "user";
-  target: "models_cache" | "model_tasks_cache" | "generations_cache" | "prompts_cache" | "skills_cache";
+  target: "config_files" | "models_cache" | "model_tasks_cache" | "decisions_cache" | "generations_cache" | "prompts_cache" | "skills_cache";
   message: string;
 };
 
@@ -275,10 +276,16 @@ export const saveCheckpointForSpace = async (input: SaveCheckpointInput): Promis
   await timeIt(timings, "updateSpaceHead", () => db.update(spaces).set({ headCheckpointId: checkpoint.id, updatedAt: new Date() }).where(eq(spaces.id, spaceId)));
 
   let publishedUserConfig: { targetDir: string; copiedPaths: string[]; meta: Record<string, unknown> } | null = null;
-  if (space.slug === CONFIG_SPACE_SLUG) {
-    publishedUserConfig = await timeIt(timings, "publishUserConfig", () => publishUserConfigFromWorkspace({ userId: space.userUuid, spaceId: space.id, checkpointId: checkpoint.id, workspaceDir: dirs.latestDir }));
+  if (space.slug === HOME_SPACE_SLUG) {
+    publishedUserConfig = await timeIt(timings, "publishUserConfig", () => publishUserConfigFromWorkspace({ userId: space.userUuid, spaceId: space.id, checkpointId: checkpoint.id, workspaceDir: dirs.latestDir })).catch(async (error) => {
+      await recordPublishWarning({ scope: "user", target: "config_files", message: formatErrorMessage(error) }, error);
+      return null;
+    });
+  }
+  if (publishedUserConfig) {
     await publishModelsCacheFromFile({ modelsPath: join(publishedUserConfig.targetDir, ".cohub", "models.json"), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "user", target: "models_cache", message: formatErrorMessage(error) }, error));
     await publishModelTasksCacheFromFile({ configPath: join(publishedUserConfig.targetDir, ".cohub", "model-tasks.json"), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "user", target: "model_tasks_cache", message: formatErrorMessage(error) }, error));
+    await publishDecisionsCacheFromFile({ configPath: join(publishedUserConfig.targetDir, ".cohub", "decisions.json"), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "user", target: "decisions_cache", message: formatErrorMessage(error) }, error));
     await publishGenerationsCacheFromDir({ generationsDir: getGenerationsDir(publishedUserConfig.targetDir), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "user", target: "generations_cache", message: formatErrorMessage(error) }, error));
     await publishPromptsCacheFromDir({ promptsDir: getPromptsDir(publishedUserConfig.targetDir), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "user", target: "prompts_cache", message: formatErrorMessage(error) }, error));
     await publishSkillsCacheFromDir({ skillsDir: getSkillsDir(publishedUserConfig.targetDir), scope: "user", userId: space.userUuid, sourceCheckpointId: checkpoint.id, sandboxDir: "/configs/user/.agents/skills" }).catch((error) => recordPublishWarning({ scope: "user", target: "skills_cache", message: formatErrorMessage(error) }, error));
@@ -289,6 +296,7 @@ export const saveCheckpointForSpace = async (input: SaveCheckpointInput): Promis
     publishedPlatformConfig = await timeIt(timings, "publishPlatformConfig", () => publishConfigFromWorkspace({ workspaceDir: dirs.latestDir, checkpointId: checkpoint.id, targetDir: "/configs/platform", whitelist: ["AGENTS.md", "CLAUDE.md", ".agents", ".cohub"], sourceLabel: "platform" }));
     await publishModelsCacheFromFile({ modelsPath: join(publishedPlatformConfig.targetDir, ".cohub", "models.json"), scope: "platform", sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "platform", target: "models_cache", message: formatErrorMessage(error) }, error));
     await publishModelTasksCacheFromFile({ configPath: join(publishedPlatformConfig.targetDir, ".cohub", "model-tasks.json"), scope: "platform", sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "platform", target: "model_tasks_cache", message: formatErrorMessage(error) }, error));
+    await publishDecisionsCacheFromFile({ configPath: join(publishedPlatformConfig.targetDir, ".cohub", "decisions.json"), scope: "platform", sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "platform", target: "decisions_cache", message: formatErrorMessage(error) }, error));
     await publishGenerationsCacheFromDir({ generationsDir: getGenerationsDir(publishedPlatformConfig.targetDir), scope: "platform", sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "platform", target: "generations_cache", message: formatErrorMessage(error) }, error));
     await publishPromptsCacheFromDir({ promptsDir: getPromptsDir(publishedPlatformConfig.targetDir), scope: "platform", sourceCheckpointId: checkpoint.id }).catch((error) => recordPublishWarning({ scope: "platform", target: "prompts_cache", message: formatErrorMessage(error) }, error));
     await publishSkillsCacheFromDir({ skillsDir: getSkillsDir(publishedPlatformConfig.targetDir), scope: "platform", sourceCheckpointId: checkpoint.id, sandboxDir: "/configs/platform/.agents/skills" }).catch((error) => recordPublishWarning({ scope: "platform", target: "skills_cache", message: formatErrorMessage(error) }, error));

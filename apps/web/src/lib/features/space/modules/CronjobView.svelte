@@ -22,29 +22,26 @@ import UserIdentity from "$lib/components/UserIdentity.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
 import {
-	buildSpaceNewSessionRoute,
-	buildSpaceTaskRoute,
-} from "$lib/space-routes";
-import {
-	displayUserName,
-	formatDateTime,
-	formatShortDateTime,
-} from "../space-utils";
-import {
-	type CronjobMode,
-	createCronjobDetailController,
-} from "./cronjob-detail-controller.svelte";
-import {
 	cronjobModelLabel,
 	cronjobPromptMeta,
 	formatCronjobPrompt,
-} from "./cronjob-utils";
-import type { TaskRealtimeEvent } from "./task-run-detail-controller.svelte";
+} from "$lib/resource-kit/cronjob";
 import {
 	displaySafeJson,
 	taskRunDuration,
 	taskRunStatusBadge,
-} from "./task-run-utils";
+} from "$lib/resource-kit/task-run";
+import { formatDateTime, formatShortDateTime } from "$lib/resource-kit/time";
+import {
+	buildSpaceNewSessionRoute,
+	buildSpaceTaskRoute,
+} from "$lib/space-routes";
+import { displayUserName } from "../space-utils";
+import {
+	type CronjobMode,
+	createCronjobDetailController,
+} from "./cronjob-detail-controller.svelte";
+import type { TaskRealtimeEvent } from "./task-run-detail-controller.svelte";
 import { withCurrentWindow } from "./window-route";
 
 type Props = {
@@ -283,7 +280,7 @@ function payloadProviderLabel(payload: unknown) {
 						<section class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:gap-8">
 							<div class="min-w-0 space-y-6">
 								{#if cronjobDetail.taskType === 'send_message'}
-									<section class="space-y-3"><div><div class="text-[10px] font-medium uppercase tracking-[0.18em] text-text-placeholder">{m.cron_prompt({}, { locale })}</div><div class="mt-1 text-[12px] text-text-tertiary">{cronjobPromptMeta(cronjobDetail.payload)}</div></div><div class="relative overflow-hidden rounded-[8px] bg-bg-elevated/40 ring-1 ring-border-subtle/60"><div class="absolute left-0 top-0 h-full w-[3px] bg-brand"></div><pre class="max-h-[460px] overflow-auto px-5 py-4 pl-6 text-[13px] leading-6 text-text-secondary whitespace-pre-wrap break-words">{formatCronjobPrompt(cronjobDetail.payload)}</pre></div></section>
+									<section class="space-y-3"><div><div class="text-[10px] font-medium uppercase tracking-[0.18em] text-text-placeholder">{m.cron_prompt({}, { locale })}</div><div class="mt-1 text-[12px] text-text-tertiary">{cronjobPromptMeta(cronjobDetail.payload, locale)}</div></div><div class="relative overflow-hidden rounded-[8px] bg-bg-elevated/40 ring-1 ring-border-subtle/60"><div class="absolute left-0 top-0 h-full w-[3px] bg-brand"></div><pre class="max-h-[460px] overflow-auto px-5 py-4 pl-6 text-[13px] leading-6 text-text-secondary whitespace-pre-wrap break-words">{formatCronjobPrompt(cronjobDetail.payload)}</pre></div></section>
 									<section class="grid gap-3 sm:grid-cols-2"><div class="rounded-[7px] bg-bg-elevated/30 px-3 py-2.5"><div class="text-[10px] font-medium uppercase tracking-wider text-text-placeholder">{m.cron_model({}, { locale })}</div><div class="mt-1 truncate text-[13px] text-text-primary">{payloadModelLabel(cronjobDetail.payload)}</div></div><div class="rounded-[7px] bg-bg-elevated/30 px-3 py-2.5"><div class="text-[10px] font-medium uppercase tracking-wider text-text-placeholder">{m.cron_provider({}, { locale })}</div><div class="mt-1 font-mono text-[12px] text-text-secondary">{payloadProviderLabel(cronjobDetail.payload)}</div></div></section>
 								{:else}
 									<section class="space-y-2"><div class="text-[10px] font-medium uppercase tracking-[0.18em] text-text-placeholder">{m.cron_payload({}, { locale })}</div><pre class="max-h-[520px] overflow-auto rounded-[8px] bg-bg-elevated/35 p-3 text-[12px] font-mono leading-relaxed text-text-secondary whitespace-pre-wrap break-all">{displaySafeJson(cronjobDetail.payload, { locale })}</pre></section>

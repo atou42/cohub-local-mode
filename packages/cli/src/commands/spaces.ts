@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
-import { readSentTurns, readSessionTurnOrigin, resolveCohubEnvironment } from "@neta-art/cohub";
+import { harnessSchema, readSentTurns, readSessionTurnOrigin, resolveCohubEnvironment, type HarnessKind } from "@neta-art/cohub";
 import type {
   CohubHttpClient,
   ContentBlock,
@@ -13,12 +13,15 @@ import type {
 import type { Command } from "commander";
 import { uploadAvatarAsset, uploadChatImageAsset } from "../avatar.js";
 import { createClient } from "../client.js";
+import { collectOption, readPromptContent } from "../command-input.js";
 import { table, json as outJson, jsonRequested, ok, error, handleHttp, formatEpochMs, truncateText } from "../output.js";
 import { SESSION_STATUS_COLUMN } from "../session-status.js";
 import { resolveSpace } from "../space.js";
 import { uploadLocalFiles, type LocalUploadEntry } from "../space-files/upload.js";
+import { registerDecisionCommand } from "./decision.js";
 import { registerSpaceCommerce } from "./space-commerce.js";
 import { registerSpaceFileTransfer } from "./space-files.js";
+import { registerSpaceWallet } from "./space-wallet.js";
 import { registerSpaceActivity } from "./space-activity.js";
 import { registerSpaceDisplays } from "./space-displays.js";
 import { registerSpaceInvitations } from "./space-invitations.js";
@@ -42,6 +45,7 @@ export type SpaceCreateOptions = {
   name: string;
   description?: string;
   checkpoint?: string;
+  image?: string;
   autoDestroy?: string;
   idleTtl?: string;
   spec?: string;
@@ -53,7 +57,7 @@ type PromptOptions = {
   title?: string;
   model?: string;
   provider?: string;
-  harness?: "cohub" | "pi" | "codex";
+  harness?: HarnessKind;
   thinkingLevel?: string;
   readOnly?: boolean;
   steer?: boolean;
@@ -84,7 +88,7 @@ type UploadOptions = {
 };
 
 const cliEnv = resolveCohubEnvironment();
-const defaultIdleTtlSeconds = cliEnv === "prod" ? 12 * 60 * 60 : 10 * 60;
+const defaultIdleTtlSeconds = cliEnv === "prod" ? 60 * 60 : 5 * 60;
 const SPACE_ROLES = ["host", "builder", "guest"] as const;
 const SANDBOX_SPEC_IDS = ["standard", "boost", "ultra"] as const;
 const LABEL_RESOURCE_TYPES = ["session", "checkpoint", "file"] as const;
@@ -98,10 +102,6 @@ function parseInteger(value: string, name: string, options: { min?: number; max?
   if (options.min !== undefined && parsed < options.min) return error(`Invalid ${name}`, `${name} must be at least ${options.min}`);
   if (options.max !== undefined && parsed > options.max) return error(`Invalid ${name}`, `${name} must be at most ${options.max}`);
   return parsed;
-}
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
 }
 
 function parseEnvOptions(values: string[] | undefined): Record<string, string> | undefined {
@@ -141,6 +141,7 @@ const parseSandboxSpec = (value: string | undefined) => value ? parseChoice(valu
 export function buildSpaceCreateInput(opts: SpaceCreateOptions): CreateSpaceInput {
   const autoDestroy = parseAutoDestroy(opts);
   const spec = parseSandboxSpec(opts.spec);
+  const image = opts.image ? parseChoice(opts.image, "sandbox image", ["default", "game"] as const) : undefined;
   const checkpointId = opts.checkpoint?.trim();
   if (opts.checkpoint !== undefined && !checkpointId) {
     return error("Invalid checkpoint", "Checkpoint ID is required");
@@ -152,12 +153,13 @@ export function buildSpaceCreateInput(opts: SpaceCreateOptions): CreateSpaceInpu
     ...(checkpointId
       ? { bootstrapSource: { type: "checkpoint", checkpointId } as const }
       : {}),
-    ...((autoDestroy || spec)
+    ...((autoDestroy || spec || image)
       ? {
           config: {
             sandbox: {
               ...(autoDestroy ? { autoDestroy } : {}),
               ...(spec ? { spec } : {}),
+              ...(image ? { image } : {}),
             },
           },
         }
@@ -240,17 +242,6 @@ async function confirmRestart(opts: { yes?: boolean }): Promise<void> {
   }
   const answer = Buffer.concat(chunks).toString().trim().toLowerCase();
   if (answer !== "y" && answer !== "yes") return error("Cancelled");
-}
-
-async function readPromptContent(words: string[], options: { allowEmpty?: boolean } = {}): Promise<string> {
-  let content = words.join(" ");
-  if (!content && !process.stdin.isTTY) {
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    content = Buffer.concat(chunks).toString().trim();
-  }
-  if (!content && !options.allowEmpty) return error("No content", "Pass as argument or pipe via stdin");
-  return content;
 }
 
 async function sendPrompt(command: Command, words: string[], opts: PromptOptions): Promise<void> {
@@ -416,7 +407,7 @@ export function registerPrompt(program: Command): void {
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
     .option("-p, --provider <provider>", "Provider name")
-    .option("--harness <harness>", "Harness: cohub, pi, or codex", "cohub")
+    .option("--harness <harness>", `Harness: ${harnessSchema.options.join(", ")}`, "cohub")
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh|max")
     .option("--read-only", "Use read-only tools")
     .option("--steer", "Interrupt the current turn and run immediately")
@@ -442,6 +433,8 @@ export function registerPrompt(program: Command): void {
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh")
     .option("--json", "Output as JSON")
     .action((words: string[], opts: CompletionOptions) => runCompletionCommand(program, words, opts));
+
+  registerDecisionCommand(program);
 }
 
 export function registerSpaceCreate(
@@ -455,6 +448,7 @@ export function registerSpaceCreate(
     .requiredOption("-n, --name <name>", "Space name")
     .option("-d, --description <desc>", "Space description")
     .option("--checkpoint <id>", "Create from a checkpoint")
+    .option("--image <image>", "Sandbox image: default or game")
     .option("--auto-destroy <mode>", "Sandbox auto destroy mode: idle or never")
     .option("--idle-ttl <seconds>", "Idle auto destroy TTL in seconds, max 2592000 (30d)")
     .option("--spec <spec>", "Sandbox spec: standard, boost, or ultra")
@@ -503,6 +497,34 @@ function registerUserLabels(program: Command) {
   labels.command("reorder <refs...>").description("Set personal label order").action(async (refs: string[]) => {
     try { await createClient().user.labels.reorder(refs); ok(`Reordered ${refs.length} label(s)`); } catch (e: unknown) { handleHttp(e); }
   });
+}
+
+export function registerSpaceSetup(spacesCmd: Command, deps: { createClient?: typeof createClient } = {}): void {
+  spacesCmd
+    .command("setup [id]")
+    .description("Show cloud sandbox startup scripts, results, and log paths")
+    .option("--json", "Output as JSON")
+    .action(async (id: string | undefined, opts: { json?: boolean }) => {
+      try {
+        const spaceId = id ?? await resolveSpace(spacesCmd);
+        const { sandbox } = await (deps.createClient ?? createClient)().space(spaceId).sandbox.get();
+        const setup = sandbox?.meta?.setup ?? null;
+        if (jsonRequested(opts)) return outJson({ provider: sandbox?.provider ?? null, setup });
+        if (sandbox?.provider === "local") return ok("Setup is disabled for local spaces.");
+        if (!setup) return ok("No setup report is available.");
+        table([
+          { key: "Status", value: setup.status ?? (setup.error || setup.exitCode ? "failed" : "succeeded") },
+          { key: "Duration", value: setup.duration || "—" },
+          ...(setup.error ? [{ key: "Error", value: setup.error }] : []),
+        ], [{ key: "key", label: "Key" }, { key: "value", label: "Value" }]);
+        if (setup.steps?.length) table(setup.steps.map((step) => ({
+          script: step.path, status: step.status, duration: step.duration || "—", logs: step.logDir,
+        })), [
+          { key: "script", label: "Script" }, { key: "status", label: "Status" },
+          { key: "duration", label: "Duration" }, { key: "logs", label: "Logs" },
+        ]);
+      } catch (e: unknown) { handleHttp(e); }
+    });
 }
 
 export function registerSpaces(program: Command): void {
@@ -659,21 +681,25 @@ export function registerSpaces(program: Command): void {
       }
     });
 
+  registerSpaceSetup(spacesCmd);
+
   // ── spaces config ──
   spacesCmd
     .command("config <id>")
     .description("Show or update space configuration")
     .option("--auto-destroy <mode>", "Sandbox auto destroy mode: idle or never")
     .option("--idle-ttl <seconds>", "Idle auto destroy TTL in seconds, max 2592000 (30d)")
-    .option("--spec <spec>", "Sandbox spec: standard, boost, or ultra")
+    .option("--spec <spec>", "Sandbox spec: standard, boost, ultra, or auto")
+    .option("--image <image>", "Sandbox image: default, game, or auto")
     .option("--json", "Output as JSON")
-    .action(async (id: string, opts: { autoDestroy?: string; idleTtl?: string; spec?: string; json?: boolean }) => {
+    .action(async (id: string, opts: { autoDestroy?: string; idleTtl?: string; spec?: string; image?: string; json?: boolean }) => {
       const client = createClient();
       try {
         const autoDestroy = parseAutoDestroy(opts);
-        const spec = parseSandboxSpec(opts.spec);
-        if (autoDestroy || spec) {
-          const result = await client.space(id).updateConfig({ sandbox: { ...(autoDestroy ? { autoDestroy } : {}), ...(spec ? { spec } : {}) } });
+        const spec = opts.spec === "auto" ? null : parseSandboxSpec(opts.spec);
+        const image = opts.image === "auto" ? null : opts.image ? parseChoice(opts.image, "sandbox image", ["default", "game"] as const) : undefined;
+        if (autoDestroy || spec !== undefined || image !== undefined) {
+          const result = await client.space(id).updateConfig({ sandbox: { ...(autoDestroy ? { autoDestroy } : {}), ...(spec !== undefined ? { spec } : {}), ...(image !== undefined ? { image } : {}) } });
           if (jsonRequested(opts)) return outJson(result);
           ok(`Space config updated${autoDestroy ? ` — sandbox auto destroy: ${formatAutoDestroy(autoDestroy)}` : ""}${spec ? ` — sandbox spec: ${spec}` : ""}${result.sandbox?.pendingRestart ? " — restart the sandbox to apply" : ""}`);
           return;
@@ -682,6 +708,11 @@ export function registerSpaces(program: Command): void {
         if (jsonRequested(opts)) return outJson(result);
         table([
           { key: "sandbox.autoDestroy", value: formatAutoDestroy(result.config.sandbox.autoDestroy) },
+          { key: "sandbox.image", value: result.config.sandbox.image ?? "default" },
+          { key: "sandbox.imageSource", value: result.config.sandbox.preferences?.origins.image ?? "platform" },
+          { key: "sandbox.specSource", value: result.config.sandbox.preferences?.origins.spec ?? "platform" },
+          { key: "sandbox.warnings", value: result.config.sandbox.preferences?.warnings.join(", ") || "—" },
+          { key: "sandbox.pendingRestart", value: String(result.config.sandbox.preferences?.pendingRestart ?? false) },
           { key: "sandbox.spec", value: result.config.sandbox.spec ?? "standard" },
           { key: "sandbox.appliedSpec", value: result.config.sandbox.appliedSpec ?? "—" },
           { key: "sandbox.allowedSpec", value: result.config.sandbox.allowedSpec ?? "standard" },
@@ -699,7 +730,7 @@ export function registerSpaces(program: Command): void {
     .command("prompt [content...]", { hidden: true })
     .alias("send")
     .description("Send or schedule a prompt in the target space")
-    .option("--harness <harness>", "Harness: cohub, pi, or codex", "cohub")
+    .option("--harness <harness>", `Harness: ${harnessSchema.options.join(", ")}`, "cohub")
     .option("--session <id>", "Target session ID")
     .option("--title <title>", "Title for a newly created session or schedule")
     .option("-m, --model <model>", "Model name")
@@ -730,6 +761,8 @@ export function registerSpaces(program: Command): void {
     .option("--thinking-level <level>", "Thinking level: off|minimal|low|medium|high|xhigh")
     .option("--json", "Output as JSON")
     .action((words: string[], opts: CompletionOptions) => runCompletionCommand(spacesCmd, words, opts));
+
+  registerDecisionCommand(spacesCmd);
 
   // ── spaces files ──
   registerFiles(spacesCmd);
@@ -790,6 +823,7 @@ export function registerSpaces(program: Command): void {
   registerSpaceCommerce(spacesCmd);
 
   // ── spaces activity ──
+  registerSpaceWallet(spacesCmd);
   registerSpaceActivity(spacesCmd);
 
   // ── spaces usage ──

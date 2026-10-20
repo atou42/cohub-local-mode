@@ -6,6 +6,7 @@ import {
   WS_COMPACT_STREAM_CAPABILITY,
   WS_ROOM_SUBSCRIPTION_CAPABILITY,
   WS_REALTIME_ROOM_CAPABILITY,
+  WS_REALTIME_ROOM_HISTORY_CAPABILITY,
   normalizeRealtimeRooms,
   type ChannelEnvelope,
   type RealtimeCompactFrame,
@@ -522,12 +523,30 @@ export class WebsocketClient {
     });
   }
 
-  async joinRealtimeRoom(input: { roomId: string; ticket: string; requestId?: string }) {
+  async joinRealtimeRoom(input: { roomId: string; ticket: string; instanceId?: string; after?: number; requestId?: string }) {
     await this.ensureOpen();
     this.send({
       type: "realtime.room.join",
       requestId: input.requestId,
-      payload: { roomId: input.roomId, ticket: input.ticket },
+      payload: {
+        roomId: input.roomId,
+        ticket: input.ticket,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+        ...(input.after !== undefined ? { after: input.after } : {}),
+      },
+    });
+  }
+
+  async readRealtimeRoomHistory(input: { roomId: string; after?: number; limit?: number; requestId?: string }) {
+    await this.ensureOpen();
+    this.send({
+      type: "realtime.room.history",
+      requestId: input.requestId,
+      payload: {
+        roomId: input.roomId,
+        ...(input.after !== undefined ? { after: input.after } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      },
     });
   }
 
@@ -549,6 +568,11 @@ export class WebsocketClient {
         clientEventId: input.clientEventId,
       },
     });
+  }
+
+  async detachRealtimeRoom(input: { roomId: string; requestId?: string }) {
+    await this.ensureOpen();
+    this.send({ type: "realtime.room.detach", requestId: input.requestId, payload: { roomId: input.roomId } });
   }
 
   async leaveRealtimeRoom(input: { roomId: string; requestId?: string }) {
@@ -685,7 +709,7 @@ export class WebsocketClient {
     const waiter = this.createAuthWaiter();
     this.send({
       type: "auth",
-      payload: { token, capabilities: [WS_COMPACT_STREAM_CAPABILITY, WS_ROOM_SUBSCRIPTION_CAPABILITY, WS_BOARD_AWARENESS_CAPABILITY, WS_REALTIME_ROOM_CAPABILITY] },
+      payload: { token, capabilities: [WS_COMPACT_STREAM_CAPABILITY, WS_ROOM_SUBSCRIPTION_CAPABILITY, WS_BOARD_AWARENESS_CAPABILITY, WS_REALTIME_ROOM_CAPABILITY, WS_REALTIME_ROOM_HISTORY_CAPABILITY] },
     });
     await waiter.promise;
     this.authReconnectAttempted = false;

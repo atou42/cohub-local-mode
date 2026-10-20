@@ -1,5 +1,13 @@
 <script lang="ts">
-import { SPACE_INSTALLED_APPS_PATH } from "@cohub/protocol";
+import {
+	type ResourceAppTarget,
+	readResourceAppLaunch,
+	readResourceAppTarget,
+	resourceAppLaunch,
+	resourceAppRef,
+	SPACE_INSTALLED_APPS_PATH,
+	writeResourceAppTarget,
+} from "@cohub/protocol";
 import type {
 	AppNavigationOpenMessage,
 	AppNavigationTarget,
@@ -62,6 +70,12 @@ import {
 	writeInstalledApps,
 } from "$lib/features/app/app-center";
 import {
+	APP_NAVIGATION_OPEN_EVENT,
+	type AppNavigationOpenRequest,
+} from "$lib/features/app/app-navigation-request";
+import { createAppNavigator } from "$lib/features/app/app-navigator";
+import {
+	createAppNavigationResolver,
 	loadAppPreview,
 	resolveAppNavigation,
 } from "$lib/features/app/app-open";
@@ -92,6 +106,7 @@ import {
 	getSessionTitle,
 	subscribeSpaceChannel,
 } from "$lib/features/session-chat";
+import { createSessionRenameController } from "$lib/features/session-chat/session-rename-controller.svelte";
 import SessionChatPanel from "$lib/features/session-chat/SessionChatPanel.svelte";
 import { pushHostShortcut } from "$lib/host-bridge";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -126,8 +141,9 @@ import {
 } from "$lib/space-routes";
 import { authStore } from "$lib/stores/auth.svelte";
 import { insertComposerSnippet } from "$lib/stores/composer-insert";
-import { startSessionSync } from "$lib/stores/session-store";
+import { sessionStore, startSessionSync } from "$lib/stores/session-store";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
+import { mergeCachedTaskRun } from "$lib/stores/task-runs-cache";
 import {
 	IMMERSIVE_CHAT_MAX,
 	IMMERSIVE_CHAT_MIN,
@@ -143,7 +159,7 @@ import {
 } from "$lib/workspace-assets";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import { createAppPreviewController } from "./modules/app-window-controller.svelte";
-import { appWindowKey } from "./modules/app-window-key";
+import { appWindowKey, parseAppWindowKey } from "./modules/app-window-key";
 import { createBoardWindowController } from "./modules/board-window-controller.svelte";
 import DesktopLayerHost from "./modules/DesktopLayerHost.svelte";
 import { createDesktopLayerManager } from "./modules/desktop-layer-manager.svelte";
@@ -163,6 +179,7 @@ import OpenWithDialog, {
 import PortReadyToastView from "./modules/PortReadyToast.svelte";
 import { createPortPreviewController } from "./modules/port-window-controller.svelte";
 import { extractPublicEndpoints } from "./modules/port-window-utils";
+import { resourceFromUrl } from "./modules/resource-app-route";
 import SessionShareDialog from "./modules/SessionShareDialog.svelte";
 import SpaceDanmakuLayer from "./modules/SpaceDanmakuLayer.svelte";
 import SpaceFileDomain, {
@@ -194,6 +211,7 @@ import { createSpaceStatusController } from "./modules/space-status-controller.s
 import { createWindowManager } from "./modules/window-manager.svelte";
 import {
 	encodeWindowParam,
+	readAppHash,
 	readWindowFromSearch,
 	resolveRouteWindow,
 	type WindowRef,
@@ -257,11 +275,15 @@ const routeSessionId = $derived(data.sessionId ?? null);
 const isNewSessionRoute = $derived(
 	routeView === "session" && routeSessionId === "new",
 );
+const routeSearchParams = $derived.by(() => {
+	const url = page.url;
+	void page.state;
+	return typeof window === "undefined"
+		? url.searchParams
+		: new URLSearchParams(window.location.search);
+});
 const routePreviewRef = $derived.by((): WindowRef | null => {
-	const searchParams =
-		typeof window === "undefined"
-			? page.url.searchParams
-			: new URLSearchParams(window.location.search);
+	const searchParams = routeSearchParams;
 	const preview = resolveRouteWindow(searchParams, page.state.workspacePreview);
 	if (preview) return preview;
 	const legacyFile = searchParams.get("file");
@@ -417,10 +439,25 @@ const appShell = $derived.by<AppRuntimeShellContext>(() => {
 		turn: currentTurn ? { id: currentTurn } : null,
 	};
 });
-// Session rename (header inline edit)
-let sessionRenaming = $state(false);
-let sessionRenameValue = $state("");
-let sessionRenameSaving = $state(false);
+const sessionRename = createSessionRenameController({
+	getTarget: () => {
+		const session = sessionChat.activeSession;
+		return session && session.spaceId === spaceId && session.id === routeSessionId
+			? {
+					spaceId,
+					sessionId: session.id,
+					title: session.title ?? getSessionTitle(session),
+				}
+			: null;
+	},
+	rename: async (target, title) => {
+		const result = await sdk
+			.space(target.spaceId)
+			.session(target.sessionId)
+			.rename(title);
+		sessionStore.merge(result.session);
+	},
+});
 
 let resourceActionMenuOpen = $state(false);
 let labelPickerResource = $state<{
@@ -485,27 +522,34 @@ async function openMessageUrl(href: string, event: MouseEvent) {
 	}
 }
 
-async function handleAppNavigationOpen(message: AppNavigationOpenMessage) {
-	if (message.target.kind !== "app") {
-		return openWorkspaceNavigation(message.target);
-	}
-	try {
-		const { detail: parsed, launch } = await resolveAppNavigation(
-			sdk.apps,
-			message.target.ref,
-			message.target.launch,
-		);
-		return openResolvedAppNavigation(
+const appResolver = createAppNavigationResolver(
+	sdk.apps,
+	(appId) =>
+		appPreview.previews.find((tab) => tab.appId === appId && tab.detail)
+			?.detail,
+);
+const appNavigator = createAppNavigator({
+	getContext: () => spaceId,
+	resolve: (target) => appResolver.resolve(target.ref, target.launch),
+	open: ({ detail, launch }, message, current) =>
+		openResolvedAppNavigation(
 			message,
-			parsed.app.id,
-			appDisplayTitle(parsed.app.meta, parsed.app.slug),
-			{ source: "user" },
+			detail.app.id,
+			appDisplayTitle(detail.app.meta, detail.app.slug),
+			{
+				source: "user",
+				...(activeSessionId ? { sessionId: activeSessionId } : {}),
+			},
 			launch,
-			parsed.app.meta,
-		);
-	} catch {
-		return { handled: false as const, reason: "inaccessible" as const };
-	}
+			detail.app.meta,
+			current,
+		),
+});
+
+async function handleAppNavigationOpen(message: AppNavigationOpenMessage) {
+	if (message.target.kind === "app") return appNavigator.open(message);
+	appNavigator.cancel();
+	return openWorkspaceNavigation(message.target);
 }
 
 const fileHandlers = createFileHandlerResolver({
@@ -656,6 +700,68 @@ async function pickOpenWith(choice: OpenWithChoice, always: boolean) {
 	});
 }
 
+let appRouteSequence = 0;
+async function hydrateAppRoute(ref: WindowRef, hash: string) {
+	const target = parseAppWindowKey(ref.key);
+	if (!target) return;
+	const sequence = ++appRouteSequence;
+	const targetSpace = spaceId;
+	const existing = appPreview.previews.find((tab) => tab.key === ref.key);
+	if (
+		existing &&
+		existing.launch?.hash !== hash &&
+		!(await appPreview.settle(ref.key))
+	) {
+		if (sequence === appRouteSequence && targetSpace === spaceId)
+			windowManager.syncCurrent();
+		return;
+	}
+	if (sequence !== appRouteSequence || targetSpace !== spaceId) return;
+	if (existing?.launch?.hash === hash) {
+		windowManager.activate("app", ref.key, false);
+		return;
+	}
+	windowManager.openApp(
+		{
+			appId: target.appId,
+			launch: { hash },
+			openContext: {
+				source: "user",
+				...(activeSessionId ? { sessionId: activeSessionId } : {}),
+				...(target.path ? { file: { path: target.path } } : {}),
+			},
+		},
+		{ syncUrl: false, source: "route" },
+	);
+}
+
+async function openResourceOrFallback(target: ResourceAppTarget) {
+	const targetSpace = spaceId;
+	const result = await handleAppNavigationOpen({
+		protocol: "cohub.app.navigation",
+		version: 1,
+		type: "open",
+		requestId: crypto.randomUUID(),
+		target: {
+			kind: "app",
+			ref: resourceAppRef(target),
+			launch: resourceAppLaunch(targetSpace, target),
+		},
+	});
+	if (result.handled || targetSpace !== spaceId) return;
+	const segment = {
+		task: "tasks",
+		checkpoint: "checkpoints",
+		cronjob: "cronjobs",
+		app: "apps",
+	}[target.kind];
+	const search = new URLSearchParams({ native: "1" });
+	if (target.base) search.set("base", target.base);
+	await goto(`/spaces/${spaceId}/${segment}/${target.id}?${search}`, {
+		replaceState: true,
+	});
+}
+
 async function openWorkspaceNavigation(
 	target: AppNavigationTarget,
 	source: WorkspaceAppOpenContext["source"] = "user",
@@ -704,11 +810,38 @@ function showWorkspaceNotice(message: string) {
 	}, 3000);
 }
 
-async function openWorkspaceApp(input: PublishedAppOpenInput) {
+let committingAppNavigation = false;
+async function openWorkspaceApp(
+	input: PublishedAppOpenInput,
+	isCurrent?: () => boolean,
+) {
+	if (!isCurrent) appNavigator.cancel();
+	if (input.launch?.hash) {
+		const key = appWindowKey(input.appId, input.openContext.file?.path);
+		const existing = appPreview.previews.find((tab) => tab.key === key);
+		if (
+			existing &&
+			existing.launch?.hash !== input.launch.hash &&
+			!(await appPreview.settle(key))
+		) {
+			if (!isCurrent || isCurrent()) windowManager.syncCurrent();
+			return { ok: false as const, reason: "cancelled" as const };
+		}
+	}
+	if (isCurrent && !isCurrent())
+		return { ok: false as const, reason: "cancelled" as const };
 	const opened = await openPublishedApp(input, {
 		spaceId,
+		isCurrent,
 		loadMeta: loadPublishedAppMeta,
-		openWindow: (open) => windowManager.openApp(open),
+		openWindow: (open) => {
+			committingAppNavigation = true;
+			try {
+				windowManager.openApp(open);
+			} finally {
+				committingAppNavigation = false;
+			}
+		},
 		openOverlay: (open) => desktopLayers.openOverlay(open),
 	});
 	if (!opened.ok && opened.reason === "overlay_limit") {
@@ -759,14 +892,18 @@ async function openResolvedAppNavigation(
 	openContext: WorkspaceAppOpenContext,
 	launch?: { search?: string; hash?: string },
 	meta?: AppRecord["meta"],
+	isCurrent = () => true,
 ) {
-	const opened = await openWorkspaceApp({
-		appId,
-		label,
-		launch: launch ?? null,
-		openContext,
-		...(meta !== undefined ? { meta } : {}),
-	});
+	const opened = await openWorkspaceApp(
+		{
+			appId,
+			label,
+			launch: launch ?? null,
+			openContext,
+			...(meta !== undefined ? { meta } : {}),
+		},
+		isCurrent,
+	);
 	if (!opened.ok) return { handled: true as const };
 	if (!message.call) return { handled: true as const };
 	const result = await callOpenedApp(appId, opened.surface, {
@@ -1020,18 +1157,7 @@ const openAppPublish = (
 ) => {
 	appPublishTarget = { targetType, targetRef };
 };
-const inlineFileIsMarkdown = $derived(fileWorkspace.inlineFileIsMarkdown);
-const inlineFileIsCsv = $derived(fileWorkspace.inlineFileIsCsv);
-const inlineFileIsHtml = $derived(fileWorkspace.inlineFileIsHtml);
-const inlineFileHasRenderedPreview = $derived(
-	fileWorkspace.inlineFileHasRenderedPreview,
-);
-const inlineFileIsImage = $derived(fileWorkspace.inlineFileIsImage);
-const inlineFileIsVideo = $derived(fileWorkspace.inlineFileIsVideo);
-const inlineFileIsAudio = $derived(fileWorkspace.inlineFileIsAudio);
-const inlineFileIsPdf = $derived(fileWorkspace.inlineFileIsPdf);
-const inlineFileIsText = $derived(fileWorkspace.inlineFileIsText);
-const inlineFileDataUrl = $derived(fileWorkspace.inlineFileDataUrl);
+const inlineFilePreview = $derived(fileWorkspace.inlineFilePreview);
 let previewApps = $state<AppRecord[]>([]);
 let previewAppsLoadedFor = $state<string | null>(null);
 /** Realtime mutations seen while the full list request is in flight. */
@@ -1310,7 +1436,7 @@ $effect(() => {
 		const hasRoutePreview = Boolean(
 			readWindowFromSearch(
 				typeof window !== "undefined" ? window.location.search : null,
-			),
+			) || readResourceAppTarget(page.url.searchParams),
 		);
 		const openLayout = uiState.applySpaceDefaultLayoutIfFresh(
 			currentSpaceId,
@@ -1712,40 +1838,6 @@ function userTitle(
 		.filter(Boolean)
 		.join(" · ");
 }
-// ── Session rename (header inline edit) ────────────────────────────────
-function startSessionRename() {
-	const session = activeSessionState?.session;
-	if (!session) return;
-	sessionRenaming = true;
-	sessionRenameValue = session.title ?? getSessionTitle(session);
-}
-function cancelSessionRename() {
-	sessionRenaming = false;
-	sessionRenameValue = "";
-}
-async function submitSessionRename() {
-	if (sessionRenameSaving || !activeSessionId) return;
-	const trimmed = sessionRenameValue.trim();
-	if (!trimmed) {
-		cancelSessionRename();
-		return;
-	}
-	const session = activeSessionState?.session;
-	if (!session) return;
-	if (trimmed === (session.title ?? getSessionTitle(session))) {
-		cancelSessionRename();
-		return;
-	}
-	sessionRenameSaving = true;
-	try {
-		await sessionChat.renameActiveSession(trimmed);
-	} catch {
-		// Silently fail
-	} finally {
-		sessionRenameSaving = false;
-		cancelSessionRename();
-	}
-}
 function themeCssChanged(
 	changes: Array<{ path?: string; oldPath?: string }> | undefined,
 ) {
@@ -1974,6 +2066,7 @@ async function handleWsEvent(payload: ChannelEnvelope) {
 				if (eventSpaceId === spaceId) {
 					taskRealtimeSeq += 1;
 					taskRealtimeEvent = { spaceId, payload, seq: taskRealtimeSeq };
+					mergeCachedTaskRun(spaceId, { ...task, id: task.id });
 				}
 			}
 		}
@@ -2051,6 +2144,8 @@ onDestroy(() => {
 	if (workspaceNoticeTimer) clearTimeout(workspaceNoticeTimer);
 	spaceBootstrap.resetLoaded();
 	// A flush still running must not navigate away from wherever we went.
+	appNavigator.cancel();
+	appRouteSequence += 1;
 	heldNavigation = null;
 });
 
@@ -2086,6 +2181,19 @@ async function resumeHeldNavigation() {
 // One guard for everything leaving the workspace would lose: file drafts that
 // are still syncing and App documents with unsaved work. Asks at most once.
 beforeNavigate((navigation) => {
+	const destination = navigation.to?.url;
+	const resource = destination && resourceFromUrl(destination);
+	if (
+		resource &&
+		resource.spaceId === spaceId &&
+		!navigation.willUnload &&
+		destination?.searchParams.get("native") !== "1"
+	) {
+		navigation.cancel();
+		void openResourceOrFallback(resource.target);
+		return;
+	}
+	appNavigator.cancel();
 	if (activeSessionId) sessionChat.captureCurrentScrollAnchor(activeSessionId);
 	sessionChat.flushComposerDraft();
 	void fileWorkspace.persistInlineFileDrafts();
@@ -2273,10 +2381,26 @@ async function toggleFilesTree() {
 }
 
 function syncPreviewQuery(ref: WindowRef | null, replace = true) {
+	if (!committingAppNavigation) appNavigator.cancel();
+	appRouteSequence += 1;
 	if (typeof window === "undefined") return;
 	const search = new URLSearchParams(window.location.search);
 	// Canonicalize the legacy public-slug query when preview state changes.
 	search.delete("file");
+	const appTab =
+		ref?.kind === "app"
+			? appPreview.previews.find((tab) => tab.key === ref.key)
+			: null;
+	const resource = appTab?.launch?.hash
+		? readResourceAppLaunch(appTab.launch.hash)
+		: null;
+	search.delete("appHash");
+	if (appTab?.launch?.hash && appTab.launch.hash.length <= 2048)
+		search.set("appHash", appTab.launch.hash);
+	writeResourceAppTarget(
+		search,
+		resource?.spaceId === spaceId ? resource.target : null,
+	);
 	const next = withWindowParam(window.location.pathname, search, ref);
 	const current = `${window.location.pathname}${window.location.search}`;
 	if (next === current) return;
@@ -2691,6 +2815,7 @@ onMount(() => {
 	sessionChat.loadSessionScrollAnchors();
 	window.addEventListener("keydown", handleSessionVimKeydown);
 	const handleAppsChanged = (event: Event) => {
+		appResolver.clear();
 		const detail = (
 			event as CustomEvent<{ spaceId?: string; app?: { id?: string } }>
 		).detail;
@@ -2721,6 +2846,23 @@ onMount(() => {
 	// The chat panel owns the agent catalog.
 	void sessionChat.loadGenerationModelsCatalog();
 	void sessionChat.loadPromptTemplates();
+	const handleAppNavigationRequest = (event: Event) => {
+		const request = (event as CustomEvent<AppNavigationOpenRequest>).detail;
+		if (!request || request.spaceId !== spaceId) return;
+		event.preventDefault();
+		void handleAppNavigationOpen(request.message).then((result) => {
+			if (
+				!result.handled &&
+				request.fallbackHref &&
+				request.spaceId === spaceId
+			)
+				void goto(request.fallbackHref, { keepFocus: true, noScroll: true });
+		});
+	};
+	window.addEventListener(
+		APP_NAVIGATION_OPEN_EVENT,
+		handleAppNavigationRequest,
+	);
 	const handleOpenInlineFileEvent = (e: Event) => {
 		const custom = e as CustomEvent<{ spaceId?: string; path?: string }>;
 		if (custom.detail?.spaceId !== spaceId || !custom.detail?.path) return;
@@ -2850,6 +2992,7 @@ onMount(() => {
 		portPreview.dispose();
 		for (const dispose of appSurfaceDisposers.values()) dispose();
 		appSurfaceDisposers.clear();
+		appResolver.clear();
 		appPreview.dispose();
 		desktopLayers.dismissAll();
 		appSurfaces.clear();
@@ -2861,6 +3004,10 @@ onMount(() => {
 		spaceRealtime.dispose();
 		window.removeEventListener("resize", handlePreviewWindowResize);
 		workspaceResizeObserver.disconnect();
+		window.removeEventListener(
+			APP_NAVIGATION_OPEN_EVENT,
+			handleAppNavigationRequest,
+		);
 		window.removeEventListener(
 			"cohub:open-inline-file",
 			handleOpenInlineFileEvent,
@@ -2880,6 +3027,7 @@ onMount(() => {
 	};
 });
 function resetSpaceScopedState(currentSpaceId: string) {
+	appResolver.clear();
 	spaceFsEventGeneration += 1;
 	spaceFsRefreshCoordinator.reset();
 	lastSandboxFsSeq = null;
@@ -2987,7 +3135,8 @@ $effect(() => {
 		previewImmersiveMode &&
 		pageMounted &&
 		!activeWindowKind &&
-		!routePreviewRef
+		!routePreviewRef &&
+		!readResourceAppTarget(page.url.searchParams)
 	) {
 		previewLayout.exitPresentation();
 	}
@@ -3049,6 +3198,9 @@ $effect(() => {
 	const currentSpaceId = spaceId;
 	const sourceKey = activeFsSourceKey;
 	const preview = routePreviewRef;
+	const resourceTarget = readResourceAppTarget(routeSearchParams);
+	const appHash =
+		preview?.kind === "app" ? readAppHash(routeSearchParams) : null;
 	const sessionKey =
 		routeView === "session" && routeSessionId ? routeSessionId : null;
 	// Retry pending port deep-links when sandbox endpoints arrive.
@@ -3070,6 +3222,16 @@ $effect(() => {
 				displayWindows.closeAll();
 			});
 			appliedPreviewContextKey = contextKey;
+		}
+
+		if (appHash && preview?.kind === "app") {
+			void hydrateAppRoute(preview, appHash);
+			return;
+		}
+		appRouteSequence += 1;
+		if (resourceTarget) {
+			void openResourceOrFallback(resourceTarget);
+			return;
 		}
 
 		// 2) Compact session navigation returns to chat without disposing preview
@@ -3162,20 +3324,11 @@ const spaceFileDomainProps = $derived.by<
 	previewEndpoints,
 	inlineFileDownloadUrl,
 	inlineFileDownloadName,
-	inlineFileIsText,
-	inlineFileHasRenderedPreview,
+	inlineFilePreview,
 	inlineFileDiff: fileWorkspace.inlineFileDiff,
 	inlineFileDiffLoading: fileWorkspace.inlineFileDiffLoading,
 	inlineFileDiffError: fileWorkspace.inlineFileDiffError,
-	inlineFileIsMarkdown,
-	inlineFileIsCsv,
-	inlineFileIsHtml,
 	inlineFileCopied,
-	inlineFileIsImage,
-	inlineFileIsVideo,
-	inlineFileIsAudio,
-	inlineFileIsPdf,
-	inlineFileDataUrl,
 	inlineFileApp,
 	inlineFileDragging: fileWorkspace.inlineFileDragging,
 	uploadPaneVisible: fileWorkspace.uploadPaneVisible,
@@ -3333,11 +3486,7 @@ $effect(() => {
 	if (!session || !scope.onActiveSession) return;
 	untrack(() => scope.onActiveSession?.(session, currentSpace));
 });
-const sessionRenameState = $derived({
-	renaming: sessionRenaming,
-	value: sessionRenameValue,
-	saving: sessionRenameSaving,
-});
+const sessionRenameState = $derived(sessionRename.state);
 const resourceActionState = $derived({
 	open: resourceActionMenuOpen,
 	available: hasResourceActions(),
@@ -3348,12 +3497,10 @@ const headerActions = {
 		if (filesColumnHidden) previewLayout.setFilesColumnHidden(false);
 		windowManager.openDisplay(displayId);
 	},
-	startSessionRename,
-	cancelSessionRename,
-	submitSessionRename,
-	setSessionRenameValue: (value: string) => {
-		sessionRenameValue = value;
-	},
+	startSessionRename: sessionRename.start,
+	cancelSessionRename: sessionRename.cancel,
+	submitSessionRename: sessionRename.submit,
+	setSessionRenameValue: sessionRename.setValue,
 	toggleResourceActionMenu: () => {
 		resourceActionMenuOpen = !resourceActionMenuOpen;
 	},
@@ -3423,7 +3570,7 @@ const headerActions = {
 	/>
 {/if}
 {#if workspaceNotice}
-	<div class="workspace-notice pointer-events-none">
+	<div class="workspace-notice toast-surface pointer-events-none">
 		{workspaceNotice}
 	</div>
 {/if}
@@ -3823,10 +3970,6 @@ const headerActions = {
     bottom: 1rem;
     z-index: var(--z-workspace-toast);
     max-width: min(22rem, calc(100vw - 2rem));
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 0.75rem;
-    background: var(--color-bg-elevated);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 18%);
     color: var(--color-text-secondary);
     font-size: 0.75rem;
     line-height: 1rem;
@@ -3845,11 +3988,7 @@ const headerActions = {
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    border-radius: 10px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-elevated);
     padding: 9px 10px 9px 12px;
-    box-shadow: 0 10px 30px color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
   }
   :global(.port-ready-action) {
     display: inline-flex;
@@ -3993,11 +4132,11 @@ const headerActions = {
     color: var(--text-primary);
   }
   :global(.menu-item.danger) {
-    color: var(--error-soft);
+    color: var(--color-error-soft);
   }
   :global(.menu-item.danger:hover) {
-    background: var(--error-bg);
-    color: var(--error-soft);
+    background: var(--color-error-bg);
+    color: var(--color-error-soft);
   }
   :global(.toggle-btn) {
     display: inline-flex;

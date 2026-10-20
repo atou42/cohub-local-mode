@@ -343,7 +343,7 @@ $effect(() => {
             </button>
             {#if newMenuOpen && newMenuAnchorEl}
               <div
-                class="dropdown"
+                class="dropdown menu-surface"
                 bind:this={newMenuEl}
                 use:floatNear={{
                   getAnchor: () => newMenuAnchorEl,
@@ -386,7 +386,7 @@ $effect(() => {
               </button>
               {#if uploadMenuOpen && uploadMenuAnchorEl}
                 <div
-                  class="dropdown"
+                  class="dropdown menu-surface"
                   bind:this={uploadMenuEl}
                   use:floatNear={{
                     getAnchor: () => uploadMenuAnchorEl,
@@ -515,10 +515,6 @@ $effect(() => {
   .dropdown {
     min-width: 150px;
     padding: 4px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-primary);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   }
 
   .dropdown-item {

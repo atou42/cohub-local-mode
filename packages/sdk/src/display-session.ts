@@ -9,6 +9,7 @@ import {
 } from "@cohub/protocol";
 import type { SpaceDisplaysApi } from "./apis/displays.js";
 import { type DisplayConnectionStats, type DisplayStatsCounters, readDisplayStats } from "./display-stats.js";
+import { waitForIceGathering } from "./rtc/index.js";
 
 export type { DisplayConnectionStats } from "./display-stats.js";
 
@@ -80,7 +81,7 @@ export class DisplayConnection {
     const connection = new DisplayConnection(api, displayId, options.control ?? true, pc);
     try {
       await pc.setLocalDescription(await pc.createOffer());
-      await gathered(pc, options.gatherTimeoutMs ?? DEFAULT_GATHER_TIMEOUT_MS, options.signal);
+      await waitForIceGathering(pc, options.gatherTimeoutMs ?? DEFAULT_GATHER_TIMEOUT_MS, options.signal);
       const offer = pc.localDescription?.sdp;
       if (!offer) throw new Error("The browser produced no offer");
       const session = await api.openSession(displayId, { offer, control: connection.control }, { signal: options.signal });
@@ -218,29 +219,6 @@ export class DisplayConnection {
         break;
     }
   }
-}
-
-function gathered(pc: RTCPeerConnection, timeoutMs: number, signal?: AbortSignal): Promise<void> {
-  if (pc.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const done = () => {
-      clearTimeout(timer);
-      pc.removeEventListener("icegatheringstatechange", check);
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    };
-    const check = () => {
-      if (pc.iceGatheringState === "complete") done();
-    };
-    const abort = () => {
-      clearTimeout(timer);
-      pc.removeEventListener("icegatheringstatechange", check);
-      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-    };
-    const timer = setTimeout(done, timeoutMs);
-    pc.addEventListener("icegatheringstatechange", check);
-    signal?.addEventListener("abort", abort, { once: true });
-  });
 }
 
 export function connectDisplay(api: SpaceDisplaysApi, displayId: string, options?: ConnectDisplayOptions) {

@@ -1,4 +1,5 @@
 import type {
+	Actor,
 	BoardPatch,
 	BoardPlaybackCommand,
 	BoardPlaybackSnapshot,
@@ -82,11 +83,6 @@ export function createBoardWindowController(
 			expire: ReturnType<typeof setTimeout>;
 		}
 	>();
-	const activityModelRequests = new Map<
-		string,
-		Promise<{ provider: string | null; id: string } | null>
-	>();
-	let disposed = false;
 
 	function updateBoards(
 		boardId: string,
@@ -126,37 +122,6 @@ export function createBoardWindowController(
 		activityTimers.set(activity.id, { settle, expire });
 	}
 
-	function resolveActivityModel(activity: BoardAutomationActivity) {
-		const { sessionId, turnId } = activity.source;
-		if (disposed || activity.kind !== "agent" || !sessionId || !turnId) return;
-		const spaceId = activity.source.spaceId ?? options.getSpaceId();
-		const key = `${spaceId}:${sessionId}:${turnId}`;
-		let request = activityModelRequests.get(key);
-		if (!request) {
-			if (activityModelRequests.size >= 64) {
-				const oldest = activityModelRequests.keys().next().value;
-				if (oldest) activityModelRequests.delete(oldest);
-			}
-			request = sdk
-				.space(spaceId)
-				.session(sessionId)
-				.turns.get(turnId)
-				.then(({ turn }) =>
-					turn.model ? { provider: turn.provider, id: turn.model } : null,
-				)
-				.catch(() => null);
-			activityModelRequests.set(key, request);
-		}
-		void request.then((model) => {
-			if (disposed || !model) return;
-			automationActivities = automationActivities.map((item) =>
-				item.id === activity.id && item.source.turnId === turnId
-					? { ...item, model }
-					: item,
-			);
-		});
-	}
-
 	function noteAutomation(
 		boardId: string,
 		event: {
@@ -164,6 +129,7 @@ export function createBoardWindowController(
 			mutationId: string;
 			itemIds: string[];
 			source: RequestSource;
+			actor?: Actor;
 		},
 	) {
 		const document = boards.find((item) => item.boardId === boardId)?.document;
@@ -174,6 +140,7 @@ export function createBoardWindowController(
 			txId: event.mutationId,
 			itemIds: event.itemIds,
 			source: event.source,
+			actor: event.actor,
 		});
 		if (!activity) return;
 		const previous = automationActivities;
@@ -186,7 +153,6 @@ export function createBoardWindowController(
 		);
 		if (!current) return;
 		scheduleActivityLifecycle(current);
-		resolveActivityModel(current);
 	}
 
 	function clearActivitiesForBoard(boardId: string) {
@@ -239,13 +205,14 @@ export function createBoardWindowController(
 				if (
 					payload.source &&
 					payload.changed.items.length &&
-					boardAutomationKind(payload.source)
+					boardAutomationKind(payload.source, payload.actor)
 				) {
 					noteAutomation(boardId, {
 						actorId: payload.actorId,
 						mutationId: payload.mutationId,
 						itemIds: payload.changed.items,
 						source: payload.source,
+						actor: payload.actor,
 					});
 				}
 			},
@@ -489,11 +456,9 @@ export function createBoardWindowController(
 	}
 
 	function dispose() {
-		disposed = true;
 		for (const boardId of [...replicas.keys()]) releaseReplica(boardId);
 		for (const activity of automationActivities)
 			clearActivityTimers(activity.id);
-		activityModelRequests.clear();
 		boards = [];
 	}
 

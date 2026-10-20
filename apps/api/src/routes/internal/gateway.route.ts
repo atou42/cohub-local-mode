@@ -1,16 +1,17 @@
 import { context, trace, SpanStatusCode } from "@opentelemetry/api";
 import { boards, apps } from "@cohub/db";
+import { AppRoomStore } from "@cohub/infra/app-room";
 import { createLogger } from "@cohub/infra/logging";
 import { getTracer, extractTrace } from "@cohub/infra/tracing/propagator";
 import { gatewayInboundEventSchema, type GatewayInboundEvent } from "@cohub/protocol/gateway";
-import { UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+import { UPLOAD_ERROR_BATCH_TOO_LARGE, UPLOAD_ERROR_FILE_TOO_LARGE, UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
 import { parseRealtimeRoom } from "@cohub/protocol/realtime";
 import { dispatchSpacePresenceUpdated } from "../../realtime-events.js";
 import { getSpacePresenceSnapshot } from "../../space-presence.js";
 import { Hono } from "hono";
 import { bindAllActiveSpaceChannelsToGateway, handleInboundEvent, resolveChannelInboundForEventWithLock } from "../../channels.js";
 import { hasPermission } from "../../permissions.js";
-import { ensureInternalRequest, getOptionalAuth, getAppSessionPrincipal, requireValidId } from "../../lib/middleware.js";
+import { ensureInternalRequest, getOptionalAuth, getAppSessionPrincipal, requireValidId, useAccountPrincipal } from "../../lib/middleware.js";
 import { getSpaceById } from "../../space-sessions.js";
 import { getSpaceSandboxBySpaceId } from "../../space-sandboxes.js";
 import { reportLocalRuntimeStatus, type LocalRuntimeStatusReport } from "../../lib/sandbox/local-runtime-status.js";
@@ -53,11 +54,11 @@ import {
   saveSpaceUploadManifest,
   type SpaceUploadManifestEntry,
 } from "../../space-upload-storage.js";
-import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse } from "../../upload-quota.js";
 import { enqueueSandboxUploadFilesJob } from "../../sandbox-bash-queue.js";
 import { db } from "../../db/index.js";
 import { eq } from "drizzle-orm";
-import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket } from "../../app-realtime-rooms.js";
+import { getAppRoomById, serializeAppRoom, verifyAppRoomTicket, verifyHostedRoomTicket } from "../../app-rooms.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const tracer = getTracer("cohub-api");
@@ -82,8 +83,7 @@ const safeUploadPath = (value: string) => {
 
 const attachmentPlanErrorResponse = (error: unknown) => {
   if (error instanceof PublicAssetValidationError) {
-    const status = error.message.includes("too large") ? 413 : 400;
-    return { status, body: { message: error.message } };
+    return { status: error.code ? 413 : 400, body: { ...(error.code ? { code: error.code } : {}), message: error.message } };
   }
   if (error instanceof PublicAssetConfigError || error instanceof UserUploadConfigError) {
     return { status: 503, body: { message: "public asset storage is not configured" } };
@@ -158,7 +158,7 @@ router.post("/authorize-realtime-rooms", async (c) => {
     }
 
     if (parsed.kind === "room") {
-      rejected.push({ room, code: "FORBIDDEN", message: "Work rooms require room admission" });
+      rejected.push({ room, code: "FORBIDDEN", message: "App rooms require room admission" });
       continue;
     }
 
@@ -169,7 +169,7 @@ router.post("/authorize-realtime-rooms", async (c) => {
         .where(eq(boards.id, parsed.id))
         .limit(1);
       const allowed = board
-        ? await hasPermission(user, "file.view", { spaceId: board.spaceId }).catch((error) => {
+        ? await hasPermission(user, "file.view.filtered", { spaceId: board.spaceId }).catch((error) => {
             logger.warn("[RealtimeRooms] failed to authorize Board room", { room, userId: user.uuid, error });
             return false;
           })
@@ -193,12 +193,12 @@ router.post("/authorize-realtime-rooms", async (c) => {
   return c.json({ ok: true, rooms: accepted, rejected });
 });
 
-router.post("/authorize-work-room", async (c) => {
+router.post("/authorize-app-room", async (c) => {
   const forbidden = ensureInternalRequest(c);
   if (forbidden) return forbidden;
 
   const principal = getAppSessionPrincipal(c);
-  if (!principal) return c.json({ ok: false, message: "a Work session is required" }, 403);
+  if (!principal) return c.json({ ok: false, message: "an App session is required" }, 403);
   const body = await c.req.json<{ roomId?: string; ticket?: string }>().catch(() => null);
   const roomId = typeof body?.roomId === "string" ? body.roomId.trim() : "";
   const ticket = typeof body?.ticket === "string" ? body.ticket.trim() : "";
@@ -216,12 +216,12 @@ router.post("/authorize-work-room", async (c) => {
   if (!room || room.appId !== principal.appId) {
     return c.json({ ok: false, message: "room not found" }, 404);
   }
-  const [work] = await db.select({ status: apps.status, spaceId: apps.spaceId })
+  const [app] = await db.select({ status: apps.status, spaceId: apps.spaceId })
     .from(apps)
     .where(eq(apps.id, principal.appId))
     .limit(1);
-  if (work?.status !== "published" || work.spaceId !== principal.spaceId) {
-    return c.json({ ok: false, message: "work is unavailable" }, 403);
+  if (app?.status !== "published" || app.spaceId !== principal.spaceId) {
+    return c.json({ ok: false, message: "app is unavailable" }, 403);
   }
 
   return c.json({
@@ -229,6 +229,31 @@ router.post("/authorize-work-room", async (c) => {
     room: serializeAppRoom(room),
     participantId: ticketPayload.participantId,
     userKey: ticketPayload.userKey,
+  });
+});
+
+router.post("/authorize-hosted-room", async (c) => {
+  const forbidden = ensureInternalRequest(c);
+  if (forbidden) return forbidden;
+  const user = useAccountPrincipal(c);
+  if (user instanceof Response) return user;
+  const body = await c.req.json<{ roomId?: string; ticket?: string }>().catch(() => null);
+  const roomId = body?.roomId;
+  const ticket = typeof body?.ticket === "string" ? verifyHostedRoomTicket(body.ticket) : null;
+  if (!roomId || !requireValidId(roomId) || ticket?.roomId !== roomId || ticket.userUuid !== user.uuid) {
+    return c.json({ ok: false, message: "invalid room admission" }, 403);
+  }
+  const seat = { roomId, participantId: ticket.participantId, owner: `seat:${ticket.participantId}` };
+  const store = new AppRoomStore(redisCommandClient);
+  if (await store.renew(seat) !== "active") return c.json({ ok: false, message: "room seat is no longer active" }, 403);
+  const room = await getAppRoomById(roomId);
+  if (!room || room.appId !== ticket.appId) return c.json({ ok: false, message: "room not found" }, 404);
+  const [app] = await db.select({ status: apps.status, spaceId: apps.spaceId }).from(apps).where(eq(apps.id, room.appId)).limit(1);
+  if (app?.status !== "published") return c.json({ ok: false, message: "app is unavailable" }, 403);
+  return c.json({
+    ok: true,
+    room: serializeAppRoom(room),
+    participantId: ticket.participantId,
   });
 });
 
@@ -260,7 +285,7 @@ router.post("/authorize-board-awareness", async (c) => {
     return c.json({ ok: false, message: "board not found" }, 404);
   }
 
-  const requiredPermission = permission === "edit" ? "file.edit" : "file.view";
+  const requiredPermission = permission === "edit" ? "file.edit" : "file.view.filtered";
   const allowed = await hasPermission(user, requiredPermission, { spaceId }).catch((error) => {
     logger.warn("[BoardAwareness] failed to authorize update", {
       boardId,
@@ -427,7 +452,7 @@ router.post("/attachments/plan", async (c) => {
     for (const file of files) {
       if (!/^[a-zA-Z0-9_-]{1,80}$/.test(file.id) || seenFileIds.has(file.id)) return c.json({ message: "file ids must be unique safe strings" }, 400);
       seenFileIds.add(file.id);
-      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) return c.json({ message: "file too large" }, 413);
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) return c.json({ code: UPLOAD_ERROR_FILE_TOO_LARGE, message: "file too large" }, 413);
       const relativePath = safeUploadPath(file.relativePath?.trim() || file.name);
       if (!relativePath) return c.json({ message: "invalid upload path" }, 400);
       if (seenRelativePaths.has(relativePath)) return c.json({ message: "duplicate upload path" }, 400);
@@ -454,8 +479,7 @@ router.post("/attachments/plan", async (c) => {
     });
   } catch (error) {
     if (!(error instanceof UploadRateLimitError)) throw error;
-    c.header("Retry-After", String(error.retryAfterSeconds));
-    return c.json({ message: error.message }, 429);
+    return uploadRateLimitedResponse(c, error);
   }
   if (uploadId && fileEntries.length > 0) {
     await saveSpaceUploadManifest({
@@ -536,13 +560,13 @@ router.post("/attachments/materialize", async (c) => {
       if (seenPaths.has(relativePath)) return c.json({ message: "duplicate upload path" }, 400);
       seenPaths.add(relativePath);
       if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) {
-        return c.json({ message: "file too large" }, 413);
+        return c.json({ code: UPLOAD_ERROR_FILE_TOO_LARGE, message: "file too large" }, 413);
       }
       if (typeof file.downloadUrl !== "string" || !isAllowedPublicAssetDownloadUrl(file.downloadUrl)) {
         return c.json({ message: "invalid download url" }, 400);
       }
       totalBytes += file.size;
-      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ message: "upload too large" }, 413);
+      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ code: UPLOAD_ERROR_BATCH_TOO_LARGE, message: "upload too large" }, 413);
       prepared.push({
         id: typeof file.id === "string" ? file.id : null,
         relativePath,
@@ -592,10 +616,7 @@ router.post("/attachments/materialize", async (c) => {
 
     return c.json({ ok: true, uploaded: result.uploaded, pathById });
   } catch (error) {
-    if (error instanceof UploadRateLimitError) {
-      c.header("Retry-After", String(error.retryAfterSeconds));
-      return c.json({ message: error.message }, 429);
-    }
+    if (error instanceof UploadRateLimitError) return uploadRateLimitedResponse(c, error);
     logger.error("[GatewayAttachment] failed to materialize remote files", error, { spaceId });
     return c.json({ message: "failed to materialize" }, 500);
   }

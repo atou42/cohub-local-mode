@@ -1,12 +1,21 @@
 import {
 	APP_APPEARANCE_TOKENS,
 	type AppAppearance,
+	type AppAppearanceToken,
 } from "@cohub/protocol/app-runtime";
 import { CUSTOM_THEME_CHANGED_EVENT } from "$lib/custom-theme/events";
 import { getResolvedTheme } from "$lib/theme.svelte";
 import { isDarkTheme } from "$lib/theme-registry";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+/** Tokens whose host variable differs from `--<token>`; status hues come from the theme scales. */
+const TOKEN_SOURCES: Partial<Record<AppAppearanceToken, string>> = {
+	success: "--success-500",
+	warning: "--warning-500",
+	error: "--error-500",
+	info: "--info-500",
+};
 
 /** Bumped when something outside the theme id restyles the host. */
 let revision = $state(0);
@@ -39,7 +48,9 @@ export function readHostAppearance(): AppAppearance | undefined {
 	const style = getComputedStyle(document.documentElement);
 	const tokens: AppAppearance["tokens"] = {};
 	for (const token of APP_APPEARANCE_TOKENS) {
-		const value = style.getPropertyValue(`--${token}`).trim();
+		const value = style
+			.getPropertyValue(TOKEN_SOURCES[token] ?? `--${token}`)
+			.trim();
 		if (value) tokens[token] = value;
 	}
 	const appearance: AppAppearance = {

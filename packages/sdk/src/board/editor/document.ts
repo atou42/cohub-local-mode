@@ -27,6 +27,7 @@ export function createDocumentModule(ctx: EditorContext) {
 	const recentlyAdded = new Set<string>();
 	let evaluated: ReadonlyMap<string, BoardItem> = new Map();
 	let played: ReadonlyMap<string, BoardItem> = new Map();
+	let scripted: ReadonlyMap<string, BoardItem> = new Map();
 	let compiled: {
 		animations: BoardDocument["animations"];
 		items: BoardDocument["items"];
@@ -47,15 +48,16 @@ export function createDocumentModule(ctx: EditorContext) {
 
 	function displayItem(id: string): BoardItem | undefined {
 		if (draft.has(id)) return draft.get(id) ?? undefined;
-		return evaluated.get(id) ?? played.get(id) ?? state.base.items[id];
+		return scripted.get(id) ?? evaluated.get(id) ?? played.get(id) ?? state.base.items[id];
 	}
 
-	function displayDocument(): BoardDocument {
+	function displayDocument(includeScripts = true): BoardDocument {
 		const base = state.base;
-		if (draft.size === 0 && evaluated.size === 0 && played.size === 0) return base;
+		if (draft.size === 0 && evaluated.size === 0 && played.size === 0 && (!includeScripts || scripted.size === 0)) return base;
 		const items = { ...base.items };
 		for (const [id, item] of played) items[id] = item;
 		for (const [id, item] of evaluated) items[id] = item;
+		if (includeScripts) for (const [id, item] of scripted) items[id] = item;
 		for (const [id, item] of draft) {
 			if (item) items[id] = item;
 			else delete items[id];
@@ -87,6 +89,19 @@ export function createDocumentModule(ctx: EditorContext) {
 		if (changed.size) rescene(changed);
 	}
 
+	function setScriptItems(items: ReadonlyMap<string, BoardItem>) {
+		const previous = scripted;
+		scripted = items;
+		const changed = [...new Set([...previous.keys(), ...items.keys()])].filter((id) => !sameJson(previous.get(id), items.get(id)));
+		if (!changed.length) return;
+		const structural = changed.some((id) => {
+			const before = previous.get(id) ?? state.base.items[id];
+			const after = items.get(id) ?? state.base.items[id];
+			return !before || !after || before.parent !== after.parent || before.z !== after.z || !sameJson(arrowBindings(before), arrowBindings(after));
+		});
+		rescene(structural ? undefined : changed);
+	}
+
 	function rescene(ids?: Iterable<string>) {
 		if (ids) {
 			const changed = [...ids];
@@ -105,6 +120,7 @@ export function createDocumentModule(ctx: EditorContext) {
 		draft.clear();
 		draftOrigins.clear();
 		played = new Map();
+		scripted = new Map();
 		reevaluate();
 		state.scene = buildBoardScene(next);
 		ctx.query.invalidate();
@@ -156,15 +172,20 @@ export function createDocumentModule(ctx: EditorContext) {
 		rescene();
 	}
 
-	function send(patch: BoardPatch) {
-		if (options.readonly || isEmptyBoardPatch(patch)) return;
+	function send(patch: BoardPatch): Promise<Error | null> {
+		if (options.readonly || isEmptyBoardPatch(patch)) return Promise.resolve(null);
 		state.pendingCommits += 1;
-		void Promise.resolve(options.onCommit(patch))
+		let completion: Promise<unknown>;
+		try { completion = Promise.resolve(options.onCommit(patch)); }
+		catch (error) { completion = Promise.reject(error); }
+		return completion
 			.then(() => {
 				state.saveError = null;
+				return null;
 			})
 			.catch((error: unknown) => {
 				state.saveError = error instanceof Error ? error.message : "Failed to sync board";
+				return error instanceof Error ? error : new Error(state.saveError);
 			})
 			.finally(() => {
 				state.pendingCommits -= 1;
@@ -235,6 +256,20 @@ export function createDocumentModule(ctx: EditorContext) {
 		commit({}, record);
 	}
 
+	function commitPatch(patch: BoardPatch) {
+		if (options.readonly) throw new Error("Board is read-only.");
+		const before = state.base;
+		const result = applyBoardPatchToDocument(before, patch);
+		if (!result.ok) throw new Error(result.diagnostics[0]?.message ?? "Invalid board patch.");
+		const ids = Object.keys(patch.items ?? {});
+		const redo = diffBoardEdits(before, result.document, ids);
+		if (isEmptyBoardPatch(redo)) return;
+		state.undoStack = [...state.undoStack.slice(-UNDO_LIMIT + 1), { undo: diffBoardEdits(result.document, before, ids), redo }];
+		state.redoStack = [];
+		adopt(result.document, ids);
+		return send(redo).then((error) => { if (error) throw error; });
+	}
+
 	function applyPatch(patch: BoardPatch): boolean {
 		const result = applyBoardPatchToDocument(state.base, patch);
 		if (!result.ok) {
@@ -277,9 +312,9 @@ export function createDocumentModule(ctx: EditorContext) {
 		return placeItem(next, frame, matrix, box);
 	}
 
-	function topZ(parent: string | undefined): number {
+	function topZ(parent: string | undefined, scene = state.scene): number {
 		let z = 0;
-		for (const id of state.scene.children(parent)) z = Math.max(z, displayItem(id)?.z ?? 0);
+		for (const id of scene.children(parent)) z = Math.max(z, scene.get(id)?.z ?? 0);
 		return z + 1;
 	}
 
@@ -287,8 +322,13 @@ export function createDocumentModule(ctx: EditorContext) {
 		markAdded,
 		consumeRecentlyAdded,
 		displayItem,
+		copyScene: () => scripted.size ? buildBoardScene(displayDocument(false)) : state.scene,
 		reevaluate,
 		setPlayedItems,
+		get hasScriptItems() { return scripted.size > 0; },
+		setScriptItems,
+		animationItems: () => new Map([...played, ...evaluated]),
+		commitPatch,
 		rescene,
 		reset,
 		setDraftItem,

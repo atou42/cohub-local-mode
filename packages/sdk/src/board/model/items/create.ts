@@ -1,6 +1,9 @@
 import {
 	type BoardItem,
+	type BoardMediaOrigin,
+	BoardMediaOriginSchema,
 	type BoardMediaSnapshot,
+	type BoardTaskArtifact,
 	type BoardTaskSnapshot,
 	parseBoardItem,
 	pointsRect,
@@ -9,9 +12,9 @@ import { BOARD_DRAW_STROKE_SIZE } from "@cohub/protocol/board-constants";
 import { quantizeDrawCoordinate } from "../draw-input.js";
 import { filePreviewKind } from "../file-preview.js";
 import { type BoardFileSnapshotFacts, fileStem } from "../file-snapshot.js";
-import { getMediaResourceTitle as getResourceTitle, inferBoardMediaKind as inferMediaKind } from "../media.js";
+import { boardModelFormat, getMediaResourceTitle as getResourceTitle, inferBoardMediaKind as inferMediaKind } from "../media.js";
 import type { ShapeKind } from "../shape-types.js";
-import { featuredTaskArtifact } from "../task.js";
+import { featuredTaskArtifact } from "@cohub/protocol";
 import { DEFAULT_BOARD_TOOL_STYLES } from "../tool-styles.js";
 import { createBoardItemId } from "./id.js";
 
@@ -23,6 +26,7 @@ const DEFAULT_TASK_MEDIA_SIZE = { width: 320, height: 180 };
 const DEFAULT_VIDEO_SIZE = { width: 320, height: 180 };
 const DEFAULT_AUDIO_SIZE = { width: 320, height: 112 };
 const DEFAULT_FILE_SIZE = { width: 260, height: 132 };
+const DEFAULT_MODEL_SIZE = { width: 264, height: 264 };
 const DEFAULT_FILE_COVER_SIZE = { width: 260, height: 208 };
 const DEFAULT_SHAPE_SIZE = { width: 200, height: 140 };
 const DEFAULT_FRAME_SIZE = { width: 480, height: 320 };
@@ -76,14 +80,17 @@ function cleanSnapshot(snapshot: BoardMediaSnapshot): BoardMediaSnapshot {
 	) as BoardMediaSnapshot;
 }
 
-export function createFileNodeForPath(
+export type BoardMediaItemKind = "image" | "video" | "audio" | "file";
+
+export function createMediaBoardItem(
 	path: string,
 	x: number,
 	y: number,
 	snapshot: BoardMediaSnapshot & BoardFileSnapshotFacts = {},
 	id = createBoardItemId(),
+	mediaKind?: BoardMediaItemKind,
 ): BoardItemEntry {
-	const kind = inferMediaKind(path, snapshot.mimeType);
+	const kind = mediaKind ?? inferMediaKind(path, snapshot.mimeType);
 	const title =
 		snapshot.title ??
 		(kind === "file" || kind === "text"
@@ -127,8 +134,9 @@ export function createFileNodeForPath(
 			}),
 		};
 	}
-	const size =
-		filePreviewKind(snapshot) === "cover"
+	const size = boardModelFormat(path, snapshot.mimeType)
+		? DEFAULT_MODEL_SIZE
+		: filePreviewKind(snapshot) === "cover"
 			? DEFAULT_FILE_COVER_SIZE
 			: DEFAULT_FILE_SIZE;
 	return {
@@ -141,6 +149,8 @@ export function createFileNodeForPath(
 	};
 }
 
+export const createFileNodeForPath = createMediaBoardItem;
+
 export function createTaskBoardItem(
 	taskRunId: string,
 	snapshot: BoardTaskSnapshot,
@@ -148,6 +158,7 @@ export function createTaskBoardItem(
 	y: number,
 	metadata?: Record<string, unknown>,
 	id = createBoardItemId(),
+	aspect?: number,
 ): BoardItemEntry {
 	const artifact = featuredTaskArtifact(snapshot.artifacts);
 	const visual =
@@ -161,7 +172,7 @@ export function createTaskBoardItem(
 			)
 		: artifact?.type === "audio"
 			? DEFAULT_TASK_MEDIA_SIZE
-			: DEFAULT_TASK_SIZE;
+			: expectedTaskSize(aspect);
 	return {
 		id,
 		item: item({
@@ -171,6 +182,13 @@ export function createTaskBoardItem(
 			props: { taskRunId, snapshot },
 		}),
 	};
+}
+
+function expectedTaskSize(aspect?: number): { width: number; height: number } {
+	if (!aspect || !Number.isFinite(aspect) || aspect <= 0) return { ...DEFAULT_TASK_SIZE };
+	const width = DEFAULT_TASK_MEDIA_SIZE.width;
+	const height = Math.round(width / aspect);
+	return height > 0 && height <= width * 4 ? { width, height } : { ...DEFAULT_TASK_SIZE };
 }
 
 export function createTextBoardItem(
@@ -330,9 +348,97 @@ export function titleForBoardItem(value: BoardItem): string {
 			return value.props.snapshot.title;
 		case "effect":
 			return value.props.kind;
-		case "sketch":
-			return value.props.src.split("/").pop() ?? "Sketch";
+		case "custom":
+			return value.script.src.split("/").pop() ?? "Custom";
 		default:
 			return value.type;
 	}
+}
+
+const RESULT_GAP = 24;
+const RESULT_COLUMNS = 4;
+const RESULT_TEXT_WIDTH = 320;
+const RESULT_MIN_HEIGHT = 120;
+const RESULT_MAX_HEIGHT = 480;
+
+export function boardItemOrigin(item: BoardItem): BoardMediaOrigin | null {
+	if (item.type === "image" || item.type === "video" || item.type === "audio") return item.props.origin ?? null;
+	if (item.type !== "text") return null;
+	const parsed = BoardMediaOriginSchema.safeParse(item.metadata?.origin);
+	return parsed.success ? parsed.data : null;
+}
+
+export const boardOriginKey = (origin: BoardMediaOrigin) => `${origin.taskRunId}/${origin.artifactId}`;
+
+export function createTaskResultItems(input: {
+	taskRunId: string;
+	frame: { x: number; y: number; width: number; height: number };
+	artifacts: readonly BoardTaskArtifact[];
+	existing?: ReadonlySet<string>;
+}): BoardItemEntry[] {
+	const rowHeight = Math.min(RESULT_MAX_HEIGHT, Math.max(RESULT_MIN_HEIGHT, input.frame.height));
+	const left = input.frame.x + input.frame.width + RESULT_GAP * 2;
+	const entries: BoardItemEntry[] = [];
+	let column = 0;
+	let x = left;
+	let y = input.frame.y;
+	let tallest = 0;
+	for (const artifact of input.artifacts) {
+		if (input.existing?.has(boardOriginKey({ taskRunId: input.taskRunId, artifactId: artifact.id }))) continue;
+		if (column === RESULT_COLUMNS) {
+			column = 0;
+			x = left;
+			y += tallest + RESULT_GAP;
+			tallest = 0;
+		}
+		const entry = taskResultItem(input.taskRunId, artifact, x, y, rowHeight);
+		const size = "size" in entry.item && entry.item.size ? entry.item.size : { width: RESULT_TEXT_WIDTH, height: rowHeight };
+		entries.push(entry);
+		x += size.width + RESULT_GAP;
+		tallest = Math.max(tallest, size.height);
+		column += 1;
+	}
+	return entries;
+}
+
+function taskResultItem(
+	taskRunId: string,
+	artifact: BoardTaskArtifact,
+	x: number,
+	y: number,
+	rowHeight: number,
+): BoardItemEntry {
+	const id = createBoardItemId();
+	const origin = { taskRunId, artifactId: artifact.id };
+	if (artifact.type === "text") {
+		return {
+			id,
+			item: item({ type: "text", position: { x, y }, metadata: { origin }, props: { text: artifact.textExcerpt, width: RESULT_TEXT_WIDTH } }),
+		};
+	}
+	const snapshot = cleanSnapshot({
+		title: artifact.title,
+		mimeType: artifact.mimeType,
+		...(artifact.type !== "audio" ? { naturalWidth: artifact.naturalWidth, naturalHeight: artifact.naturalHeight } : {}),
+		...(artifact.type !== "image" ? { durationMs: artifact.durationMs } : {}),
+	});
+	if (artifact.type === "audio") {
+		return {
+			id,
+			item: item({ type: "audio", position: { x, y }, size: DEFAULT_AUDIO_SIZE, props: { src: artifact.url, snapshot, origin } }),
+		};
+	}
+	const fallback = artifact.type === "video" ? DEFAULT_VIDEO_SIZE : DEFAULT_MEDIA_SIZE;
+	const ratio = artifact.naturalWidth && artifact.naturalHeight
+		? artifact.naturalWidth / artifact.naturalHeight
+		: fallback.width / fallback.height;
+	return {
+		id,
+		item: item({
+			type: artifact.type,
+			position: { x, y },
+			size: { width: Math.round(rowHeight * ratio), height: rowHeight },
+			props: { src: artifact.url, snapshot, origin },
+		}),
+	};
 }

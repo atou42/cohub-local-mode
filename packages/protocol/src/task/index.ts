@@ -35,6 +35,12 @@ export type RunCommandTaskPayload = Omit<TaskPayload, "type" | "data"> & {
 
 export type TaskRunStatus = "pending" | "running" | "completed" | "failed";
 
+export type TaskRunBoard = {
+  boardId: string;
+  title?: string;
+  itemIds: string[];
+};
+
 export interface TaskScheduleConfig {
   pattern: string;
   timezone?: string;

@@ -8,6 +8,7 @@ export type BillingCreditSummaryRaw = {
   available_balance: number;
   open_overage_balance: number;
   net_balance: number;
+  global_available_balance?: number;
 };
 
 /**
@@ -64,9 +65,11 @@ export const COHUB_BILLING_USAGE_TYPES = {
   generation: "generation",
   generationLlm: "generation.llm",
   generationLlmRaw: "generation.llm.raw",
+  generationDecision: "generation.decision",
   generationImage: "generation.image",
   generationVideo: "generation.video",
   generationMusic: "generation.music",
+  generation3d: "generation.3d",
   sandboxCompute: "sandbox.compute",
   spaceStorage: "space.storage",
   workConsumption: "work.consumption",
@@ -195,6 +198,8 @@ export type BillingCreditExpiryGroup = {
 
 export type BillingCreditStatus = {
   netUsd: number;
+  /** Null/absent means the provider did not report global grant availability. */
+  globalAvailableUsd?: number | null;
   groups: BillingCreditExpiryGroup[];
 };
 
@@ -372,6 +377,7 @@ export type BillingSubscriptionHistoryList = BillingUserRef & {
 };
 
 export type BillingCheckoutInput = BillingUserRef & {
+  walletCheckout?: { id: string; actorUserId: string; spaceId: string };
   productKey: string;
   returnUrl?: string;
   promotionCode?: string;
@@ -502,6 +508,8 @@ export type BillingBalanceActivityList = BillingUserRef & {
 };
 
 export type BillingBalanceActivityListInput = BillingUserRef & {
+  transactionLedger?: boolean;
+  createCustomer?: boolean;
   tokenType?: CohubBillingTokenType;
   page?: number;
   limit?: number;
@@ -588,12 +596,13 @@ export interface BillingOperations {
   ensureCustomer(input: BillingUserRef): Promise<BillingUserRef>;
   getState(input: BillingUserRef): Promise<BillingAccountState>;
   getGenerationModelDiscount(input: GenerationModelDiscountInput): Promise<GenerationModelDiscount>;
-  getCreditStatus(input: BillingUserRef & { tokenType?: CohubBillingTokenType }): Promise<BillingCreditStatus>;
+  getCreditStatus(input: BillingUserRef & { tokenType?: CohubBillingTokenType; createCustomer?: boolean }): Promise<BillingCreditStatus>;
   getCatalog(input?: BillingUserRef): Promise<BillingCatalog>;
   previewPromotionCode(input: BillingPromotionCodePreviewInput): Promise<BillingPromotionCodePreview>;
   listSubscriptions(input: BillingHistoryListInput): Promise<BillingSubscriptionHistoryList>;
   purchaseAddon(input: BillingCheckoutInput): Promise<BillingCheckoutResult>;
   createSubscription(input: BillingCheckoutInput): Promise<BillingCheckoutResult>;
+  confirmSpaceWalletOrder(input: BillingUserRef & { requestId: string; actorUserId: string; spaceId: string }): Promise<{ settled: boolean; pending: boolean }>;
   resolveCheckoutConfirmation(input: BillingUserRef & { productKey: string; checkoutId: string }): Promise<BillingCheckoutConfirmation>;
   cancelSubscriptionCheckout(input: BillingUserRef & { subscriptionId: string }): Promise<BillingSubscriptionHistoryStatus>;
   cancelSubscriptionAutoRenew(input: BillingUserRef & { subscriptionId: string }): Promise<BillingSubscriptionHistoryStatus>;

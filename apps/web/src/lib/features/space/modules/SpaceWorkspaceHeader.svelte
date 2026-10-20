@@ -29,6 +29,7 @@ import { getSessionTitle } from "$lib/features/session-chat";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { m } from "$lib/paraglide/messages.js";
+import { buildSpaceRootRoute } from "$lib/space-routes";
 import { uiState } from "$lib/stores/ui.svelte";
 import SpacePresenceStack from "./SpacePresenceStack.svelte";
 import SpaceRuntimeStatus from "./SpaceRuntimeStatus.svelte";
@@ -77,6 +78,7 @@ export type SpaceIdentity = {
 };
 
 export type SessionRenameState = {
+	failed: boolean;
 	renaming: boolean;
 	value: string;
 	saving: boolean;
@@ -244,7 +246,7 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 			</button>
 			{#if resourceActions.open && resourceActionsRootEl}
 				<div
-					class="w-44 overflow-hidden rounded-md border border-border-subtle bg-bg-primary py-1 shadow-lg"
+					class="menu-surface w-44 overflow-hidden py-1"
 					role="menu"
 					data-resource-actions
 					use:floatNear={{
@@ -320,14 +322,14 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 					{#if context.spaceIdentity}
 						{@render SpaceCrumb(context.spaceIdentity)}
 					{:else}
-						<button
-							type="button"
+						<a
+							href={buildSpaceRootRoute(context.spaceId)}
 							class="inline-flex shrink-0 items-center text-text-primary transition-colors hover:text-text-secondary lg:hidden"
 							title={spaceTitle}
 							aria-label={m.space_header_open_space({}, { locale })}
 						>
 							<SpaceAvatar name={spaceTitle} profile={context.space?.publicProfile} seed={context.spaceId} size="xs" />
-						</button>
+						</a>
 					{/if}
 					<div class="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
 						{#if sessionRename.renaming && context.activeSession}
@@ -338,6 +340,7 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 								class="max-w-[40vw] min-w-0 flex-1 rounded bg-bg-hover-strong px-1 py-0.5 text-[13px] leading-tight text-text-primary outline-none"
 								placeholder={m.space_header_session_name_ph({}, { locale })}
 								maxlength={80}
+								aria-invalid={sessionRename.failed}
 								disabled={sessionRename.saving}
 								oninput={(event) => {
 									actions.setSessionRenameValue(event.currentTarget.value);
@@ -368,15 +371,15 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 						{/if}
 					</div>
 				{:else if routeHeaderTitle}
-					<button type="button" class="inline-flex shrink-0 items-center text-text-primary transition-colors hover:text-text-secondary lg:hidden" title={spaceTitle} aria-label={m.space_header_open_space({}, { locale })}>
+					<a href={buildSpaceRootRoute(context.spaceId)} class="inline-flex shrink-0 items-center text-text-primary transition-colors hover:text-text-secondary lg:hidden" title={spaceTitle} aria-label={m.space_header_open_space({}, { locale })}>
 						<SpaceAvatar name={spaceTitle} profile={context.space?.publicProfile} seed={context.spaceId} size="xs" />
-					</button>
+					</a>
 					<span class="min-w-0 truncate text-[13px] text-text-secondary">{routeHeaderTitle}</span>
 				{:else}
-					<button type="button" class="inline-flex min-w-0 items-center gap-1.5 truncate text-left text-[13px] text-text-primary transition-colors hover:text-text-secondary">
+					<a href={buildSpaceRootRoute(context.spaceId)} class="inline-flex min-w-0 items-center gap-1.5 truncate text-left text-[13px] text-text-primary transition-colors hover:text-text-secondary">
 						<SpaceAvatar name={spaceTitle} profile={context.space?.publicProfile} seed={context.spaceId} size="xs" />
 						{spaceTitle}
-					</button>
+					</a>
 				{/if}
 			</div>
 		{/snippet}
@@ -386,6 +389,11 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 			{@render HeaderActions()}
 		{/snippet}
 	</ColumnHeader>
+	{#if sessionRename.renaming && sessionRename.failed}
+		<div class="border-b border-border-subtle px-3 py-1.5 text-[12px] text-error-soft" role="alert">
+			{m.session_rename_failed({}, { locale })}
+		</div>
+	{/if}
 
 <style>
 	.space-crumb {
@@ -408,11 +416,11 @@ function handleSessionRenameKeydown(event: KeyboardEvent) {
 	}
 
 	.header-action.is-shared {
-		color: var(--success-soft);
+		color: var(--color-success-soft);
 	}
 
 	.header-action.is-shared:hover {
-		background: var(--success-bg);
-		color: var(--success);
+		background: var(--color-success-bg);
+		color: var(--color-success);
 	}
 </style>

@@ -1,13 +1,3 @@
-/**
- * Where a Board's referenced media comes from.
- *
- * A Board node stores a workspace path, but that path only resolves against the
- * Space it was authored in. A published Board is read by viewers who have no
- * access to that Space, so the renderer never resolves paths itself — it asks a
- * source. Live boards resolve through the Space file API; a published Work
- * resolves against the immutable assets captured into its artifact.
- */
-
 import type { AppBoardAsset } from "@neta-art/cohub";
 import type { BoardAssetSource } from "@neta-art/cohub/board";
 
@@ -30,13 +20,6 @@ export function createSpaceBoardAssetSource(spaceId: string): BoardAssetSource {
 	};
 }
 
-/**
- * Resolve against a published Board artifact.
- *
- * Assets are addressed by the path recorded at publish time, so a node whose
- * asset was missing or rejected during capture resolves to null and renders as
- * unavailable — the viewer is never sent back to the origin Space.
- */
 export function createAppBoardAssetSource(input: {
 	manifestUrl: string;
 	assets: AppBoardAsset[];

@@ -46,16 +46,37 @@ Development uses:
 - API: `https://api-dev.cohub.live`
 - WebSocket: `wss://gateway-dev.cohub.live/ws`
 
-Custom endpoints are still supported when needed:
+Override endpoints for self-hosted deployments or proxies:
 
 ```ts
 const client = createCohubClient({
   baseUrl: "https://api.example.com",
+  webBaseUrl: "https://cohub.example.com",
   getAccessToken: async () => localStorage.getItem("token"),
   websocket: {
     url: "https://gateway.example.com",
   },
+  voice: {
+    url: "https://gateway.example.com",
+  },
 });
+```
+
+In Node.js, the SDK and CLI share these optional environment variables:
+
+| Variable | Endpoint |
+| --- | --- |
+| `COHUB_BASE_URL` | API base URL |
+| `COHUB_WS_URL` | Realtime gateway URL (`http(s)` or `ws(s)`; `/ws` is added when omitted) |
+| `COHUB_WEB_URL` | Web origin for App authorization and CLI links |
+| `COHUB_VOICE_WS_URL` | Voice input gateway URL; falls back to `COHUB_WS_URL` with `/asr/ws` |
+
+Explicit client options take precedence over environment variables. Unconfigured
+endpoints use the selected environment's defaults. API, web, and gateway addresses
+are configured separately; changing `baseUrl` does not change the gateway.
+
+```bash
+COHUB_BASE_URL=http://localhost:3000 COHUB_WS_URL=ws://localhost:8080 node app.js
 ```
 
 ## Spaces and sessions
@@ -101,10 +122,15 @@ const stop = board.subscribe({
 });
 ```
 
-Task Items keep a small, replaceable display snapshot beside their stable
-`taskRunId`; build it from an authoritative TaskRun with
-`taskRunToBoardTaskSnapshot(taskRun)` from `@neta-art/cohub/board`, and restore
-a Board's TaskRuns in one request with `client.tasks.getMany(ids, { spaceId })`.
+Task Items show a run by its `taskRunId`. Write only the id; the server fills
+the display snapshot from the run and rewrites it when the run finishes, on
+every Board in the Space that shows it. Lay a run's results out as media with
+`createTaskResultItems`; each result keeps an `origin` leading back to the run.
+
+```ts
+const { taskRunId } = await client.generations.create({ spaceId, model, content });
+await board.apply({ items: { hero: { type: "task", position: { x: 80, y: 80 }, size: { width: 480, height: 270 }, props: { taskRunId } } } });
+```
 
 ### Layers
 
@@ -131,7 +157,7 @@ The editor has no framework. Read state through its getters and listen with
 change, so they work directly with `useSyncExternalStore`:
 
 ```ts
-import { createBoardRegistry, defineBoardItem } from "@neta-art/cohub/board";
+import { createBoardRegistry, defineBoardItem, worldPoint } from "@neta-art/cohub/board";
 import { createBoardEditor } from "@neta-art/cohub/board/editor";
 import { createBoardReplica } from "@neta-art/cohub/board/replica";
 import { createBoardAssetManager, mountBoardStage } from "@neta-art/cohub/board/stage";
@@ -157,7 +183,16 @@ const editor = createBoardEditor({
 });
 replica.subscribe((state) => state.document && editor.loadDocument(state.document, boardId));
 
-// Where Space file paths resolve; a published copy could resolve elsewhere.
+// Prefer stable media URLs. Existing Space paths remain supported by addFile.
+editor.addMedia("https://cdn.example.com/cover.webp", worldPoint(0, 0));
+// Supply a kind for sources without a file extension.
+editor.addMedia("https://cdn.example.com/media?id=42", worldPoint(400, 0), {
+  kind: "video",
+  snapshot: { title: "Launch", naturalWidth: 1920, naturalHeight: 1080 },
+});
+
+// Media URLs load directly; these callbacks only receive Space paths.
+// A published copy can resolve paths against captured artifacts instead.
 const source = {
   resolveFileUrl: (path: string) => space.files.resolveUrl(path, { purpose: "preview" }),
   resolvePlaybackUrl: (path: string) => space.files.resolveUrl(path, { purpose: "playback" }),
@@ -182,6 +217,12 @@ editor.addItem("acme.order", { at: editor.viewCenter(), props: { orderId: "o-1",
 
 // React: const selection = useSyncExternalStore((fn) => editor.subscribe("selection", fn), () => editor.selection);
 ```
+
+For draggable DOM item views, use `createBoardPointerGestures(element, { move, end })`
+from `board/stage`: call `start(event)` for accepted pointer downs and `cancel()`
+on unmount. It follows active pointers outside the element, preserves mouse gestures
+when capture is lost, and cancels on window blur or page hide. Forward events through
+`context.toPointerEvent` to the editor; keep hover handling separate from active gestures.
 
 Items of a type the client does not know still render as a placeholder, move
 and keep every field, so documents written by newer clients are never
@@ -221,6 +262,25 @@ const stop = session.subscribe({
 
 stop();
 ```
+
+## Space wallets
+
+```ts
+const wallet = client.space(spaceId).wallet;
+const balance = await wallet.get();
+const catalog = await wallet.catalog();
+const activity = await wallet.activities(1);
+const { checkout, orderId } = await wallet.createOrder({
+  id: crypto.randomUUID(), // Persist and reuse this ID when retrying.
+  productKey,
+});
+const confirmation = await wallet.confirmOrder(orderId);
+```
+
+Open `checkout.checkoutUrl` to pay. Confirmation requires the contributor's
+session; a payment redirect is not proof of settlement. Space funds pay whole
+usage charges when sufficient, otherwise the original user's balance is used.
+Personal balance transfers and withdrawals are not supported.
 
 ## Apps and the App runtime
 

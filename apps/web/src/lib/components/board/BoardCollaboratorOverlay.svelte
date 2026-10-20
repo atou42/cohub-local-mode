@@ -64,6 +64,8 @@ const pendingCursorDeadline = $derived.by(() => {
 });
 
 $effect(() => {
+	peers;
+	now = Date.now();
 	const deadline = pendingCursorDeadline;
 	if (deadline <= Date.now()) return;
 	const timer = setInterval(() => {

@@ -33,6 +33,58 @@ ENV=dev cohub auth login
 ENV=dev cohub spaces ls
 ```
 
+Use a custom API endpoint for self-hosted deployments or proxies:
+
+```bash
+cohub --base-url https://api.example.com spaces ls
+COHUB_BASE_URL=https://api.example.com cohub spaces ls
+```
+
+`--base-url` takes precedence over `COHUB_BASE_URL`. Without either, the CLI uses
+the selected environment's default API address. Configure other endpoints separately:
+
+| Variable | Endpoint |
+| --- | --- |
+| `COHUB_BASE_URL` | API base URL |
+| `COHUB_WS_URL` | Realtime gateway URL (`http(s)` or `ws(s)`) |
+| `COHUB_WEB_URL` | Web base URL used in links |
+
+Changing the API base URL does not change the gateway or authentication provider.
+For self-hosted authentication, set `COHUB_AUTH_ISSUER`, `COHUB_AUTH_CLIENT_ID`,
+and, if needed, `COHUB_AUTH_RESOURCE` and `COHUB_AUTH_SCOPE`. Stored login sessions,
+Home Space caches, and Runtime directory bindings are scoped to the API base URL.
+Sign in once for each custom server, or supply `COHUB_EXECUTION_TOKEN`.
+
+## Board export resources
+
+Board exports keep the requested resolution and source image quality. Before rendering,
+`boards export` prints the output dimensions and frame count (except with `--json`).
+Decoded image textures, including background and script output images, share a 256 MiB
+budget. Oversized images fail before native decoding rather than silently becoming
+placeholders. Use `--image-memory <MiB>` to raise the budget when the environment has
+sufficient memory; it is an image budget, not a limit on total process memory.
+`--size` controls the viewport only with `--camera`.
+
+```bash
+cohub boards export lesson.board --animation lecture --at 0:92s:40ms --camera --size 1600x900 -o lecture.mp4
+NODE_DEBUG=cohub:board-export cohub boards export lesson.board --animation lecture --at 0:92s:40ms -o lecture.mp4
+```
+
+Debug output reports render stages, RSS, heap, external buffers, reserved image bytes,
+and available/constrained process memory. Video encoding is reported separately.
+MP4 exports require even output dimensions and fail before rendering if the initial
+export dimensions are odd. Video frame dimensions must remain constant.
+
+For a repeatable 2,301-frame native export memory benchmark, run from the repository root:
+
+```bash
+node --import tsx packages/cli/scripts/bench-board-export.ts
+```
+
+Set `BOARD_EXPORT_BENCH_FRAMES`, `BOARD_EXPORT_BENCH_WIDTH`, or
+`BOARD_EXPORT_BENCH_HEIGHT` to change the workload. The benchmark discards PNGs
+as they are produced and stops if RSS exceeds 1 GiB.
+
 ## Usage
 
 Use `--json` when reading output for decisions, extracting IDs, or chaining commands.
@@ -74,8 +126,8 @@ cohub -s <spaceId> run -- git status
 
 Space-scoped commands use `-s`, then `COHUB_SPACE_ID`, then the Space remembered for
 the current directory. `<space>` is a Space ID, a slug you own such as `home`, or
-`username/slug`. Only `prompt`, `completion`, `generate`, `apps`, and `public` fall
-back to your Home Space; other commands exit with an error when no target is given:
+`username/slug`. Only `prompt`, `completion`, `decision`, `generate`, `apps`, and
+`public` fall back to your Home Space; other commands exit with an error when no target is given:
 
 ```bash
 cohub -s <spaceId> spaces prompt "message" --json
@@ -85,7 +137,9 @@ cohub -s home spaces files ls
 
 ## Local Runtime
 
-Connect one local workspace to a Space and select Pi or Codex per turn.
+Connect one local workspace to a Space and select Pi, Codex, Claude Code or WorkBuddy per turn.
+Claude Code (`claude`) and WorkBuddy (`codebuddy`) run Cohub Turns only; terminal sync covers Pi and Codex.
+Without `--harness`, every installed harness is tried; one that cannot start is skipped with a warning.
 
 To keep using native terminals with ordinary Cohub Chats / Turns:
 
@@ -127,7 +181,7 @@ are never uploaded automatically. Use `runtime logs --json` to export a failure 
 events carry the local `runtimeId` plus server `requestId` / `traceparent` when a turn has
 reached the Agent trace.
 
-The Runtime uses WebSockets, native Pi RPC / Codex app-server, and existing cloud
+The Runtime uses WebSockets, native Pi RPC / Codex app-server / Claude Code stream-json, and existing cloud
 streaming. Local executables and credentials are required. `sandbox up` has been
 removed. Reconnection and result reconciliation are automatic; no recovery command is needed.
 When a result genuinely cannot be determined, the affected Chat offers an explicit stop
@@ -229,6 +283,20 @@ cohub -s <spaceId> spaces activity
 cohub -s <spaceId> spaces activity 7
 cohub -s <spaceId> spaces activity 365 --json
 ```
+
+## Space wallet
+
+```bash
+cohub -s <spaceId> spaces wallet balance
+cohub -s <spaceId> spaces wallet catalog
+cohub -s <spaceId> spaces wallet recharge <productKey> --request-id <uuid>
+cohub -s <spaceId> spaces wallet confirm <orderId>
+cohub -s <spaceId> spaces wallet activity --page 1 --json
+```
+
+Recharge prints a payment URL. Reuse the request UUID when retrying the same
+recharge. Any signed-in user with access to the Space may contribute; payment
+does not grant additional permissions. Transfers and withdrawals are not supported.
 
 ## Boards
 
@@ -336,6 +404,8 @@ cohub generate "Lip-sync to this spoken take" \
   --image reference_image=https://example.com/portrait.png \
   --audio reference_audio=https://example.com/speech.mp3
 
+cohub generate -m song2 --text "prompt=upbeat synthwave" --text "lyrics=[Verse] Neon lights" --param seed=42
+
 cohub generate "a calm lake" \
   --model <model> \
   --async
@@ -346,6 +416,7 @@ cohub tasks get <taskRunId> --json
 Supported inputs:
 
 ```bash
+--text <role>=<text>
 --image <path-or-url>
 --image first_frame=<path-or-url>
 --image last_frame=<path-or-url>
@@ -356,7 +427,7 @@ Supported inputs:
 --audio reference_audio=<path-or-url>
 ```
 
-Role-qualified media values add `meta.role` to that content block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request.
+Role-qualified values add `meta.role` to that content block. Text roles come from the model's text inputs (`cohub models show <model>`); repeat `--text <role>=<text>` for each text block. Repeat `--image reference_image=...` for multiple reference images. Seedance role-qualified media should use public URL inputs. Do not mix first/last frame roles with reference roles (`reference_image`, `reference_video`, `reference_audio`) in one request.
 
 Pass generation parameters with `--param key=value` or `--parameters '<json>'`.
 
@@ -430,8 +501,16 @@ cohub apps resolve <appSlug> --owner <username> --space-slug <spaceSlug>
 
 Use `--json` for machine-readable output. `apps get`, `apps stats`, and `apps download` also accept `app://<username>/<space>/<app>` mention URIs. `apps stats` reports total, 24-hour, 7-day, and 30-day views with a source breakdown. Download restores newly published file and directory artifacts directly from the CDN with checksum verification. HTML files with companion assets are restored as directory bundles; Board and port apps are not downloadable. The resolve command remains available for explicit slug-based lookup.
 
-Realtime rooms use a published App's runtime identity, so they are available
-through `client.app.realtime` in the SDK rather than as CLI commands.
+Agents can join hosted Rooms and attach realtime events or media:
+
+```bash
+cohub rooms join '<invite>'
+cohub rooms connect <room-id> --json
+cohub rooms rtc <room-id> --channel chat --data-input -
+cohub rooms rtc <room-id> --audio speech.pcm --output ./received
+```
+
+RTC uses an on-demand Go/Pion helper, with external FFmpeg only when media conversion is needed. Encoded Ogg Opus and VP8 IVF inputs avoid re-encoding. Reception defaults to framed RTP archives; `--receive-format raw` decodes PCM/I420 for models. `--output -` writes binary frames to stdout and status to stderr. Recording is explicit, files are never overwritten, and the default receive quota is 1 GiB. Disconnecting keeps the hosted seat. See [Room RTC helper](../../apps/sandbox/cmd/cohub-rtc/README.md) for local builds, formats, migration details, and release prerequisites.
 
 ## Drive the Cohub UI
 

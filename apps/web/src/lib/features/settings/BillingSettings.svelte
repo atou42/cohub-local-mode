@@ -840,7 +840,7 @@ $effect(() => {
 												<div class="min-w-0">
 													<div class="flex min-w-0 items-center gap-2">
 														<div class="truncate text-text-secondary">{grant.benefitName ?? grant.grantKind ?? m.billing_balance_source({}, { locale })}</div>
-														<span class="shrink-0 rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] leading-none {isGrantDisplayActive(grant) ? 'text-text-tertiary' : 'text-text-placeholder'}">{getGrantDisplayStatus(grant)}</span>
+														<span class="tag {isGrantDisplayActive(grant) ? '' : 'text-text-placeholder'}">{getGrantDisplayStatus(grant)}</span>
 													</div>
 													<div class="mt-0.5 flex min-w-0 items-center gap-1.5 text-text-tertiary">
 														<Clock class="h-3 w-3 shrink-0" />
@@ -919,7 +919,7 @@ $effect(() => {
 										<div class="flex min-w-0 items-center gap-2">
 											<div class="truncate font-medium text-text-primary">{item.title}</div>
 											{#if activityStatusLabel(item.status)}
-												<span class="shrink-0 rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] leading-none text-text-tertiary">{activityStatusLabel(item.status)}</span>
+												<span class="tag">{activityStatusLabel(item.status)}</span>
 											{/if}
 										</div>
 										<div class="mt-0.5 text-[11px] text-text-tertiary">{formatBillingDate(item.createdAt)}</div>

@@ -56,7 +56,7 @@ const label = $derived(
 	}
 
 	.sync-status--error {
-		color: var(--error-soft);
+		color: var(--color-error-soft);
 	}
 
 	.sync-status--idle {
@@ -67,6 +67,6 @@ const label = $derived(
 		height: 0.375rem;
 		width: 0.375rem;
 		border-radius: 9999px;
-		background: var(--warning-soft);
+		background: var(--color-warning-soft);
 	}
 </style>

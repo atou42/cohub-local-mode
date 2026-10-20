@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { contentBlockSchema } from "../core/content-schema.js";
 import type { ContentBlock } from "../core/content.js";
+import { localHarnessSchema } from "./harnesses.js";
 
 /** Keep follow-up authorship in block metadata so older Runtime servers can retain it unchanged. */
 export function nativeUserContent(blocks: readonly ContentBlock[]): ContentBlock[] {
@@ -33,7 +34,7 @@ export const nativeTurnStartSchema = z.object({
   sessionId: id.nullable(),
   parentTurnId: id.nullable(),
   branchSessionId: id,
-  harness: z.enum(["pi", "codex"]),
+  harness: localHarnessSchema,
   nativeSessionId: z.string().min(1).max(255),
   userContent: content,
   startedAt: z.iso.datetime(),
@@ -93,7 +94,7 @@ export const SETTLED_TURN_STATUSES = ["completed", "failed", "interrupted", "can
 export const NATIVE_INGEST_MAX_TURNS = 500;
 
 const nativeIngestSchema = z.object({
-  harness: z.enum(["pi", "codex"]),
+  harness: localHarnessSchema,
   nativeSessionId: z.string().min(1).max(255),
   turns: z.array(nativeIngestTurnSchema).min(1).max(NATIVE_INGEST_MAX_TURNS),
 }).strict();

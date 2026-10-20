@@ -7,15 +7,13 @@ import {
 	type Permission,
 	type SpaceRecord,
 } from "@neta-art/cohub";
-import { Check, Copy, ExternalLink, Loader2, Rocket } from "lucide-svelte";
+import { Check, Copy, ExternalLink, Rocket } from "lucide-svelte";
 import Dialog from "$lib/components/Dialog.svelte";
+import Spinner from "$lib/components/Spinner.svelte";
 import { dispatchAppsChanged } from "$lib/features/app/app-realtime";
-import {
-	APP_SCOPE_GROUPS,
-	APP_SCOPE_OPTIONS,
-} from "$lib/features/space/modules/app-utils";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { m } from "$lib/paraglide/messages.js";
+import { APP_SCOPE_GROUPS, APP_SCOPE_OPTIONS } from "$lib/resource-kit/app";
 import { sdk } from "$lib/sdk";
 import {
 	normalizePublicSlugInput,
@@ -264,12 +262,12 @@ async function copyUrl() {
 				</div>
 			</div>
 			<div class="button-row">
-				<button type="button" class="secondary-btn" onclick={() => void copyUrl()}>
+				<button type="button" class="key-btn secondary-key" onclick={() => void copyUrl()}>
 					{#if copied}<Check class="h-3.5 w-3.5" />{:else}<Copy class="h-3.5 w-3.5" />{/if}
 					Copy
 				</button>
-				<a class="secondary-btn" href={publishedUrl} target="_blank" rel="noreferrer"><ExternalLink class="h-3.5 w-3.5" />Open</a>
-				<button type="button" class="primary-btn" onclick={onClose}>Done</button>
+				<a class="key-btn secondary-key" href={publishedUrl} target="_blank" rel="noreferrer"><ExternalLink class="h-3.5 w-3.5" />Open</a>
+				<button type="button" class="key-btn primary-key" onclick={onClose}>Done</button>
 			</div>
 		{:else}
 			<section class="address-section">
@@ -321,13 +319,13 @@ async function copyUrl() {
 			<section class="permissions-section">
 				<div class="section-label">{m.app_publish_app_can({}, { locale })}</div>
 				<div class="permissions-grid">
-					{#each APP_SCOPE_GROUPS as group (group.title)}
+					{#each APP_SCOPE_GROUPS as group (group.scopes.join())}
 						<div class="permission-group">
-							<div class="group-title">{group.title}</div>
+							<div class="group-title">{group.title({}, { locale })}</div>
 							{#each APP_SCOPE_OPTIONS.filter((option) => group.scopes.includes(option.scope)) as option (option.scope)}
-								<label class="permission-row" title={option.description}>
+								<label class="permission-row" title={option.description({}, { locale })}>
 									<input type="checkbox" bind:checked={appScopes[option.scope]} />
-									{option.label}
+									{option.label({}, { locale })}
 								</label>
 							{/each}
 						</div>
@@ -344,7 +342,7 @@ async function copyUrl() {
 						<span class="presentation-copy">{m.app_publish_hide_cohub_bar_detail({}, { locale })}</span>
 					</span>
 					{#if !hideCohubBarAllowed && !hideCohubBarLoading}
-						<span class="plan-badge">Pro / Max</span>
+						<span class="tag">Pro / Max</span>
 					{/if}
 				</label>
 				{#if !hideCohubBarAllowed && !hideCohubBarLoading}
@@ -354,9 +352,9 @@ async function copyUrl() {
 
 			{#if error}<div class="error-box">{error}</div>{/if}
 			<div class="button-row footer-row">
-				<button type="button" class="secondary-btn" onclick={onClose}>{m.common_cancel({}, { locale })}</button>
-				<button type="button" class="primary-btn" onclick={() => void publish()} disabled={!canPublish}>
-					{#if publishing}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Rocket class="h-3.5 w-3.5" />{/if}
+				<button type="button" class="key-btn secondary-key" onclick={onClose}>{m.common_cancel({}, { locale })}</button>
+				<button type="button" class="key-btn primary-key" onclick={() => void publish()} disabled={!canPublish}>
+					{#if publishing}<Spinner class="h-3.5 w-3.5" />{:else}<Rocket class="h-3.5 w-3.5" />{/if}
 					Publish
 				</button>
 			</div>
@@ -383,7 +381,7 @@ async function copyUrl() {
 	.source-ref span { color: var(--text-placeholder); }
 	.access-section { display: grid; gap: 8px; }
 	.access-row { display: flex; align-items: flex-start; gap: 8px; border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-surface); padding: 10px; font-size: 12px; color: var(--text-secondary); }
-	.access-row input { margin-top: 2px; accent-color: var(--brand); }
+	.access-row input { margin-top: 2px; }
 	.access-title { display: block; font-weight: 500; color: var(--text-primary); }
 	.access-copy { display: block; margin-top: 2px; color: var(--text-tertiary); }
 	.permissions-section { display: grid; gap: 10px; }
@@ -395,24 +393,17 @@ async function copyUrl() {
 		.group-title { grid-column: 1 / -1; }
 	}
 	.permission-row { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 12px; color: var(--text-secondary); }
-	.permission-row input { accent-color: var(--brand); }
 	.presentation-section { display: grid; gap: 8px; }
 	.presentation-row { display: flex; align-items: flex-start; gap: 8px; min-height: 28px; font-size: 12px; color: var(--text-secondary); }
-	.presentation-row input { margin-top: 2px; accent-color: var(--brand); }
+	.presentation-row input { margin-top: 2px; }
 	.presentation-title { display: block; font-weight: 500; color: var(--text-primary); }
 	.presentation-copy { display: block; margin-top: 2px; color: var(--text-tertiary); }
 	.presentation-hint { font-size: 11px; color: var(--text-tertiary); }
-	.plan-badge { flex-shrink: 0; border-radius: 9999px; border: 1px solid var(--border-subtle); padding: 3px 8px; font-size: 10px; line-height: 1; color: var(--text-tertiary); }
 	.disabled-option { opacity: .6; }
-	.error-box { border-radius: 6px; border: 1px solid color-mix(in srgb, var(--error-soft) 30%, transparent); background: var(--error-bg); padding: 8px 10px; font-size: 12px; color: var(--error-soft); }
+	.error-box { border-radius: 6px; border: 1px solid color-mix(in srgb, var(--color-error-soft) 30%, transparent); background: var(--color-error-bg); padding: 8px 10px; font-size: 12px; color: var(--color-error-soft); }
 	.button-row { display: flex; justify-content: flex-end; gap: 8px; }
 	.footer-row { position: sticky; bottom: 0; z-index: 2; margin: 0 -16px -16px; border-top: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--bg-primary) 94%, transparent); padding: 12px 16px 16px; backdrop-filter: blur(10px); }
-	.primary-btn, .secondary-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; border-radius: 6px; padding: 0 12px; font-size: 12px; font-weight: 500; transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease; }
-	.primary-btn { border: 1px solid var(--brand); background: var(--brand); color: var(--brand-contrast-fg); }
-	.primary-btn:hover:not(:disabled) { opacity: .92; }
-	.primary-btn:disabled { cursor: not-allowed; opacity: .5; }
-	.secondary-btn { border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); }
-	.secondary-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+	.key-btn { gap: 7px; min-height: 34px; padding: 0 12px; font-size: 12px; text-decoration: none; }
 	.success-block { display: flex; align-items: center; gap: 10px; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-surface); padding: 12px; }
 	.success-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--brand); color: var(--brand-contrast-fg); }
 
@@ -421,6 +412,6 @@ async function copyUrl() {
 		.permission-row { min-height: 40px; align-items: center; }
 		.permission-row input, .access-row input { width: 16px; height: 16px; }
 		.button-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
-		.primary-btn, .secondary-btn { width: 100%; min-height: 44px; font-size: 13px; }
+		.key-btn { width: 100%; min-height: 44px; font-size: 13px; }
 	}
 </style>

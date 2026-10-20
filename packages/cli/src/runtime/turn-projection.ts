@@ -1,4 +1,5 @@
-import { nativeMessageRole, projectNativeSession, type CanonicalProjectionTurn, type ContentBlock, type MessageToolCallsFile, type ProjectionInput, type ProjectionTarget, type SessionTurnRecord, type StoredIntermediateMessage, type StoredToolCall, type TurnIntermediateMessagesFile } from "@neta-art/cohub";
+import { nativeMessageRole, type CanonicalProjectionTurn, type ContentBlock, type MessageToolCallsFile, type ProjectionInput, type ProjectionTarget, type SessionTurnRecord, type StoredIntermediateMessage, type StoredToolCall, type TurnIntermediateMessagesFile } from "@neta-art/cohub";
+import { harnessAdapter } from "./harnesses/index.js";
 
 export type SessionTurnProjectionClient = {
   session(sessionId: string): {
@@ -150,5 +151,5 @@ export async function listSessionProjectionTurns(
 }
 
 export function projectTurnBatch(input: Omit<ProjectionInput, "turns"> & { turns: ProjectionSourceTurn[] }, target: ProjectionTarget) {
-  return projectNativeSession(input, target);
+  return harnessAdapter(target).session.project(input);
 }

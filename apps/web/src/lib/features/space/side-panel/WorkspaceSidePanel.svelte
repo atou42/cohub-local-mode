@@ -1,6 +1,9 @@
 <script lang="ts">
 import type { SpacePublicEndpoints } from "@cohub/protocol/ports";
-import { Files, Images, MessageSquare, PanelsTopLeft } from "lucide-svelte";
+import { compactOnOverflow } from "$lib/actions/compact-on-overflow";
+import EntityIcon, {
+	type EntityIconName,
+} from "$lib/components/EntityIcon.svelte";
 import FileUploadPane from "$lib/components/FileUploadPane.svelte";
 import { provideFileTreeMarks } from "$lib/components/file-tree-marks";
 import MobileRightDrawer from "$lib/components/MobileRightDrawer.svelte";
@@ -128,26 +131,26 @@ let {
 	onOpenInstalledApp,
 }: Props = $props();
 
-type TabDefinition = { id: SidePanelTab; label: string; icon: typeof Files };
+type TabDefinition = { id: SidePanelTab; label: string; icon: EntityIconName };
 
 const locale = $derived(getLocale());
 const tabs = $derived<TabDefinition[]>([
 	{
 		id: "session",
 		label: m.side_panel_tab_session({}, { locale }),
-		icon: MessageSquare,
+		icon: "chat",
 	},
-	{ id: "files", label: m.files_title({}, { locale }), icon: Files },
+	{ id: "files", label: m.files_title({}, { locale }), icon: "files" },
 	...(canViewTasks
 		? [
 				{
 					id: "media" as const,
 					label: m.side_panel_tab_media({}, { locale }),
-					icon: Images,
+					icon: "media" as const,
 				},
 			]
 		: []),
-	{ id: "apps", label: m.sidebar_apps({}, { locale }), icon: PanelsTopLeft },
+	{ id: "apps", label: m.sidebar_apps({}, { locale }), icon: "apps" },
 ]);
 
 let preferredTab = $state<SidePanelTab>(readSidePanelTab());
@@ -199,34 +202,39 @@ $effect(() => {
 
 {#snippet tabBar(mobile: boolean)}
 	<div
-		class="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border-subtle px-2 [scrollbar-width:none] {mobile ? 'bg-bg-primary' : ''}"
-		role="tablist"
-		aria-label={m.side_panel_label({}, { locale })}
+		class="group flex h-11 shrink-0 items-center overflow-x-auto border-b border-border-subtle [scrollbar-width:none] lg:h-10 {mobile ? 'bg-bg-primary' : ''}"
+		{@attach compactOnOverflow}
 	>
-		{#each tabs as tab (tab.id)}
-			{@const selected = activeTab === tab.id}
-			{#if tab.id === "files"}
-				<span class="mx-1 h-3.5 w-px shrink-0 bg-border-subtle" aria-hidden="true"></span>
-			{/if}
-			<button
-				type="button"
-				role="tab"
-				aria-selected={selected}
-				class="relative inline-flex shrink-0 items-center gap-1.5 rounded-[5px] px-2 text-[11px] font-medium transition-colors {mobile ? 'h-8' : 'h-7'} {selected ? 'bg-bg-elevated text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}"
-				onclick={() => selectTab(tab.id)}
-			>
-				<tab.icon class="h-3.5 w-3.5" />
-				{tab.label}
-				{#if tab.id === "session" && sidePanel.sessionBusy}
-					<span
-						class="h-1.5 w-1.5 rounded-full bg-brand"
-						role="img"
-						aria-label={m.side_panel_session_busy({}, { locale })}
-						title={m.side_panel_session_busy({}, { locale })}
-					></span>
+		<div
+			class="flex w-max items-center gap-0.5 px-2"
+			role="tablist"
+			aria-label={m.side_panel_label({}, { locale })}
+		>
+			{#each tabs as tab (tab.id)}
+				{@const selected = activeTab === tab.id}
+				{#if tab.id === "files"}
+					<span class="mx-1 h-3.5 w-px shrink-0 bg-border-subtle" aria-hidden="true"></span>
 				{/if}
-			</button>
-		{/each}
+				<button
+					type="button"
+					role="tab"
+					aria-selected={selected}
+					class="tab-key relative {mobile ? 'h-8' : 'h-7'}"
+					onclick={() => selectTab(tab.id)}
+				>
+					<EntityIcon name={tab.icon} class="h-3.5 w-3.5 group-data-compact:hidden" />
+					{tab.label}
+					{#if tab.id === "session" && sidePanel.sessionBusy}
+						<span
+							class="h-1.5 w-1.5 rounded-full bg-brand"
+							role="img"
+							aria-label={m.side_panel_session_busy({}, { locale })}
+							title={m.side_panel_session_busy({}, { locale })}
+						></span>
+					{/if}
+				</button>
+			{/each}
+		</div>
 	</div>
 {/snippet}
 

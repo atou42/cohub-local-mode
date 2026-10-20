@@ -1,34 +1,5 @@
-import { BOARD_MIME_TYPE, isBoardPath } from "@cohub/protocol";
+import { BOARD_MIME_TYPE, isBoardPath, isTextMime } from "@cohub/protocol";
 import type { SpaceFsFileResponse } from "@neta-art/cohub";
-
-/** Strip parameters (`text/plain; charset=utf-8` → `text/plain`) and lowercase. */
-export function normalizeMime(
-	mimeType: string | null | undefined,
-): string | null {
-	if (!mimeType) return null;
-	const base = mimeType.split(";")[0]?.trim().toLowerCase();
-	return base || null;
-}
-
-/**
- * Classify text-like MIME types the same way the API does for Space FS reads.
- * Used by the browser to decide editor/preview handling, including URL-delivered
- * text files that arrive with empty content.
- */
-export function isTextMime(mimeType: string | null | undefined) {
-	const mime = normalizeMime(mimeType);
-	if (!mime) return false;
-	return (
-		mime.startsWith("text/") ||
-		mime === "application/json" ||
-		mime === "application/csv" ||
-		mime === "application/xml" ||
-		mime === "application/yaml" ||
-		mime === "application/toml" ||
-		mime === "application/sql" ||
-		mime === "application/x-ndjson"
-	);
-}
 
 /**
  * Whether a file response should be treated as editable/previewable text.

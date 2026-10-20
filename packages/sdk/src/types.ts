@@ -1,3 +1,4 @@
+export type { SpaceWalletSummary, SpaceWalletActivity, SpaceWalletActivityPage } from "@cohub/protocol";
 export type { SessionStats, ExecutionStats, TurnMetrics, RequestMetric } from "@cohub/protocol/model";
 import type {
   SessionBindingRecord as ProtocolSessionBindingRecord,
@@ -41,7 +42,9 @@ import type {
   PublicGenerationDeclaration,
 } from "@cohub/protocol/generation";
 import type { MessageRecord } from "@cohub/protocol/model";
-import type { ModelThinkingLevel, SearchTextRange } from "@cohub/protocol";
+import type { HarnessKind, ModelThinkingLevel, SearchTextRange } from "@cohub/protocol";
+import type { TaskRunBoard } from "@cohub/protocol/task";
+export type { TaskRunBoard } from "@cohub/protocol/task";
 
 export type { SearchTextRange } from "@cohub/protocol";
 
@@ -216,6 +219,7 @@ export type BillingCreditExpiryGroup = {
 
 export type BillingCreditStatus = {
   netUsd: number;
+  globalAvailableUsd?: number | null;
   groups: BillingCreditExpiryGroup[];
 };
 
@@ -587,7 +591,7 @@ export type BillingBalanceActivityList = {
 export type UserRulesResponse = {
   content: string;
   updatedAt: string | null;
-  source: "config-space";
+  source: "home-space";
   path: string;
 };
 
@@ -628,6 +632,8 @@ export type SpaceFsEntry = {
 };
 
 export type SpaceFsTreeResponse = { path: string; entries: SpaceFsEntry[] };
+export type SpaceFsListOptions = { pagination: true; limit?: number; cursor?: string };
+export type SpaceFsTreePage = SpaceFsTreeResponse & { nextCursor: string | null; truncated: boolean };
 export type SpaceFsFileKind = "text" | "binary";
 export type SpaceFsEncoding = "utf-8" | "base64";
 export type SpaceFsFileResponse = {
@@ -806,6 +812,8 @@ export type SpaceSandboxConfig = {
   provider?: SpaceSandboxProvider;
   autoDestroy: SpaceSandboxAutoDestroyPolicy;
   spec?: SandboxSpecId;
+  image?: import("@cohub/protocol/sandbox").SandboxImageId;
+  preferences?: import("@cohub/protocol/sandbox").SandboxPreferenceStatus;
   appliedSpec?: SandboxSpecId | null;
   specPendingRestart?: boolean;
   allowedSpec?: SandboxSpecId;
@@ -906,7 +914,8 @@ export type SpaceConfigInput = {
   sandbox?: {
     provider?: SpaceSandboxProvider;
     autoDestroy?: SpaceSandboxAutoDestroyPolicy;
-    spec?: SandboxSpecId;
+    spec?: SandboxSpecId | null;
+    image?: import("@cohub/protocol/sandbox").SandboxImageId | null;
   };
 };
 
@@ -1270,7 +1279,7 @@ export type CreateSpacePromptInput = {
   model?: string | null;
   provider?: string | null;
   /** Harness selected for this turn. */
-  harness?: "cohub" | "pi" | "codex" | null;
+  harness?: HarnessKind | null;
   /** Optional thinking level override for this turn. Omit to inherit session default. */
   thinkingLevel?: ModelThinkingLevel | null;
   clientMessageId?: string | null;
@@ -1311,9 +1320,15 @@ export type {
   CompletionThinkingLevel,
   CompletionUsage,
   CreateSpaceCompletionInput,
+  CreateSpaceDecisionInput,
+  DecisionAnswer,
+  DecisionQuestion,
+  DecisionState,
+  DecisionStateImage,
   ModelThinkingLevel,
   SpaceCompletionResult,
   SpaceCompletionStreamEvent,
+  SpaceDecisionResult,
 } from "@cohub/protocol";
 
 export type CronJobPayload = Record<string, unknown>;
@@ -1367,6 +1382,7 @@ export type CronJobRecord<TPayload extends CronJobPayload = CronJobPayload> = {
 export type TaskRunDetailResponse = {
   run: TaskRunRecord;
   progress: unknown;
+  boards?: TaskRunBoard[];
 };
 
 export type TaskRunRecord = {

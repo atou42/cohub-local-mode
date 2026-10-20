@@ -1,0 +1,131 @@
+name: RTC Helper Binaries
+
+on:
+  pull_request:
+    paths:
+      - 'apps/sandbox/cmd/cohub-rtc/**'
+      - 'apps/sandbox/rtccore/**'
+      - 'apps/sandbox/rtc/**'
+      - 'apps/sandbox/go.*'
+      - 'apps/sandbox/LICENSE'
+      - 'apps/sandbox/NOTICE'
+      - '.github/workflows/rtc-binaries-build.yml'
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+    paths:
+      - 'apps/sandbox/cmd/cohub-rtc/**'
+      - 'apps/sandbox/rtccore/**'
+      - 'apps/sandbox/rtc/**'
+      - 'apps/sandbox/go.*'
+      - 'apps/sandbox/LICENSE'
+      - 'apps/sandbox/NOTICE'
+      - '.github/workflows/rtc-binaries-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: rtc-binaries-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.scope.outputs.changed }}
+      version: ${{ steps.scope.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Detect RTC release changes
+        id: scope
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_REF" != refs/tags/* ]]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid production release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "version=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          previous=''
+          if git rev-parse --verify "${GITHUB_SHA}^" >/dev/null 2>&1; then
+            previous=$(git tag --merged "${GITHUB_SHA}^" --sort=-version:refname | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sed -n '1p')
+          fi
+          if [[ -z "$previous" ]]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$previous" "$GITHUB_SHA" -- apps/sandbox/cmd/cohub-rtc apps/sandbox/rtccore apps/sandbox/go.mod apps/sandbox/go.sum apps/sandbox/LICENSE apps/sandbox/NOTICE .github/workflows/rtc-binaries-build.yml; then
+            echo "No RTC changes since $previous"
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [[ "$status" != 1 ]]; then exit "$status"; fi
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: scope
+    if: needs.scope.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/sandbox/go.mod
+          cache-dependency-path: apps/sandbox/go.sum
+      - name: Install media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Verify
+        working-directory: apps/sandbox
+        run: |
+          test -z "$(gofmt -l cmd/cohub-rtc rtccore)"
+          go vet ./cmd/cohub-rtc ./rtccore ./rtc
+          go test -race ./cmd/cohub-rtc ./rtccore ./rtc
+      - name: Build portable helpers
+        working-directory: apps/sandbox
+        run: |
+          set -euo pipefail
+          mkdir -p dist/rtc
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              name="cohub-rtc_${os}_${arch}"
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "dist/rtc/$name" ./cmd/cohub-rtc
+              gzip -n "dist/rtc/$name"
+              (cd dist/rtc && sha256sum "$name.gz" > "$name.gz.sha256")
+            done
+          done
+          cp LICENSE NOTICE dist/rtc/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rtc-binaries
+          path: apps/sandbox/dist/rtc/
+          if-no-files-found: error
+
+  publish-cdn:
+    needs: [scope, build]
+    if: needs.scope.outputs.version != '' && needs.scope.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: rtc-binaries
+          path: upload
+      - name: Publish immutable binaries
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PUBLIC_ASSET_OSS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PUBLIC_ASSET_OSS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-1
+          RELEASE_TAG: ${{ needs.scope.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.aws
+          printf '[default]\nrequest_checksum_calculation = when_required\nresponse_checksum_validation = when_required\ns3 =\n    addressing_style = virtual\n' > ~/.aws/config
+          aws s3 cp upload "s3://cohub-public/rtc/${RELEASE_TAG}/" --endpoint-url https://oss-us-west-1.aliyuncs.com --recursive --cache-control 'public, max-age=31536000, immutable'

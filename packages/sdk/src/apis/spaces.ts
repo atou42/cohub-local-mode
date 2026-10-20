@@ -1,5 +1,8 @@
+import { listDirectory, type FileListOptions } from "./file-list.js";
+import type { SpaceFsTreePage } from "../types.js";
 import { readSessionStats, type SessionStats } from "@cohub/protocol/model";
 import type { SpacePublicEndpoints } from "@cohub/protocol/ports";
+import type { SandboxSetupInfo } from "@cohub/protocol/sandbox";
 import type { ContentBlock } from "@cohub/protocol/core";
 import { SPACE_HOOK_WEBHOOK_SECRET_HEADER } from "@cohub/protocol";
 import type {
@@ -11,8 +14,10 @@ import type {
   SpaceWebhookTriggerResponse,
 } from "@cohub/protocol";
 import { getRealtimeSpaceRoom } from "@cohub/protocol/realtime/types";
+import { requireSessionContext } from "./session-context.js";
 import { BoardClient, SpaceBoardsApi } from "../board/client/index.js";
 import { ensureRealtimeConnected } from "../realtime.js";
+import { SpaceWalletApi } from "./space-wallet.js";
 import { SpaceDisplaysApi } from "./displays.js";
 import type { WebsocketClient, WebsocketEventPayload } from "../websocket.js";
 import { HttpError, type HttpTransport, type Fetch } from "../transport.js";
@@ -57,8 +62,10 @@ import type {
   CreateSpacePromptInput,
   CreateSpacePromptResponse,
   CreateSpaceCompletionInput,
+  CreateSpaceDecisionInput,
   SpaceCompletionResult,
   SpaceCompletionStreamEvent,
+  SpaceDecisionResult,
   SpaceEnvInput,
   SpaceFsCompleteUploadInput,
   SpaceFsCompleteUploadResponse,
@@ -420,14 +427,10 @@ export class SpaceFilesApi {
     private readonly spaceId: string,
   ) {}
 
-  list(path = "", customFetch?: Fetch) {
-    const params = new URLSearchParams();
-    if (path) params.set("path", path);
-    const query = params.toString();
-    return this.transport.request<SpaceFsTreeResponse>(
-      `/api/spaces/${this.spaceId}/fs/tree${query ? `?${query}` : ""}`,
-      { fetch: customFetch },
-    );
+  list(path?: string, customFetch?: Fetch): Promise<SpaceFsTreeResponse>;
+  list(path: string, options: FileListOptions): Promise<SpaceFsTreePage>;
+  list(path = "", options?: Fetch | FileListOptions) {
+    return listDirectory(this.transport, `/api/spaces/${this.spaceId}/fs/tree`, path, options);
   }
 
   read(path: string, customFetch?: Fetch, signal?: AbortSignal) {
@@ -775,7 +778,7 @@ class SessionTurnsClient {
     return this.transport.request<SessionTurnsPaginatedResponse>(
       `/api/sessions/${this.sessionId}/turns${query ? `?${query}` : ""}`,
       { fetch: customFetch, signal },
-    );
+    ).then((response) => requireSessionContext(response, this.spaceId, this.sessionId));
   }
 
   index(
@@ -792,7 +795,7 @@ class SessionTurnsClient {
     return this.transport.request<SessionTurnIndexResponse>(
       `/api/sessions/${this.sessionId}/turns/index${query ? `?${query}` : ""}`,
       { fetch: customFetch },
-    );
+    ).then((response) => requireSessionContext(response, this.spaceId, this.sessionId));
   }
 
   window(
@@ -813,7 +816,7 @@ class SessionTurnsClient {
     return this.transport.request<SessionTurnWindowResponse>(
       `/api/sessions/${this.sessionId}/turns/window${query ? `?${query}` : ""}`,
       { fetch: customFetch },
-    );
+    ).then((response) => requireSessionContext(response, this.spaceId, this.sessionId));
   }
 
   streamSnapshot(customFetch?: Fetch) {
@@ -992,7 +995,7 @@ export class SessionClient {
       {
         fetch: customFetch,
       },
-    );
+    ).then((response) => requireSessionContext(response, this.spaceId, this.id));
   }
 
   async stats(options: { signal?: AbortSignal } = {}): Promise<{ stats: SessionStats }> {
@@ -1537,7 +1540,7 @@ export type SpaceSandboxRecord = {
   reportedAt?: string | null;
   stoppedAt?: string | null;
   stopReason?: string | null;
-  meta?: Record<string, unknown> | null;
+  meta?: (Record<string, unknown> & { setup?: SandboxSetupInfo | null }) | null;
 };
 
 export class SpaceSandboxApi {
@@ -1826,14 +1829,10 @@ export class SpaceCheckpointFilesApi {
     private readonly checkpointId: string,
   ) {}
 
-  list(path = "", customFetch?: Fetch) {
-    const params = new URLSearchParams();
-    if (path) params.set("path", path);
-    const query = params.toString();
-    return this.transport.request<SpaceFsTreeResponse>(
-      `/api/spaces/${this.spaceId}/checkpoints/${this.checkpointId}/fs/tree${query ? `?${query}` : ""}`,
-      { fetch: customFetch },
-    );
+  list(path?: string, customFetch?: Fetch): Promise<SpaceFsTreeResponse>;
+  list(path: string, options: FileListOptions): Promise<SpaceFsTreePage>;
+  list(path = "", options?: Fetch | FileListOptions) {
+    return listDirectory(this.transport, `/api/spaces/${this.spaceId}/checkpoints/${this.checkpointId}/fs/tree`, path, options);
   }
 
   read(path: string, customFetch?: Fetch) {
@@ -2008,6 +2007,7 @@ export class SpaceClient {
   readonly invitations: SpaceInvitationsApi;
   readonly labels: SpaceLabelsApi;
   readonly boards: SpaceBoardsApi;
+  readonly wallet: SpaceWalletApi;
   readonly commerce: SpaceCommerceApi;
 
   constructor(
@@ -2034,6 +2034,7 @@ export class SpaceClient {
     this.invitations = new SpaceInvitationsApi(transport, id);
     this.labels = new SpaceLabelsApi(transport, id);
     this.boards = new SpaceBoardsApi(transport, id, websocketClient);
+    this.wallet = new SpaceWalletApi(transport, id);
     this.commerce = new SpaceCommerceApi(transport, id);
   }
 
@@ -2245,6 +2246,15 @@ export class SpaceClient {
       signal?.removeEventListener("abort", onAbort);
       await releaseReader();
     }
+  }
+
+  decision(input: CreateSpaceDecisionInput, options: { signal?: AbortSignal } = {}) {
+    return this.transport.request<SpaceDecisionResult>(`/api/spaces/${this.id}/decisions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: options.signal,
+    });
   }
 
   update(input: { name?: string; slug?: string | null }) {

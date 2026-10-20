@@ -1,6 +1,6 @@
 /** Lightweight HTML head parsing for App page presentation fields. */
 
-import { APP_FILE_HANDLERS_META_NAME, parseAppFileHandlers } from "@cohub/protocol";
+import { APP_DEVICES_META_NAME, APP_FILE_HANDLERS_META_NAME, type AppDevice, parseAppDevices, parseAppFileHandlers } from "@cohub/protocol";
 
 export type HtmlPageMeta = {
   title: string | null;
@@ -16,6 +16,7 @@ export type HtmlPageMeta = {
   surface: AppSurfaceRole | null;
   /** File extensions the App opens, from `<meta name="cohub:file-handlers">`. */
   fileHandlers: string[];
+  devices: AppDevice[];
 };
 
 export type AppSurfaceRole = "window" | "overlay";
@@ -166,8 +167,10 @@ const surfaceValue = (head: string): AppSurfaceRole | null => {
 const fileHandlersValue = (head: string): string[] =>
   parseAppFileHandlers(metaContent(head, [APP_FILE_HANDLERS_META_NAME]));
 
+const devicesValue = (head: string): AppDevice[] => parseAppDevices(metaContent(head, [APP_DEVICES_META_NAME]));
+
 /**
- * Extract title / description / icon / image / lang / theme-color / surface / file handlers from HTML without executing it.
+ * Extract title / description / icon / image / lang / theme-color / surface / file handlers / devices from HTML without executing it.
  * Prefers document title and standard meta / link tags.
  */
 export function extractHtmlPageMeta(html: string): HtmlPageMeta {
@@ -188,6 +191,7 @@ export function extractHtmlPageMeta(html: string): HtmlPageMeta {
     themeColor: themeColorValue(head),
     surface: surfaceValue(head),
     fileHandlers: fileHandlersValue(head),
+    devices: devicesValue(head),
   };
 }
 
@@ -257,5 +261,6 @@ export function emptyHtmlPageMeta(): HtmlPageMeta {
     themeColor: null,
     surface: null,
     fileHandlers: [],
+    devices: [],
   };
 }

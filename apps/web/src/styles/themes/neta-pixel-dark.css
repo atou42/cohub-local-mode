@@ -1,0 +1,257 @@
+/* --- Neta Pixel Dark --- */
+
+[data-theme="neta-pixel-dark"],
+[data-theme="neta-pixel"] .toast-surface {
+	color-scheme: dark;
+
+	--neutral-0: #f2f2f3;
+	--neutral-5: #e3e3e4;
+	--neutral-10: #b9b9ba;
+	--neutral-20: #8f9090;
+	--neutral-30: #737474;
+	--neutral-40: #555657;
+	--neutral-50: #444547;
+	--neutral-60: #37383b;
+	--neutral-70: #2d2e2f;
+	--neutral-80: #28292b;
+	--neutral-90: #1b1c1d;
+	--neutral-95: #161718;
+	--neutral-100: #0f1011;
+
+	--brand-50: #2d2e2f;
+	--brand-100: #28292b;
+	--brand-200: #555657;
+	--brand-300: #737474;
+	--brand-400: #f6f6f6;
+	--brand-500: #d5d5d5;
+	--brand-600: #e3e3e3;
+	--brand-700: #b9b9ba;
+	--brand-800: #d5d5d5;
+	--brand-900: #f6f6f6;
+	--brand-bg: rgb(246 246 246 / 0.18);
+
+	--success-400: #5bdc93;
+	--success-500: #5bdc93;
+	--success-700: var(--success-500);
+	--success-900: #203329;
+
+	--warning-400: #ffd54f;
+	--warning-500: #ffd54f;
+	--warning-700: var(--warning-500);
+	--warning-900: #373220;
+
+	--error-400: #ff7088;
+	--error-500: #ff7088;
+	--error-700: var(--error-500);
+	--error-fg: #161718;
+	--error-900: #372328;
+
+	--info-400: #1bd5e6;
+	--info-500: #1bd5e6;
+	--info-700: var(--info-500);
+	--info-900: #173235;
+
+	--bg-primary: var(--neutral-95);
+	--bg-content: var(--neutral-95);
+	--bg-surface: var(--neutral-80);
+	--bg-surface-hover: var(--neutral-70);
+	--bg-elevated: var(--neutral-70);
+	--bg-subtle: var(--neutral-90);
+	--bg-input: var(--neutral-90);
+	--bg-code: var(--neutral-100);
+	--bg-header-alt: var(--neutral-100);
+
+	--text-primary: var(--neutral-0);
+	--text-reading: var(--neutral-5);
+	--text-secondary: var(--neutral-10);
+	--text-tertiary: var(--neutral-20);
+	--text-placeholder: var(--neutral-30);
+	--text-disabled: var(--neutral-40);
+
+	--border-primary: var(--neutral-50);
+	--border-default: var(--border-primary);
+	--border-subtle: var(--neutral-60);
+	--border-strong: var(--neutral-40);
+
+	--bg-hover: rgb(246 246 246 / 0.12);
+	--bg-hover-strong: rgb(246 246 246 / 0.18);
+	--bg-active: rgb(246 246 246 / 0.24);
+
+	--scrollbar-thumb: rgb(246 246 246 / 0.16);
+	--scrollbar-thumb-hover: rgb(246 246 246 / 0.26);
+
+	--selection-bg: #185056;
+	--divider-muted: color-mix(in srgb, var(--border-subtle) 65%, transparent);
+
+	--brand: var(--brand-400);
+	--brand-hover: var(--brand-500);
+	--brand-soft: var(--brand-700);
+	--brand-contrast-fg: #161718;
+	--brand-muted-fg: var(--text-primary);
+	--brand-muted: rgb(246 246 246 / 0.08);
+	--brand-muted-hover: rgb(246 246 246 / 0.12);
+	--brand-border: rgb(246 246 246 / 0.26);
+
+	--overlay-scrim: rgb(10 10 11 / 0.62);
+	--overlay-scrim-strong: rgb(10 10 11 / 0.86);
+	--overlay-control-bg: rgb(246 246 246 / 0.1);
+	--overlay-control-bg-hover: rgb(246 246 246 / 0.18);
+	--overlay-control-text: var(--neutral-0);
+
+	--provider-discord: oklch(62% 0.16 275);
+	--provider-discord-bg: color-mix(
+		in srgb,
+		var(--provider-discord) 10%,
+		transparent
+	);
+	--provider-discord-bg-hover: color-mix(
+		in srgb,
+		var(--provider-discord) 14%,
+		transparent
+	);
+	--provider-discord-border: color-mix(
+		in srgb,
+		var(--provider-discord) 22%,
+		transparent
+	);
+	--provider-discord-border-hover: color-mix(
+		in srgb,
+		var(--provider-discord) 42%,
+		transparent
+	);
+	--provider-feishu: oklch(70% 0.12 220);
+	--provider-feishu-bg: color-mix(
+		in srgb,
+		var(--provider-feishu) 10%,
+		transparent
+	);
+	--provider-feishu-bg-hover: color-mix(
+		in srgb,
+		var(--provider-feishu) 14%,
+		transparent
+	);
+	--provider-feishu-border: color-mix(
+		in srgb,
+		var(--provider-feishu) 22%,
+		transparent
+	);
+	--provider-feishu-border-hover: color-mix(
+		in srgb,
+		var(--provider-feishu) 42%,
+		transparent
+	);
+	--provider-wechat: oklch(72% 0.14 160);
+	--provider-wechat-bg: color-mix(
+		in srgb,
+		var(--provider-wechat) 10%,
+		transparent
+	);
+	--provider-wechat-bg-hover: color-mix(
+		in srgb,
+		var(--provider-wechat) 14%,
+		transparent
+	);
+	--provider-wechat-border: color-mix(
+		in srgb,
+		var(--provider-wechat) 22%,
+		transparent
+	);
+	--provider-wechat-border-hover: color-mix(
+		in srgb,
+		var(--provider-wechat) 42%,
+		transparent
+	);
+
+	--shadow-subtle: rgb(0 0 0 / 0.2);
+	--shadow-medium: rgb(0 0 0 / 0.32);
+	--shadow-strong: rgb(0 0 0 / 0.48);
+	--brand-ring: rgb(246 246 246 / 0.28);
+	--mask-opaque: black;
+	--identity-l: 70%;
+	--identity-c: 0.12;
+
+	--app-bg-image: none;
+	--app-bg-overlay: none;
+	--app-bg-size: auto;
+	--app-bg-position: center;
+	--app-bg-repeat: repeat;
+
+	--sidebar-bg: var(--bg-primary);
+	--sidebar-border: var(--border-subtle);
+	--sidebar-item-bg: transparent;
+	--sidebar-item-hover-bg: rgb(246 246 246 / 0.12);
+	--sidebar-item-active-bg: rgb(246 246 246 / 0.18);
+	--sidebar-item-active-fg: var(--text-primary);
+	--sidebar-item-radius: 8px;
+	--sidebar-primary-action-bg: var(--pixel-key-face);
+	--sidebar-primary-action-bg-hover: var(--pixel-key-face-hover);
+	--sidebar-primary-action-fg: var(--pixel-key-content);
+	--sidebar-primary-action-border: transparent;
+	--sidebar-primary-action-radius: 0;
+
+	--chat-bg: var(--bg-content);
+	--chat-panel-bg: var(--bg-content);
+	--chat-panel-border: var(--border-subtle);
+	--chat-user-message-bg: rgb(246 246 246 / 0.06);
+	--chat-user-message-border: var(--neutral-60);
+	--chat-user-message-fg: var(--text-primary);
+	--chat-user-message-max-width: min(52rem, 100%);
+	--chat-user-message-radius: 12px;
+	--chat-user-message-tail-radius: var(--chat-user-message-radius);
+	--chat-content-max-width: 56rem;
+	--chat-msg-inset: 0.5rem;
+	--chat-assistant-message-bg: transparent;
+	--chat-assistant-message-fg: var(--text-primary);
+	--chat-composer-bg: var(--bg-input);
+	--chat-composer-bg-focus: var(--neutral-80);
+	--chat-composer-border: var(--neutral-50);
+	--chat-composer-border-focus: var(--neutral-40);
+	--chat-composer-radius: 20px;
+	--chat-composer-placeholder: var(--text-placeholder);
+
+	--board-card: var(--neutral-80);
+	--board-card-shadow-color: #000000;
+	--board-card-shadow-opacity: 0.4;
+	--board-selection-accent: #1bd5e6;
+	--board-background-image-url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' shape-rendering='crispEdges'%3E%3Crect width='28' height='28' fill='%23161718'/%3E%3Crect x='13' y='13' width='2' height='2' fill='%233A3C40'/%3E%3C/svg%3E";
+	--board-background-tile-width: 28;
+	--board-background-tile-height: 28;
+
+	--heatmap-0: var(--neutral-80);
+	--heatmap-1: #173235;
+	--heatmap-2: #1f8b96;
+	--heatmap-3: #1bd5e6;
+	--heatmap-4: #2ff1ff;
+
+	--pixel-key-shell: #0b0b0d;
+	--pixel-key-face: #f6f6f6;
+	--pixel-key-face-hover: #ffffff;
+	--pixel-key-highlight: #ffffff;
+	--pixel-key-depth: #b9b9ba;
+	--pixel-key-content: #161718;
+	--pixel-key-focus: #2ff1ff;
+	--secondary-key-shell: var(--neutral-40);
+	--pixel-key-disabled-shell: var(--neutral-60);
+	--pixel-key-disabled-face: var(--neutral-70);
+	--pixel-key-disabled-highlight: var(--neutral-60);
+	--pixel-key-disabled-depth: var(--neutral-60);
+	--pixel-key-disabled-content: var(--neutral-40);
+
+	--activity: #2ff1ff;
+	--menu-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+	--toolbar-shadow: 0 8px 20px rgb(0 0 0 / 0.4);
+	--dialog-shadow: 0 0 40px rgb(0 0 0 / 0.5);
+
+	--segmented-track: var(--neutral-90);
+	--segmented-thumb: var(--neutral-70);
+
+	--toggle-shell: var(--neutral-50);
+	--toggle-face: var(--neutral-80);
+	--toggle-face-hover: var(--neutral-70);
+	--toggle-groove: var(--neutral-90);
+	--toggle-knob-frame: var(--neutral-40);
+	--toggle-knob-face: #f6f6f6;
+	--toggle-knob-depth: #b9b9ba;
+	--toggle-eye: #161718;
+	--toggle-eye-closed: #8f9090;
+}

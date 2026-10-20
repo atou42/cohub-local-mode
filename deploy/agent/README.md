@@ -24,6 +24,7 @@
 
 ## Agent 关键环境变量
 
+- `TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY`（可选，与 API、Worker 一致；Agent 只用它标记新消息，不需要 billing 管理凭据）
 - `DATABASE_URL`
 - `REDIS_URL`
 - `BULLMQ_REDIS_URL`

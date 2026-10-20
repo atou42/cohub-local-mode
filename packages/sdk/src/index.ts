@@ -1,12 +1,13 @@
 export {
   RUNTIME_PROTOCOL_VERSION, RUNTIME_MAX_FRAME_BYTES, RUNTIME_RECOVERY_BATCH_SIZE, runtimeCommandSchema, runtimeEventSchema, runtimeReadySchema,
-  contextToPiMessages, selectRuntimeContextMessages, isLocalHarness, resolveHarness,
-  fingerprintProjectionTurns, isProjectionCompaction, projectNativeMessageMeta, projectNativeSession, serializeProjection, serializeProjectionRecords, trimProjectionTurnsToCompaction,
+  contextToPiMessages, selectRuntimeContextMessages, isLocalHarness, resolveHarness, harnessLabel, assertHarnessAccess,
+  LOCAL_HARNESSES, LOCAL_HARNESS_SPECS, harnessSchema, localHarnessSchema,
+  fingerprintProjectionTurns, isProjectionCompaction, isProjectionPendingGeneration, projectNativeMessageMeta, projectNativeSession, serializeProjection, serializeProjectionRecords, trimProjectionTurnsToCompaction,
   RUNTIME_ARCHIVE_SEGMENT_BYTES, harnessArchiveIndexSchema, validateArchiveBoundary,
   nativeTurnCompleteSchema, nativeTurnProgressSchema, nativeIngestTurnSchema, nativeRuntimeEventSchema, runtimeNativeStopSchema, NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, NATIVE_SYNC_SOURCE, isNativeClientTurn, nativeMessageRole, nativeUserContent,
 } from "@cohub/protocol";
 export type {
-  ContentBlock, HarnessKind, LocalHarness, RuntimeCapabilities, RuntimeCommand, RuntimeContext, RuntimePendingExecution,
+  ContentBlock, HarnessKind, LocalHarness, LocalHarnessSpec, RuntimeCapabilities, RuntimeCommand, RuntimeContext, RuntimePendingExecution,
   RuntimeContextMessage, RuntimeTurnInput, RuntimeTurnUserMessage, RuntimeMessage, RuntimeExecutionEvent, HarnessArchive,
   CanonicalProjectionMessage, CanonicalProjectionTurn, NativeProjection, ProjectionCursor, ProjectionInput, ProjectionRecord, ProjectionTarget, ProjectionWarning,
   RuntimeStatus, RuntimeSessionRecoveryStatus, RuntimeStopConfirmation, HarnessArchiveIndex, RuntimeArchiveSegment, RuntimeArchiveUpload, RuntimeArchivePage,
@@ -56,10 +57,38 @@ export type { ParsedAppRef, AppPublicRef } from "./app-ref.js";
 export { isUuid } from "@cohub/protocol/identifiers";
 export { parseSpaceRef } from "./space-ref.js";
 export { HOME_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
-export { UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_BATCH_FILES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+export {
+  batchUploadEntries,
+  UPLOAD_ERROR_BATCH_TOO_LARGE,
+  UPLOAD_ERROR_FILE_TOO_LARGE,
+  UPLOAD_ERROR_RATE_LIMITED,
+  UPLOAD_ERROR_TOO_MANY_FILES,
+  UPLOAD_MAX_BATCH_BYTES,
+  UPLOAD_MAX_BATCH_FILES,
+  UPLOAD_MAX_FILE_BYTES,
+} from "@cohub/protocol";
+export { isTextMime, mimeTypeForPath } from "@cohub/protocol/fs";
 export type { SpaceRef } from "./space-ref.js";
 export { AppCommerceApi } from "./apis/app-commerce.js";
 export { AppRealtimeApi, AppRoom } from "./apis/app-realtime.js";
+export { RoomsApi } from "./apis/rooms.js";
+export type { RoomCreated, RoomEvent, RoomEvents, RoomEventsQuery, RoomInvite, RoomView } from "./apis/rooms.js";
+export { AppRoomRtc, AppRtcChannel, AppRtcError } from "./apis/app-room-rtc.js";
+export type {
+  AppRtcCandidate,
+  AppRtcChannelOptions,
+  AppRtcErrorCode,
+  AppRtcLocalTrack,
+  AppRtcMessage,
+  AppRtcPeerEvent,
+  AppRtcRemoteTrack,
+  AppRtcState,
+  AppRtcTrackInput,
+} from "./apis/app-room-rtc.js";
+export type { AppRtcDelivery, AppRtcPublication, AppRtcQuality } from "@cohub/protocol/rtc";
+export { APP_DEVICES } from "@cohub/protocol/app-devices";
+export type { AppDevice, AppDevicesStatus } from "@cohub/protocol/app-devices";
+export type { RtcTransportStats } from "./rtc/index.js";
 export { ReferencesApi } from "./apis/references.js";
 export { ReferralsApi } from "./apis/referrals.js";
 export { buildSpaceInvitePath, buildSpacePath } from "./apis/invitations.js";
@@ -211,6 +240,7 @@ export type {
   SpaceChannelBindingRecord,
   SpaceEventName,
   SpaceFileStream,
+  SpaceSandboxRecord,
   SpaceTurnListOptions,
   WaitForSpaceFsCopyOptions,
   WebSocketConnectionState,
@@ -219,13 +249,18 @@ export type { SpaceListOptions, SpaceListPage } from "./types.js";
 export type {
   RealtimeRoomDescriptor,
   RealtimeRoomEvent,
+  RealtimeRoomHistory,
+  RealtimeRoomHistoryEvent,
   RealtimeRoomMember,
 } from "@cohub/protocol/realtime";
+export type { Actor, ActorKind, ActorModel } from "@cohub/protocol/provenance";
 export type {
   AppRoomAdmissionResponse,
   AppRoomCreateInput,
   AppRoomEvent,
   AppRoomEventMap,
+  AppRoomHistory,
+  AppRoomInvite,
   AppRoomPublishResult,
   AppRoomState,
 } from "./apis/app-realtime.js";

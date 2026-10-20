@@ -1,4 +1,4 @@
-import { parseAppFileHandlers } from "@cohub/protocol";
+import { parseAppDevices, parseAppFileHandlers } from "@cohub/protocol";
 import type { AppSurfaceRole, HtmlPageMeta } from "./html-meta.js";
 
 export type AppExtractedPageMeta = HtmlPageMeta & {
@@ -17,6 +17,7 @@ export type AppPublishExtractedPageMeta = {
   surface: AppSurfaceRole | null;
   /** Absent from workers that predate file handlers. */
   fileHandlers?: string[];
+  devices?: string[];
   sourcePath: string;
 };
 
@@ -217,7 +218,7 @@ export function isWeakAppPageMediaRef(ref: string | null | undefined): boolean {
 }
 
 export function materializeHtmlPageMeta(
-  page: Omit<HtmlPageMeta, "fileHandlers"> & { fileHandlers?: string[]; sourcePath?: string },
+  page: Omit<HtmlPageMeta, "fileHandlers" | "devices"> & { fileHandlers?: string[]; devices?: string[]; sourcePath?: string },
   assetKey: string | null | undefined,
   toPublicUrl: (objectKey: string) => string,
   extractedAt = new Date().toISOString(),
@@ -231,6 +232,7 @@ export function materializeHtmlPageMeta(
     themeColor: cleanAppMetaText(page.themeColor, 64),
     surface: page.surface,
     fileHandlers: parseAppFileHandlers(page.fileHandlers),
+    devices: parseAppDevices(page.devices),
     sourcePath: page.sourcePath,
     extractedAt,
   };
@@ -298,6 +300,7 @@ export function mergeAppPageMeta(
     themeColor: extracted.themeColor ?? null,
     surface: extracted.surface ?? null,
     fileHandlers: parseAppFileHandlers(extracted.fileHandlers),
+    devices: parseAppDevices(extracted.devices),
     sourcePath: extracted.sourcePath ?? null,
     extractedAt: extracted.extractedAt ?? new Date().toISOString(),
   };
@@ -336,6 +339,16 @@ export function mergeAppPageMeta(
     else delete meta.fileHandlers;
   } else {
     meta.fileHandlers = handlers;
+  }
+
+  const devices = meta.devices === undefined ? null : parseAppDevices(meta.devices);
+  const previousDevices = previous ? parseAppDevices(previous.devices) : [];
+  if (devices === null || sameList(devices, previousDevices)) {
+    const next = parseAppDevices(extracted.devices);
+    if (next.length) meta.devices = next;
+    else delete meta.devices;
+  } else {
+    meta.devices = devices;
   }
 
   return Object.keys(meta).length ? meta : null;

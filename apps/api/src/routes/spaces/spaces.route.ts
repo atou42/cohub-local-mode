@@ -1,10 +1,10 @@
-import { BillingAccessBlockedError, COHUB_BILLING_FEATURES, billingOperations } from "@cohub/billing";
-import { DEFAULT_SANDBOX_SPEC_ID, SANDBOX_SPECS, getSandboxSpecRank, isSandboxSpecId, type SandboxSpecId } from "@cohub/sandbox-controller";
+import { BillingAccessBlockedError } from "@cohub/billing";
+import { DEFAULT_SANDBOX_SPEC_ID, SANDBOX_SPECS, getDefaultSandboxIdleTtl, getSandboxSpecRank, isSandboxSpecId, type SandboxSpecId } from "@cohub/sandbox-controller";
 import { createLogger } from "@cohub/infra/logging";
 import { getCurrentRequestId } from "@cohub/infra/tracing";
 import { Hono, type Context } from "hono";
 import type { ContentBlock } from "@cohub/protocol/core";
-import { displaysSnapshotSchema, fileWatcherStatusSchema, getDefaultSpaceModsForEnv, runtimeDisplaysKey, harnessSchema, isLocalHarness, runtimeStopConfirmationSchema, runtimeWorkspaceKey, runtimeWorkspaceStatus } from "@cohub/protocol";
+import { displaysSnapshotSchema, fileWatcherStatusSchema, getDefaultSpaceModsForEnv, runtimeDisplaysKey, harnessSchema, isLocalHarness, runtimeStopConfirmationSchema, type HarnessKind, runtimeWorkspaceKey, runtimeWorkspaceStatus } from "@cohub/protocol";
 import {
   HOME_SPACE_SLUG,
   parseSpaceSlug,
@@ -18,6 +18,8 @@ import { spaces, spaceChannels, spaceSandboxes, spaceSessions, sessionTurns, tas
 import { eq, and, inArray, desc, lt, or, sql } from "drizzle-orm";
 import { hostPromptImages } from "../../session-images.js";
 import { useAuth, getOptionalAuth, getAppSessionPrincipal, requireValidId, buildSpaceListItems, authzDenied, getSpacePublicProfile, normalizePublicAvatarUrl } from "../../lib/middleware.js";
+import { getAllowedSandboxSpecId, getSandboxImageCatalog, resolveSpaceSandboxPreferences } from "../../space-sandbox-preferences.js";
+import { parseSandboxPreferences, type SandboxImageId } from "../../sandbox-preferences.js";
 import { config } from "../../config.js";
 import { scheduleSandboxAutoDestroy } from "../../sandbox-idle-scheduler.js";
 import { attachSandboxPublicEndpoints } from "../../sandbox-public-network.js";
@@ -64,6 +66,7 @@ import {
   getCheckpointDiffFile,
   getCheckpointDiffSummary,
 } from "../../checkpoint-diff.js";
+import { parseFsPagination } from "../../fs-pagination.js";
 import { checkpointFsJsonError, listCheckpointDirectory, readCheckpointFile } from "../../checkpoint-fs.js";
 import type { AuthUser } from "../../lib/middleware.js";
 import { submitSessionPrompt } from "../../session-prompts.js";
@@ -315,7 +318,7 @@ type SpacePromptInput = {
   content?: ContentBlock[];
   model?: string | null;
   provider?: string | null;
-  harness?: "cohub" | "pi" | "codex" | null;
+  harness?: HarnessKind | null;
   thinkingLevel?: string | null;
   clientMessageId?: string | null;
   generationPolicy?: unknown;
@@ -330,13 +333,14 @@ type SpaceConfigInput = {
   sandbox?: {
     provider?: SpaceSandboxProvider;
     autoDestroy?: SpaceSandboxAutoDestroyPolicy;
-    spec?: SandboxSpecId;
+    spec?: SandboxSpecId | null;
+    image?: SandboxImageId | null;
   };
 };
 
 const DEFAULT_SPACE_SANDBOX_AUTO_DESTROY: SpaceSandboxAutoDestroyPolicy = {
   mode: "idle",
-  ttlSeconds: config.env === "prod" ? 12 * 60 * 60 : 10 * 60,
+  ttlSeconds: getDefaultSandboxIdleTtl(config.env),
 };
 
 const MIN_SPACE_SANDBOX_AUTO_DESTROY_TTL_SECONDS = 60;
@@ -426,25 +430,6 @@ const normalizeSpaceSandboxSpec = (value: unknown): SandboxSpecId => {
   throw new Error(`sandbox.spec must be one of: ${Object.keys(SANDBOX_SPECS).join(", ")}`);
 };
 
-const getSpaceSandboxSpec = (space: typeof spaces.$inferSelect): SandboxSpecId => {
-  const { config } = readSpaceConfig(space);
-  const sandbox = isRecord(config.sandbox) ? config.sandbox : {};
-  return isSandboxSpecId(sandbox.spec) ? sandbox.spec : DEFAULT_SANDBOX_SPEC_ID;
-};
-
-async function getAllowedSandboxSpecId(userId: string): Promise<SandboxSpecId> {
-  try {
-    const state = await billingOperations.getState({ userId });
-    const keys = new Set(state.entitlements.filter((entitlement) => entitlement.enabled).map((entitlement) => entitlement.key));
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecUltra)) return "ultra";
-    if (keys.has(COHUB_BILLING_FEATURES.sandboxSpecBoost)) return "boost";
-    return DEFAULT_SANDBOX_SPEC_ID;
-  } catch (error) {
-    logger.warn("[SandboxSpec] failed to check entitlement", { userId, error });
-    return DEFAULT_SANDBOX_SPEC_ID;
-  }
-}
-
 const createSandboxSpecRequiredResponse = (c: Context, specId: SandboxSpecId) =>
   featureGateResponse(c, {
     source: "sandbox_spec",
@@ -456,12 +441,18 @@ const createSandboxSpecRequiredResponse = (c: Context, specId: SandboxSpecId) =>
 const normalizeSpaceConfigInput = (input?: SpaceConfigInput | null): SpaceConfigInput => {
   const provider = normalizeSpaceSandboxProvider(input?.sandbox?.provider);
   const policy = input?.sandbox?.autoDestroy;
-  const spec = normalizeSpaceSandboxSpec(input?.sandbox?.spec);
+  const spec = input?.sandbox?.spec == null ? null : normalizeSpaceSandboxSpec(input.sandbox.spec);
+  const image = input?.sandbox?.image ?? null;
+  if (image !== null) {
+    parseSandboxPreferences({ image });
+    if (!getSandboxImageCatalog()[image]) throw new Error("Sandbox image is unavailable");
+  }
   return {
     sandbox: {
       provider,
       autoDestroy: policy ? normalizeSpaceSandboxAutoDestroyPolicy(policy) : DEFAULT_SPACE_SANDBOX_AUTO_DESTROY,
       spec,
+      image,
     },
   };
 };
@@ -472,7 +463,8 @@ const mergeSpaceConfig = (space: typeof spaces.$inferSelect, patch: SpaceConfigI
     ...(isRecord(config.sandbox) ? config.sandbox : {}),
     ...(patch.sandbox?.provider ? { provider: patch.sandbox.provider } : {}),
     ...(patch.sandbox?.autoDestroy ? { autoDestroy: patch.sandbox.autoDestroy } : {}),
-    ...(patch.sandbox?.spec ? { spec: patch.sandbox.spec } : {}),
+    ...(patch.sandbox?.spec !== undefined ? { spec: patch.sandbox.spec } : {}),
+    ...(patch.sandbox?.image !== undefined ? { image: patch.sandbox.image } : {}),
   };
   const nextConfig = {
     ...config,
@@ -941,7 +933,8 @@ router.post("/", async (c) => {
       sandbox: {
         provider: sandboxProvider,
         autoDestroy: sandboxAutoDestroy,
-        spec: requestedSpec,
+        spec: normalizedConfig.sandbox?.spec ?? null,
+        image: normalizedConfig.sandbox?.image ?? null,
       },
       extraEnv: normalizedExtraEnv,
       mods: preparedModValues,
@@ -1486,7 +1479,7 @@ router.get("/:id/checkpoints/:checkpointId/fs/tree", async (c) => {
   if (!(await hasPermission(user, "checkpoint.view", { spaceId }))) return authzDenied(c);
 
   try {
-    return c.json(await listCheckpointDirectory({ spaceId, checkpointId, path: c.req.query("path") ?? "" }));
+    return c.json(await listCheckpointDirectory({ spaceId, checkpointId, path: c.req.query("path") ?? "", pagination: parseFsPagination(c.req.query()) }));
   } catch (error) {
     const { status, body } = checkpointFsJsonError(error);
     return c.json(body, status as never);
@@ -1710,19 +1703,36 @@ router.get("/:id/config", async (c) => {
   const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId)).limit(1);
   if (!space) return c.json({ message: "space not found" }, 404);
 
-  const [allowedSpec, sandbox] = await Promise.all([
-    user?.uuid ? getAllowedSandboxSpecId(user.uuid) : Promise.resolve(DEFAULT_SANDBOX_SPEC_ID),
+  const [resolved, sandbox] = await Promise.all([
+    resolveSpaceSandboxPreferences(spaceId),
     getSpaceSandboxBySpaceId(spaceId),
   ]);
+  const appliedMeta = isRecord(sandbox?.meta) ? sandbox.meta : {};
+  const pendingRestart = resolved.applicable && Boolean(sandbox) && (
+    sandbox?.desiredImage !== resolved.imageRef.split("/").pop() || appliedMeta.appliedSpec !== resolved.effective.spec
+  );
   return c.json({
     config: {
       sandbox: {
         provider: getSpaceSandboxProvider(space),
         autoDestroy: getSpaceSandboxAutoDestroyPolicy(space),
-        spec: getSpaceSandboxSpec(space),
+        spec: resolved.effective.spec,
+        image: resolved.effective.image,
+        preferences: {
+          requested: resolved.requested,
+          effective: resolved.effective,
+          applied: { image: appliedMeta.appliedImage ?? null, spec: appliedMeta.appliedSpec ?? null },
+          overrides: resolved.overrides,
+          origins: resolved.origins,
+          sources: resolved.sources,
+          warnings: resolved.warnings,
+          images: Object.keys(getSandboxImageCatalog()),
+          pendingRestart,
+          applicable: resolved.applicable,
+        },
         appliedSpec: isRecord(sandbox?.meta) && isSandboxSpecId(sandbox.meta.appliedSpec) ? sandbox.meta.appliedSpec : null,
         specPendingRestart: isRecord(sandbox?.meta) ? sandbox.meta.specPendingRestart === true : false,
-        allowedSpec,
+        allowedSpec: resolved.allowedSpec,
         specs: SANDBOX_SPECS,
       },
     },
@@ -1739,24 +1749,38 @@ router.patch("/:id/config", async (c) => {
   const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId)).limit(1);
   if (!space) return c.json({ message: "space not found" }, 404);
 
-  const body = await c.req.json<{ sandbox?: { autoDestroy?: SpaceSandboxAutoDestroyPolicy; spec?: SandboxSpecId } }>().catch(() => null);
+  const body = await c.req.json<SpaceConfigInput>().catch(() => null);
   if (!body) return c.json({ message: "invalid body" }, 400);
 
   let nextAutoDestroy: SpaceSandboxAutoDestroyPolicy;
   let nextSpec: SandboxSpecId;
+  let resolved: Awaited<ReturnType<typeof resolveSpaceSandboxPreferences>>;
   try {
+    const image = body.sandbox?.image;
+    if (image != null) {
+      parseSandboxPreferences({ image });
+      if (!getSandboxImageCatalog()[image]) throw new Error("Sandbox image is unavailable");
+    }
+    resolved = await resolveSpaceSandboxPreferences(spaceId, {
+      ...(image !== undefined ? { image } : {}),
+      ...(body.sandbox?.spec !== undefined ? { spec: body.sandbox.spec } : {}),
+    });
     nextAutoDestroy = body.sandbox?.autoDestroy ? normalizeSpaceSandboxAutoDestroyPolicy(body.sandbox.autoDestroy) : getSpaceSandboxAutoDestroyPolicy(space);
-    nextSpec = body.sandbox?.spec ? normalizeSpaceSandboxSpec(body.sandbox.spec) : getSpaceSandboxSpec(space);
+    nextSpec = resolved.effective.spec;
   } catch (error) {
     return c.json({ message: error instanceof Error ? error.message : "invalid space config" }, 400);
   }
 
-  const allowedSpec = await getAllowedSandboxSpecId(space.userUuid);
-  if (getSandboxSpecRank(nextSpec) > getSandboxSpecRank(allowedSpec)) {
-    return createSandboxSpecRequiredResponse(c, nextSpec);
+  const allowedSpec = resolved.allowedSpec;
+  if (body.sandbox?.spec && getSandboxSpecRank(body.sandbox.spec) > getSandboxSpecRank(allowedSpec)) {
+    return createSandboxSpecRequiredResponse(c, body.sandbox.spec);
   }
 
-  const nextMeta = mergeSpaceConfig(space, { sandbox: { autoDestroy: nextAutoDestroy, spec: nextSpec } });
+  const nextMeta = mergeSpaceConfig(space, { sandbox: {
+    autoDestroy: nextAutoDestroy,
+    ...(body.sandbox?.spec !== undefined ? { spec: body.sandbox.spec } : {}),
+    ...(body.sandbox?.image !== undefined ? { image: body.sandbox.image } : {}),
+  } });
 
   const [updated] = await db.update(spaces).set({ meta: nextMeta, updatedAt: new Date(), lastActivityAt: new Date() }).where(eq(spaces.id, spaceId)).returning();
   if (!updated) return c.json({ message: "failed to update space config" }, 500);
@@ -1765,14 +1789,16 @@ router.patch("/:id/config", async (c) => {
   const baseAt = sandbox?.lastActivityAt ?? sandbox?.lastHeartbeatAt ?? sandbox?.createdAt ?? updated.createdAt ?? new Date();
   await scheduleSandboxAutoDestroy({ spaceId, policy: nextAutoDestroy, baseAt: baseAt ? new Date(baseAt) : null }).catch((error) => logger.error("[SandboxAutoDestroy] failed to reschedule policy", { spaceId, error }));
 
-  const specResult = body.sandbox?.spec ? await resizeSpaceSandboxToSpec({ spaceId, specId: nextSpec }).catch(async (error) => {
+  const imageChanged = Boolean(sandbox) && sandbox?.desiredImage !== resolved.imageRef.split("/").pop();
+  const specResult = body.sandbox?.spec !== undefined && !imageChanged ? await resizeSpaceSandboxToSpec({ spaceId, specId: nextSpec }).catch(async (error) => {
     logger.warn("[SandboxSpec] failed to resize sandbox", { spaceId, specId: nextSpec, error });
     await markSandboxSpecPendingRestart({ spaceId, specId: nextSpec, reason: "resize_failed" }).catch((markError) => {
       logger.warn("[SandboxSpec] failed to mark pending restart", { spaceId, specId: nextSpec, error: markError });
     });
     return { resized: false, pendingRestart: true, message: error instanceof Error ? error.message : String(error) };
-  }) : { resized: false, pendingRestart: false };
+  }) : { resized: false, pendingRestart: imageChanged };
 
+  await dispatchSpaceListChanged(spaceId);
   return c.json({ space: await serializeSpaceForResponse(updated, user), sandbox: specResult });
 });
 
@@ -1968,7 +1994,7 @@ router.post("/:id/prompt", async (c) => {
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
   if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
   if (body.harness !== undefined && body.harness !== null && !harnessSchema.safeParse(body.harness).success) {
-    return c.json({ message: "harness must be one of: cohub, pi, codex" }, 400);
+    return c.json({ message: `harness must be one of: ${harnessSchema.options.join(", ")}` }, 400);
   }
   const promptPermission = accessMode === "read_only" ? "session.prompt.readonly" : "session.prompt.fullaccess";
   if (!(await hasPermission(user, promptPermission, { spaceId }))) return authzDenied(c);

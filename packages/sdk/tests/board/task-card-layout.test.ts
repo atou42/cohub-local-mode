@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { containTaskPreviewRect } from "../../src/board/render/renderers/task-card-renderer.js";
+import { containRect as containTaskPreviewRect } from "../../src/board/render/surface.js";
 
 test("task preview contains landscape media without cropping", () => {
 	assert.deepEqual(containTaskPreviewRect(300, 180, 1600, 900), {

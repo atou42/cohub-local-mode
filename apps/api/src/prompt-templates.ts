@@ -17,7 +17,7 @@ import {
   type PromptTemplateScope,
 } from "@cohub/infra/config-runtime/prompts";
 import { getSpaceModMountSignature, listEnabledSpaceMods } from "@cohub/core/space-mods";
-import { renderPromptTemplate } from "@cohub/core/sessions";
+import { parsePromptCommand, renderPromptTemplate } from "@cohub/core/sessions";
 import { config } from "./config.js";
 import { db } from "./db/index.js";
 import { redisCommandClient } from "./redis.js";
@@ -197,43 +197,6 @@ async function fetchPromptTemplates(options: LoadPromptTemplatesOptions): Promis
   return mergePromptTemplatesConfigs(...configs).templates;
 }
 
-function parseCommandArgs(argsString: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let inQuote: string | null = null;
-
-  for (let i = 0; i < argsString.length; i++) {
-    const char = argsString[i];
-
-    if (inQuote) {
-      if (char === inQuote) {
-        inQuote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      inQuote = char;
-      continue;
-    }
-
-    if (char === " " || char === "\t") {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (current) args.push(current);
-  return args;
-}
-
 export async function listPromptTemplates(options: LoadPromptTemplatesOptions = {}): Promise<PromptTemplateCatalogEntry[]> {
   const templates = await fetchPromptTemplates(options);
   return templates.map((template) => ({
@@ -249,17 +212,12 @@ export async function listPromptTemplates(options: LoadPromptTemplatesOptions = 
 }
 
 export async function expandPromptTemplate(text: string, options: LoadPromptTemplatesOptions = {}): Promise<ExpandedPromptTemplate | null> {
-  if (!text.startsWith("/") || text.startsWith("/skill:")) return null;
-
-  const spaceIndex = text.indexOf(" ");
-  const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-  const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-  const template = (await fetchPromptTemplates(options)).find((item) => item.name === templateName);
+  const command = text.startsWith("/skill:") ? null : parsePromptCommand(text);
+  if (!command) return null;
+  const template = (await fetchPromptTemplates(options)).find((item) => item.name === command.name);
   if (!template) return null;
-
-  const args = parseCommandArgs(argsString);
   return {
-    renderedText: renderPromptTemplate(template.content, args, {
+    renderedText: renderPromptTemplate(template.content, command, {
       sessionId: options.sessionId,
       spaceId: options.spaceId,
       userUuid: options.userId,
@@ -274,7 +232,7 @@ export async function expandPromptTemplate(text: string, options: LoadPromptTemp
       order: template.order,
       scope: template.scope,
     },
-    args,
+    args: command.args,
     rawInput: text,
   };
 }

@@ -1,29 +1,15 @@
 import type {
 	BoardDrawItem,
 	BoardDrawPoint,
-	BoardFrame,
 	BoardSceneItem as BoardItem,
 	BoardScene as BoardModelScene,
 	SceneItem,
 } from "../model/index.js";
-import {
-	CORNER_RESIZE_HANDLES,
-	drawPointsBounds,
-	frameCorners,
-	frameHandlePosition,
-	frameRayIntersection,
-	parseBoardItem,
-	type Rect,
-	type ResizeHandle,
-	rotationHandleAnchor,
-	rotationHandlePosition,
-	type WorldPoint,
-} from "../model/index.js";
+import { drawPointsBounds, parseBoardItem } from "../model/index.js";
 import type {
 	BoardCardRenderer,
 	BoardCardRendererResolver,
 	BoardRenderContext,
-	BoardRenderPalette,
 } from "../render/index.js";
 import {
 	type ClipGroup,
@@ -32,10 +18,6 @@ import {
 	syncClipGroup,
 } from "../render/index.js";
 import { type Container, Graphics } from "pixi.js";
-import type {
-	BoardSelectionTransform,
-	BoardTransformControl,
-} from "../editor/index.js";
 
 type CardEntry = {
 	item: BoardItem;
@@ -45,6 +27,7 @@ type CardEntry = {
 	hovered: boolean;
 	resizing: boolean;
 	globalSig: string;
+	scriptRevision: number;
 };
 
 const FAR_LAYER_ENTER = 450;
@@ -52,6 +35,7 @@ const FAR_LAYER_EXIT = 350;
 const FAR_PASS_BATCH = 240;
 const FAR_LIVE_LIMIT = 64;
 const Z_FAR_LAYER = -1;
+const Z_LIFTED = 1e9;
 const Z_LIVE_STROKE = Number.MAX_SAFE_INTEGER - 1;
 const Z_OVERLAY = Number.MAX_SAFE_INTEGER;
 
@@ -67,48 +51,6 @@ function idSetSignature(ids: Set<string>): number {
 		hash ^= local;
 	}
 	return hash;
-}
-
-function traceFrame(graphics: Graphics, frame: BoardFrame) {
-	const corners = frameCorners(frame);
-	const first = corners[0];
-	if (!first) return graphics;
-	graphics.moveTo(first.x, first.y);
-	for (let index = 1; index < corners.length; index += 1) {
-		const point = corners[index];
-		if (point) graphics.lineTo(point.x, point.y);
-	}
-	return graphics.closePath();
-}
-
-function frameEdgePoints(
-	frame: BoardFrame,
-	handle: ResizeHandle,
-): readonly [{ x: number; y: number }, { x: number; y: number }] | null {
-	switch (handle) {
-		case "n":
-			return [
-				frameHandlePosition(frame, "nw"),
-				frameHandlePosition(frame, "ne"),
-			];
-		case "e":
-			return [
-				frameHandlePosition(frame, "ne"),
-				frameHandlePosition(frame, "se"),
-			];
-		case "s":
-			return [
-				frameHandlePosition(frame, "sw"),
-				frameHandlePosition(frame, "se"),
-			];
-		case "w":
-			return [
-				frameHandlePosition(frame, "nw"),
-				frameHandlePosition(frame, "sw"),
-			];
-		default:
-			return null;
-	}
 }
 
 export type BoardLiveStroke = {
@@ -127,30 +69,10 @@ export type SceneSyncInput = {
 	visibleIds: Set<string> | null;
 	pinnedIds: Set<string>;
 	globalSig: string;
+	staleIds?: ReadonlySet<string>;
 	structureVersion: number;
 	geometryVersion: number;
 	gestureActive: boolean;
-};
-
-export type SceneOverlayInput = {
-	zoom: number;
-	pointerType: string;
-	marquee: Rect | null;
-	selection: string[];
-	transform: BoardSelectionTransform | null;
-	controls: boolean;
-	hoveredControl: BoardTransformControl | null;
-	rotationPointer: WorldPoint | null;
-	arrowEndpoints?: Array<{ x: number; y: number }>;
-	ports?: ReadonlyArray<{ x: number; y: number; radius: number }>;
-	hoveredPort?: { x: number; y: number } | null;
-	arrowDraft?: {
-		from: { x: number; y: number };
-		to: { x: number; y: number };
-		size: number;
-		targetFrame: BoardFrame | null;
-	} | null;
-	bindTarget?: BoardFrame | null;
 };
 
 export type BoardSceneNode = {
@@ -162,7 +84,7 @@ export type BoardScene = {
 	sync: (input: SceneSyncInput) => void;
 	getNode: (itemId: string) => BoardSceneNode | null;
 	readonly animated: boolean;
-	drawOverlay: (input: SceneOverlayInput, palette: BoardRenderPalette) => void;
+	tick: (clock: number) => number | null;
 	destroy: (context: BoardRenderContext) => void;
 };
 
@@ -178,12 +100,15 @@ export function createBoardScene(options: {
 	const cards = new Map<string, CardEntry>();
 	const clips = new Map<string, ClipGroup>();
 	const animatedIds = new Set<string>();
+	const tickingIds = new Set<string>();
 	const pools = new Map<string, Container[]>();
 	const heldKeys = new Map<string, string>();
 	let orderById = new Map<string, number>();
 	let farSig: string | null = null;
 	let farActive = false;
 	let lastStructureVersion = -1;
+	let lastZoom = Number.NaN;
+	let lifted: ReadonlySet<string> = new Set();
 	const liveStrokes = new Map<
 		string,
 		{
@@ -221,6 +146,7 @@ export function createBoardScene(options: {
 		setHeldKey(context, id, null);
 		cards.delete(id);
 		animatedIds.delete(id);
+		tickingIds.delete(id);
 		if (destroyed) return;
 		entry.container.parent?.removeChild(entry.container);
 		entry.container.visible = false;
@@ -285,6 +211,7 @@ export function createBoardScene(options: {
 		container.alpha = scene.opacity(item.id);
 		hostFor(item, scene).addChild(container);
 		if (renderer.animated) animatedIds.add(item.id);
+		if (renderer.tick) tickingIds.add(item.id);
 		const entry: CardEntry = {
 			item,
 			container,
@@ -293,9 +220,11 @@ export function createBoardScene(options: {
 			hovered: context.hoveredId === item.id,
 			resizing: context.resizingIds.has(item.id),
 			globalSig,
+			scriptRevision: context.scripts?.revision?.(item.id) ?? 0,
 		};
 		cards.set(item.id, entry);
 		setHeldKey(context, item.id, context.assetKey(item));
+		renderer.zoom?.(container, context.zoom);
 		return entry;
 	}
 
@@ -575,13 +504,19 @@ export function createBoardScene(options: {
 			const selected = context.selectedIds.has(id);
 			const hovered = context.hoveredId === id;
 			const resizing = context.resizingIds.has(id);
+			const scriptRevision = context.scripts?.revision?.(id) ?? 0;
+			const observed =
+				entry.renderer.observesSelection === true &&
+				(selected !== entry.selected || hovered !== entry.hovered);
 			const changed =
+				input.staleIds?.has(id) ||
+				scriptRevision !== entry.scriptRevision ||
 				item !== entry.item ||
 				entry.renderer.animated ||
-				selected !== entry.selected ||
-				hovered !== entry.hovered ||
+				observed ||
 				resizing !== entry.resizing ||
 				globalSig !== entry.globalSig;
+			entry.scriptRevision = scriptRevision;
 			entry.item = item;
 			entry.selected = selected;
 			entry.hovered = hovered;
@@ -591,152 +526,46 @@ export function createBoardScene(options: {
 			if (changed) {
 				entry.renderer.update(entry.container, item, context);
 				entry.container.alpha = scene.opacity(id);
+				if (entry.renderer.tick) tickingIds.add(id);
 			}
 		}
 		if (structureChanged || liveSetChanged) syncClips(scene);
+		if (context.zoom !== lastZoom) {
+			lastZoom = context.zoom;
+			for (const entry of cards.values()) entry.renderer.zoom?.(entry.container, lastZoom);
+		}
 
-		if (structureChanged || farModeChanged || liveSetChanged) applyChildOrder();
+		const liftChanged = context.liftedIds !== lifted;
+		lifted = context.liftedIds;
+		if (structureChanged || farModeChanged || liveSetChanged || liftChanged) applyChildOrder(scene);
 		syncLiveStrokes(input);
 	}
 
-	function applyChildOrder() {
-		for (const [id, entry] of cards) {
-			entry.container.zIndex = orderById.get(id) ?? 0;
+	function tick(clock: number): number | null {
+		let next: number | null = null;
+		for (const id of tickingIds) {
+			const entry = cards.get(id);
+			const wait = entry?.container.visible ? (entry.renderer.tick?.(entry.container, clock) ?? null) : null;
+			if (wait === null) tickingIds.delete(id);
+			else next = next === null ? wait : Math.min(next, wait);
 		}
-		world.sortableChildren = true;
-		world.sortChildren();
+		return next;
 	}
 
-	function drawOverlay(input: SceneOverlayInput, palette: BoardRenderPalette) {
-		overlay.clear();
-		const {
-			zoom,
-			pointerType,
-			marquee,
-			selection,
-			transform,
-			controls,
-			hoveredControl,
-			rotationPointer,
-			arrowEndpoints,
-			ports,
-			hoveredPort,
-			arrowDraft,
-			bindTarget,
-		} = input;
-		const inv = 1 / zoom;
-		const brand = palette.brand;
-
-		if (marquee) {
-			overlay
-				.rect(marquee.x, marquee.y, marquee.width, marquee.height)
-				.fill({ color: brand, alpha: 0.08 });
-			overlay
-				.rect(marquee.x, marquee.y, marquee.width, marquee.height)
-				.stroke({ color: brand, width: inv, alpha: 0.7 });
-		}
-
-		if (bindTarget)
-			traceFrame(overlay, bindTarget).stroke({
-				color: brand,
-				width: 2 * inv,
-				alpha: 0.9,
-			});
-		if (arrowDraft) {
-			const { from, to, size, targetFrame } = arrowDraft;
-			if (targetFrame)
-				traceFrame(overlay, targetFrame).stroke({
-					color: brand,
-					width: 2 * inv,
-					alpha: 0.9,
-				});
-			overlay
-				.moveTo(from.x, from.y)
-				.lineTo(to.x, to.y)
-				.stroke({
-					color: brand,
-					width: Math.max(size, 1.5) * inv,
-					alpha: 0.85,
-					cap: "round",
-				});
-			overlay.circle(to.x, to.y, 3.5 * inv).fill({ color: brand, alpha: 0.95 });
-		}
-
-		if (ports && ports.length > 0) {
-			for (const port of ports) {
-				const hovered =
-					hoveredPort &&
-					Math.abs(hoveredPort.x - port.x) < 0.001 &&
-					Math.abs(hoveredPort.y - port.y) < 0.001;
-				const r = (hovered ? port.radius * 1.5 : port.radius) * inv;
-				overlay
-					.circle(port.x, port.y, r)
-					.fill({ color: palette.surface, alpha: 1 })
-					.stroke({ color: brand, width: 1.5 * inv, alpha: hovered ? 1 : 0.8 });
+	function applyChildOrder(scene: BoardModelScene) {
+		const raised = new Set(lifted);
+		for (const id of lifted) {
+			if (scene.get(id)?.type === "frame") {
+				for (const child of scene.descendants(id)) raised.add(child);
 			}
 		}
-
-		if (!transform || selection.length === 0) return;
-		const source = transform.frame;
-		traceFrame(overlay, source).stroke({
-			color: brand,
-			width: 1.5 * inv,
-			alpha: 0.95,
-		});
-		if (!controls) return;
-
-		if (arrowEndpoints && arrowEndpoints.length > 0) {
-			const r = 5 * inv;
-			for (const point of arrowEndpoints) {
-				overlay
-					.circle(point.x, point.y, r)
-					.fill({ color: palette.surface, alpha: 1 })
-					.stroke({ color: brand, width: 1.5 * inv });
-			}
-			return;
+		const order = (id: string) => (orderById.get(id) ?? 0) + (raised.has(id) ? Z_LIFTED : 0);
+		for (const [id, entry] of cards) entry.container.zIndex = order(id);
+		for (const [id, entry] of clips) {
+			entry.group.zIndex = order(id) + 0.5;
+			entry.group.sortChildren();
 		}
-
-		if (hoveredControl?.kind === "resize" && transform.resizeMode === "free") {
-			const edge = frameEdgePoints(source, hoveredControl.handle);
-			if (edge) {
-				overlay
-					.moveTo(edge[0].x, edge[0].y)
-					.lineTo(edge[1].x, edge[1].y)
-					.stroke({ color: brand, width: 2.5 * inv, alpha: 1 });
-			}
-		}
-
-		if (transform.resizeMode !== "none") {
-			for (const handle of CORNER_RESIZE_HANDLES) {
-				const position = frameHandlePosition(source, handle);
-				const hovered =
-					hoveredControl?.kind === "resize" && hoveredControl.handle === handle;
-				overlay
-					.circle(position.x, position.y, (hovered ? 5 : 4) * inv)
-					.fill({ color: hovered ? brand : palette.surface, alpha: 1 })
-					.stroke({ color: brand, width: 1.5 * inv });
-			}
-		}
-
-		if (
-			transform.canRotate &&
-			(pointerType === "touch" || transform.resizeMode === "none")
-		) {
-			const rotation = rotationPointer ?? rotationHandlePosition(source, zoom);
-			const anchor = rotationPointer
-				? frameRayIntersection(source, rotationPointer)
-				: rotationHandleAnchor(source);
-			const hovered =
-				rotationPointer !== null || hoveredControl?.kind === "rotate";
-			overlay
-				.moveTo(anchor.x, anchor.y)
-				.lineTo(rotation.x, rotation.y)
-				.stroke({ color: brand, width: inv, alpha: 0.8 });
-			overlay
-				.circle(rotation.x, rotation.y, (hovered ? 6 : 5) * inv)
-				.fill({ color: hovered ? brand : palette.surface })
-				.stroke({ color: brand, width: 1.5 * inv });
-		}
+		world.sortChildren();
 	}
 
 	function destroy(context: BoardRenderContext) {
@@ -753,11 +582,13 @@ export function createBoardScene(options: {
 		for (const entry of clips.values()) entry.group.destroy({ children: true });
 		clips.clear();
 		animatedIds.clear();
+		tickingIds.clear();
 		for (const id of [...liveStrokes.keys()]) removeLiveStroke(id, context);
 		resetFarLayer();
 		farActive = false;
 		visibleMemo = null;
 		lastStructureVersion = -1;
+		lastZoom = Number.NaN;
 	}
 
 	return {
@@ -769,7 +600,7 @@ export function createBoardScene(options: {
 		get animated() {
 			return animatedIds.size > 0;
 		},
-		drawOverlay,
+		tick,
 		destroy,
 	};
 }

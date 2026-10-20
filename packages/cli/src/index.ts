@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
+import { registerEndpointOptions } from "./endpoint-options.js";
 import { registerAuth } from "./commands/auth.js";
 import { registerBoards } from "./commands/boards.js";
 import { registerChannels } from "./commands/channels.js";
@@ -21,6 +22,7 @@ import { registerRuntime } from "./commands/runtime.js";
 import { registerTasks } from "./commands/tasks.js";
 import { registerDesktop, registerLegacyUi } from "./commands/desktop.js";
 import { registerApps } from "./commands/apps.js";
+import { registerRooms } from "./commands/rooms.js";
 import { formatUnknownCommandError, resolveHelpPath } from "./help-path.js";
 
 const VERSION = (() => {
@@ -32,7 +34,7 @@ const VERSION = (() => {
   }
 })();
 
-const program = new Command("cohub");
+const program = registerEndpointOptions(new Command("cohub"));
 
 program
   .name("cohub")
@@ -54,6 +56,7 @@ Common commands:
   cohub spaces ls
   cohub prompt "Fix the failing tests"
   cohub completion "Summarize AGENTS.md" --system-prompt AGENTS.md --stream
+  cohub decision "I was charged twice" -q questions.json
   cohub run -- git status
   cohub runtime up ./my-project
   cohub runtime logs --follow
@@ -65,6 +68,7 @@ Common commands:
   cohub -s <space-id> public upload ./dist demo
   cohub -s <space-id> apps publish demo --file dist/index.html
   cohub desktop open <app-id> --call selection.get
+  cohub rooms join <invite>
   cohub -s <space-id> spaces commerce products list
   cohub models ls
   cohub models ls --model-type multimodal
@@ -73,12 +77,15 @@ Common commands:
 Target space:
   -s <space>, then COHUB_SPACE_ID, then the current directory Runtime binding.
   <space> is an ID, a slug you own such as home, or username/slug.
-  prompt, completion, generate, apps, and public fall back to your Home Space;
+  prompt, completion, decision, generate, apps, and public fall back to your Home Space;
   other Space commands need a target.
 
 Environment:
   COHUB_SPACE_ID         Target Space when -s is omitted
   COHUB_EXECUTION_TOKEN  Use this token instead of the stored Logto session
+  COHUB_BASE_URL         Override the API base URL
+  COHUB_WS_URL           Override the realtime WebSocket URL
+  COHUB_WEB_URL          Override the web URL used in links
   ENV=dev                Use the development Cohub environment
   HTTPS_PROXY            Honored for API and uploads (also HTTP_PROXY, NO_PROXY)
   Runtime logs            ~/.local/state/cohub/runtime/<space-id>/diagnostics
@@ -103,6 +110,7 @@ registerReferrals(program);
 registerTasks(program);
 registerCronJobs(program);
 registerApps(program);
+registerRooms(program);
 registerDesktop(program);
 registerLegacyUi(program);
 

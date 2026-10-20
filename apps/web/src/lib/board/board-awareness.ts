@@ -17,7 +17,10 @@ import type {
 	BoardSceneItem as BoardItem,
 } from "@neta-art/cohub/board";
 import { selectionBounds } from "@neta-art/cohub/board";
-import type { BoardEditor, BoardInteraction } from "$lib/board/editor.svelte";
+import type {
+	BoardEditor,
+	BoardInteraction,
+} from "@neta-art/cohub/board/editor";
 
 const SEND_INTERVAL_MS = 40;
 const VIEWPORT_SEND_INTERVAL_MS = 100;
@@ -280,9 +283,38 @@ function previewMatchesItem(
 	return Boolean(item && sameFrame(preview.frame, item.frame));
 }
 
+function sameAwarenessState(
+	a: BoardAwarenessStateUpdate | null,
+	b: BoardAwarenessStateUpdate,
+): boolean {
+	if (!a) return false;
+	return (
+		a.client?.formFactor === b.client?.formFactor &&
+		a.tool === b.tool &&
+		a.editingId === b.editingId &&
+		a.cursor?.x === b.cursor?.x &&
+		a.cursor?.y === b.cursor?.y &&
+		a.cursor?.pointerType === b.cursor?.pointerType &&
+		a.viewport?.x === b.viewport?.x &&
+		a.viewport?.y === b.viewport?.y &&
+		a.viewport?.width === b.viewport?.width &&
+		a.viewport?.height === b.viewport?.height &&
+		a.viewport?.zoom === b.viewport?.zoom &&
+		a.selection.count === b.selection.count &&
+		a.selection.bounds?.x === b.selection.bounds?.x &&
+		a.selection.bounds?.y === b.selection.bounds?.y &&
+		a.selection.bounds?.width === b.selection.bounds?.width &&
+		a.selection.bounds?.height === b.selection.bounds?.height &&
+		a.selection.bounds?.rotation === b.selection.bounds?.rotation &&
+		a.selection.ids.length === b.selection.ids.length &&
+		a.selection.ids.every((id, index) => id === b.selection.ids[index])
+	);
+}
+
 export function createBoardAwarenessController(options: ControllerOptions) {
 	const now = options.now ?? Date.now;
 	const peers = new Map<string, RemoteBoardAwarenessPeer>();
+	let lastPrunedAt = now();
 	let seq = 0;
 	let localCursor: CursorInput | null = null;
 	let localViewport: ViewportInput | null = null;
@@ -439,6 +471,12 @@ export function createBoardAwarenessController(options: ControllerOptions) {
 		const payload = event.payload;
 		const existing = peers.get(payload.connectionId);
 		if (existing && payload.seq <= existing.seq) return;
+		const timestamp = now();
+		let changed =
+			!existing ||
+			existing.actorId !== payload.actorId ||
+			existing.actorName !== payload.actorName ||
+			timestamp - existing.lastSeenAt > CURSOR_VISIBLE_MS;
 		const peer: RemoteBoardAwarenessPeer = existing ?? {
 			connectionId: payload.connectionId,
 			actorId: payload.actorId,
@@ -449,16 +487,18 @@ export function createBoardAwarenessController(options: ControllerOptions) {
 			gestureEndedAt: null,
 			lastCursor: null,
 			cursorClearedAt: null,
-			cursorMovedAt: now(),
-			viewportMovedAt: now(),
-			lastSeenAt: now(),
+			cursorMovedAt: timestamp,
+			viewportMovedAt: timestamp,
+			lastSeenAt: timestamp,
 		};
 		peer.actorId = payload.actorId;
 		peer.actorName = payload.actorName;
 		peer.seq = payload.seq;
-		peer.lastSeenAt = now();
+		peer.lastSeenAt = timestamp;
 
 		const update = payload.update;
+		changed ||=
+			update.type !== "state" || !sameAwarenessState(peer.state, update);
 		if (update.type === "state") {
 			const previousCursor = peer.state?.cursor ?? peer.lastCursor;
 			if (
@@ -505,7 +545,7 @@ export function createBoardAwarenessController(options: ControllerOptions) {
 			peer.gestureEndedAt = null;
 		}
 		peers.set(peer.connectionId, peer);
-		options.onChange();
+		if (changed) options.onChange();
 	}
 
 	function reconcile(items: readonly BoardItem[]) {
@@ -536,6 +576,13 @@ export function createBoardAwarenessController(options: ControllerOptions) {
 		const timestamp = now();
 		let changed = false;
 		for (const [connectionId, peer] of peers) {
+			const cursorDeadline = peer.lastSeenAt + CURSOR_VISIBLE_MS;
+			if (
+				(peer.state?.cursor || peer.lastCursor || peer.state?.viewport) &&
+				lastPrunedAt <= cursorDeadline &&
+				timestamp > cursorDeadline
+			)
+				changed = true;
 			const gestureExpired =
 				peer.gestureEndedAt != null &&
 				timestamp - peer.gestureEndedAt > ENDED_GESTURE_TTL_MS;
@@ -549,7 +596,8 @@ export function createBoardAwarenessController(options: ControllerOptions) {
 				changed = true;
 			}
 		}
-		if (changed || peers.size > 0) options.onChange();
+		lastPrunedAt = timestamp;
+		if (changed) options.onChange();
 	}
 
 	const heartbeat =

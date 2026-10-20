@@ -14,7 +14,10 @@ import { getCacheUserKey } from "$lib/cache/keys";
 import type { ActivityCacheRecord } from "$lib/cache/repositories/activity-repo";
 
 const CLEANUP_STORAGE_KEY = "cohub:cache:last-cleanup-at:v1";
-const LEGACY_ACTIVITY_PREFIX = "cohub:activity:v1:";
+const LEGACY_LOCAL_STORAGE_PREFIXES = [
+	"cohub:activity:v1:",
+	"cohub:board:seen:",
+] as const;
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const MAX_ENTRIES = {
@@ -81,7 +84,11 @@ export function removeLegacyLocalStorage() {
 	try {
 		for (let index = localStorage.length - 1; index >= 0; index -= 1) {
 			const key = localStorage.key(index);
-			if (key?.startsWith(LEGACY_ACTIVITY_PREFIX)) localStorage.removeItem(key);
+			if (
+				key &&
+				LEGACY_LOCAL_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))
+			)
+				localStorage.removeItem(key);
 		}
 	} catch {
 		// ignore

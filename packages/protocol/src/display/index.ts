@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./actions.js";
+export { rtcIceServerSchema, type RtcIceServer, type RtcIceServers } from "../rtc/index.js";
 
 /**
  * Displays: a machine's screens, shared with people over WebRTC and with
@@ -205,18 +206,6 @@ export type DisplayCapture = {
   data: string;
   width: number;
   height: number;
-};
-
-export const rtcIceServerSchema = z.object({
-  urls: z.union([z.string().min(1).max(512), z.array(z.string().min(1).max(512)).min(1).max(16)]),
-  username: z.string().max(512).optional(),
-  credential: z.string().max(512).optional(),
-});
-export type RtcIceServer = z.infer<typeof rtcIceServerSchema>;
-
-export type RtcIceServers = {
-  iceServers: RtcIceServer[];
-  expiresAt: string;
 };
 
 export const DISPLAY_SESSION_OFFER_MAX = 64 * 1024;

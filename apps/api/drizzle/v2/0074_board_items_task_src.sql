@@ -1,0 +1,1 @@
+CREATE INDEX "v2_idx_board_items_task_src" ON "v2"."board_items" USING btree ("src") WHERE "v2"."board_items"."type" = 'task';

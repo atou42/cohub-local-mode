@@ -20,10 +20,11 @@ import type {
 	BoardCollaboratorProfile,
 } from "$lib/board/board-activity";
 import AppPublishDialog from "$lib/components/AppPublishDialog.svelte";
-import type { FileViewMode } from "$lib/components/file-diff-view";
 import WorkspaceWindowsPane from "$lib/components/WorkspaceWindowsPane.svelte";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
+import type { FilePreviewModel } from "$lib/file-preview-model";
 import { DURATION_PANEL, svelteEaseIn } from "$lib/motion.svelte";
+import type { FileViewMode } from "$lib/resource-kit/diff";
 import type { SpaceFsNode } from "$lib/space-fs";
 import { patchCachedSpaceList } from "$lib/stores/space-list-cache";
 import { cacheSpaceRecordSoon } from "$lib/stores/space-record-cache";
@@ -105,21 +106,12 @@ export type SpaceFileDomainProps = {
 	previewEndpoints: SpacePublicEndpoints;
 	inlineFileDownloadUrl: string;
 	inlineFileDownloadName: string;
-	inlineFileIsText: boolean;
-	inlineFileHasRenderedPreview: boolean;
+	inlineFilePreview: FilePreviewModel;
 	inlineFileViewMode: FileViewMode;
 	inlineFileDiff: SpacePendingDiffFileResponse | null;
 	inlineFileDiffLoading: boolean;
 	inlineFileDiffError: string | null;
-	inlineFileIsMarkdown: boolean;
-	inlineFileIsCsv: boolean;
-	inlineFileIsHtml: boolean;
 	inlineFileCopied: boolean;
-	inlineFileIsImage: boolean;
-	inlineFileIsVideo: boolean;
-	inlineFileIsAudio: boolean;
-	inlineFileIsPdf: boolean;
-	inlineFileDataUrl: string | null;
 	inlineFileApp: AppRecord | null;
 	inlineFileZoom: number;
 	inlineFilePanX: number;
@@ -285,21 +277,12 @@ let {
 	previewEndpoints,
 	inlineFileDownloadUrl,
 	inlineFileDownloadName,
-	inlineFileIsText,
-	inlineFileHasRenderedPreview,
+	inlineFilePreview,
 	inlineFileViewMode = $bindable(),
 	inlineFileDiff,
 	inlineFileDiffLoading,
 	inlineFileDiffError,
-	inlineFileIsMarkdown,
-	inlineFileIsCsv,
-	inlineFileIsHtml,
 	inlineFileCopied,
-	inlineFileIsImage,
-	inlineFileIsVideo,
-	inlineFileIsAudio,
-	inlineFileIsPdf,
-	inlineFileDataUrl,
 	inlineFileApp,
 	inlineFileZoom = $bindable(),
 	inlineFilePanX = $bindable(),
@@ -526,23 +509,14 @@ function previewContentOut(node: Element) {
 		{inlineFileCanGoBack}
 		{inlineFileDownloadUrl}
 		{inlineFileDownloadName}
-		{inlineFileIsText}
-		{inlineFileHasRenderedPreview}
+		{inlineFilePreview}
 		bind:inlineFileViewMode
 		{inlineFileDiff}
 		{inlineFileDiffLoading}
 		{inlineFileDiffError}
-		{inlineFileIsMarkdown}
-		{inlineFileIsCsv}
-		{inlineFileIsHtml}
 		{activeFsReadonly}
 		{canEditFiles}
 		{inlineFileCopied}
-		{inlineFileIsImage}
-		{inlineFileIsVideo}
-		{inlineFileIsAudio}
-		{inlineFileIsPdf}
-		{inlineFileDataUrl}
 		inlineFileSpaceId={spaceId}
 		{inlineFileApp}
 		{isMobile}
@@ -572,7 +546,7 @@ function previewContentOut(node: Element) {
 	</div>
 {/each}
 
-{#if inlineBoard}
+{#each inlineBoard ? [inlineBoard] : [] as board (board.path)}
 	<div
 		class="h-full min-h-0"
 		hidden={activeWindowKind !== "board"}
@@ -580,7 +554,7 @@ function previewContentOut(node: Element) {
 		aria-hidden={activeWindowKind !== "board"}
 	>
 		<BoardWindow
-		board={inlineBoard}
+		board={board}
 		windows={windows}
 		spaceId={spaceId}
 		shell={appShell}
@@ -601,7 +575,7 @@ function previewContentOut(node: Element) {
 		onOpenTask={onOpenTask}
 		/>
 	</div>
-{/if}
+{/each}
 
 {#if inlinePortPreview}
 	<div

@@ -14,8 +14,7 @@ import {
   buildFsCdnManifestKey,
   shouldUseFsCdnCache,
 } from "./space-fs-cdn-policy.js";
-import { isTextMime } from "./space-fs-mime.js";
-import type { SpaceFsFileResponse, SpaceFsPreparingFile } from "@cohub/protocol/fs";
+import { isTextMime, type SpaceFsFileResponse, type SpaceFsPreparingFile } from "@cohub/protocol/fs";
 
 export type FsCdnFileMeta = {
   spaceId: string;

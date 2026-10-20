@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { UPLOAD_RATE_MAX_BYTES, UPLOAD_RATE_MAX_FILES, UPLOAD_RATE_WINDOW_SECONDS } from "@cohub/protocol";
-import { consumeUploadQuota, UploadRateLimitError, type UploadQuotaRedis } from "./upload-quota.js";
+import { UPLOAD_ERROR_RATE_LIMITED, UPLOAD_RATE_MAX_BYTES, UPLOAD_RATE_MAX_FILES, UPLOAD_RATE_WINDOW_SECONDS } from "@cohub/protocol";
+import { Hono } from "hono";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse, type UploadQuotaRedis } from "./upload-quota.js";
 
 /** Minimal fixed-window replica of the Lua script for behavior coverage. */
 const fakeRedis = () => {
@@ -62,5 +63,19 @@ describe("consumeUploadQuota", () => {
     }).catch((error: unknown) => error);
     assert.ok(limited instanceof UploadRateLimitError);
     assert.equal(limited.retryAfterSeconds, UPLOAD_RATE_WINDOW_SECONDS);
+  });
+});
+
+describe("uploadRateLimitedResponse", () => {
+  it("returns a coded 429 with the retry hint in header and body", async () => {
+    const app = new Hono().get("/", (c) => uploadRateLimitedResponse(c, new UploadRateLimitError(90)));
+    const response = await app.request("/");
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("Retry-After"), "90");
+    assert.deepEqual(await response.json(), {
+      code: UPLOAD_ERROR_RATE_LIMITED,
+      message: "too many uploads, please try again later",
+      retryAfterSeconds: 90,
+    });
   });
 });

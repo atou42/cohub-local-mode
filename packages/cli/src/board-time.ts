@@ -8,6 +8,11 @@ export function parseBoardTime(value: string, name = "time"): number {
 }
 
 export function parseBoardTimes(value: string, name = "--at", limit = 10_000): number[] {
+  if (value.includes(",")) {
+    const entries = value.split(",");
+    if (entries.length > limit) throw new Error(`${name}: frame count exceeds the limit of ${limit}`);
+    return entries.map((entry) => parseBoardTime(entry, name));
+  }
   const parts = value.split(":");
   if (parts.length === 1) return [parseBoardTime(value, name)];
   if (parts.length !== 3) throw new Error(`${name}: expected a time or start:end:step`);

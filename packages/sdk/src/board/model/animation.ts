@@ -236,18 +236,22 @@ function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): 
 	return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 
-export type BoardColorResolver = (color: BoardColor) => number | null;
+export type BoardColorResolver = (color: BoardColor) => number | { color: number; alpha: number } | null;
 
 function hex(color: number): string {
 	return `#${Math.max(0, Math.min(0xffffff, Math.round(color))).toString(16).padStart(6, "0")}`;
 }
 
 function mixColor(a: unknown, b: unknown, t: number, resolve: BoardColorResolver): unknown {
-	const from = resolve(a as BoardColor);
-	const to = resolve(b as BoardColor);
-	if (from === null || to === null) return t < 1 ? a : b;
-	const channel = (shift: number) => Math.round(lerp((from >> shift) & 0xff, (to >> shift) & 0xff, t));
-	return hex((channel(16) << 16) | (channel(8) << 8) | channel(0));
+	const left = resolve(a as BoardColor);
+	const right = resolve(b as BoardColor);
+	if (left === null || right === null) return t < 1 ? a : b;
+	const from = typeof left === "number" ? { color: left, alpha: 1 } : left;
+	const to = typeof right === "number" ? { color: right, alpha: 1 } : right;
+	const alpha = lerp(from.alpha, to.alpha, t);
+	const channel = (shift: number) => alpha > 0 ? Math.round(lerp(((from.color >> shift) & 0xff) * from.alpha, ((to.color >> shift) & 0xff) * to.alpha, t) / alpha) : 0;
+	const rgb = hex((channel(16) << 16) | (channel(8) << 8) | channel(0));
+	return alpha >= 1 ? rgb : `${rgb}${Math.round(Math.max(0, alpha) * 255).toString(16).padStart(2, "0")}`;
 }
 
 export function parseHexColor(color: BoardColor): number | null {
@@ -256,6 +260,18 @@ export function parseHexColor(color: BoardColor): number | null {
 	if (!match?.[1]) return null;
 	const digits = match[1].length === 3 ? [...match[1]].map((digit) => digit + digit).join("") : match[1];
 	return Number.parseInt(digits, 16);
+}
+
+function parseAnimationColor(color: BoardColor): ReturnType<BoardColorResolver> {
+	if (typeof color === "string") {
+		if (color.trim().toLowerCase() === "transparent") return { color: 0, alpha: 0 };
+		const match = /^#([0-9a-f]{4}|[0-9a-f]{8})$/i.exec(color.trim());
+		if (match?.[1]) {
+			const digits = match[1].length === 4 ? [...match[1]].map((digit) => digit + digit).join("") : match[1];
+			return { color: Number.parseInt(digits.slice(0, 6), 16), alpha: Number.parseInt(digits.slice(6), 16) / 255 };
+		}
+	}
+	return parseHexColor(color);
 }
 
 function blend(track: CompiledTrack, index: number, time: number, resolveColor: BoardColorResolver): unknown {
@@ -289,7 +305,7 @@ function blend(track: CompiledTrack, index: number, time: number, resolveColor: 
 	}
 }
 
-export function sampleBoardTrack(track: CompiledTrack, time: number, resolveColor: BoardColorResolver = parseHexColor): unknown {
+export function sampleBoardTrack(track: CompiledTrack, time: number, resolveColor: BoardColorResolver = parseAnimationColor): unknown {
 	const index = keyframeIndex(track.times, time);
 	if (index < 0) return track.values[0];
 	return blend(track, index, time, resolveColor);
@@ -375,7 +391,7 @@ export function evaluateBoardAnimations(
 	times: ReadonlyMap<string, number> | Readonly<Record<string, number>>,
 	options: BoardEvaluateOptions = {},
 ): BoardEvaluation {
-	const resolveColor = options.resolveColor ?? parseHexColor;
+	const resolveColor = options.resolveColor ?? parseAnimationColor;
 	const local = new Map<string, number>(times instanceof Map ? times : Object.entries(times));
 	for (const id of compiled.order) {
 		const animation = compiled.animations.get(id);

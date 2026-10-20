@@ -244,22 +244,22 @@ const segments = $derived.by(() => {
 				{#if segment.replies}
 					<CodexQuestionReplies replies={segment.replies} />
 				{:else}
-					<div class="whitespace-pre-wrap break-words">
-				{#each segment.tokens as token}
-					{#if token.type !== 'text'}
-						<button
-							type="button"
-							class={userMentionButtonClass}
-							title={m.message_open_in_new({ label: token.label }, { locale })}
-							aria-label={
-								token.type === "appMention"
-									? m.message_open_aria_app({ label: token.label }, { locale })
-									: m.message_open_aria_space({ label: token.label }, { locale })
-							}
-							onclick={(event) => openUserMention(token, event)}
-						>{token.text}</button>
-					{:else}{token.text}{/if}
-				{/each}
+					<div class="whitespace-pre-wrap [overflow-wrap:anywhere]">
+						{#each segment.tokens as token}
+							{#if token.type !== 'text'}
+								<button
+									type="button"
+									class={userMentionButtonClass}
+									title={m.message_open_in_new({ label: token.label }, { locale })}
+									aria-label={
+										token.type === "appMention"
+											? m.message_open_aria_app({ label: token.label }, { locale })
+											: m.message_open_aria_space({ label: token.label }, { locale })
+									}
+									onclick={(event) => openUserMention(token, event)}
+								>{token.text}</button>
+							{:else}{token.text}{/if}
+						{/each}
 					</div>
 				{/if}
 			{/each}
