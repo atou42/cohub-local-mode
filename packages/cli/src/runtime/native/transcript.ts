@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { PassThrough, Transform } from "node:stream";
+import { Transform } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -157,30 +157,10 @@ async function scanCodexRollouts(signal?: AbortSignal): Promise<Map<string, stri
 }
 
 async function* compressedCodexRolloutBytes(path: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  const stoppedReading = new Error("Codex rollout reader stopped at its requested boundary");
-  const source = createReadStream(path);
   const decoder = createZstdDecompress();
-  const stream = new PassThrough();
-  // Observe decoder errors until the pipeline closes, including after an early header/prefix read.
-  const pumping = pipeline(source, decoder, stream, { signal })
-    .then(() => ({ error: null }), (error: unknown) => ({ error }));
-  try {
-    yield* stream.iterator({ destroyOnReturn: false });
-  } finally {
-    const streams = [source, decoder, stream];
-    const priorError = streams.find((current) => current.errored)?.errored;
-    const prematurelyClosed = streams.some((current) => current.destroyed
-      && (!current.readableEnded || ("writableFinished" in current && !current.writableFinished)));
-    // Do not replace a pending source/decoder failure with our own stop. Newer pipelines can
-    // overwrite AbortError, so stop with an ordinary error whose identity survives cleanup.
-    // A finished writable side no longer needs interruption; pipeline may have removed its listeners.
-    if (!stream.writableFinished && !priorError && !prematurelyClosed && !signal?.aborted) stream.destroy(stoppedReading);
-    const { error } = await pumping;
-    const failure = priorError ?? error;
-    // biome-ignore lint/correctness/noUnsafeFinally: A reader return must still reject archive errors and caller cancellation.
-    if (failure && failure !== stoppedReading) throw failure;
-    signal?.throwIfAborted();
-  }
+  // pipeline keeps error listeners attached, so stopping at a header or prefix cannot crash with an unhandled decoder error.
+  const pumping = pipeline(createReadStream(path), decoder, { signal }).catch(() => {});
+  try { yield* decoder; } finally { decoder.destroy(); await pumping; }
 }
 
 /** Raw JSONL bytes of a rollout, transparently decompressing `.zst` and honoring a lineage cutoff. */

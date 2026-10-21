@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm, mkdir, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { readNativeTranscript, readNativeTranscriptHeader, ensurePlainCodexRollout } from "../src/runtime/native/transcript.js";
+import { codexRolloutBytes, readNativeTranscript, readNativeTranscriptHeader, ensurePlainCodexRollout } from "../src/runtime/native/transcript.js";
 import { nativeIngestTurnSchema } from "@neta-art/cohub";
 
 const at = "2026-09-21T00:00:00.000Z";
@@ -253,6 +253,30 @@ test("a missing .zst rollout fails immediately instead of hanging", async () => 
     else process.env.CODEX_HOME = previousHome;
     await f.cleanup();
   }
+});
+
+test("compressed rollout reads stop at a header or prefix without crashing", async () => {
+  const { zstdCompressSync } = await import("node:zlib");
+  const f = await fixture();
+  try {
+    const path = join(f.root, "session.jsonl.zst");
+    const header = line({ type: "session_meta", payload: { id: "thread", cwd: f.root } });
+    const raw = Buffer.from(`${header}${line({ type: "tail", payload: "x".repeat(1024 * 1024) })}`);
+    await writeFile(path, zstdCompressSync(raw));
+    const read = async (end: number | null) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of codexRolloutBytes(path, end)) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    };
+    assert.deepEqual(await readNativeTranscriptHeader(path, "codex"), { nativeSessionId: "thread", cwd: f.root });
+    assert.deepEqual(await read(Buffer.byteLength(header)), Buffer.from(header));
+    assert.deepEqual(await read(raw.length), raw);
+    assert.deepEqual(await read(null), raw);
+    await writeFile(path, "not a zstd frame");
+    await assert.rejects(read(null), { code: "ZSTD_error_prefix_unknown" });
+    // A late decoder error would surface here as an uncaught exception.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally { await f.cleanup(); }
 });
 
 test("decompressing an oversized rollout stops at the local limit", async () => {
