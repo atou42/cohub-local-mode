@@ -3,6 +3,7 @@ import type {
 	SpaceFsFileResponse,
 	SpaceFsPreparingFile,
 } from "@neta-art/cohub";
+import { readDirectoryPages, type DirectoryListing } from "$lib/space-fs-list";
 import { sdk } from "$lib/sdk";
 import {
 	buildSpaceFileDownloadUrl,
@@ -18,7 +19,10 @@ export type ActiveFsClient = {
 	readonly source: ActiveFsSource;
 	readonly sourceKey: string;
 	readonly readonly: boolean;
-	list: (path: string) => Promise<{ entries: SpaceFsEntry[] }>;
+	list: (
+		path: string,
+		onFirstPage?: (entries: SpaceFsEntry[]) => void,
+	) => Promise<DirectoryListing>;
 	read: (
 		path: string,
 		signal?: AbortSignal,
@@ -49,14 +53,15 @@ export function createActiveFsClient(input: {
 }): ActiveFsClient {
 	const { spaceId, source } = input;
 	const isCheckpoint = source.kind === "checkpoint";
-	const list: ActiveFsClient["list"] = (path) => {
-		if (source.kind === "checkpoint") {
-			return sdk
-				.space(spaceId)
-				.checkpoints(source.checkpointId)
-				.files.list(path);
-		}
-		return sdk.space(spaceId).files.list(path);
+	const list: ActiveFsClient["list"] = (path, onFirstPage) => {
+		const files =
+			source.kind === "checkpoint"
+				? sdk.space(spaceId).checkpoints(source.checkpointId).files
+				: sdk.space(spaceId).files;
+		return readDirectoryPages(
+			(cursor) => files.list(path, { pagination: true, cursor }),
+			onFirstPage,
+		);
 	};
 	const read: ActiveFsClient["read"] = (path, signal) => {
 		if (source.kind === "checkpoint") {

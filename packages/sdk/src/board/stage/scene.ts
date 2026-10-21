@@ -17,6 +17,7 @@ import {
 	isClippingFrame,
 	syncClipGroup,
 } from "../render/index.js";
+import { getBoardResolution, textZoomBucket } from "../render/text-resolution.js";
 import { type Container, Graphics } from "pixi.js";
 
 type CardEntry = {
@@ -40,6 +41,7 @@ const Z_LIVE_STROKE = Number.MAX_SAFE_INTEGER - 1;
 const Z_OVERLAY = Number.MAX_SAFE_INTEGER;
 
 const POOL_LIMIT_PER_RENDERER = 48;
+const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 function idSetSignature(ids: Set<string>): number {
 	let hash = ids.size;
@@ -83,6 +85,9 @@ export type BoardSceneNode = {
 export type BoardScene = {
 	sync: (input: SceneSyncInput) => void;
 	getNode: (itemId: string) => BoardSceneNode | null;
+	holders: (key: string) => ReadonlySet<string>;
+	readonly liveVersion: number;
+	liveIds: () => ReadonlySet<string>;
 	readonly animated: boolean;
 	tick: (clock: number) => number | null;
 	destroy: (context: BoardRenderContext) => void;
@@ -103,11 +108,14 @@ export function createBoardScene(options: {
 	const tickingIds = new Set<string>();
 	const pools = new Map<string, Container[]>();
 	const heldKeys = new Map<string, string>();
+	const holders = new Map<string, Set<string>>();
 	let orderById = new Map<string, number>();
 	let farSig: string | null = null;
 	let farActive = false;
 	let lastStructureVersion = -1;
 	let lastZoom = Number.NaN;
+	let lastResolution = "";
+	let liveVersion = 0;
 	let lifted: ReadonlySet<string> = new Set();
 	const liveStrokes = new Map<
 		string,
@@ -117,18 +125,27 @@ export function createBoardScene(options: {
 			template: BoardDrawItem;
 		}
 	>();
-
 	function setHeldKey(
 		context: BoardRenderContext,
 		cardId: string,
-		desiredKey: string | null,
+		item: BoardItem | null,
 	) {
+		const desiredKey = item ? context.assetKey(item) : null;
 		const heldKey = heldKeys.get(cardId) ?? null;
 		if (desiredKey === heldKey) return;
-		if (heldKey) context.releaseTexture(heldKey);
-		if (desiredKey) context.acquireTexture(desiredKey);
-		if (desiredKey) heldKeys.set(cardId, desiredKey);
-		else heldKeys.delete(cardId);
+		if (heldKey) {
+			context.releaseTexture(heldKey);
+			const ids = holders.get(heldKey);
+			ids?.delete(cardId);
+			if (ids?.size === 0) holders.delete(heldKey);
+		}
+		if (desiredKey && item) {
+			heldKeys.set(cardId, desiredKey);
+			const ids = holders.get(desiredKey);
+			if (ids) ids.add(cardId);
+			else holders.set(desiredKey, new Set([cardId]));
+			context.acquireTexture(desiredKey, item);
+		} else heldKeys.delete(cardId);
 	}
 
 	function takeFromPool(rendererId: string): Container | null {
@@ -223,7 +240,7 @@ export function createBoardScene(options: {
 			scriptRevision: context.scripts?.revision?.(item.id) ?? 0,
 		};
 		cards.set(item.id, entry);
-		setHeldKey(context, item.id, context.assetKey(item));
+		setHeldKey(context, item.id, item);
 		renderer.zoom?.(container, context.zoom);
 		return entry;
 	}
@@ -424,6 +441,9 @@ export function createBoardScene(options: {
 			gestureActive,
 		} = input;
 
+		const resolution = `${textZoomBucket(context.zoom)}:${getBoardResolution()}`;
+		const resolutionChanged = resolution !== lastResolution;
+		lastResolution = resolution;
 		const structureChanged = structureVersion !== lastStructureVersion;
 		if (structureChanged) {
 			lastStructureVersion = structureVersion;
@@ -462,7 +482,14 @@ export function createBoardScene(options: {
 		if (farActive) {
 			const { orderedIds, unbatched } = visibleFacts(input);
 			for (const id of unbatched) wanted.add(id);
-			let budget = FAR_LIVE_LIMIT;
+			let retained = 0;
+			if (!farPainted) for (const id of cards.keys()) {
+				if ((!visibleIds || visibleIds.has(id)) && !farCovered.has(id) && !wanted.has(id)) {
+					wanted.add(id);
+					retained++;
+				}
+			}
+			let budget = Math.max(0, FAR_LIVE_LIMIT - retained);
 			for (const id of orderedIds) {
 				if (budget === 0) break;
 				if (farCovered.has(id) || wanted.has(id)) continue;
@@ -522,13 +549,17 @@ export function createBoardScene(options: {
 			entry.hovered = hovered;
 			entry.resizing = resizing;
 			entry.globalSig = globalSig;
-			setHeldKey(context, id, context.assetKey(item));
+			setHeldKey(context, id, item);
 			if (changed) {
 				entry.renderer.update(entry.container, item, context);
 				entry.container.alpha = scene.opacity(id);
 				if (entry.renderer.tick) tickingIds.add(id);
+			} else if (resolutionChanged && entry.renderer.resolution) {
+				entry.renderer.resolution(entry.container, item, context);
+				if (entry.renderer.tick) tickingIds.add(id);
 			}
 		}
+		if (liveSetChanged) liveVersion += 1;
 		if (structureChanged || liveSetChanged) syncClips(scene);
 		if (context.zoom !== lastZoom) {
 			lastZoom = context.zoom;
@@ -578,6 +609,7 @@ export function createBoardScene(options: {
 		pools.clear();
 		for (const key of heldKeys.values()) context.releaseTexture(key);
 		heldKeys.clear();
+		holders.clear();
 		orderById = new Map();
 		for (const entry of clips.values()) entry.group.destroy({ children: true });
 		clips.clear();
@@ -589,6 +621,7 @@ export function createBoardScene(options: {
 		visibleMemo = null;
 		lastStructureVersion = -1;
 		lastZoom = Number.NaN;
+		lastResolution = "";
 	}
 
 	return {
@@ -597,6 +630,11 @@ export function createBoardScene(options: {
 			const entry = cards.get(itemId);
 			return entry ? { item: entry.item, container: entry.container } : null;
 		},
+		holders: (key) => holders.get(key) ?? EMPTY_IDS,
+		get liveVersion() {
+			return liveVersion;
+		},
+		liveIds: () => new Set(cards.keys()),
 		get animated() {
 			return animatedIds.size > 0;
 		},

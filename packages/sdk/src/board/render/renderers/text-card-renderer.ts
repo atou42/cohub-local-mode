@@ -87,6 +87,10 @@ export const textCardRenderer: BoardCardRenderer = {
   update: (container, item, context) => {
     if (item.type === "text") sync(container, item as SceneItem<BoardTextItem>, context);
   },
+  resolution: (container, _item, context) => {
+    const parts = partsByContainer.get(container);
+    if (parts) syncTextResolution(parts.body, parts, context.zoom * Math.max(1, parts.body.scale.x));
+  },
   renderFar: (graphics, item, context) => {
     if (item.type !== "text") return;
     drawFarPlate(graphics, item.frame, { fill: itemColor(context, item.style.fill, "neutral"), fillAlpha: 0.35 * itemAlpha(context, item.style.fill) });

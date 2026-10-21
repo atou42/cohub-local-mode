@@ -15,5 +15,5 @@ export {
   selectBoardExportAssets,
 } from "@neta-art/cohub/board";
 export { prepareBoardExport } from "@neta-art/cohub/board/export";
-export { createBoardRenderSampler, inspectBoardScene, measureBoardText } from "@neta-art/cohub/board/render";
+export { createBoardRenderSampler, inspectBoardScene, inspectBoardItems, measureBoardText } from "@neta-art/cohub/board/render";
 export { createNodeBoardRenderer, createNodeBoardScriptHost, exportBoardImageBytes } from "@neta-art/cohub/board/export/node";

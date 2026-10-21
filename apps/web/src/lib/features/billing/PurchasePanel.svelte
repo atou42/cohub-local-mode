@@ -1,11 +1,11 @@
 <script lang="ts">
 import type { BillingCatalogProduct } from "@neta-art/cohub";
 import { AlertCircle, ChevronUp } from "lucide-svelte";
+import Segmented from "$lib/components/Segmented.svelte";
 import type { Locale } from "$lib/i18n/locale";
 import { m } from "$lib/paraglide/messages.js";
 import CheckoutSummary from "./CheckoutSummary.svelte";
 import { formatMoney } from "./format";
-import IntervalToggle from "./IntervalToggle.svelte";
 import ProductCard from "./ProductCard.svelte";
 import {
 	bestYearlySavingsPercent,
@@ -77,19 +77,32 @@ function select(product: BillingCatalogProduct) {
 	<div class="catalog">
 		<div class="controls">
 			{#if showTabs}
-				<div class="family" role="tablist">
-					<button type="button" role="tab" aria-selected={family === "plans"} onclick={() => switchFamily("plans")}>{m.purchase_family_plans({}, { locale })}</button>
-					<button type="button" role="tab" aria-selected={family === "packs"} onclick={() => switchFamily("packs")}>{m.purchase_family_packs({}, { locale })}</button>
-				</div>
+				<Segmented
+					role="tablist"
+					label={m.purchase_family_label({}, { locale })}
+					value={family}
+					options={[
+						{ value: "plans", label: m.purchase_family_plans({}, { locale }) },
+						{ value: "packs", label: m.purchase_family_packs({}, { locale }) },
+					]}
+					onchange={switchFamily}
+				/>
 			{:else}
 				<span></span>
 			{/if}
 			{#if family === "plans" && hasPlans}
-				<IntervalToggle
+				<Segmented
+					label={m.purchase_billing_interval({}, { locale })}
 					value={flow.interval}
-					hasYearly={flow.hasYearly}
-					yearlySavingsPercent={yearlySavings}
-					{locale}
+					options={[
+						{ value: "monthly", label: m.billing_monthly({}, { locale }) },
+						{
+							value: "yearly",
+							label: m.billing_yearly({}, { locale }),
+							disabled: !flow.hasYearly,
+							note: flow.hasYearly && yearlySavings ? `−${yearlySavings}%` : undefined,
+						},
+					]}
 					onchange={(interval) => flow.setInterval(interval)}
 				/>
 			{/if}
@@ -190,27 +203,6 @@ function select(product: BillingCatalogProduct) {
 		justify-content: space-between;
 		gap: 10px;
 	}
-	.family {
-		display: inline-flex;
-		gap: 2px;
-		font-size: 13px;
-	}
-	.family button {
-		padding: 6px 10px;
-		border-radius: 5px;
-		color: var(--text-tertiary);
-		font-weight: 500;
-		cursor: pointer;
-		transition: color 150ms, background-color 150ms;
-	}
-	.family button:hover {
-		color: var(--text-secondary);
-	}
-	.family button[aria-selected="true"] {
-		background: var(--bg-hover);
-		color: var(--text-primary);
-	}
-
 	.grid {
 		display: grid;
 		gap: 14px;

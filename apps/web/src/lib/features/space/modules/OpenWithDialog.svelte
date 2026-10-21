@@ -51,13 +51,13 @@ $effect(() => {
 		<button type="button" class="choice" onclick={() => onPick({ kind: "builtin" }, always)}>
 			<span class="flex h-5 w-5 items-center justify-center text-text-tertiary"><FileText class="h-4 w-4" /></span>
 			<span class="min-w-0 flex-1 truncate">{m.open_with_builtin({}, { locale })}</span>
-			{#if !defaultAppId}<span class="badge">{m.open_with_default({}, { locale })}</span>{/if}
+			{#if !defaultAppId}<span class="tag">{m.open_with_default({}, { locale })}</span>{/if}
 		</button>
 		{#each candidates ?? [] as app (app.appId)}
 			<button type="button" class="choice" onclick={() => onPick({ kind: "app", appId: app.appId }, always)}>
 				<AppIcon meta={app.meta} slug={app.slug} seed={app.appId} size="xxs" class="mx-0.5" />
 				<span class="min-w-0 flex-1 truncate">{appDisplayTitle(app.meta, app.slug)}</span>
-				{#if app.appId === defaultAppId}<span class="badge">{m.open_with_default({}, { locale })}</span>{/if}
+				{#if app.appId === defaultAppId}<span class="tag">{m.open_with_default({}, { locale })}</span>{/if}
 			</button>
 		{/each}
 		{#if !candidates}
@@ -95,12 +95,4 @@ $effect(() => {
 		outline: none;
 	}
 
-	.badge {
-		flex-shrink: 0;
-		border-radius: 4px;
-		background: var(--bg-elevated);
-		padding: 0.0625rem 0.375rem;
-		font-size: 10px;
-		color: var(--text-tertiary);
-	}
 </style>

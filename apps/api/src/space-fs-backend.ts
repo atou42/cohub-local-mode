@@ -245,7 +245,6 @@ export async function resolveSpaceFileDownload(spaceId: string, path: string, op
 export {
   assertSafeRelativePath,
   ensureSpaceWorkspaceReady,
-  getMimeType,
   sanitizeFileName,
   spaceFsJsonError,
   streamSpaceFile,

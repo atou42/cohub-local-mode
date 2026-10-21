@@ -100,6 +100,9 @@ export const audioCardRenderer: BoardCardRenderer = {
 	update: (container, item, context) => {
 		if (item.type === "audio") sync(container, item, context);
 	},
+	resolution: (container, item, context) => {
+		if (item.type === "audio") sync(container, item, context);
+	},
 	renderFar: (graphics, item, context) => {
 		drawFarPlate(graphics, item.frame, {
 			fill: context.palette.surface,

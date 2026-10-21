@@ -3,13 +3,8 @@ import { type Container, Text } from "pixi.js";
 import type { BoardFrame } from "@cohub/protocol";
 import { getBoardResolution } from "../text-resolution.js";
 
-const TEXT_OPTIONS = {
-	resolution: getBoardResolution(),
-	roundPixels: true,
-} as const;
-
 export function createLabel(text: string, style: Record<string, unknown>) {
-	return new Text({ ...TEXT_OPTIONS, text, style: { fontFamily: BOARD_FONT_STACK, ...style } });
+	return new Text({ resolution: getBoardResolution(), roundPixels: true, text, style: { fontFamily: BOARD_FONT_STACK, ...style } });
 }
 
 export function positionShell(root: Container, item: { frame: BoardFrame }) {

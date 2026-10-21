@@ -22,6 +22,7 @@ import type {
 import AppPublishDialog from "$lib/components/AppPublishDialog.svelte";
 import WorkspaceWindowsPane from "$lib/components/WorkspaceWindowsPane.svelte";
 import type { AppSurfaceHost } from "$lib/features/app/surface-host";
+import type { FilePreviewModel } from "$lib/file-preview-model";
 import { DURATION_PANEL, svelteEaseIn } from "$lib/motion.svelte";
 import type { FileViewMode } from "$lib/resource-kit/diff";
 import type { SpaceFsNode } from "$lib/space-fs";
@@ -105,21 +106,12 @@ export type SpaceFileDomainProps = {
 	previewEndpoints: SpacePublicEndpoints;
 	inlineFileDownloadUrl: string;
 	inlineFileDownloadName: string;
-	inlineFileIsText: boolean;
-	inlineFileHasRenderedPreview: boolean;
+	inlineFilePreview: FilePreviewModel;
 	inlineFileViewMode: FileViewMode;
 	inlineFileDiff: SpacePendingDiffFileResponse | null;
 	inlineFileDiffLoading: boolean;
 	inlineFileDiffError: string | null;
-	inlineFileIsMarkdown: boolean;
-	inlineFileIsCsv: boolean;
-	inlineFileIsHtml: boolean;
 	inlineFileCopied: boolean;
-	inlineFileIsImage: boolean;
-	inlineFileIsVideo: boolean;
-	inlineFileIsAudio: boolean;
-	inlineFileIsPdf: boolean;
-	inlineFileDataUrl: string | null;
 	inlineFileApp: AppRecord | null;
 	inlineFileZoom: number;
 	inlineFilePanX: number;
@@ -285,21 +277,12 @@ let {
 	previewEndpoints,
 	inlineFileDownloadUrl,
 	inlineFileDownloadName,
-	inlineFileIsText,
-	inlineFileHasRenderedPreview,
+	inlineFilePreview,
 	inlineFileViewMode = $bindable(),
 	inlineFileDiff,
 	inlineFileDiffLoading,
 	inlineFileDiffError,
-	inlineFileIsMarkdown,
-	inlineFileIsCsv,
-	inlineFileIsHtml,
 	inlineFileCopied,
-	inlineFileIsImage,
-	inlineFileIsVideo,
-	inlineFileIsAudio,
-	inlineFileIsPdf,
-	inlineFileDataUrl,
 	inlineFileApp,
 	inlineFileZoom = $bindable(),
 	inlineFilePanX = $bindable(),
@@ -526,23 +509,14 @@ function previewContentOut(node: Element) {
 		{inlineFileCanGoBack}
 		{inlineFileDownloadUrl}
 		{inlineFileDownloadName}
-		{inlineFileIsText}
-		{inlineFileHasRenderedPreview}
+		{inlineFilePreview}
 		bind:inlineFileViewMode
 		{inlineFileDiff}
 		{inlineFileDiffLoading}
 		{inlineFileDiffError}
-		{inlineFileIsMarkdown}
-		{inlineFileIsCsv}
-		{inlineFileIsHtml}
 		{activeFsReadonly}
 		{canEditFiles}
 		{inlineFileCopied}
-		{inlineFileIsImage}
-		{inlineFileIsVideo}
-		{inlineFileIsAudio}
-		{inlineFileIsPdf}
-		{inlineFileDataUrl}
 		inlineFileSpaceId={spaceId}
 		{inlineFileApp}
 		{isMobile}

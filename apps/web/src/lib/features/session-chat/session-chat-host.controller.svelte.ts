@@ -18,6 +18,7 @@ import type {
 import type { ChannelEnvelope } from "@cohub/protocol/realtime";
 import {
 	extractBillingPayload,
+	type HarnessKind,
 	HttpError,
 	type SessionRecord,
 } from "@neta-art/cohub";
@@ -47,6 +48,7 @@ import {
 import { isStale } from "$lib/features/space/runtime-status-view";
 import { resolvePreferredGenerationModel } from "$lib/generation-model-catalog";
 import { formatGenerationPolicyLabel } from "$lib/generation-policy-label";
+import { getLocale } from "$lib/i18n/locale.svelte";
 import { extractSpaceMentionsFromText } from "$lib/mentions/space";
 import {
 	formatThinkingLevelShort,
@@ -128,6 +130,7 @@ import {
 } from "$lib/stores/turn-intermediate-cache";
 import { turnRecordToIndexItem } from "$lib/turn-nav-preview";
 import type { LocalUploadEntry } from "$lib/upload-entries";
+import { describeUploadError } from "$lib/upload-errors";
 import type { WorkspaceFileLinkTarget } from "$lib/workspace-file-links";
 import {
 	shouldClearActiveSessionForNewDraft,
@@ -254,7 +257,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 	}
 
 	const isNewSessionRoute = $derived(route.kind === "new");
-	const workspace = createSessionWorkspaceController();
+	const workspace = createSessionWorkspaceController(() => spaceId);
 	const composer = createSessionComposerController();
 	const viewport = createViewportContextController();
 	const scroll = createSessionScrollController();
@@ -365,7 +368,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		mode: "agent",
 		model: null,
 	});
-	let harnessBySession = $state<Record<string, "cohub" | "pi" | "codex">>({});
+	let harnessBySession = $state<Record<string, HarnessKind>>({});
 	let localModelsBySession = $state<Record<string, LocalModelSelection>>({});
 	const harnessSelectionKey = $derived(
 		`${spaceId}:${activeSessionId ?? "draft"}`,
@@ -1953,7 +1956,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					session:
 						currentSeed?.session ??
 						existing?.session ??
-						sessionStore.get(sessionId),
+						workspace.getSession(sessionId),
 					turns: currentSeed?.turns ?? existing?.turns ?? [],
 					loading: true,
 					loaded: currentSeed?.loaded ?? existing?.loaded ?? false,
@@ -2023,7 +2026,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 						session:
 							fallback?.session ??
 							existing?.session ??
-							sessionStore.get(sessionId),
+							workspace.getSession(sessionId),
 						turns: fallback?.turns ?? existing?.turns ?? [],
 						loading: false,
 						loaded: Boolean(fallback?.loaded ?? existing?.loaded),
@@ -2921,13 +2924,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		}
 	}
 
-	function setComposerHarness(harness: "cohub" | "pi" | "codex") {
+	function setComposerHarness(harness: HarnessKind) {
 		if (sending || composerMode === "create") return;
 		harnessBySession = { ...harnessBySession, [harnessSelectionKey]: harness };
 		clearComposerError();
 	}
 
-	function canUseHarness(harness: "cohub" | "pi" | "codex") {
+	function canUseHarness(harness: HarnessKind) {
 		if (harness === "cohub") return true;
 		return Boolean(
 			runtimeCatalog?.online &&
@@ -3414,11 +3417,13 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 					? "Could not send request. Your session may be invalid — try refreshing or signing in again."
 					: rawSendError;
 			const sendErrorCode = getHttpErrorCode(error);
+			const locale = getLocale();
 			const displayError =
 				hadFileUpload || hadImageUpload
 					? uploadCompleted
-						? "Message failed. Attachments were uploaded."
-						: "Upload failed. Please try again."
+						? m.attach_send_failed_uploaded({}, { locale })
+						: (describeUploadError(error, locale) ??
+							m.attach_upload_failed({}, { locale }))
 					: sendError;
 			setComposerError(displayError, sendErrorCode);
 			if (sessionId)
@@ -4282,7 +4287,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 				void loadTurnIndex(route.sessionId);
 			} else {
 				const state = sessionStateById[route.sessionId];
-				if (state && !state.loaded && !state.loading) {
+				if (state && !state.loaded && !state.loading && !state.error) {
 					void loadSessionState(route.sessionId);
 				}
 			}
@@ -4359,8 +4364,17 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		appliedRouteTurnKey = null;
 	}
 
+	function retryFailedSessionLoad() {
+		const sessionId = activeSessionId;
+		const state = sessionId ? sessionStateById[sessionId] : null;
+		if (sessionId && state?.error?.kind === "error" && !state.loaded && !state.loading) {
+			void loadSessionState(sessionId);
+		}
+	}
+
 	function onTransportOpen() {
 		generationRealtime.onTransportOpen();
+		retryFailedSessionLoad();
 	}
 	function onConnectionRecovered() {
 		void refreshSessionsList();
@@ -4372,6 +4386,7 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			return;
 		}
 		void refreshSessionsList();
+		retryFailedSessionLoad();
 		if (activeSessionId && sessionStateById[activeSessionId]?.loaded) {
 			void reconcileSessionTail(activeSessionId);
 		}
@@ -4392,18 +4407,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 			visibleRect: state.visibleRect,
 			selectedNodes: state.selectedNodes,
 		});
-	}
-
-	async function renameActiveSession(title: string) {
-		if (!activeSessionId) return null;
-		const trimmed = title.trim();
-		if (!trimmed) return null;
-		const result = await sdk
-			.space(spaceId)
-			.session(activeSessionId)
-			.rename(trimmed);
-		sessionStore.merge(result.session);
-		return result.session;
 	}
 
 	function dispose() {
@@ -4720,7 +4723,6 @@ export function createSessionChatHost(options: SessionChatHostOptions) {
 		reportBoardView,
 		flushComposerDraft: flushActiveComposerDraft,
 		refreshSessions: refreshSessionsList,
-		renameActiveSession,
 		dispose,
 		handleSend,
 		setComposerMode,

@@ -130,7 +130,7 @@ function sync(
 		height,
 		detail,
 		elevation,
-		texture ? `${texture.width}x${texture.height}` : "none",
+		texture?.uid ?? "none",
 		coverFailed,
 		fileState,
 		kind,
@@ -335,6 +335,9 @@ export const fileCardRenderer: BoardCardRenderer = {
 		return root;
 	},
 	update: (container, item, context) => {
+		if (item.type === "file") sync(container, item, context);
+	},
+	resolution: (container, item, context) => {
 		if (item.type === "file") sync(container, item, context);
 	},
 	zoom: (container, zoom) => {

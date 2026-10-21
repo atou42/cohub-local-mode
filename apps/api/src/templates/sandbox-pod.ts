@@ -13,6 +13,7 @@ type SandboxPodTemplateVariables = {
   SPACE_SYSTEM_SUBPATH?: string;
   CONFIGS_SUBPATH?: string;
   SANDBOX_SPEC_ID?: SandboxSpecId;
+  SANDBOX_IMAGE?: string;
 };
 
 function assertK8sSafeName(value: string, fieldName: string) {
@@ -105,6 +106,12 @@ export const SANDBOX_POD_TEMPLATE = {
             name: "space-storage",
             mountPath: "/configs/user/.agents",
             subPath: "${CONFIGS_SUBPATH}/users/${OWNER_USER_ID}/.agents",
+            readOnly: true,
+          },
+          {
+            name: "space-storage",
+            mountPath: "/configs/user/.cohub",
+            subPath: "${CONFIGS_SUBPATH}/users/${OWNER_USER_ID}/.sandbox-setup",
             readOnly: true,
           },
           {

@@ -18,11 +18,13 @@ import {
 } from "../../render/script-runtime.js";
 import type { BoardScriptHost } from "../../render/renderers/board-renderer-registry.js";
 import type { BoardNodeRenderer } from "./index.js";
+import { initializeBoardFonts } from "./fonts.js";
 
 const WORKER = `
 const {parentPort, workerData} = require('node:worker_threads');
 const {createContext, Script, SourceTextModule} = require('node:vm');
-const {createCanvas} = require(workerData.canvasModule);
+const {createCanvas, GlobalFonts} = require(workerData.canvasModule);
+(${initializeBoardFonts.toString()})(GlobalFonts, workerData.fonts);
 const instances = new Map();
 const graphs = new Map();
 const update = new Script('__runtime.update(JSON.parse(__inputJson)); __runtime.step(__time)');
@@ -185,6 +187,7 @@ export function createNodeBoardScriptHost(
             workerData: {
               runtime: createScriptRuntime.toString(),
               timeout,
+              fonts: renderer.fonts ?? [],
               canvasModule: fileURLToPath(
                 import.meta.resolve("@napi-rs/canvas"),
               ),

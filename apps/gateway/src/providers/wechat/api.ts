@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createLogger } from "@cohub/infra/logging";
+import { OutboundDeliveryUnknownError } from "../base.js";
 import {
   WECHAT_DEFAULT_BOT_AGENT,
   WECHAT_DEFAULT_BASE_URL,
@@ -169,6 +170,7 @@ export async function getWeChatUploadUrl(params: {
   fileSize: number;
   aesKeyHex: string;
   botAgent?: string;
+  signal?: AbortSignal;
 }) {
   const text = await postJson({
     baseUrl: params.baseUrl,
@@ -176,6 +178,7 @@ export async function getWeChatUploadUrl(params: {
     token: params.token,
     timeoutMs: DEFAULT_API_TIMEOUT_MS,
     label: "wechat getUploadUrl",
+    signal: params.signal,
     body: {
       filekey: params.filekey,
       media_type: params.mediaType,
@@ -199,7 +202,8 @@ export async function sendWeChatMessageItems(params: {
   contextToken?: string | null;
   botAgent?: string;
   label?: string;
-}) {
+  signal?: AbortSignal;
+}): Promise<{ externalMessageId: string }> {
   const clientId = crypto.randomUUID();
   const body: WeChatSendMessageRequest & { base_info: { bot_agent: string } } = {
     msg: {
@@ -218,14 +222,31 @@ export async function sendWeChatMessageItems(params: {
     logger.warn(`[WeChat] sending without context token to=${params.to}`);
   }
 
-  await postJson({
-    baseUrl: params.baseUrl,
-    endpoint: "ilink/bot/sendmessage",
-    token: params.token,
-    timeoutMs: DEFAULT_API_TIMEOUT_MS,
-    label: params.label ?? "wechat sendMessage",
-    body,
-  });
+  let responseText: string;
+  try {
+    params.signal?.throwIfAborted();
+    responseText = await postJson({
+      baseUrl: params.baseUrl,
+      endpoint: "ilink/bot/sendmessage",
+      token: params.token,
+      timeoutMs: DEFAULT_API_TIMEOUT_MS,
+      signal: params.signal,
+      label: params.label ?? "wechat sendMessage",
+      body,
+    });
+  } catch (error) {
+    throw new OutboundDeliveryUnknownError(`WeChat send outcome unknown: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  let response: { ret?: number; errcode?: number; errmsg?: string };
+  try {
+    response = JSON.parse(responseText);
+    if (!response || (response.ret === undefined && response.errcode === undefined)) throw new Error("Missing WeChat result code");
+  } catch (error) {
+    throw new OutboundDeliveryUnknownError("Invalid WeChat send response", { cause: error });
+  }
+  if ((response.ret !== undefined && response.ret !== 0) || (response.errcode !== undefined && response.errcode !== 0)) {
+    throw new Error(`WeChat send failed ret=${response.ret} errcode=${response.errcode}: ${response.errmsg ?? ""}`);
+  }
   return { externalMessageId: clientId };
 }
 
@@ -236,6 +257,7 @@ export async function sendWeChatTextMessage(params: {
   text: string;
   contextToken?: string | null;
   botAgent?: string;
+  signal?: AbortSignal;
 }) {
   return sendWeChatMessageItems({
     baseUrl: params.baseUrl,
@@ -243,6 +265,7 @@ export async function sendWeChatTextMessage(params: {
     to: params.to,
     contextToken: params.contextToken,
     botAgent: params.botAgent,
+    signal: params.signal,
     items: params.text.trim()
       ? [{ type: WeChatMessageItemType.TEXT, text_item: { text: params.text } }]
       : [],

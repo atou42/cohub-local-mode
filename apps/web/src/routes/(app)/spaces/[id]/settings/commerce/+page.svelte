@@ -643,7 +643,7 @@ $effect(() => {
 							<div class="rounded-[8px] border border-dashed border-border-subtle px-4 py-6 text-center">
 								<div class="text-[13px] font-medium text-text-secondary">{m.commerce_no_benefits({}, { locale })}</div>
 								<div class="mt-1 text-[12px] text-text-tertiary">{m.commerce_no_benefits_hint({}, { locale })}</div>
-								<button type="button" class="mt-3 inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-3 py-2 text-[12px] font-medium text-text-primary transition-colors hover:bg-bg-hover" onclick={() => { clearNotice(); dialog = { kind: "benefit-create" }; }} disabled={!canManage}>
+								<button type="button" class="secondary-key mt-3 min-h-9 gap-1.5 px-3 py-2 text-[12px]" onclick={() => { clearNotice(); dialog = { kind: "benefit-create" }; }} disabled={!canManage}>
 									<Plus class="h-3.5 w-3.5" /> {m.commerce_create_benefit({}, { locale })}
 								</button>
 							</div>
@@ -658,8 +658,8 @@ $effect(() => {
 												<div class="flex flex-wrap items-center gap-2">
 													<span class="inline-flex h-1.5 w-1.5 shrink-0 rounded-full {archived ? 'bg-text-placeholder' : 'bg-brand'}" aria-hidden="true"></span>
 													<span class="text-[13px] font-medium text-text-primary {archived ? 'line-through' : ''}">{benefit.name}</span>
-													<span class="rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">{benefit.type === 'credits' ? m.commerce_credits({}, { locale }) : m.commerce_feature({}, { locale })}</span>
-													{#if archived}<span class="rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-text-placeholder">{m.commerce_archived({}, { locale })}</span>{/if}
+													<span class="tag font-medium uppercase tracking-wide">{benefit.type === 'credits' ? m.commerce_credits({}, { locale }) : m.commerce_feature({}, { locale })}</span>
+													{#if archived}<span class="tag uppercase tracking-wide text-text-placeholder">{m.commerce_archived({}, { locale })}</span>{/if}
 												</div>
 												<div class="mt-0.5 truncate font-mono text-[11px] text-text-tertiary">{benefit.key}</div>
 												{#if benefit.description}<div class="mt-1 text-[12px] text-text-secondary">{benefit.description}</div>{/if}
@@ -675,7 +675,7 @@ $effect(() => {
 												{/if}
 											</div>
 											<div class="flex shrink-0 items-center gap-1">
-												<button type="button" class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50" onclick={() => { clearNotice(); dialog = { kind: "benefit-edit", benefit }; }} disabled={benefitActionBusyKey !== null || archived || !canManage}>
+												<button type="button" class="secondary-key h-8 gap-1.5 px-2.5 text-[11px]" onclick={() => { clearNotice(); dialog = { kind: "benefit-edit", benefit }; }} disabled={benefitActionBusyKey !== null || archived || !canManage}>
 													<Pencil class="h-3 w-3" /> {m.commerce_edit({}, { locale })}
 												</button>
 												<button type="button" class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[6px] px-2.5 text-[11px] font-medium text-text-placeholder transition-colors hover:bg-bg-hover hover:text-error-soft disabled:opacity-50" onclick={() => void archiveBenefit(benefit)} disabled={benefitActionBusyKey !== null || archived || !canManage}>
@@ -710,7 +710,7 @@ $effect(() => {
 							<div class="rounded-[8px] border border-dashed border-border-subtle px-4 py-6 text-center">
 								<div class="text-[13px] font-medium text-text-secondary">{m.commerce_no_products({}, { locale })}</div>
 								<div class="mt-1 text-[12px] text-text-tertiary">{m.commerce_no_products_hint({}, { locale })}</div>
-								<button type="button" class="mt-3 inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-3 py-2 text-[12px] font-medium text-text-primary transition-colors hover:bg-bg-hover" onclick={() => { clearNotice(); dialog = { kind: "product-create" }; }} disabled={!canManage}>
+								<button type="button" class="secondary-key mt-3 min-h-9 gap-1.5 px-3 py-2 text-[12px]" onclick={() => { clearNotice(); dialog = { kind: "product-create" }; }} disabled={!canManage}>
 									<Plus class="h-3.5 w-3.5" /> {m.commerce_create_product({}, { locale })}
 								</button>
 							</div>
@@ -724,7 +724,7 @@ $effect(() => {
 											<div class="min-w-0">
 												<div class="flex flex-wrap items-center gap-2">
 													<span class="text-[13px] font-medium text-text-primary {archived ? 'line-through' : ''}">{product.name}</span>
-													<span class="rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">{m.commerce_one_time({}, { locale })}</span>
+													<span class="tag font-medium uppercase tracking-wide">{m.commerce_one_time({}, { locale })}</span>
 												</div>
 												<div class="mt-0.5 truncate font-mono text-[11px] text-text-tertiary">{product.key}</div>
 											</div>
@@ -739,10 +739,10 @@ $effect(() => {
 												{product.status}
 											</span>
 											{#if product.cohubBalance}
-												<span class="rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-secondary">{m.commerce_balance({ amount: formatCurrency(product.cohubBalance.amountUsd, "USD", { locale, minimumFractionDigits: 2, maximumFractionDigits: 2 }) }, { locale })}</span>
+												<span class="tag text-text-secondary">{m.commerce_balance({ amount: formatCurrency(product.cohubBalance.amountUsd, "USD", { locale, minimumFractionDigits: 2, maximumFractionDigits: 2 }) }, { locale })}</span>
 											{/if}
 											{#if product.display.creditsAmount != null && product.display.creditsAmount > 0}
-												<span class="rounded-[4px] border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-secondary">{m.commerce_credits_amount({ count: product.display.creditsAmount }, { locale })}</span>
+												<span class="tag text-text-secondary">{m.commerce_credits_amount({ count: product.display.creditsAmount }, { locale })}</span>
 											{/if}
 										</div>
 
@@ -751,7 +751,7 @@ $effect(() => {
 										{/if}
 
 										<div class="mt-3 flex items-center gap-1 border-t border-border-subtle pt-2.5">
-											<button type="button" class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50" onclick={() => { clearNotice(); dialog = { kind: "product-edit", product }; }} disabled={productActionBusyKey !== null || archived || !canManage}>
+											<button type="button" class="secondary-key h-8 gap-1.5 px-2.5 text-[11px]" onclick={() => { clearNotice(); dialog = { kind: "product-edit", product }; }} disabled={productActionBusyKey !== null || archived || !canManage}>
 												<Pencil class="h-3 w-3" /> {m.commerce_edit({}, { locale })}
 											</button>
 											<button type="button" class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[6px] px-2.5 text-[11px] font-medium text-text-placeholder transition-colors hover:bg-bg-hover hover:text-error-soft disabled:opacity-50" onclick={() => void archiveProduct(product)} disabled={productActionBusyKey !== null || archived || !canManage}>
@@ -776,7 +776,7 @@ $effect(() => {
 								<div class="text-[12px] text-text-tertiary">{m.commerce_bindings_desc({}, { locale })}</div>
 							</div>
 						</div>
-						<button type="button" class="inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-3 py-2 text-[12px] font-medium text-text-primary transition-colors hover:bg-bg-hover disabled:opacity-50" onclick={() => { bindFormOpen = !bindFormOpen; bindProductKey = ""; bindBenefitKey = ""; }} disabled={!canManage || bindableProducts.length === 0 || bindableBenefits.length === 0}>
+						<button type="button" class="secondary-key min-h-9 shrink-0 gap-1.5 px-3 py-2 text-[12px]" onclick={() => { bindFormOpen = !bindFormOpen; bindProductKey = ""; bindBenefitKey = ""; }} disabled={!canManage || bindableProducts.length === 0 || bindableBenefits.length === 0}>
 							<Plus class="h-3.5 w-3.5" /> {m.commerce_bind_benefit({}, { locale })}
 						</button>
 					</div>
@@ -906,7 +906,7 @@ $effect(() => {
 							</div>
 							{#if ordersHasMore}
 								<div class="mt-3 flex justify-center">
-									<button type="button" class="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-input px-3 py-2 text-[12px] font-medium text-text-primary transition-colors hover:bg-bg-hover disabled:opacity-50" onclick={() => void loadMoreOrders()} disabled={ordersLoadingMore}>
+									<button type="button" class="secondary-key min-h-9 gap-1.5 px-3 py-2 text-[12px]" onclick={() => void loadMoreOrders()} disabled={ordersLoadingMore}>
 										{#if ordersLoadingMore}<Loader2 class="h-3.5 w-3.5 animate-spin" />{/if}
 										{m.commerce_load_more({}, { locale })}
 									</button>

@@ -169,6 +169,10 @@ export const shapeCardRenderer: BoardCardRenderer = {
 	update: (container, item, context) => {
 		if (item.type === "shape") sync(container, item as SceneItem<BoardShapeItem>, context);
 	},
+	resolution: (container, _item, context) => {
+		const parts = partsByContainer.get(container);
+		if (parts) syncTextResolution(parts.label, parts, context.zoom);
+	},
 	renderFar: (graphics, item, context) => {
 		if (item.type !== "shape") return;
 		drawFarPlate(graphics, item.frame, {

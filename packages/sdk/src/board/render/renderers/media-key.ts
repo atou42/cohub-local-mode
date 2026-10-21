@@ -1,4 +1,5 @@
 import type { Graphics } from "pixi.js";
+import { traceCube } from "../card-tag.js";
 import { tracePixelRect } from "../surface.js";
 import type { BoardRenderContext } from "./board-renderer-registry.js";
 
@@ -30,4 +31,20 @@ export function drawMediaPlayKey(
 	graphics
 		.poly([cx - size * 0.45, cy - size * 0.75, cx + size * 0.8, cy, cx - size * 0.45, cy + size * 0.75])
 		.fill({ color: ink, alpha: 0.96 });
+}
+
+export function drawModelKey(
+	graphics: Graphics,
+	cx: number,
+	cy: number,
+	radius: number,
+	context: BoardRenderContext,
+) {
+	if (context.style.corner === "pixel") {
+		const size = Math.round(radius * 1.6);
+		tracePixelRect(graphics, Math.round(cx - size / 2), Math.round(cy - size / 2), size, size, 2).fill({ color: MEDIA_SCRIM, alpha: 0.62 });
+	} else {
+		graphics.circle(cx, cy, radius).fill({ color: MEDIA_SCRIM, alpha: 0.45 });
+	}
+	traceCube(graphics, cx, cy, radius * 0.5).stroke({ color: MEDIA_INK, width: Math.max(1, radius / 10), alpha: 0.96, join: "round", cap: "round" });
 }

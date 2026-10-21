@@ -25,36 +25,14 @@ import {
   renderBoardExport,
 } from "../index.js";
 import type { BoardScriptHost } from "../../render/renderers/board-renderer-registry.js";
+import { initializeBoardFonts, type BoardFontRegistry, type BoardNodeFont } from "./fonts.js";
+
+export type { BoardNodeFont } from "./fonts.js";
 
 export type NodeCanvasModule = {
   createCanvas: (width: number, height: number) => unknown;
   Image: new () => unknown;
-  GlobalFonts: {
-    registerFromPath: (path: string, name?: string) => unknown;
-    has: (name: string) => boolean;
-    setAlias?: (fontName: string, alias: string) => boolean;
-  };
-};
-
-const SYSTEM_UI_FAMILIES = [
-  "Noto Sans",
-  "DejaVu Sans",
-  "Liberation Sans",
-  "FreeSans",
-  "Helvetica Neue",
-  "Arial",
-  "Segoe UI",
-];
-
-function aliasSystemUi(fonts: NodeCanvasModule["GlobalFonts"]): void {
-  if (!fonts.setAlias || fonts.has("system-ui")) return;
-  const family = SYSTEM_UI_FAMILIES.find((name) => fonts.has(name));
-  if (family) fonts.setAlias(family, "system-ui");
-}
-
-export type BoardNodeFont = {
-  path: string;
-  family?: string;
+  GlobalFonts: BoardFontRegistry;
 };
 
 export type BoardNodeRendererOptions = {
@@ -70,6 +48,7 @@ export type BoardNodeTexture = {
 export type BoardNodeRenderer = {
   renderer: Renderer;
   canvasModule: NodeCanvasModule;
+  fonts?: readonly BoardNodeFont[];
   decodeImage: (bytes: Uint8Array, mimeType?: string) => Promise<BoardNodeTexture>;
   destroy: () => void;
 };
@@ -137,10 +116,8 @@ export async function createNodeBoardRenderer(
     CanvasTextPipe,
   );
 
-  for (const font of options.fonts ?? []) {
-    canvasModule.GlobalFonts.registerFromPath(font.path, font.family ?? BOARD_TEXT_FONT_FAMILY);
-  }
-  aliasSystemUi(canvasModule.GlobalFonts);
+  const fonts = (options.fonts ?? []).map((font) => ({ ...font, family: font.family ?? BOARD_TEXT_FONT_FAMILY }));
+  initializeBoardFonts(canvasModule.GlobalFonts, fonts);
 
   function createCanvas(width = 1, height = 1) {
     const canvas = canvasModule.createCanvas(
@@ -187,6 +164,7 @@ export async function createNodeBoardRenderer(
   return {
     renderer: renderer as unknown as Renderer,
     canvasModule,
+    fonts,
     decodeImage: async (bytes) => {
       const image = new canvasModule.Image() as {
         src: Uint8Array | string;

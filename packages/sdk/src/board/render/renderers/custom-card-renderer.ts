@@ -2,7 +2,7 @@ import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { BoardCustomItem } from "@cohub/protocol";
 import { BOARD_MONO_FONT_STACK } from "@cohub/protocol/board-constants";
 import type { SceneItem } from "../../model/scene.js";
-import { getBoardResolution } from "../text-resolution.js";
+import { getBoardResolution, syncTextResolution } from "../text-resolution.js";
 import { positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
@@ -26,9 +26,9 @@ function sync(container: Container, item: SceneItem<BoardCustomItem>, context: B
 		parts.id = item.id;
 	}
 	positionShell(parts.root, item);
+	syncTextResolution(parts.label, parts.label, context.zoom);
 	const { width, height } = item.frame;
-	const resolution = Math.min(4, Math.max(0.25, context.zoom * getBoardResolution()));
-	const texture = context.scripts?.frame(item, context.time, resolution) ?? null;
+	const texture = context.scripts?.frame(item, context.time) ?? null;
 	const error = context.scripts?.error(item.id) ?? null;
 	parts.sprite.visible = Boolean(texture);
 	const display = texture ?? Texture.EMPTY;
@@ -71,6 +71,10 @@ export const customCardRenderer: BoardCardRenderer = {
 	},
 	update: (container, item, context) => {
 		if (item.type === "custom") sync(container, item as SceneItem<BoardCustomItem>, context);
+	},
+	resolution: (container, _item, context) => {
+		const parts = partsByContainer.get(container);
+		if (parts) syncTextResolution(parts.label, parts.label, context.zoom);
 	},
 	renderFar: (graphics, item, context) => {
 		drawFarPlate(graphics, item.frame, { fill: context.palette.muted, fillAlpha: 0.12 });

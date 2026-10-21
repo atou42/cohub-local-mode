@@ -93,6 +93,10 @@ export const unknownCardRenderer: BoardCardRenderer = {
 	update: (container, item, context) => {
 		sync(container, item, context);
 	},
+	resolution: (container, _item, context) => {
+		const parts = partsByContainer.get(container);
+		if (parts) syncTextResolution(parts.label, parts, context.zoom);
+	},
 	renderFar: (graphics, item, context) => {
 		drawFarPlate(graphics, item.frame, {
 			fill: context.palette.muted,

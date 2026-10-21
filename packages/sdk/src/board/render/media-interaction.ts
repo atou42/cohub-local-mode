@@ -1,6 +1,8 @@
-import type { BoardSceneItem, } from "../model/scene.js";
+import { isBoardModelItem } from "../model/media.js";
+import type { BoardSceneItem } from "../model/scene.js";
 import { degToRad, rotatePointAround, type WorldPoint, worldPoint } from "../model/geometry.js";
 import { audioKeyCenter } from "./renderers/audio-card-renderer.js";
+import { modelKeyCenter } from "./renderers/model-card-renderer.js";
 import { featuredTaskArtifact } from "@cohub/protocol";
 import { boardCardDetailed } from "./text-resolution.js";
 
@@ -16,6 +18,7 @@ export function mediaPlayBadgeVisible(
 ): boolean {
 	if (!options.materialized) return false;
 	if (item.type === "video" || item.type === "audio") return true;
+	if (isBoardModelItem(item)) return boardCardDetailed(zoom);
 	if (item.type !== "task" || !boardCardDetailed(zoom)) return false;
 	const artifact = featuredTaskArtifact(item.props.snapshot.artifacts);
 	if (artifact?.type === "audio") return true;
@@ -23,11 +26,17 @@ export function mediaPlayBadgeVisible(
 		(Boolean(artifact.previewUrl) || options.hasVideoPreview);
 }
 
+function cornerKey(item: BoardSceneItem) {
+	const { width, height } = item.frame;
+	if (item.type === "audio") return audioKeyCenter(width, height);
+	return isBoardModelItem(item) ? modelKeyCenter(width, height) : null;
+}
+
 export function mediaPlayKeyCenter(item: BoardSceneItem): WorldPoint {
 	const { x, y, width, height, rotation } = item.frame;
 	const center = worldPoint(x + width / 2, y + height / 2);
-	if (item.type !== "audio") return center;
-	const key = audioKeyCenter(width, height);
+	const key = cornerKey(item);
+	if (!key) return center;
 	return rotatePointAround(worldPoint(x + key.x, y + key.y), center, degToRad(rotation || 0));
 }
 
@@ -36,7 +45,10 @@ export function mediaPlayBadgeHit(
 	point: WorldPoint,
 	zoom: number,
 ): boolean {
-	const radius = 28 / Math.max(zoom, 0.05);
+	const scale = Math.max(zoom, 0.05);
+	const radius = isBoardModelItem(item)
+		? Math.max(cornerKey(item)?.radius ?? 0, 16 / scale)
+		: 28 / scale;
 	const center = mediaPlayKeyCenter(item);
 	return Math.hypot(point.x - center.x, point.y - center.y) <= radius;
 }

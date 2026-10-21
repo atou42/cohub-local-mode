@@ -1,6 +1,9 @@
 export {
   BillingConfigurationError,
   billingOperations,
+  spaceWalletBillingOperations,
+  createSpaceWalletBillingOperations,
+  resolveSpaceWalletBillingClientConfig,
   createBillingOperations,
   createBusinessBillingOperations,
   createDisabledBusinessBillingOperations,
@@ -11,7 +14,7 @@ export {
   isBillingConfigured,
   resolveBillingClientConfig,
 } from "./client.js";
-export type { BillingClientConfig, BillingRedisClient, BillingRuntimeConfig } from "./client.js";
+export type { BillingClientConfig, BillingRedisClient, BillingRuntimeConfig, SpaceWalletBillingOperations } from "./client.js";
 export type {
   BillingAccountState,
   BillingCatalog,

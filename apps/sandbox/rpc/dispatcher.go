@@ -149,6 +149,10 @@ func (d *Dispatcher) Handle(request protocol.RPCRequest, ownerIdentity string) (
 		return accepted, d.complete(request, accepted.OpID, d.handleFSEdit(request))
 	case "fs.mkdir":
 		return accepted, d.complete(request, accepted.OpID, d.handleFSMkdir(request))
+	case "fs.delete":
+		return accepted, d.complete(request, accepted.OpID, d.handleFSDelete(request))
+	case "fs.move":
+		return accepted, d.complete(request, accepted.OpID, d.handleFSMove(request))
 	case "fs.stat":
 		return accepted, d.complete(request, accepted.OpID, d.handleFSStat(request))
 	case "fs.ls":
@@ -225,6 +229,8 @@ type fsTreeParams struct {
 	Depth            int    `json:"depth"`
 	Limit            int    `json:"limit"`
 	RespectGitignore *bool  `json:"respectGitignore"`
+	Pagination       bool   `json:"pagination"`
+	Cursor           string `json:"cursor"`
 }
 
 type fsFindParams struct {
@@ -784,6 +790,9 @@ func (d *Dispatcher) handleFSTree(request protocol.RPCRequest) interface{} {
 	}
 	if !info.IsDir() {
 		return d.failed(request, "", "NOT_DIRECTORY", fmt.Sprintf("not a directory: %s", resolved.path))
+	}
+	if params.Pagination {
+		return d.listTreePage(request, params, resolved.path, info)
 	}
 
 	depth := params.Depth

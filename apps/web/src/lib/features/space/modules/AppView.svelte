@@ -388,7 +388,7 @@ onDestroy(() => {
                 <div class="py-3 text-[12px] sm:grid sm:grid-cols-[88px_minmax(0,1fr)_minmax(0,200px)_150px] sm:items-center sm:gap-3 sm:py-2.5">
                   <div class="flex items-center gap-2 px-1">
                     <span class="font-mono text-text-primary">v{version.version}</span>
-                    {#if version.id === appDetail.currentVersionId}<span class="rounded-full bg-brand-muted px-2 py-0.5 text-[10px] font-medium text-brand">Current</span>{/if}
+                    {#if version.id === appDetail.currentVersionId}<span class="tag font-medium" data-tone="brand">Current</span>{/if}
                   </div>
                   <div class="mt-1 truncate font-mono text-text-tertiary sm:mt-0" title={`${version.targetType}:${version.targetRef}`}>{version.targetType}:{version.targetRef}</div>
                   {#if sessionHref && version.source?.session}

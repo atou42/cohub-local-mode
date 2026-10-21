@@ -1,6 +1,8 @@
 <script lang="ts">
+import { isModelMime, mimeTypeForPath } from "@cohub/protocol/fs";
 import {
 	AppWindow,
+	Box,
 	ChevronDown,
 	Download,
 	File as FileIcon,
@@ -90,6 +92,7 @@ const markLabel = $derived.by(() => {
 });
 const isActive = $derived(selectedPath === node.path);
 const isDir = $derived(node.type === "dir");
+const isModel = $derived(!isDir && isModelMime(mimeTypeForPath(node.name)));
 let isDragOver = $state(false);
 let isMoveTarget = $state(false);
 let rowEl: HTMLDivElement | null = $state(null);
@@ -391,6 +394,8 @@ $effect(() => {
   <span class="icon shrink-0" class:twisty={isDir}>
     {#if isDir}
       <ChevronDown class="h-3 w-3 transition-transform {node.isOpen ? '' : '-rotate-90'}" />
+    {:else if isModel}
+      <Box class="w-3.5 h-3.5" />
     {:else}
       <FileIcon class="w-3.5 h-3.5" />
     {/if}
@@ -468,6 +473,14 @@ $effect(() => {
 </div>
 
 {#if isDir && node.isOpen && depth < 50}
+  {#if node.loadError}
+    <div class="flex items-center gap-2 py-1 text-[12px] text-text-tertiary" style:padding-left={`${(depth + 1) * 14 + 8}px`} role="status">
+      <span class="min-w-0 flex-1">{node.loadError}</span>
+      <button type="button" class="shrink-0 px-2 py-1 text-text-secondary hover:text-text-primary" onclick={() => onToggle({ ...node, isOpen: false })}>
+        {m.common_retry({}, { locale })}
+      </button>
+    </div>
+  {/if}
   {#each node.children as child (child.path)}
     <FsTreeItem
       node={child}

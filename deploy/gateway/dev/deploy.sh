@@ -59,6 +59,7 @@ if [ -z "$GATEWAY_HOSTNAMES" ]; then
 fi
 ENV=$(get_value "ENV")
 LOG_LEVEL=$(get_value "LOG_LEVEL")
+GATEWAY_OUTBOUND_CONCURRENCY=$(get_value "GATEWAY_OUTBOUND_CONCURRENCY")
 
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   Cohub Gateway Dev 环境部署           ║${NC}"
@@ -130,6 +131,7 @@ PY
     -e "s|__LOGTO_ENDPOINT__|${LOGTO_ENDPOINT}|g" \
     -e "s|__ENV__|${ENV}|g" \
     -e "s|__LOG_LEVEL__|${LOG_LEVEL:-info}|g" \
+    -e "s|__GATEWAY_OUTBOUND_CONCURRENCY__|${GATEWAY_OUTBOUND_CONCURRENCY:-16}|g" \
     "$dst"
   rm -f "$dst.bak"
 }

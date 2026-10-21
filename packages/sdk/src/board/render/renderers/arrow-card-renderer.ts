@@ -99,6 +99,10 @@ export const arrowCardRenderer: BoardCardRenderer = {
 	update: (container, item, context) => {
 		if (item.type === "arrow") sync(container, item as SceneItem<BoardArrowItem>, context);
 	},
+	resolution: (container, _item, context) => {
+		const parts = partsByContainer.get(container);
+		if (parts) syncTextResolution(parts.label, parts, context.zoom);
+	},
 	renderFar: (graphics, item, context) => {
 		if (item.type !== "arrow") return;
 		const arrow = item as SceneItem<BoardArrowItem>;

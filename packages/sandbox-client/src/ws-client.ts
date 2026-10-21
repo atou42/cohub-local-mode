@@ -152,6 +152,7 @@ type SandboxClientRegistration = {
 };
 
 export class SandboxConnection {
+  heartbeat?: SandboxHeartbeat;
   private closed = false;
   private disposed = false;
 
@@ -276,7 +277,6 @@ export class SandboxConnection {
         method: pending.method,
         rpcErrorCode: message.error.code,
         retryable: message.error.retryable ?? false,
-        ...(message.error.code === "IO_ERROR" ? { transportReason: message.error.message } : {}),
         diagnostics: pending.diagnostics,
       }));
     }
@@ -636,8 +636,9 @@ async function connectOnce(registration: SandboxClientRegistration, run: Sandbox
             return;
           }
           heartbeat = message;
+          if (connection) connection.heartbeat = message;
           const setup = message.metadata?.setup;
-          if (setup) {
+          if (setup && setup.status !== "waiting" && setup.status !== "running") {
             if (setup.ran) {
               if (setup.exitCode === 0 && !setup.error) {
                 logger.debug(`[SandboxWS] setup.sh completed ok spaceId=${registration.spaceId} duration=${setup.duration}`);
@@ -673,6 +674,7 @@ async function connectOnce(registration: SandboxClientRegistration, run: Sandbox
           attached = true;
           const attachedSandboxId = heartbeat.sandboxId;
           connection = new SandboxConnection(registration.spaceId, attachedSandboxId, message.identity, message.connectionId, heartbeat.capabilities, socket, registration);
+          connection.heartbeat = heartbeat;
           setActiveConnection(registration.spaceId, connection);
           callHookSafely(registration.spaceId, "onAttached", () => registration.hooks?.onAttached?.({
             spaceId: registration.spaceId,

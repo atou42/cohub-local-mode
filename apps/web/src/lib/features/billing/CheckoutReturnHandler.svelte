@@ -104,6 +104,7 @@ async function waitForSettlement(productKey: string, checkoutId: string) {
 
 onMount(() => {
 	const url = new URL(window.location.href);
+	if (url.searchParams.has("wallet_order")) return;
 	const found = readCheckoutReturn(url);
 	if (!found) return;
 	result = found;
@@ -142,7 +143,7 @@ onMount(() => {
 </script>
 
 {#if result}
-	<div class="toast" role="status" class:success={showSuccess} class:confirming={showPending}>
+	<div class="toast toast-surface" role="status" class:success={showSuccess} class:confirming={showPending}>
 		{#if showPending}
 			<Loader2 class="icon is-msg" aria-hidden="true" />
 		{:else if showSuccess}
@@ -190,11 +191,6 @@ onMount(() => {
 		align-items: flex-start;
 		gap: 10px;
 		padding: 12px 12px 12px 14px;
-		border-radius: 10px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-		box-shadow: 0 8px 24px oklch(0% 0 0 / 0.18);
 		animation: enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
 	}
 	@media (min-width: 640px) {
