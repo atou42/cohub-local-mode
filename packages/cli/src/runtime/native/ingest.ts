@@ -4,7 +4,6 @@ import { NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, type NativeIngestResult
 import { acceptsDirectory, acceptsTranscript, readSessionHeader, readTranscript, transcriptRoots, type Harness, type NativeTranscriptTurn } from "./adapters.js";
 import { nativeTurnId } from "./identity.js";
 import type { RuntimeArchiveStore } from "../archive-store.js";
-import { restoreRegistration, type NativeRegistration, type RegistrationDiagnostic } from "./registration.js";
 import { transcriptFormat } from "../harnesses/index.js";
 import { containsNativePath } from "./paths.js";
 
@@ -70,7 +69,6 @@ type LedgerEntry = { path: string; state: TranscriptState } | { import: ImportJo
 const IMPORT_FAILURES_KEPT = 100;
 
 export type IngestTransport = {
-  registration?(sessionId: string, turnId: string, options?: { signal?: AbortSignal }): Promise<NativeRegistration>;
   ingest(event: Extract<NativeRuntimeEvent, { type: "ingest" }>, options?: { signal?: AbortSignal }): Promise<NativeIngestResult>;
   known(turnIds: string[], options?: { signal?: AbortSignal }): Promise<Array<{ turnId: string; sessionId: string; settled: boolean }>>;
   progress(event: Extract<NativeRuntimeEvent, { type: "progress" }>, options?: { signal?: AbortSignal }): Promise<{ accepted?: boolean; resync?: boolean } | unknown>;
@@ -78,7 +76,6 @@ export type IngestTransport = {
 };
 
 export type IngestHooks = {
-  onRegistrationRestored?: (details: RegistrationDiagnostic, context: { path: string; harness: Harness }) => void;
   /**
    * Control-plane certainty about a session's file as last written at `mtimeMs`: `true` when the
    * agent settled after that write, `false` while it runs, `null` when the control plane cannot
@@ -182,7 +179,6 @@ export class NativeIngest {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watchers: Array<{ close(): void }> = [];
   private transport: IngestTransport | null = null;
-  private registrationController = new AbortController();
   private harnesses: Harness[];
   private enabledAt: string;
   private watching: AbortSignal | null = null;
@@ -244,8 +240,6 @@ export class NativeIngest {
   }
 
   connect(transport: IngestTransport | null): void {
-    this.registrationController.abort();
-    this.registrationController = new AbortController();
     this.transport = transport;
     if (!transport) return;
     void this.scan().then(() => this.resync()).catch((error) => this.report(this.options.cwd, error));
@@ -441,7 +435,6 @@ export class NativeIngest {
 
   async close(signal: AbortSignal): Promise<void> {
     this.stopped = true;
-    this.registrationController.abort();
     if (this.writeTimer) clearTimeout(this.writeTimer);
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
@@ -615,7 +608,6 @@ export class NativeIngest {
 
   private async apply(state: TranscriptState, turns: NativeTranscriptTurn[], lane: "live" | "import", mtimeMs: number): Promise<void> {
     const transport = this.transport;
-    const registrationSignal = this.registrationController.signal;
     if (!transport) throw new Error("Runtime is offline");
     const derived = (turn: NativeTranscriptTurn) => nativeTurnId(this.options.spaceId, state.harness, state.nativeSessionId, turn.key);
     const from = state.throughTurnKey ? turns.findIndex((turn) => turn.key === state.throughTurnKey) + 1 : 0;
@@ -665,34 +657,18 @@ export class NativeIngest {
     });
     let lastSettled: Candidate | null = null;
     const controllable = this.options.hooks?.controllable?.(state);
-    const payloads = [];
-    for (const item of todo) {
-      let userContent = item.turn.userContent;
-      const recorded = known.get(item.turnId);
-      if (recorded && !recorded.settled && item.settled && transport.registration) {
-        const registration = await transport.registration(recorded.sessionId, item.turnId, { signal: registrationSignal });
-        registrationSignal.throwIfAborted();
-        const restored = restoreRegistration(registration, {
-          spaceId: this.options.spaceId, sessionId: recorded.sessionId, harness: state.harness, nativeSessionId: state.nativeSessionId,
-          turnId: item.turnId, parentTurnId: item.parentTurnId, userContent, startedAt: item.turn.startedAt,
-          ...(this.imported(item.turn) ? { origin: "local_import" as const } : {}),
-        });
-        userContent = restored.userContent;
-        if (restored.diagnostic) this.options.hooks?.onRegistrationRestored?.(restored.diagnostic, { path: state.path, harness: state.harness });
-      }
-      payloads.push({
-        item,
-        turn: {
-          turnId: item.turnId,
-          parentTurnId: item.parentTurnId,
-          userContent,
-          startedAt: item.turn.startedAt,
-          ...(this.imported(item.turn) ? { origin: "local_import" as const } : {}),
-          ...(!item.settled && controllable !== undefined ? { controllable } : {}),
-          result: item.settled ? this.complete(item.turn.result ?? this.cutOff(item, pending)) : null,
-        },
-      });
-    }
+    const payloads = todo.map((item) => ({
+      item,
+      turn: {
+        turnId: item.turnId,
+        parentTurnId: item.parentTurnId,
+        userContent: item.turn.userContent,
+        startedAt: item.turn.startedAt,
+        ...(this.imported(item.turn) ? { origin: "local_import" as const } : {}),
+        ...(!item.settled && controllable !== undefined ? { controllable } : {}),
+        result: item.settled ? this.complete(item.turn.result ?? this.cutOff(item, pending)) : null,
+      },
+    }));
     for (const batch of chunks(payloads, INGEST_BATCH_TURNS, (payload) => JSON.stringify(payload.turn).length)) {
       const result = await transport.ingest({
         type: "ingest",
