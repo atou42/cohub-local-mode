@@ -1,3 +1,5 @@
+import { startRuntimeLifecycle } from "./lifecycle";
+
 declare const __COHUB_RUNTIME_ENV__: "dev" | "prod";
 
 (() => {
@@ -9,6 +11,7 @@ declare const __COHUB_RUNTIME_ENV__: "dev" | "prod";
   if (runtimeWindow[initialized]) return;
   runtimeWindow[initialized] = true;
   runtimeWindow.__cohub ??= {};
+  startRuntimeLifecycle();
 
   console.log(
     `%c cohub%c.runtime %c ${__COHUB_RUNTIME_ENV__.toUpperCase()} %c Ready `,

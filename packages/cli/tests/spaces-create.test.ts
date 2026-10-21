@@ -20,6 +20,7 @@ test("space create input combines a checkpoint with sandbox config", () => {
       autoDestroy: "idle",
       idleTtl: "3600",
       spec: "boost",
+      image: "game",
     }),
     {
       name: "Forked space",
@@ -32,6 +33,7 @@ test("space create input combines a checkpoint with sandbox config", () => {
         sandbox: {
           autoDestroy: { mode: "idle", ttlSeconds: 3600 },
           spec: "boost",
+          image: "game",
         },
       },
     },

@@ -9,10 +9,11 @@ import type { TaskPayload } from "@cohub/protocol/task";
 import { parseGenerationBillingRetryData } from "./generation-billing-retry-data.js";
 import { registerTask } from "./registry.js";
 import { updateGenerationTurnBilling } from "./generation-session.js";
+import { spaceWalletBilling } from "../space-wallet-billing.js";
 
 /**
- * Retry post-success generation charging. Safe to re-run: recordUsage is
- * idempotent via operationId `generation:${taskRunId}`.
+ * Personal billing retries retain the original idempotency key. With Space
+ * wallets enabled, the shared router skips retries rather than choosing a new payer.
  */
 registerTask(GENERATION_BILLING_RETRY_TASK_TYPE, async (job: Job) => {
   const payload = job.data as TaskPayload;
@@ -25,7 +26,9 @@ registerTask(GENERATION_BILLING_RETRY_TASK_TYPE, async (job: Job) => {
     return { status: "skipped", reason: "billing_not_configured", taskRunId: data.taskRunId };
   }
 
-  const result = await billingOperations.recordUsage({
+  const result = await spaceWalletBilling.recordUsage({
+    spaceId: payload.spaceId,
+    retryOnly: true,
     userId: data.userId,
     amountUsd,
     tokenType: COHUB_BILLING_TOKEN_TYPES.usdMicroCent,
@@ -61,7 +64,7 @@ registerTask(GENERATION_BILLING_RETRY_TASK_TYPE, async (job: Job) => {
     ...(result.status === "disabled"
       ? { reason: "billing_disabled" }
       : result.status === "skipped"
-        ? { reason: "zero_amount" }
+        ? { reason: "record_failed" }
         : {}),
   } satisfies GenerationUsageBilling;
   await updateGenerationTurnBilling(data.taskRunId, billing);

@@ -34,6 +34,12 @@ spec:
             - configMapRef:
                 name: {{APP_NAME}}-config
           env:
+            - name: TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{APP_NAME}}-secrets
+                  key: TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY
+                  optional: true
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

@@ -1,4 +1,5 @@
-import { billingOperations, COHUB_BILLING_TOKEN_TYPES, COHUB_BILLING_USAGE_TYPES } from "@cohub/billing";
+import { billingOperations, spaceWalletBillingOperations, COHUB_BILLING_TOKEN_TYPES, COHUB_BILLING_USAGE_TYPES } from "@cohub/billing";
+import { claimMessageWalletBilling } from "@cohub/core/space-wallet";
 import { qualifyAndRewardReferral } from "@cohub/core/referrals";
 import { readImageToTextCalls } from "@cohub/core/sessions";
 import { sessionMessages, sessionTurns, spaceSessions, tokenUsageStatsHourly } from "@cohub/db";
@@ -13,6 +14,7 @@ import { createLogger } from "@cohub/infra/logging";
 import { db } from "../../../db.js";
 import { registerSystemJob } from "../../registry.js";
 import { resolveLlmRequestStats } from "./request-stats.js";
+import { spaceWalletBilling } from "../../../space-wallet-billing.js";
 
 const logger = createLogger({ serviceName: "cohub-worker" });
 
@@ -37,6 +39,8 @@ const resolveActorUserId = async (message: typeof sessionMessages.$inferSelect) 
 };
 
 const recordBillingUsage = async (input: {
+  spaceId: string | undefined;
+  retryOnly: boolean;
   userId: string | null;
   usage: Usage | null;
   sourceId: string;
@@ -50,7 +54,9 @@ const recordBillingUsage = async (input: {
     ? Number(amount.toFixed(8))
     : 0;
   if (amountUsd <= 0 || !billingOperations.status.configured) return;
-  await billingOperations.recordUsage({
+  await spaceWalletBilling.recordUsage({
+    spaceId: input.spaceId,
+    retryOnly: input.retryOnly,
     userId: input.userId,
     amountUsd,
     tokenType: COHUB_BILLING_TOKEN_TYPES.usdMicroCent,
@@ -61,10 +67,12 @@ const recordBillingUsage = async (input: {
   });
 };
 
-const recordBilling = async (message: typeof sessionMessages.$inferSelect, userId: string | null, usage: Usage | null) => {
+const recordBilling = async (spaceId: string | undefined, retryOnly: boolean, message: typeof sessionMessages.$inferSelect, userId: string | null, usage: Usage | null) => {
   if ((message.meta as { runtime?: unknown } | null)?.runtime === "local") return;
   if (!message.errorMessage && message.stopReason !== "error" && message.stopReason !== "aborted") {
     await recordBillingUsage({
+      spaceId,
+      retryOnly,
       userId,
       usage,
       sourceId: message.id,
@@ -75,6 +83,8 @@ const recordBilling = async (message: typeof sessionMessages.$inferSelect, userI
   }
   await Promise.all(readImageToTextCalls(message.meta).map((call) => call.status === "succeeded"
     ? recordBillingUsage({
+        spaceId,
+        retryOnly,
         userId,
         usage: call.usage,
         sourceId: message.id,
@@ -240,7 +250,12 @@ registerSystemJob(SESSION_MESSAGE_POSTPROCESS_JOB, async (job: Job) => {
   const userId = await resolveActorUserId(message);
 
   // Idempotent external effects first; non-idempotent hourly aggregation must remain last.
-  await recordBilling(message, userId, usage);
+  const meta = (message.meta ?? {}) as Record<string, unknown>;
+  const alreadyAttempted = Object.hasOwn(meta, "walletBillingAttempted");
+  const walletEligible = meta.walletBillingEligible === true;
+  const walletMode = walletEligible && billingOperations.status.configured && spaceWalletBillingOperations.status.configured;
+  const shouldBill = !message.usageAggregatedAt && !alreadyAttempted && (!walletMode || await claimMessageWalletBilling(db, message.id));
+  if (shouldBill) await recordBilling(walletEligible ? spaceId : undefined, job.attemptsMade > 0 || job.attemptsStarted > 1, message, userId, usage);
   await maybeQualifyReferral(message);
   await aggregateUsage(message, spaceId, userId, usage);
 

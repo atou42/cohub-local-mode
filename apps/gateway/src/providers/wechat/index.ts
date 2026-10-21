@@ -4,11 +4,12 @@ import type { WeChatChannelConfig } from "@cohub/protocol/gateway";
 import type { GatewayInboundEvent, GatewaySessionOutput } from "@cohub/protocol/gateway";
 import type { PlannedGatewayOutboundCommand } from "@cohub/protocol/gateway";
 import { randomUUID } from "node:crypto";
-import type { GatewayProvider } from "../base.js";
+import type { GatewayProvider, GatewayOutboundContext } from "../base.js";
+import { deliverWeChatReply } from "./outbound.js";
 import { publishInboundEvent } from "../../bus.js";
 import { resolveChannelCommand } from "../../channel-commands.js";
 import { getSpaceChannelConfig } from "../../redis.js";
-import { getWeChatUpdates, notifyWeChatStart, notifyWeChatStop, sendWeChatMessageItems, sendWeChatTextMessage } from "./api.js";
+import { getWeChatUpdates, notifyWeChatStart, notifyWeChatStop } from "./api.js";
 import {
   getWeChatContextToken,
   getWeChatSyncBuf,
@@ -26,10 +27,7 @@ import {
   type WeChatMessage,
   type WeChatMessageItem,
 } from "./types.js";
-import { WECHAT_INBOUND_IMAGE_MAX_COUNT, downloadImageItem, uploadImageContentBlock } from "./media/image.js";
-import { extractMediaLinks, normalizeMediaUrl } from "../../media-links.js";
-import { uploadWeChatMediaItem } from "./media/upload.js";
-import { renderWeChatText } from "./media/text.js";
+import { WECHAT_INBOUND_IMAGE_MAX_COUNT, downloadImageItem } from "./media/image.js";
 import { ingestInboundMedia } from "../../media/inbound-attachments.js";
 import { imageExtensionFromMimeType } from "../../media/mime.js";
 import { WECHAT_INBOUND_FILE_MAX_COUNT, downloadAttachmentItem } from "./media/file.js";
@@ -129,18 +127,6 @@ const getSessionOutput = (cmd: PlannedGatewayOutboundCommand): GatewaySessionOut
   return output as GatewaySessionOutput;
 };
 
-const renderOutboundText = (content: ContentBlock[]) => renderWeChatText(content
-  .map((block) => {
-    if (block.type === "text") return block.text;
-    if (block.type === "system_note") return block.text;
-    return "";
-  })
-  .filter(Boolean)
-  .join("\n"));
-
-const outboundImages = (content: ContentBlock[]) => content
-  .filter((block): block is Extract<ContentBlock, { type: "image" }> => block.type === "image");
-
 export class WeChatProvider implements GatewayProvider {
   private readonly abortController = new AbortController();
   private readonly credentials: ResolvedCredentials;
@@ -158,104 +144,22 @@ export class WeChatProvider implements GatewayProvider {
     void this.notifyStop();
   }
 
-  async handleOutbound(cmd: PlannedGatewayOutboundCommand) {
-    if (cmd.provider !== "wechat") return { success: false, error: "provider mismatch" };
+  async handleOutbound(cmd: PlannedGatewayOutboundCommand, context?: GatewayOutboundContext) {
+    if (cmd.provider !== "wechat") return { success: false, error: "provider mismatch", retryable: false };
     const externalChatId = cmd.externalChatId?.trim();
-    if (!externalChatId) return { success: false, error: "missing externalChatId" };
-
+    if (!externalChatId) return { success: false, error: "missing externalChatId", retryable: false };
     const output = getSessionOutput(cmd);
     const config = await getSpaceChannelConfig<WeChatChannelConfig>(this.channelId);
-    if (output?.type === "session.turn.patch" && config?.outbound?.showIntermediateStatus !== true) {
-      return { success: true };
-    }
-
-    const isFinal = output?.type === "session.message.persisted";
-    const text = output?.type === "session.turn.error" ? renderWeChatText(output.error) : renderOutboundText(cmd.content);
-    const images = output?.type === "session.turn.error" ? [] : outboundImages(cmd.content);
-    const mediaItems = output?.type === "session.turn.error" || !isFinal ? [] : extractMediaLinks(cmd.content, { maxItems: 6 });
-    if (!text && images.length === 0 && mediaItems.length === 0) return { success: true };
-
-    const contextToken = await getWeChatContextToken(this.channelId, externalChatId);
-    let lastExternalMessageId: string | undefined;
-    if (text) {
-      const result = await sendWeChatTextMessage({
-        baseUrl: this.credentials.baseUrl,
-        token: this.credentials.token,
-        to: externalChatId,
-        text,
-        contextToken,
-      });
-      lastExternalMessageId = result.externalMessageId;
-      await updateWeChatStatus(this.channelId, { lastOutboundAt: Date.now() });
-    }
-
-    let imageFailures = 0;
-    for (const image of images) {
-      try {
-        const item = await uploadImageContentBlock({
-          block: image,
-          baseUrl: this.credentials.baseUrl,
-          cdnBaseUrl: this.credentials.cdnBaseUrl,
-          token: this.credentials.token,
-          to: externalChatId,
-        });
-        const result = await sendWeChatMessageItems({
-          baseUrl: this.credentials.baseUrl,
-          token: this.credentials.token,
-          to: externalChatId,
-          items: [item],
-          contextToken,
-          label: "wechat sendImage",
-        });
-        lastExternalMessageId = result.externalMessageId;
-        await updateWeChatStatus(this.channelId, { lastOutboundAt: Date.now() });
-      } catch (error) {
-        imageFailures += 1;
-        logger.warn(`[WeChat:${this.channelId}] outbound image failed`, error);
-        await updateWeChatStatus(this.channelId, {
-          lastErrorAt: Date.now(),
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-        void markChannelDegraded(this.channelId, error).catch(() => undefined);
-      }
-    }
-
-    let mediaFailures = 0;
-    for (const item of mediaItems) {
-      const mediaUrl = item.source.type === "url" ? normalizeMediaUrl(item.source.url) : null;
-      if (item.kind === "image" && mediaUrl && images.some((image) => image.source.type === "url" && normalizeMediaUrl(image.source.url) === mediaUrl)) continue;
-      try {
-        const messageItem = await uploadWeChatMediaItem({
-          item,
-          baseUrl: this.credentials.baseUrl,
-          cdnBaseUrl: this.credentials.cdnBaseUrl,
-          token: this.credentials.token,
-          to: externalChatId,
-        });
-        const result = await sendWeChatMessageItems({
-          baseUrl: this.credentials.baseUrl,
-          token: this.credentials.token,
-          to: externalChatId,
-          items: [messageItem],
-          contextToken,
-          label: `wechat send${item.kind}`,
-        });
-        lastExternalMessageId = result.externalMessageId;
-        await updateWeChatStatus(this.channelId, { lastOutboundAt: Date.now() });
-      } catch (error) {
-        mediaFailures += 1;
-        logger.warn(`[WeChat:${this.channelId}] outbound media failed`, error);
-        await updateWeChatStatus(this.channelId, {
-          lastErrorAt: Date.now(),
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const failures = imageFailures + mediaFailures;
-    return failures > 0
-      ? { success: Boolean(lastExternalMessageId), error: `${failures} WeChat media item(s) failed`, externalMessageId: lastExternalMessageId }
-      : { success: true, externalMessageId: lastExternalMessageId };
+    if (output?.type === "session.turn.patch" && config?.outbound?.showIntermediateStatus !== true) return { success: true };
+    const result = await deliverWeChatReply({
+      command: cmd,
+      credentials: this.credentials,
+      contextToken: await getWeChatContextToken(this.channelId, externalChatId),
+      context,
+    });
+    if (result.externalMessageId) await updateWeChatStatus(this.channelId, { lastOutboundAt: Date.now() });
+    if (!result.success) await updateWeChatStatus(this.channelId, { lastErrorAt: Date.now(), lastError: result.error });
+    return result;
   }
 
   private async start() {

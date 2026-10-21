@@ -3,6 +3,8 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { spaceSandboxes, spaces } from "@cohub/db";
 import type { RpcMethod, SandboxHeartbeat, SandboxStatus } from "@cohub/protocol/sandbox";
 
+export { getSandboxBootstrapGate } from "./bootstrap.js";
+
 export const SANDBOX_LIFECYCLE_STATUSES = [
   "pending",
   "provisioning",
@@ -114,7 +116,7 @@ const DEFAULT_LOCK_TTL_MS = 10 * 60_000;
 const nowDate = () => new Date();
 
 export function getDefaultSandboxIdleTtl(env: "dev" | "prod"): number {
-  return env === "prod" ? 12 * 60 * 60 : 10 * 60;
+  return env === "prod" ? 60 * 60 : 5 * 60;
 }
 
 const resolvedEnv = (typeof process !== "undefined" && process.env?.ENV === "prod" ? "prod" : "dev") as "dev" | "prod";

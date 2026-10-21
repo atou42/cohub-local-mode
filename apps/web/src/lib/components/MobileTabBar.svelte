@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import { APP_AREA_ICONS, appAreaLabel } from "$lib/components/app-area";
+import EntityIcon from "$lib/components/EntityIcon.svelte";
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { requestListScrollTop } from "$lib/layout/list-scroll-top";
@@ -25,7 +26,6 @@ function onTabClick(event: MouseEvent, href: string) {
 >
   {#each APP_AREAS as area (area)}
     {@const active = activeArea === area}
-    {@const Icon = APP_AREA_ICONS[area]}
     {@const href = appAreaHref(area)}
     <a
       {href}
@@ -36,7 +36,7 @@ function onTabClick(event: MouseEvent, href: string) {
       {#if area === "account" && profile}
         <UserAvatar name={profile.displayName} avatarUrl={profile.avatarUrl} seed={authStore.userUuid} size="xs" class="h-[22px] w-[22px] border-0 ring-offset-1 ring-offset-bg-primary transition-shadow {active ? 'ring-[1.5px] ring-brand' : ''}" />
       {:else}
-        <Icon class="h-[22px] w-[22px] shrink-0" strokeWidth={active ? 2 : 1.75} />
+        <EntityIcon name={APP_AREA_ICONS[area]} class="h-[22px] w-[22px]" strokeWidth={active ? 2 : 1.75} />
       {/if}
       <span class="max-w-full truncate text-[11px] leading-none {active ? 'font-medium' : ''}">
         {appAreaLabel(area, locale)}

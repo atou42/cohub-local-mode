@@ -12,8 +12,6 @@ import {
   normalizeLocalPageAssetRef,
 } from "@cohub/core/apps";
 import {
-  BOARD_EXTENSION,
-  BOARD_MIME_TYPE,
   isBoardPath,
   parseBoardManifest,
   type AppArtifactManifest,
@@ -22,6 +20,7 @@ import {
   type AppBoardAsset,
 } from "@cohub/protocol";
 import { BOARD_SCRIPT_MAX_BYTES } from "@cohub/protocol/board-script-modules";
+import { mimeTypeForPath } from "@cohub/protocol/fs";
 import { collectBoardPublishReferences } from "./board-dependencies.js";
 import type { Job } from "bullmq";
 import { captureBoardSnapshots } from "@cohub/core/board";
@@ -68,72 +67,6 @@ class WorkPublishAssetError extends Error {
     super(message);
   }
 }
-
-const mimeByExt: Record<string, string> = {
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".markdown": "text/markdown",
-  ".json": "application/json",
-  ".jsonl": "application/x-ndjson",
-  [BOARD_EXTENSION]: BOARD_MIME_TYPE,
-  ".js": "text/javascript",
-  ".mjs": "text/javascript",
-  ".cjs": "text/javascript",
-  ".ts": "text/typescript",
-  ".tsx": "text/tsx",
-  ".jsx": "text/jsx",
-  ".svelte": "text/x-svelte",
-  ".css": "text/css",
-  ".scss": "text/x-scss",
-  ".html": "text/html",
-  ".xml": "application/xml",
-  ".yaml": "application/yaml",
-  ".yml": "application/yaml",
-  ".toml": "application/toml",
-  ".ini": "text/plain",
-  ".env": "text/plain",
-  ".sh": "text/x-shellscript",
-  ".bash": "text/x-shellscript",
-  ".py": "text/x-python",
-  ".go": "text/x-go",
-  ".rs": "text/x-rust",
-  ".java": "text/x-java-source",
-  ".c": "text/x-c",
-  ".h": "text/x-c",
-  ".cpp": "text/x-c++src",
-  ".hpp": "text/x-c++hdr",
-  ".sql": "application/sql",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".bmp": "image/bmp",
-  ".ico": "image/x-icon",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mov": "video/quicktime",
-  ".m4v": "video/x-m4v",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg",
-  ".m4a": "audio/mp4",
-  ".aac": "audio/aac",
-  ".flac": "audio/flac",
-  ".opus": "audio/ogg",
-  ".zip": "application/zip",
-  ".gz": "application/gzip",
-  ".tar": "application/x-tar",
-  ".rar": "application/vnd.rar",
-  ".7z": "application/x-7z-compressed",
-  ".pdf": "application/pdf",
-  ".exe": "application/x-msdownload",
-  ".dmg": "application/x-apple-diskimage",
-  ".deb": "application/vnd.debian.binary-package",
-  ".rpm": "application/x-rpm",
-};
 
 type WorkSiteFile = {
   relativePath: string;
@@ -233,13 +166,6 @@ const envPrefix = () => (config.env === "prod" ? "" : `${config.env}/`);
 const buildWorkArtifactRoot = (input: { spaceId: string; appSlug: string }) => `${envPrefix()}w/${input.spaceId}/${input.appSlug}/${cacheBuster()}`;
 const workContentPrefix = (artifactRootKey: string) => `${artifactRootKey}/content`;
 
-function getMimeType(path: string) {
-  const lower = basename(path).toLowerCase();
-  if (lower === "dockerfile") return "text/x-dockerfile";
-  if (lower === "makefile") return "text/x-makefile";
-  return mimeByExt[extname(lower)] ?? (lower.startsWith(".") ? "text/plain" : null);
-}
-
 function getWorkAssetCacheControl(contentType: string) {
   // HTML stays fresh for three days; other assets retain immutable caching.
   return contentType.split(";", 1)[0]?.trim().toLowerCase() === "text/html"
@@ -311,7 +237,7 @@ async function readWorkFile(spaceId: string, path: string, rootOverride?: string
       relativePath,
       name: basename(relativePath),
       size: stats.size,
-      mimeType: getMimeType(relativePath),
+      mimeType: mimeTypeForPath(relativePath),
     };
   } finally {
     await handle.close();
@@ -404,7 +330,7 @@ async function readWorkPageCompanionAssets(input: {
     files.push({
       relativePath: relToHtmlDir,
       content,
-      mimeType: getMimeType(relToHtmlDir),
+      mimeType: mimeTypeForPath(relToHtmlDir),
     });
   }
 
@@ -459,7 +385,7 @@ async function readWorkDirectoryFiles(spaceId: string, path: string, rootOverrid
           relativePath,
           name: basename(relativePath),
           size: stats.size,
-          mimeType: getMimeType(absPath),
+          mimeType: mimeTypeForPath(absPath),
         });
       } finally {
         await handle.close();
@@ -910,7 +836,7 @@ async function captureBoardDependency(
     relativePath: sourcePath,
     name: basename(sourcePath),
     size: stats.size,
-    mimeType: getMimeType(sourcePath),
+    mimeType: mimeTypeForPath(sourcePath),
   };
   const prepared = await prepareWorkFile(file, script ? BOARD_SCRIPT_MAX_BYTES : 0);
   const extension = extname(sourcePath).toLowerCase();

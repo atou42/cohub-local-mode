@@ -28,21 +28,21 @@ type refCountedMutex struct {
 
 var pathLockTable sync.Map // canonical path -> *refCountedMutex
 
-// resolvePathLockKey canonicalizes the lock key through EvalSymlinks so
+// resolvePathLockKey canonicalizes the lock key through filesystem aliases so
 // symlink aliases pointing at the same target share one lock (matching the
 // realpath semantics of the upstream mutation queue). When the full path does
 // not exist yet (e.g. a file about to be created), the longest existing
 // ancestor is resolved and the missing leaf components are re-appended, so
 // aliases under a symlinked parent directory still map to the same key.
 func resolvePathLockKey(path string) string {
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, err := canonicalExistingPath(path)
 	if err == nil {
 		return resolved
 	}
 	probe := path
 	var trailing []string
 	for {
-		resolved, err := filepath.EvalSymlinks(probe)
+		resolved, err := canonicalExistingPath(probe)
 		if err == nil {
 			full := resolved
 			for i := len(trailing) - 1; i >= 0; i-- {
@@ -282,12 +282,18 @@ func resolveSandboxPath(cfg env.Config, rawPath string, cwd string) (resolvedSan
 	}
 
 	candidate := strings.TrimSpace(rawPath)
+	if err := validateHostPathSyntax(candidate); err != nil {
+		return resolvedSandboxPath{}, err
+	}
+	if err := validateHostPathSyntax(strings.TrimSpace(cwd)); err != nil {
+		return resolvedSandboxPath{}, err
+	}
 	if candidate == "" || candidate == "." {
 		candidate = base
 	}
 
 	var cleaned string
-	if filepath.IsAbs(candidate) {
+	if isAbsSandboxPath(candidate) {
 		cleaned = filepath.Clean(candidate)
 	} else {
 		cleaned = filepath.Clean(filepath.Join(base, candidate))
@@ -309,7 +315,7 @@ var errPathOutsideRoot = errors.New("path escapes sandbox root")
 
 // ensureWithinRoot verifies that cleaned resolves inside root. It guards
 // against both lexical traversal (..) and symlink escape by resolving the
-// longest existing ancestor of the path through EvalSymlinks before comparing.
+// longest existing ancestor of the path before comparing.
 // The root itself is assumed to be already symlink-resolved (see env.LoadLocal).
 func ensureWithinRoot(root, cleaned string) error {
 	root = filepath.Clean(root)
@@ -323,16 +329,19 @@ func ensureWithinRoot(root, cleaned string) error {
 	probe := cleaned
 	var trailing []string
 	for {
-		resolved, err := filepath.EvalSymlinks(probe)
+		resolved, err := canonicalExistingPath(probe)
 		if err == nil {
 			full := resolved
 			for i := len(trailing) - 1; i >= 0; i-- {
 				full = filepath.Join(full, trailing[i])
 			}
-			if full == root || strings.HasPrefix(full, root+string(filepath.Separator)) {
+			if pathWithin(root, full) {
 				return nil
 			}
 			return errPathOutsideRoot
+		}
+		if !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
+			return err
 		}
 		parent := filepath.Dir(probe)
 		if parent == probe {
@@ -344,7 +353,7 @@ func ensureWithinRoot(root, cleaned string) error {
 	}
 
 	// No existing ancestor resolved; fall back to a lexical prefix check.
-	if cleaned == root || strings.HasPrefix(cleaned, root+string(filepath.Separator)) {
+	if pathWithin(root, cleaned) {
 		return nil
 	}
 	return errPathOutsideRoot
@@ -357,7 +366,7 @@ func isReadOnlyPath(cfg env.Config, path string) bool {
 	}
 	candidate := filepath.Clean(path)
 	for _, root := range roots {
-		if candidate == root || strings.HasPrefix(candidate, root+string(filepath.Separator)) {
+		if pathWithin(root, candidate) {
 			return true
 		}
 	}

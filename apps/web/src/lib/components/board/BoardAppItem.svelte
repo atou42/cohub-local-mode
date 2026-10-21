@@ -3,7 +3,10 @@ import type {
 	AppDetailResponse,
 	AppRuntimeShellContext,
 } from "@neta-art/cohub";
-import type { BoardItemViewContext } from "@neta-art/cohub/board/stage";
+import {
+	type BoardItemViewContext,
+	createBoardPointerGestures,
+} from "@neta-art/cohub/board/stage";
 import type { AppNavigationHandler, BoardAppMeta } from "$lib/board/board-app";
 import AppSurface from "$lib/components/app/AppSurface.svelte";
 import CenteredLoading from "$lib/components/CenteredLoading.svelte";
@@ -11,8 +14,6 @@ import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 const {
 	id,
 	meta,
-	width,
-	height,
 	context,
 	loadDetail,
 	shell,
@@ -20,31 +21,41 @@ const {
 }: {
 	id: string;
 	meta: BoardAppMeta;
-	width: number;
-	height: number;
 	context: BoardItemViewContext;
 	loadDetail: (appId: string) => Promise<AppDetailResponse | null>;
 	shell?: AppRuntimeShellContext;
 	onNavigationOpen?: AppNavigationHandler;
 } = $props();
 
-// Keep iframe content mounted only while its rendered viewport is useful. This
-// is based on the app's screen size, so a large app remains readable at a far
-// board zoom while a small app gets a lightweight title-only representation.
-const APP_CONTENT_MIN_WIDTH = 180;
-const APP_CONTENT_MIN_HEIGHT = 120;
-
 let detail = $state<AppDetailResponse | null>(null);
+let detailAppId = $state<string | null>(null);
 let loading = $state(true);
 let forwardedPointerId: number | null = null;
+let bar: HTMLDivElement | undefined = $state();
+let pointers: ReturnType<typeof createBoardPointerGestures> | undefined;
+
+$effect(() => {
+	if (!bar) return;
+	const gestures = createBoardPointerGestures(bar, {
+		move: handleBarPointerMove,
+		end: handleBarPointerEnd,
+	});
+	pointers = gestures;
+	return () => {
+		gestures.cancel();
+		pointers = undefined;
+	};
+});
 
 $effect(() => {
 	const appId = meta.appId;
+	if (!context.detailed || detailAppId === appId) return;
 	let current = true;
 	loading = true;
 	void loadDetail(appId).then((value) => {
 		if (!current) return;
 		detail = value;
+		detailAppId = appId;
 		loading = false;
 	});
 	return () => {
@@ -52,18 +63,13 @@ $effect(() => {
 	};
 });
 
-const contentVisible = $derived(
-	width * context.zoom >= APP_CONTENT_MIN_WIDTH &&
-		height * context.zoom >= APP_CONTENT_MIN_HEIGHT,
-);
-
 function handleBarPointerDown(event: PointerEvent) {
-	if (event.button !== 0 || forwardedPointerId !== null) return;
+	if (event.button !== 0 || forwardedPointerId !== null || !pointers) return;
 	event.preventDefault();
 	event.stopPropagation();
+	pointers.start(event);
 	forwardedPointerId = event.pointerId;
 	context.editor.pointerDown(context.toPointerEvent(event));
-	(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 }
 
 function handleBarPointerMove(event: PointerEvent) {
@@ -98,18 +104,15 @@ function handleBarPointerEnd(event: PointerEvent) {
 		class="board-app-bar"
 		role="button"
 		tabindex="-1"
+		bind:this={bar}
 		onpointerdown={handleBarPointerDown}
-		onpointermove={handleBarPointerMove}
-		onpointerup={handleBarPointerEnd}
-		onpointercancel={handleBarPointerEnd}
-		onlostpointercapture={handleBarPointerEnd}
 	>
 		{#if meta.icon}<img src={meta.icon} alt="" />{/if}
 		<span>{meta.name}</span>
 	</div>
-	{#if contentVisible}
+	{#if context.detailed}
 		<div class="board-app-content">
-			{#if detail}
+			{#if detail && detailAppId === meta.appId}
 				<AppSurface
 					mode="app"
 					app={detail.app}
@@ -150,23 +153,22 @@ function handleBarPointerEnd(event: PointerEvent) {
 	}
 	.board-app-bar {
 		display: flex;
-		height: calc(28px * var(--board-zoom));
-		min-height: 1px;
+		height: 28px;
 		align-items: center;
-		gap: calc(6px * var(--board-zoom));
-		padding: 0 calc(8px * var(--board-zoom));
+		gap: 6px;
+		padding: 0 8px;
 		pointer-events: auto;
 		cursor: grab;
 		background: var(--bg-elevated);
 		color: var(--text-secondary);
-		font-size: max(1px, calc(11px * var(--board-zoom)));
+		font-size: 11px;
 		font-weight: 500;
 		white-space: nowrap;
 		overflow: hidden;
 	}
 	.board-app-bar img {
-		width: calc(16px * var(--board-zoom));
-		height: calc(16px * var(--board-zoom));
+		width: 16px;
+		height: 16px;
 		border-radius: 4px;
 		object-fit: cover;
 	}
@@ -175,10 +177,10 @@ function handleBarPointerEnd(event: PointerEvent) {
 		text-overflow: ellipsis;
 	}
 	.board-app-content {
-		height: calc(100% - 28px * var(--board-zoom));
+		height: calc(100% - 44px);
 		min-height: 0;
-		margin: calc(8px * var(--board-zoom));
-		border-radius: calc(4px * var(--board-zoom));
+		margin: 8px;
+		border-radius: 4px;
 		overflow: hidden;
 	}
 	.board-app-error {

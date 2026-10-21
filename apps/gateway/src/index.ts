@@ -882,7 +882,8 @@ async function main() {
 
   logger.info("[Gateway] Listening for outbound commands from API...");
 
-  listenOutboundCommands(manager.nodeId, async (cmd: PlannedGatewayOutboundCommand) => {
+  const outboundController = new AbortController();
+  const outboundListener = listenOutboundCommands(manager.nodeId, async (cmd: PlannedGatewayOutboundCommand, context) => {
     logger.info("[Gateway] Received outbound command:", {
       commandId: cmd.commandId,
       channelId: cmd.channelId,
@@ -891,23 +892,17 @@ async function main() {
       contentPreview: cmd.content.map((c: { type: string }) => c.type).join(", "),
     });
 
-    const targetNodeId = typeof cmd.meta?.targetNodeId === "string" ? cmd.meta.targetNodeId : null;
-    if (targetNodeId && targetNodeId !== manager.nodeId) {
-      logger.warn("[Gateway] Command rejected: wrong target node", { commandId: cmd.commandId, channelId: cmd.channelId, targetNodeId, nodeId: manager.nodeId });
-      return { success: false, error: `Wrong target node ${targetNodeId}` };
-    }
-
     const provider = manager.getProvider(cmd.channelId);
     if (!provider) {
       logger.warn(`[Gateway] Command rejected: provider not found for channel ${cmd.channelId}`);
       logger.warn(`[Gateway] Active channels: ${manager.getActiveChannelIds().join(", ") || "none"}`);
       // Routing flap — don't thrash channel health to degraded.
-      return { success: false, error: `Provider not found for channel ${cmd.channelId}` };
+      return { success: false, deferred: true, error: `Provider not found for channel ${cmd.channelId}` };
     }
 
     logger.info(`[Gateway] Routing command ${cmd.commandId} to ${cmd.provider} provider`);
     try {
-      const result = await provider.handleOutbound(cmd);
+      const result = await provider.handleOutbound(cmd, context);
       if (result.success) {
         // Only stamp outbound activity when a message was actually delivered.
         if (result.externalMessageId) {
@@ -922,9 +917,9 @@ async function main() {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`[Gateway] Command ${cmd.commandId} threw:`, error);
       void markChannelDegraded(cmd.channelId, message).catch(() => undefined);
-      return { success: false, error: message };
+      throw error;
     }
-  }).catch((error) => {
+  }, outboundController.signal).catch((error) => {
     logger.error("[Gateway] Fatal error listening to outbound stream:", error);
   });
 
@@ -1461,7 +1456,14 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("[Gateway] Received shutdown signal, stopping...");
+    outboundController.abort();
+    const drainTimeout = setTimeout(() => {
+      logger.error("[Gateway] Outbound shutdown timed out; unfinished commands remain pending");
+      process.exit(1);
+    }, 30_000);
+    await outboundListener;
     const results = await Promise.allSettled([manager.stop(), closeRuntimeRelay()]);
+    clearTimeout(drainTimeout);
     const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failed) logger.error("[Gateway] Shutdown failed", failed.reason);
     else logger.info("[Gateway] Shutdown complete");

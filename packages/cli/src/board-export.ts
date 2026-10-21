@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, copyFile, link, rename, unlink } from "node:fs/
 import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
-import { promisify } from "node:util";
+import { debuglog, promisify } from "node:util";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,9 @@ import { resolveBoardId } from "./board-command-support.js";
 import { BOARD_EXPORT_FONTS, type BoardExportFont } from "./board-fonts.js";
 import { createClient } from "./client.js";
 import { downloadPublicAudio, downloadPublicImage } from "./safe-remote-image.js";
+import { BOARD_EXPORT_IMAGE_MEMORY_MIB, BoardExportResourceError, createBoardExportImageBudget } from "./board-export-resources.js";
+
+const debugExport = debuglog("cohub:board-export");
 
 export function resolveBundledFonts(): BoardNodeFont[] {
   const require = createRequire(import.meta.url);
@@ -105,11 +108,13 @@ export async function loadBoardTextures(
   }
   for (const key of failed) if (!wanted.has(key)) failed.delete(key);
   const pending = selection.keys.filter((key) => !textures.has(key) && !failed.has(key));
-  const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, 16));
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? 2, 16));
   const client = createClient();
+  let resourceError: BoardExportResourceError | undefined;
 
   async function worker() {
     for (;;) {
+      if (resourceError) return;
       const key = pending.shift();
       if (!key) return;
       const source = boardImageKeySource(key);
@@ -124,13 +129,15 @@ export async function loadBoardTextures(
             : await downloadPublicImage(source.value);
         const texture = await renderer.decodeImage(bytes, mimeType);
         textures.set(key, texture);
-      } catch {
-        failed.add(key);
+      } catch (error) {
+        if (error instanceof BoardExportResourceError) resourceError = error;
+        else failed.add(key);
       }
     }
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  if (resourceError) throw resourceError;
   return { textures, failed: [...failed], omitted: selection.omittedKeys };
 }
 
@@ -159,6 +166,8 @@ export type BoardExportRunOptions = {
   camera?: { width: number; height: number };
   document?: BoardDocument;
   signal?: AbortSignal;
+  imageMemoryMiB?: number;
+  onPlan?: (plan: { width: number; height: number; frames: number }) => void;
   onFrame?: (frame: BoardExportFrame, index: number) => Promise<void>;
   onProgress?: (completed: number, total: number) => void;
 };
@@ -202,7 +211,13 @@ export async function runBoardVideoExport(options: BoardVideoExportOptions): Pro
   try {
     let count = 0;
     let dimensions = { width: 0, height: 0 };
-    const result = await runBoardExport({ ...options, document, format: "png", onFrame: async (frame, index) => {
+    const result = await runBoardExport({ ...options, document, format: "png", onPlan: (plan) => {
+      if (options.format === "mp4" && (plan.width % 2 || plan.height % 2)) {
+        throw new Error(`MP4 needs even dimensions, but the export is ${plan.width}x${plan.height}. Use --camera --size with even dimensions, or adjust the export region.`);
+      }
+      options.onPlan?.(plan);
+    }, onFrame: async (frame, index) => {
+      if (count && (frame.width !== dimensions.width || frame.height !== dimensions.height)) throw new Error("Video frame dimensions changed. Use a fixed export region or a smaller camera viewport.");
       await writeFile(join(tempDir, `${String(index + 1).padStart(6, "0")}.png`), frame.bytes, { signal: options.signal });
       dimensions = { width: frame.width, height: frame.height };
       count++;
@@ -238,6 +253,7 @@ export async function runBoardVideoExport(options: BoardVideoExportOptions): Pro
     else args.push("-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-f", "webm");
     const encoded = join(tempDir, `video.${options.format}`);
     args.push("-t", duration.toFixed(3), encoded);
+    debugExport("%j", { stage: "encode", width: dimensions.width, height: dimensions.height, frames: count, memory: process.memoryUsage() });
     try {
       await execFile("ffmpeg", args, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, signal: options.signal });
     } catch (error) {
@@ -268,7 +284,20 @@ export async function runBoardExport(
     throw new Error(`Animation ${options.animation} does not exist.`);
   }
   const times: Array<number | null> = options.times?.length ? options.times : [null];
-  const renderer = await createNodeBoardRenderer({ fonts: resolveBundledFonts() });
+  const imageMemoryBytes = (options.imageMemoryMiB ?? BOARD_EXPORT_IMAGE_MEMORY_MIB) * 1024 ** 2;
+  if (!Number.isSafeInteger(imageMemoryBytes) || imageMemoryBytes <= 0) throw new Error("Image memory budget must be a positive integer.");
+  const nodeRenderer = await createNodeBoardRenderer({ fonts: resolveBundledFonts() });
+  const images = createBoardExportImageBudget(nodeRenderer, imageMemoryBytes);
+  const renderer = { ...nodeRenderer, decodeImage: images.decodeImage };
+  const trace = (stage: string, completed: number, dimensions?: { width: number; height: number }) => {
+    if (!debugExport.enabled || completed % 30 !== 0) return;
+    debugExport("%j", {
+      stage, completed, total: times.length,
+      ...(dimensions ? { width: dimensions.width, height: dimensions.height } : {}),
+      imageBytes: images.usedBytes, memory: process.memoryUsage(),
+      availableMemory: process.availableMemory(), constrainedMemory: process.constrainedMemory(),
+    });
+  };
   let scriptHost: ReturnType<typeof createNodeBoardScriptHost> | null = null;
   const textureCache: BoardExportTextureCache = { textures: new Map(), failed: new Set() };
   let backgroundTexture: BoardNodeTexture | undefined;
@@ -284,6 +313,16 @@ export async function runBoardExport(
     });
     if (!plan) return null;
 
+    const region: BoardExportRegion = times.length > 1 && !options.camera ? { kind: "rect", rect: plan.world } : options.region;
+    const firstTime = times[0] ?? null;
+    const first = prepareBoardExport(document, {
+      sampler, region, camera: options.camera, scale: options.scale,
+      padding: times.length > 1 ? 0 : options.padding,
+      ...(firstTime === null ? {} : { at: { animation: options.animation, time: firstTime } }),
+    });
+    if (!first) return null;
+    options.onPlan?.({ width: first.plan.width, height: first.plan.height, frames: times.length });
+    trace("plan", 0, first.plan);
     const warnings: string[] = [];
     const textures = textureCache.textures;
     let omittedKeys = new Set<string>();
@@ -297,7 +336,8 @@ export async function runBoardExport(
       try {
         const { bytes, mimeType } = await downloadPublicImage(declaredBackground.imageUrl);
         backgroundTexture = await renderer.decodeImage(bytes, mimeType);
-      } catch {
+      } catch (error) {
+        if (error instanceof BoardExportResourceError) throw error;
         warnings.push(
           "The board background image could not be loaded; the fallback color was exported.",
         );
@@ -306,12 +346,12 @@ export async function runBoardExport(
 
     const videoCount = plan.items.filter((item) => item.type === "video").length;
     if (hasBoardScripts(document)) scriptHost = createNodeBoardScriptHost(renderer, {
+      concurrency: 2,
       readModule: async (src) => {
         const { bytes } = await readSpaceFileBytes(createClient(), options.spaceId, src);
         return new TextDecoder().decode(bytes);
       },
     });
-    const region: BoardExportRegion = times.length > 1 && !options.camera ? { kind: "rect", rect: plan.world } : options.region;
     const host = scriptHost;
     if (videoCount > 0) {
       warnings.push(
@@ -338,6 +378,7 @@ export async function runBoardExport(
       const initial = prepareBoardExport(document, frameOptions);
       if (!initial) continue;
       let prepared = initial;
+      trace("prepare", completed, initial.plan);
       if (host) {
         await host.prepare(initial.scene.items, [time ?? 0], initial.plan.scale);
         for (const item of initial.scene.items) {
@@ -348,6 +389,7 @@ export async function runBoardExport(
         if (!scripted) continue;
         prepared = scripted;
       }
+      trace("images", completed, prepared.plan);
       if (options.withImages) {
         const loaded = await loadBoardTextures(renderer, options.spaceId, prepared.plan.items.filter((item) => prepared.scene.opacity(item.id) > 0), { cache: textureCache });
         omittedKeys = new Set(loaded.omitted);
@@ -361,6 +403,7 @@ export async function runBoardExport(
         }
       }
 
+      trace("render", completed, prepared.plan);
       const result = exportBoardImageBytes(renderer, document, {
         ...frameOptions,
         colorScheme: options.colorScheme,
@@ -392,6 +435,7 @@ export async function runBoardExport(
       else frames.push(frame);
       completed++;
       options.onProgress?.(completed, times.length);
+      trace("rendered", completed, result.plan);
     }
     return completed ? { frames, warnings } : null;
   } finally {

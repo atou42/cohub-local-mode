@@ -47,6 +47,8 @@ const getExtension = (value: string) => {
   }
 };
 
+export const isVideoUrl = (url: string) => videoExtensions.has(getExtension(url));
+
 const inferKind = (url: string): GatewayMediaItem["kind"] | null => {
   const extension = getExtension(url);
   if (imageExtensions.has(extension)) return "image";

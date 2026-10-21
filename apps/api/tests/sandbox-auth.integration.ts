@@ -17,6 +17,8 @@ let row: SandboxRow | null = null;
 let conflict = false;
 let createError = false;
 let candidateToken = "";
+let setupModPaths: string[] = [];
+let reportedModPaths: string[] = [];
 let activePod: { uid: string; token: string } | null = null;
 let creates = 0;
 let events: string[] = [];
@@ -46,6 +48,11 @@ function replace(specifier: string, namedExports: Record<string, unknown>) {
 }
 
 replace("../src/config.js", { sessionsNamespace: "test-sessions", config: { appEncryptionKey: "test-platform-key", sandboxImage: "test-image", env: "dev" } });
+replace("../src/space-sandbox-preferences.js", { resolveSpaceSandboxPreferences: async () => ({
+  requested: { spec: "standard", image: "default" }, effective: { spec: "standard", image: "default" },
+  allowedSpec: "standard", imageRef: "test-image", fingerprint: "test",
+  enabledMods: setupModPaths.map((mountPath, sortOrder) => ({ mountPath, mountSlug: mountPath.split("/").at(-1), modSpaceId: `mod-${sortOrder}`, enabled: true, sortOrder })),
+}) });
 replace("../src/db/index.js", { db: {
   select: (fields?: unknown) => ({ from: () => ({ where: () => ({ limit: async () => fields ? [{ meta: {} }] : row ? [row] : [] }) }) }),
   insert: () => ({ values: (input: SandboxRow) => ({ onConflictDoUpdate: (options: { setWhere?: SQL }) => ({ returning: async () => {
@@ -72,6 +79,7 @@ replace("../src/k8s.js", { k8sCoreApi: {
   createNamespacedPod: async (input: { body: { spec: { containers: Array<{ env: Array<{ name: string; value: string }> }> } } }) => {
     creates++; events.push("create");
     candidateToken = input.body.spec.containers[0]?.env.find((value) => value.name === "SANDBOX_RPC_TOKEN")?.value ?? "";
+    reportedModPaths = JSON.parse(input.body.spec.containers[0]?.env.find((value) => value.name === "COHUB_MOD_PATHS")?.value ?? "null");
     if (conflict) throw { statusCode: 409 };
     activePod = { uid: `pod-${creates}`, token: candidateToken };
     if (creates === 1 && firstCreatePause) {
@@ -131,12 +139,23 @@ after(() => { for (const item of mocks.reverse()) item.restore(); });
 function reset() {
   row = { meta: { podIp: "10.0.0.1", rpcTokenNonce: createSandboxRpcNonce(), reportTokenHash: "old-report-hash" }, status: "running", podName: "sandbox-space-a", provider: "cloud" };
   conflict = false; createError = false; candidateToken = ""; activePod = null; creates = 0; events = [];
+  setupModPaths = []; reportedModPaths = [];
   firstCreatePause = null; publishPause = null; claimPause = null; replacementReady = null;
   replacementPublished = gate(); redisValues.clear(); redisExpiry.clear(); renewals = 0;
 }
 const input = { spaceId: "space-a", userUuid: "user-a", mode: "ensure", reason: "space_created" } as const;
 const recover = () => recoverSpaceSandbox({ spaceId: "space-a", userUuid: "user-a", verify: false, source: "manual" });
 function storedToken() { return createSandboxRpcToken("test-platform-key", "space-a", String(row?.meta.rpcTokenNonce)); }
+
+test("setup receives applied mod mount order and clears the previous run snapshot", async () => {
+  reset();
+  assert.ok(row);
+  row.meta.setup = { status: "succeeded", runId: "old-run" };
+  setupModPaths = ["/mods/z-toolchain", "/mods/a-project"];
+  await reconcileSpaceSandbox(input);
+  assert.deepEqual(reportedModPaths, setupModPaths);
+  assert.equal(row?.meta.setup, null);
+});
 
 test("ensure conflicts preserve active credentials and status", async () => {
   reset(); conflict = true;

@@ -195,6 +195,7 @@ function stopPropagation(event: Event) {
 		tabindex="-1"
 		aria-label={media.title}
 		style:left="{layout.left}px"
+		style:top="{layout.top}px"
 		style:width="{layout.width}px"
 		style:height="{layout.height}px"
 		style:transform="rotate({layout.rotation}deg)"

@@ -1,3 +1,4 @@
+import { createGenerationClient, type GenerateRequest, type GenerationModelDeclaration } from "@neta-art/generation";
 import { z } from "zod";
 
 const metaSchema = z.record(z.string(), z.unknown());
@@ -13,6 +14,7 @@ export const generationContentBlockSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("image"), source: generationSourceSchema, meta: metaSchema.optional() }),
   z.object({ type: z.literal("video"), source: generationSourceSchema, meta: metaSchema.optional() }),
   z.object({ type: z.literal("audio"), source: generationSourceSchema, meta: metaSchema.optional() }),
+  z.object({ type: z.literal("3d"), source: generationSourceSchema, meta: metaSchema.optional() }),
 ]);
 
 export const createGenerationTaskRequestSchema = z.object({
@@ -26,3 +28,19 @@ export const createGenerationTaskRequestSchema = z.object({
 });
 
 export type CreateGenerationTaskRequestInput = z.infer<typeof createGenerationTaskRequestSchema>;
+
+/**
+ * Validates a request against its model declaration, including the operation it selects, and returns the
+ * resolved parameters. Throws `GenerationValidationError` for content or parameters the model does not accept.
+ */
+export function resolveGenerationRequestParameters(
+  declaration: GenerationModelDeclaration,
+  request: Pick<GenerateRequest, "model" | "content" | "parameters" | "meta">,
+): Record<string, unknown> | undefined {
+  return createGenerationClient({ models: [declaration], includeBuiltinModels: false }).validate({
+    model: request.model,
+    content: request.content,
+    parameters: request.parameters,
+    meta: request.meta,
+  }).parameters;
+}
