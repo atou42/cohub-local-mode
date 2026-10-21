@@ -14,14 +14,14 @@ type GenerationBody = {
   parameters?: Record<string, unknown>;
 };
 
-const environment = ["ENV", "COHUB_BASE_URL", "COHUB_EXECUTION_TOKEN", "COHUB_SPACE_ID", "COHUB_TURN_ID"] as const;
+const environment = ["ENV", "COHUB_BASE_URL", "COHUB_EXECUTION_TOKEN", "COHUB_SPACE_ID", "COHUB_SESSION_ID", "COHUB_TURN_ID"] as const;
 let savedEnvironment: Partial<Record<(typeof environment)[number], string>> = {};
 
 beforeEach(() => {
   savedEnvironment = Object.fromEntries(environment.map((key) => [key, process.env[key]]));
   process.env.COHUB_BASE_URL = "https://api.test";
   process.env.COHUB_EXECUTION_TOKEN = "test-token";
-  for (const key of ["ENV", "COHUB_SPACE_ID", "COHUB_TURN_ID"] as const) delete process.env[key];
+  for (const key of ["ENV", "COHUB_SPACE_ID", "COHUB_SESSION_ID", "COHUB_TURN_ID"] as const) delete process.env[key];
 });
 
 afterEach(() => {

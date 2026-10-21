@@ -118,6 +118,12 @@ export class JsonRpcProcess {
     this.inputEnded = true;
     this.child.stdin.end();
   }
+  /** Ask a CLI that stops on SIGINT to end its current Turn. Windows has no SIGINT, so the process tree is stopped. */
+  interrupt() {
+    if (this.failure) return;
+    if (process.platform === "win32") void this.close().catch(() => undefined);
+    else this.child.kill("SIGINT");
+  }
   /** Whether the process exits within the timeout. */
   async exited(timeoutMs: number): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;

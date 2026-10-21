@@ -2,9 +2,10 @@ import { appendFile, mkdir, open, readFile, readdir, rename, stat } from "node:f
 import { join } from "node:path";
 import { NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, type NativeIngestResult, type NativeRuntimeEvent, type NativeTurnComplete, type NativeTurnMessage } from "@neta-art/cohub";
 import { acceptsDirectory, acceptsTranscript, readSessionHeader, readTranscript, transcriptRoots, type Harness, type NativeTranscriptTurn } from "./adapters.js";
+import { SizeLimitError } from "./transcript.js";
 import { nativeTurnId } from "./identity.js";
 import type { RuntimeArchiveStore } from "../archive-store.js";
-import { transcriptFormat } from "../harnesses/index.js";
+import { harnessAdapter, transcriptFormat } from "../harnesses/index.js";
 import { containsNativePath } from "./paths.js";
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
@@ -48,6 +49,8 @@ export type TranscriptState = {
   headTurnId: string | null;
   origin: "cohub" | "native";
   controllable?: boolean;
+  /** The Turn Cohub is running in this file, for formats that cannot mark it; kept across a crash. */
+  executingTurnId?: string | null;
 };
 
 export type ImportFilter = { harnesses?: Harness[]; nativeSessionId?: string };
@@ -91,6 +94,8 @@ export type IngestHooks = {
 
 /** A transcript on disk that may belong to the bound directory. */
 export type NativeCandidate = { harness: Harness; path: string; size: number; mtimeMs: number; ino: number };
+
+const fileVersion = (info: { ino: number; size: number; mtimeMs: number }) => `${info.ino}:${info.size}:${info.mtimeMs}`;
 
 /** Headers are read this many at a time; each costs one small read. */
 const HEADER_CONCURRENCY = 16;
@@ -164,8 +169,12 @@ export class NativeIngest {
   private readonly reads = new Set<Promise<void>>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly failures = new Map<string, number>();
+  /** File versions that hit a size limit; they are not read again until the file changes. */
+  private readonly oversized = new Map<string, string>();
   private readonly aliveAt = new Map<string, number>();
   private readonly runningPaths = new Set<string>();
+  /** Files a live Cohub execution is writing in a format that cannot mark its Turn. */
+  private readonly executing = new Set<string>();
   private writing: Promise<void> = Promise.resolve();
   private readonly foreign = new Set<string>();
   private importQueue: NativeCandidate[] = [];
@@ -247,17 +256,46 @@ export class NativeIngest {
 
   /**
    * Record that Cohub created or chose this transcript for a Session, before any Turn of it runs.
+   * `through` says the server has the file's Turns up to `turnKey` (none when null) and `turnId` heads them.
    */
   adopt(session: { harness: Harness; path: string; nativeSessionId: string; cwd: string }, sessionId: string, through?: { turnKey: string | null; turnId: string | null }): void {
     const state = this.states.get(session.path) ?? this.blank(session.path, session.nativeSessionId, session.cwd, session.harness, "user", { size: -1, mtimeMs: 0, ino: 0 });
     Object.assign(state, { sessionId, nativeSessionId: session.nativeSessionId });
-    if (through?.turnKey) Object.assign(state, { throughTurnKey: through.turnKey, throughTurnId: through.turnId, headTurnId: through.turnId });
+    if (through) Object.assign(state, { throughTurnKey: through.turnKey, throughTurnId: through.turnId, headTurnId: through.turnId });
     if (!this.states.has(session.path)) state.origin = "cohub";
+    // The harness wrote elsewhere than expected; the execution follows the file.
+    for (const other of this.states.values()) {
+      if (other === state || other.harness !== session.harness || other.nativeSessionId !== session.nativeSessionId || !other.executingTurnId) continue;
+      state.executingTurnId = other.executingTurnId;
+      other.executingTurnId = null;
+      if (this.executing.delete(other.path)) this.executing.add(session.path);
+      this.markDirty(other.path);
+    }
     this.states.set(session.path, state);
     this.markDirty(session.path);
   }
 
+  /** A Cohub Turn starts writing this file; a format that cannot mark it is not read until it ends. */
+  begin(session: { harness: Harness; path: string; nativeSessionId: string; cwd: string }, sessionId: string, turnId: string): void {
+    if (transcriptFormat(session.harness).marksCohubTurns) return;
+    this.adopt(session, sessionId);
+    const state = this.states.get(session.path) as TranscriptState;
+    state.executingTurnId = turnId;
+    this.executing.add(session.path);
+    this.markDirty(session.path);
+  }
+
+  /** A Cohub Turn ended, whether or not it produced a result. */
+  end(turnId: string): void {
+    for (const state of this.states.values()) {
+      if (state.executingTurnId !== turnId) continue;
+      this.executing.delete(state.path);
+      this.touch(state.path);
+    }
+  }
+
   advance(path: string, turnId: string): void {
+    this.end(turnId);
     const state = this.states.get(path);
     if (!state) return;
     state.headTurnId = turnId;
@@ -336,14 +374,16 @@ export class NativeIngest {
       if (state ? !this.unchanged(state, candidate) : candidate.mtimeMs >= enabledAt) this.live.set(candidate.path, this.live.get(candidate.path) ?? false);
     }
     this.drainLive();
-    if (this.job.state === "running") await this.startImport(this.job.filter, this.job.concurrency);
+    if (this.job.state === "running") await this.startImport(this.job.filter, this.job.concurrency, { resume: true });
   }
 
-  async plan(filter: ImportFilter = {}, signal?: AbortSignal): Promise<Array<NativeCandidate & { nativeSessionId?: string }>> {
+  /** `resume` is automatic resumption: it skips file versions that already hit a size limit, which only an explicit import retries. */
+  async plan(filter: ImportFilter = {}, signal?: AbortSignal, options: { resume?: boolean } = {}): Promise<Array<NativeCandidate & { nativeSessionId?: string }>> {
     const harnesses = this.harnesses.filter((harness) => !filter.harnesses?.length || filter.harnesses.includes(harness));
     const candidates = await discoverTranscripts(this.options.cwd, harnesses, { headers: true, nested: this.nested, signal });
     // A transcript whose first read failed is still untracked (size -1), so a later import retries it.
     return candidates.filter((candidate) => (this.states.get(candidate.path)?.size ?? -1) < 0 && !this.live.has(candidate.path)
+      && !(options.resume && this.oversized.get(candidate.path) === fileVersion(candidate))
       && (!filter.nativeSessionId || candidate.nativeSessionId === filter.nativeSessionId));
   }
 
@@ -351,8 +391,8 @@ export class NativeIngest {
    * Start or resume a backfill. What was imported is tracked, so resuming simply plans again; the
    * server recognizes any Turn it already has, so an interrupted batch is never duplicated.
    */
-  async startImport(filter: ImportFilter = {}, concurrency = DEFAULT_IMPORT_CONCURRENCY): Promise<ImportJob> {
-    const queue = await this.plan(filter);
+  async startImport(filter: ImportFilter = {}, concurrency = DEFAULT_IMPORT_CONCURRENCY, options: { resume?: boolean } = {}): Promise<ImportJob> {
+    const queue = await this.plan(filter, undefined, options);
     const resuming = this.job.state === "running" || this.job.state === "paused";
     const same = resuming && JSON.stringify(this.job.filter) === JSON.stringify(filter);
     const base = same ? this.job : { ...this.job, done: 0, turns: 0, bytes: 0, failed: [], startedAt: new Date().toISOString() };
@@ -461,7 +501,7 @@ export class NativeIngest {
 
   private retryLater(path: string, error: unknown): void {
     this.report(path, error);
-    if (this.stopped || !this.transport) return;
+    if (this.stopped || !this.transport || error instanceof SizeLimitError) return;
     const attempts = (this.failures.get(path) ?? 0) + 1;
     if (attempts > RETRY_ATTEMPTS) { this.failures.delete(path); return; }
     this.failures.set(path, attempts);
@@ -505,9 +545,20 @@ export class NativeIngest {
   }
 
   private async read(path: string, lane: "live" | "import", force: boolean): Promise<void> {
-    if (this.foreign.has(path)) return;
+    if (this.foreign.has(path) || this.executing.has(path)) return;
     const info = await stat(path).catch((error) => { if (missing(error)) return null; throw error; });
     if (!info?.isFile()) return;
+    const version = fileVersion(info);
+    if (lane === "live" && this.oversized.get(path) === version) return;
+    this.oversized.delete(path);
+    try { await this.readVersion(path, lane, force, info); }
+    catch (error) {
+      if (error instanceof SizeLimitError) this.oversized.set(path, version);
+      throw error;
+    }
+  }
+
+  private async readVersion(path: string, lane: "live" | "import", force: boolean, info: { size: number; mtimeMs: number; ino: number }): Promise<void> {
     const previous = this.states.get(path);
     // Unchanged bytes can still hold a Turn whose end the control plane has only now reported.
     if (previous && this.unchanged(previous, info) && !(force && previous.runningTurnId)) return;
@@ -584,6 +635,7 @@ export class NativeIngest {
     if (format.turnEndRecorded) return tail.result !== null;
     const certain = this.options.hooks?.settled?.(state, mtimeMs);
     if (certain != null) return certain;
+    if (tail.ended) return true;
     if (!format.replyEnded?.(tail)) return false;
     const idleMs = Date.now() - mtimeMs;
     if (idleMs >= QUIET_SETTLE_MS) return true;
@@ -616,9 +668,20 @@ export class NativeIngest {
     const known = pending.length ? await this.known(transport, pending.flatMap((turn) => turn.cloudTurnId ? [turn.cloudTurnId, derived(turn)] : [derived(turn)])) : new Map();
     const cohub = (turn: NativeTranscriptTurn) => turn.cloudTurnId && known.has(turn.cloudTurnId) ? turn.cloudTurnId : null;
     const tail = turns.at(-1);
+    // A Cohub file whose latest Cohub Turn the file cannot name (its format marks none, or it predates
+    // the marker) holds only Turns the server already has, up to its current end.
+    const cohubHead = state.executingTurnId ?? state.headTurnId;
+    const unmarked = !transcriptFormat(state.harness).marksCohubTurns || state.size < 0;
+    if (state.origin === "cohub" && cohubHead && unmarked && state.throughTurnId !== cohubHead && !turns.some((turn) => turn.cloudTurnId === cohubHead)) {
+      const through = tail ? cohub(tail) ?? cohubHead : cohubHead;
+      Object.assign(state, { throughTurnKey: tail?.key ?? state.throughTurnKey, throughTurnId: through, headTurnId: through, executingTurnId: null });
+      return;
+    }
+    state.executingTurnId = null;
     const head = !tail ? null : pending.length ? cohub(tail) ?? derived(tail) : state.throughTurnId;
     const candidates: Candidate[] = [];
-    let parentTurnId = from > 0 ? state.throughTurnId : null;
+    // A head adopted without a transcript key (Cohub's Turn left no record) still parents what follows.
+    let parentTurnId = from > 0 || !state.throughTurnKey ? state.throughTurnId : null;
     for (const [offset, turn] of pending.entries()) {
       const marked = cohub(turn);
       if (marked) {
@@ -726,7 +789,7 @@ export class NativeIngest {
   }
 
   private async archive(state: TranscriptState, turn: NativeTranscriptTurn, turnId: string): Promise<void> {
-    if (!state.sessionId) return;
+    if (!state.sessionId || !harnessAdapter(state.harness).session.archive) return;
     try {
       const source = turn.path ?? state.path;
       const archiveSource = transcriptFormat(state.harness).archiveSource;

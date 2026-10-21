@@ -280,7 +280,7 @@ If not ready within 30 seconds, it returns exit code 2 and continues connecting.
 `--yes` authorizes local execution without interaction. `down` retains all data and
 requires `--yes` when work is unconfirmed. Network reconnection is automatic; it does
 not replay model or tool work, and a disconnect does not confirm a task stopped.
-Local harnesses are Pi, Codex, Claude Code (`claude`) and WorkBuddy (`codebuddy`). Without
+Local harnesses are Pi, Codex, Claude Code (`claude`), WorkBuddy (`codebuddy`) and Cursor (`cursor-agent`). Without
 `--harness`, every installed one is tried and one that cannot start is skipped with a warning.
 
 ### Displays
@@ -337,7 +337,7 @@ cohub -s <spaceId> boards apply <boardId> -i - < changes.json
 `boards schema` explains every field, and `boards preset` prints tracks for a preset motion — as an apply-ready patch with `--animation`, or bare `tracks` without it:
 
 ```bash
-cohub -s <spaceId> boards schema                 # units, item types, colors, animatable properties
+cohub -s <spaceId> boards schema                 # units, scale, item types, colors, animatable properties
 cohub -s <spaceId> boards schema arrow           # one target
 cohub -s <spaceId> boards examples lesson > lesson.json
 cohub -s <spaceId> boards preset rise --targets a,b --animation intro | cohub boards apply <boardId> -i -
