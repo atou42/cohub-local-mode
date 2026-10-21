@@ -21,7 +21,7 @@ type CreateGenerationTaskRequest = {
 };
 ```
 
-`content` contains the prompt and any reference media:
+`content` contains the prompt and any reference media or 3D models:
 
 ```ts
 type GenerationSource =
@@ -32,8 +32,11 @@ type GenerationContentBlock =
   | { type: "text"; text: string; meta?: Record<string, unknown> }
   | { type: "image"; source: GenerationSource; meta?: Record<string, unknown> }
   | { type: "video"; source: GenerationSource; meta?: Record<string, unknown> }
-  | { type: "audio"; source: GenerationSource; meta?: Record<string, unknown> };
+  | { type: "audio"; source: GenerationSource; meta?: Record<string, unknown> }
+  | { type: "3d"; source: GenerationSource; meta?: Record<string, unknown> };
 ```
+
+`3d` blocks carry 3D asset files such as GLB, OBJ or FBX models. 3D models (for example `meshy`, adapter `meshy.tasks`) return them as output, and operations such as retexture and remesh take them as input; pass an output block back unchanged so the provider can reuse its task from `meta.task_id`. Local model files upload as generation inputs (`publicAssets.uploadGenerationInput`) when they are GLB, glTF, OBJ, FBX or STL and `filename` ends with the format's extension. Providers read the format from the URL extension, so the upload keeps the extension and stores the file with that extension's type (`model/gltf-binary`, `model/gltf+json`, `model/obj`, `model/stl`, or `application/octet-stream` for FBX); the client may send that type or `application/octet-stream`.
 
 The API queues a generation task and returns a task ID. Use task polling, or the SDK / CLI helpers, to wait for the final `GenerationTaskResult`:
 
@@ -62,7 +65,7 @@ Generation requests share the platform credit balance with LLM turns.
 
 ```ts
 operationId: `generation:${taskRunId}`  // idempotent
-usageType: "generation.image" | "generation.video" | "generation.music" | "generation"
+usageType: "generation.image" | "generation.video" | "generation.music" | "generation.3d" | "generation"
 officialCostUsd: result.cost
 amountUsd: officialCostUsd * discountMultiplier
 ```
@@ -122,6 +125,8 @@ Generation declarations live in:
 Platform declarations are loaded from `platform/.cohub/generations`, and user declarations from `users/<userId>/.cohub/generations`. User declarations override platform declarations with the same `model`.
 
 Declarations use `neta.generation.model.v1`. Adapter credentials and provider base URLs are not stored in model declarations. Worker execution uses `GENERATION_API_KEY`. An optional worker-level `GENERATION_BASE_URL` is passed to `@neta-art/generation`; when it is unset, Cohub omits the option and lets the Generation SDK select its own default.
+
+Worker requests to the generation gateway carry `X-Cohub-Task-Id: <taskRunId>` for correlation with Cohub tasks, billing, and usage statistics. Submission, polling, and retries share the same task ID; this header is not an idempotency key. Injection is limited to the configured gateway origin and base path (the SDK's current default is `https://router.neta.art`). Tagged requests reject automatic redirects to prevent leaking the header to another destination. External media requests are not tagged.
 
 Minimal shape:
 

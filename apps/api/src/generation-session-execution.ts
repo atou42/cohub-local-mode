@@ -2,13 +2,12 @@ import {
   BillingAccessBlockedError,
   billingOperations,
   contentTypesFromBlocks,
-  createBillingUsageGate,
   generationUsageKind,
   isGenerationModelDiscountFree,
   isBillingUsageGateUnavailableError,
   resolveGenerationUsageType,
 } from "@cohub/billing";
-import { createGenerationClient, GenerationValidationError } from "@neta-art/generation";
+import { GenerationValidationError } from "@neta-art/generation";
 import { buildGenerationRequestMessage, buildGenerationResultMessage } from "@cohub/protocol/generation";
 import { createInitialSpaceSession, getSpaceSessionById, persistMessageNode } from "./space-sessions.js";
 import { assignSessionSourceSystemLabel } from "@cohub/core/labels/session-source";
@@ -18,10 +17,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { getPostgresErrorConstraint, isPostgresUniqueViolation } from "./db/postgres-error.js";
 import { createSessionTurn, setGenerationTurnAssistantProjection } from "./session-turns.js";
 import { loadGenerationDeclaration } from "./generations/declarations.js";
+import { resolveGenerationRequestParameters } from "./generations/schema.js";
 import { enqueueTask } from "./tasks.js";
 import { defaultJobRetention } from "@cohub/infra/bullmq";
+import { spaceWalletBilling } from "./space-wallet-billing.js";
 
-const billingUsageGate = createBillingUsageGate({ operations: billingOperations });
+const billingUsageGate = spaceWalletBilling.gate;
 
 async function retryDatabaseOperation<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
   let lastError: unknown;
@@ -75,12 +76,7 @@ export async function createGenerationSessionExecution(input: {
   if (!declaration) throw new GenerationSessionExecutionError(404, "generation_model_not_found", `Generation model not found: ${input.model}`);
   let parameters: Record<string, unknown> | undefined;
   try {
-    parameters = createGenerationClient({ models: [declaration], includeBuiltinModels: false }).validate({
-      model: input.model,
-      content: input.content,
-      parameters: input.parameters,
-      meta: input.meta,
-    }).parameters;
+    parameters = resolveGenerationRequestParameters(declaration, input);
   } catch (error) {
     if (error instanceof GenerationValidationError) throw new GenerationSessionExecutionError(400, "invalid_generation_input", error.message);
     throw error;

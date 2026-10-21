@@ -4,7 +4,6 @@ import { z } from "zod";
 import {
   BillingAccessBlockedError,
   billingOperations,
-  createBillingUsageGate,
   COHUB_BILLING_TOKEN_TYPES,
   COHUB_BILLING_USAGE_TYPES,
   normalizePositiveUsd,
@@ -27,16 +26,12 @@ import { archiveDecisionBestEffort, createModelCallId } from "../../model-call-a
 import { callDecisionUpstream } from "../../decisions/client.js";
 import { countStateImages, prepareDecisionState } from "../../decisions/state.js";
 import { loadDecisionModels } from "../../decisions/models.js";
+import { spaceWalletBilling } from "../../space-wallet-billing.js";
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
 
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    logger.warn("[BillingGate] fail-open after decision billing evaluation error", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 const MAX_QUESTIONS = 200;
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -86,6 +81,7 @@ const createDecisionSchema = z.object({
 });
 
 async function recordDecisionBilling(input: {
+  spaceId: string;
   decisionId: string;
   userId: string;
   provider: string;
@@ -105,7 +101,8 @@ async function recordDecisionBilling(input: {
   }
   if (!billingOperations.status.configured) return;
   try {
-    const result = await billingOperations.recordUsage({
+    const result = await spaceWalletBilling.recordUsage({
+      spaceId: input.spaceId,
       userId: input.userId,
       amountUsd,
       tokenType: COHUB_BILLING_TOKEN_TYPES.usdMicroCent,
@@ -249,6 +246,7 @@ router.post("/", decisionRequestBodyLimit, async (c) => {
   const costUsd = outcome.usage.cost?.total ?? null;
   archiveDecisionBestEffort({ ...archive, costUsd });
   await recordDecisionBilling({
+    spaceId,
     decisionId,
     userId: user.uuid,
     provider: model.provider,

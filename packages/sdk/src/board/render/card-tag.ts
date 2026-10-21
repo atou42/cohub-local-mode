@@ -1,9 +1,9 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { BoardRenderContext } from "./renderers/board-renderer-registry.js";
 import { fitTextToWidth } from "./text-fit.js";
-import { syncTextResolution, textResolutionForZoom } from "./text-resolution.js";
+import { syncTextResolution } from "./text-resolution.js";
 
-export type CardGlyph = "image" | "video" | "audio" | "file" | "task";
+export type CardGlyph = "image" | "video" | "audio" | "model" | "file" | "task";
 
 export const CARD_TAG_SIZE = 11;
 const ICON = 12;
@@ -26,6 +26,7 @@ const PIXEL_GLYPHS: Record<CardGlyph, readonly string[]> = {
 	image: ["######", "#....#", "#.#..#", "#.##.#", "######", "......"],
 	video: ["######", "#.#..#", "#.##.#", "#.#..#", "######", "......"],
 	audio: ["...#..", "...##.", "...#.#", "...#..", ".###..", ".###.."],
+	model: ["..#...", ".###..", "#####.", "#####.", ".###..", "..#..."],
 	file: ["####..", "#..##.", "#...##", "#....#", "#....#", "######"],
 	task: ["..#...", ".###..", "#####.", ".###..", "..#...", "......"],
 };
@@ -46,6 +47,9 @@ function drawLineGlyph(graphics: Graphics, glyph: CardGlyph, color: number) {
 				graphics.moveTo(x, 6 - height / 2).lineTo(x, 6 + height / 2);
 			graphics.stroke(line);
 			return;
+		case "model":
+			traceCube(graphics, 6, 6, 4.5).stroke(line);
+			return;
 		case "file":
 			graphics.poly([2.5, 1, 7.5, 1, 9.5, 3, 9.5, 11, 2.5, 11]).stroke(line);
 			graphics.moveTo(7.5, 1).lineTo(7.5, 3).lineTo(9.5, 3).stroke(line);
@@ -54,6 +58,19 @@ function drawLineGlyph(graphics: Graphics, glyph: CardGlyph, color: number) {
 			graphics.poly([6, 1, 7.3, 4.7, 11, 6, 7.3, 7.3, 6, 11, 4.7, 7.3, 1, 6, 4.7, 4.7]).fill({ color });
 			return;
 	}
+}
+
+export function traceCube(graphics: Graphics, cx: number, cy: number, radius: number) {
+	const dx = radius * 0.866;
+	const dy = radius / 2;
+	graphics
+		.poly([cx, cy - radius, cx + dx, cy - dy, cx + dx, cy + dy, cx, cy + radius, cx - dx, cy + dy, cx - dx, cy - dy])
+		.moveTo(cx - dx, cy - dy)
+		.lineTo(cx, cy)
+		.lineTo(cx + dx, cy - dy)
+		.moveTo(cx, cy)
+		.lineTo(cx, cy + radius);
+	return graphics;
 }
 
 export function drawCardGlyph(graphics: Graphics, glyph: CardGlyph, color: number, pixel: boolean) {
@@ -73,7 +90,6 @@ export type CardTag = {
 	icon: Graphics;
 	text: Text | null;
 	sig: string;
-	resolution: number;
 	width: number;
 };
 
@@ -82,12 +98,16 @@ export function createCardTag(): CardTag {
 	const icon = new Graphics();
 	root.addChild(icon);
 	root.visible = false;
-	return { root, icon, text: null, sig: "", resolution: 0, width: 0 };
+	return { root, icon, text: null, sig: "", width: 0 };
+}
+
+function tagScale(zoom: number) {
+	return Math.min(MAX_GROWTH, Math.max(1, 1 / Math.max(zoom, 0.01)));
 }
 
 export function zoomCardTag(tag: CardTag, zoom: number) {
 	if (!tag.text || !tag.sig) return;
-	const scale = Math.min(MAX_GROWTH, Math.max(1, 1 / Math.max(zoom, 0.01)));
+	const scale = tagScale(zoom);
 	const span = ICON + GAP + tag.text.width;
 	tag.root.scale.set(scale);
 	tag.root.position.set(0, -(ICON + LIFT) * scale);
@@ -106,28 +126,24 @@ export function syncCardTag(
 		return;
 	}
 	if (!tag.text) {
-		tag.resolution = textResolutionForZoom(context.zoom);
 		tag.text = new Text({
 			text: "",
 			style: { fontFamily: context.style.font, fontSize: CARD_TAG_SIZE, fontWeight: "500" },
-			resolution: tag.resolution,
 			roundPixels: true,
 		});
 		tag.root.addChild(tag.text);
 	}
-	syncTextResolution(tag.text, tag, context.zoom);
 	const sig = [input.glyph, input.text, input.width, context.themeKey].join("|");
-	if (sig === tag.sig) {
-		zoomCardTag(tag, context.zoom);
-		return;
+	if (sig !== tag.sig) {
+		tag.sig = sig;
+		const color = context.palette.muted;
+		const pixel = context.style.icons === "pixel";
+		drawCardGlyph(tag.icon.clear(), input.glyph, color, pixel);
+		tag.text.style.fill = color;
+		tag.text.style.fontFamily = context.style.font;
+		fitTextToWidth(tag.text, input.text, Math.max(1, input.width - ICON - GAP));
+		tag.text.position.set(ICON + GAP, (ICON - tag.text.height) / 2);
 	}
-	tag.sig = sig;
-	const color = context.palette.muted;
-	const pixel = context.style.icons === "pixel";
-	drawCardGlyph(tag.icon.clear(), input.glyph, color, pixel);
-	tag.text.style.fill = color;
-	tag.text.style.fontFamily = context.style.font;
-	fitTextToWidth(tag.text, input.text, Math.max(1, input.width - ICON - GAP));
-	tag.text.position.set(ICON + GAP, (ICON - tag.text.height) / 2);
+	syncTextResolution(tag.text, context.textResolution * tagScale(context.zoom));
 	zoomCardTag(tag, context.zoom);
 }

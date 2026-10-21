@@ -3,7 +3,7 @@ import type { BoardDocument } from "@cohub/protocol";
 import { resolveBoardAnimationCamera, type BoardAnimationSampler } from "../model/sampling.js";
 import { createBoardRenderSampler } from "../render/sampling.js";
 import { type BoardSceneItem, buildBoardScene } from "../model/scene.js";
-import { type ICanvas, Rectangle, type Renderer, type Texture } from "pixi.js";
+import { type ICanvas, Rectangle, type Renderer, RendererType, type Texture } from "pixi.js";
 import { parseBoardCssColor } from "../render/css-color.js";
 import type { BoardShapeColors } from "../model/palette.js";
 import {
@@ -138,13 +138,25 @@ export function renderBoardExport(renderer: Renderer, input: BoardDocument, opti
   });
 
   try {
-    const canvas = renderer.extract.canvas({
+    const texture = renderer.textureGenerator.generateTexture({
       target: exportScene.root,
       frame: new Rectangle(0, 0, plan.width, plan.height),
       resolution: 1,
       antialias: true,
       clearColor: options.background === "transparent" ? undefined : palette.bg,
     });
+    let canvas: ICanvas;
+    const surface = renderer.type === RendererType.CANVAS ? texture.source.resource as ICanvas : undefined;
+    try {
+      canvas = renderer.texture.generateCanvas(texture);
+    } finally {
+      texture.destroy(true);
+      // CanvasRenderer drops the source reference but does not release its native surface.
+      if (surface) {
+        surface.width = 1;
+        surface.height = 1;
+      }
+    }
 
     const warnings: BoardExportWarning[] = [];
     if (plan.clamped) {

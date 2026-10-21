@@ -23,6 +23,7 @@ import CenteredLoading from "$lib/components/CenteredLoading.svelte";
 import FileContentPreview from "$lib/components/FileContentPreview.svelte";
 import type { PreviewCaptureTarget } from "$lib/features/preview-mark";
 import PreviewMarkHost from "$lib/features/preview-mark/ui/PreviewMarkHost.svelte";
+import type { FilePreviewModel } from "$lib/file-preview-model";
 import { getLocale } from "$lib/i18n/locale.svelte";
 import { createLazyModuleLoader } from "$lib/lazy-module";
 import { m } from "$lib/paraglide/messages.js";
@@ -63,23 +64,14 @@ type Props = {
 	inlineFileCanGoBack: boolean;
 	inlineFileDownloadUrl: string;
 	inlineFileDownloadName: string;
-	inlineFileIsText: boolean;
-	inlineFileHasRenderedPreview: boolean;
+	inlineFilePreview: FilePreviewModel;
 	inlineFileViewMode: FileViewMode;
 	inlineFileDiff: SpacePendingDiffFileResponse | null;
 	inlineFileDiffLoading: boolean;
 	inlineFileDiffError: string | null;
-	inlineFileIsMarkdown: boolean;
-	inlineFileIsCsv: boolean;
-	inlineFileIsHtml: boolean;
 	activeFsReadonly: boolean;
 	canEditFiles: boolean;
 	inlineFileCopied: boolean;
-	inlineFileIsImage: boolean;
-	inlineFileIsVideo: boolean;
-	inlineFileIsAudio: boolean;
-	inlineFileIsPdf: boolean;
-	inlineFileDataUrl: string | null;
 	inlineFileSpaceId: string;
 	inlineFileApp: AppRecord | null;
 	chrome: PreviewChrome;
@@ -123,23 +115,14 @@ let {
 	inlineFileCanGoBack,
 	inlineFileDownloadUrl,
 	inlineFileDownloadName,
-	inlineFileIsText,
-	inlineFileHasRenderedPreview,
+	inlineFilePreview,
 	inlineFileViewMode = $bindable(),
 	inlineFileDiff,
 	inlineFileDiffLoading,
 	inlineFileDiffError,
-	inlineFileIsMarkdown,
-	inlineFileIsCsv,
-	inlineFileIsHtml,
 	activeFsReadonly,
 	canEditFiles,
 	inlineFileCopied,
-	inlineFileIsImage,
-	inlineFileIsVideo,
-	inlineFileIsAudio,
-	inlineFileIsPdf,
-	inlineFileDataUrl,
 	inlineFileSpaceId,
 	inlineFileApp,
 	chrome,
@@ -170,6 +153,12 @@ let {
 }: Props = $props();
 
 const locale = $derived(getLocale());
+const previewKind = $derived(inlineFilePreview.kind);
+const inlineFileIsText = $derived(inlineFilePreview.isText);
+const inlineFileHasRenderedPreview = $derived(
+	inlineFilePreview.hasRenderedPreview,
+);
+const inlineFileDataUrl = $derived(inlineFilePreview.mediaUrl);
 
 const loadFileDiffViewModule = createLazyModuleLoader(
 	() => import("$lib/components/FileDiffView.svelte"),
@@ -191,11 +180,12 @@ const activeResponsePath = $derived(
 );
 
 const imageMarkTarget = $derived.by((): PreviewCaptureTarget | null => {
-	if (!inlineFileIsImage || !inlineFileDataUrl || !activeFilePath) return null;
+	if (previewKind !== "image" || !inlineFileDataUrl || !activeFilePath)
+		return null;
 	return { kind: "image", src: inlineFileDataUrl, path: activeFilePath };
 });
 const showHtmlMark = $derived(
-	inlineFileIsHtml &&
+	previewKind === "html" &&
 		inlineFileViewMode === "preview" &&
 		inlineFileHasRenderedPreview,
 );
@@ -214,9 +204,11 @@ const hasUsableText = $derived(
 );
 const hasUsableMedia = $derived(
 	Boolean(
-		((inlineFileIsImage || inlineFileIsVideo || inlineFileIsAudio) &&
+		((previewKind === "image" ||
+			previewKind === "video" ||
+			previewKind === "audio") &&
 			inlineFileDataUrl) ||
-			(inlineFileIsPdf &&
+			((previewKind === "pdf" || previewKind === "model3d") &&
 				inlineFile.response &&
 				(inlineFile.response.content || inlineFile.response.url)),
 	),
@@ -245,11 +237,12 @@ const viewModeOptions = $derived.by((): PreviewOption[] => {
 			value: "preview",
 			label: m.inline_preview({}, { locale }),
 			icon: Eye,
-			title: inlineFileIsMarkdown
-				? m.inline_preview_markdown({}, { locale })
-				: inlineFileIsCsv
-					? m.inline_preview_table({}, { locale })
-					: m.inline_preview_html({}, { locale }),
+			title:
+				previewKind === "markdown"
+					? m.inline_preview_markdown({}, { locale })
+					: previewKind === "csv"
+						? m.inline_preview_table({}, { locale })
+						: m.inline_preview_html({}, { locale }),
 		});
 	}
 	if (showDiffMode) {
@@ -270,7 +263,11 @@ const activeViewMode = $derived(
 const activeActionPath = $derived(activeResponsePath || activeFilePath);
 const hasResponse = $derived(Boolean(inlineFile?.response));
 const primaryDownload = $derived(
-	hasResponse && (inlineFileIsVideo || inlineFileIsAudio || inlineFileIsPdf),
+	hasResponse &&
+		(previewKind === "video" ||
+			previewKind === "audio" ||
+			previewKind === "pdf" ||
+			previewKind === "model3d"),
 );
 const canManageFile = $derived(canEditFiles && !activeFsReadonly);
 const canEditContent = $derived(canEditFiles && !activeFsReadonly);
@@ -336,7 +333,7 @@ const headerActions = $derived.by((): PreviewHeaderAction[] => {
 				run: () => onDownloadInlineFile(),
 			});
 		}
-		if (inlineFileIsHtml && inlineFileViewMode === "preview") {
+		if (previewKind === "html" && inlineFileViewMode === "preview") {
 			list.push({
 				id: "publish",
 				label: m.inline_publish_app({}, { locale }),
@@ -512,11 +509,11 @@ $effect(() => {
 			{#if showHtmlMark}
 				<PreviewMarkHost bind:open={htmlMarkOpen} target={htmlMarkTarget} />
 			{/if}
-			{#if inlineFileIsImage && inlineFileDataUrl && imageMarkTarget}
+			{#if imageMarkTarget}
 				<PreviewMarkHost bind:open={imageMarkOpen} target={imageMarkTarget} />
 			{/if}
 			{#if activeFsReadonly}
-				<span class="preview-readonly-badge">{m.inline_read_only_snapshot({}, { locale })}</span>
+				<span class="preview-readonly-badge tag">{m.inline_read_only_snapshot({}, { locale })}</span>
 			{/if}
 		{/snippet}
 	</PreviewHeader>
@@ -578,16 +575,6 @@ $effect(() => {
 <style>
 	.file-status-banner--float {
 		margin-top: 56px;
-	}
-
-	.preview-readonly-badge {
-		flex: 0 0 auto;
-		border-radius: 6px;
-		border: 1px solid var(--border-subtle);
-		padding: 3px 8px;
-		color: var(--text-tertiary);
-		font-size: 11px;
-		white-space: nowrap;
 	}
 
 	@container preview-header (max-width: 460px) {

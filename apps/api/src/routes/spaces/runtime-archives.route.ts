@@ -13,7 +13,7 @@ import { config } from "../../config.js";
 import { createPresignedGetObjectUrl, createPresignedPutObjectUrl } from "../../object-presign.js";
 import { headTurnObject } from "../../turn-object-storage.js";
 import { redisCommandClient } from "../../redis.js";
-import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse } from "../../upload-quota.js";
 import { dispatchTurnUpdated } from "../../session-output.js";
 import { getSessionTurnById } from "../../session-turns.js";
 
@@ -83,8 +83,7 @@ router.post("/prepare", async (c) => {
   }
   catch (error) {
     if (!(error instanceof UploadRateLimitError)) throw error;
-    c.header("Retry-After", String(error.retryAfterSeconds));
-    return c.json({ message: "Archive upload rate limited", retryAfterSeconds: error.retryAfterSeconds }, 429);
+    return uploadRateLimitedResponse(c, error, "Archive upload rate limited");
   }
   const uploads: RuntimeArchiveUpload[] = [];
   const unique = [...new Map(index.segments.map((segment) => [segment.sha256, segment])).values()];

@@ -9,7 +9,7 @@ import { getRealtimeSpaceRoom, getRealtimeUserRoom, normalizeRealtimeRooms } fro
 import { executeChannelCommand } from "./channel-commands.js";
 import { db } from "./db/index.js";
 import { providerMessageRefs, spaceChannels, spaceSessionBindings, userChannels } from "@cohub/db";
-import { REALTIME_OUTBOUND_CHANNEL, getGatewayNodeOutboundStreamKey, redisCommandClient, xaddWithMaxlen } from "./redis.js";
+import { REALTIME_OUTBOUND_CHANNEL, getGatewayNodeOutboundStreamKey, redisCommandClient } from "./redis.js";
 import { clearChannelHealth } from "./channel-health.js";
 import { registerSpaceSession } from "./space-sessions.js";
 import {
@@ -166,7 +166,7 @@ async function migrateOutboundCommandsForChannel(input: { spaceChannelId: string
             continue;
           }
           if (command.channelId !== input.spaceChannelId) continue;
-          await xaddWithMaxlen(redisCommandClient, toStream, "*", "payload", JSON.stringify({
+          await redisCommandClient.xadd(toStream, "*", "payload", JSON.stringify({
             ...command,
             meta: { ...(command.meta ?? {}), targetNodeId: input.toNodeId },
           }));
@@ -362,7 +362,7 @@ export async function dispatchOutboundMessage(input: {
     meta: { ...(input.meta ?? {}), targetNodeId: nodeId },
   };
 
-  await xaddWithMaxlen(redisCommandClient, getGatewayNodeOutboundStreamKey(nodeId), "*", "payload", JSON.stringify(command));
+  await redisCommandClient.xadd(getGatewayNodeOutboundStreamKey(nodeId), "*", "payload", JSON.stringify(command));
 }
 
 const resolveRealtimeEventRooms = (input: {

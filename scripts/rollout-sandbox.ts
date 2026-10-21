@@ -14,6 +14,7 @@ type CliOptions = {
   settleMs: number;
   dryRun: boolean;
   spaceIds: string[];
+  image?: "default" | "game";
 };
 
 const parseArgs = (argv: string[]) => {
@@ -69,6 +70,12 @@ const parseArgs = (argv: string[]) => {
     }
     if (arg === "--space-id" && next) {
       options.spaceIds.push(next.trim());
+      index += 1;
+      continue;
+    }
+    if (arg === "--image" && next) {
+      if (next !== "default" && next !== "game") throw new Error("Unknown sandbox image");
+      options.image = next;
       index += 1;
       continue;
     }
@@ -150,7 +157,8 @@ const remoteScriptPath = "/tmp/cohub-sandbox-rollout.mjs";
 
 const innerScript = `
 import { k8sCoreApi } from '/app/dist/k8s.js';
-import { config, sessionsNamespace } from '/app/dist/config.js';
+import { sessionsNamespace } from '/app/dist/config.js';
+import { resolveSpaceSandboxPreferences } from '/app/dist/space-sandbox-preferences.js';
 import { getSpaceSandboxBySpaceId, listSandboxRolloutTargets, reconcileSpaceSandbox, toSandboxImageVersion } from '/app/dist/space-sandboxes.js';
 
 const concurrency = ${JSON.stringify(options.concurrency)};
@@ -159,17 +167,27 @@ const timeoutMs = ${JSON.stringify(options.timeoutMs)};
 const settleMs = ${JSON.stringify(options.settleMs)};
 const dryRun = ${JSON.stringify(options.dryRun)};
 const selectedSpaceIds = new Set(${JSON.stringify(options.spaceIds)});
-const targetVersion = toSandboxImageVersion(config.sandboxImage);
+const targetVersion = 'per-space';
+const imageFilter = ${JSON.stringify(options.image ?? null)};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const allCandidates = await listSandboxRolloutTargets({
-  targetImageVersion: targetVersion,
-  limit: 10_000,
-});
-
-const filteredCandidates = selectedSpaceIds.size > 0
-  ? allCandidates.filter((candidate) => selectedSpaceIds.has(candidate.spaceId))
-  : allCandidates;
+const allCandidates = await listSandboxRolloutTargets({ limit: 10_000 });
+const pending = allCandidates.map((candidate, order) => ({ ...candidate, order })).filter((candidate) => candidate.podName && ['ready', 'running'].includes(candidate.status)
+  && (selectedSpaceIds.size === 0 || selectedSpaceIds.has(candidate.spaceId)));
+const filteredCandidates = [];
+let cursor = 0;
+await Promise.all(Array.from({ length: Math.min(8, pending.length) }, async () => {
+  while (cursor < pending.length) {
+    const candidate = pending[cursor++];
+    const resolved = await resolveSpaceSandboxPreferences(candidate.spaceId);
+    if (!resolved.applicable || (imageFilter && resolved.effective.image !== imageFilter)) continue;
+    const version = toSandboxImageVersion(resolved.imageRef);
+    if (candidate.desiredImage !== version || candidate.reportedImageVersion !== version) {
+      filteredCandidates.push({ ...candidate, targetVersion: version, image: resolved.effective.image });
+    }
+  }
+}));
+filteredCandidates.sort((a, b) => a.order - b.order);
 const candidates = limit > 0 ? filteredCandidates.slice(0, limit) : filteredCandidates;
 
 if (selectedSpaceIds.size > 0) {
@@ -200,6 +218,8 @@ console.error(JSON.stringify({
     status: candidate.status,
     desiredImage: candidate.desiredImage,
     reportedImageVersion: candidate.reportedImageVersion,
+    targetVersion: candidate.targetVersion,
+    image: candidate.image,
   })),
 }));
 
@@ -217,7 +237,7 @@ if (dryRun) {
   process.exit(0);
 }
 
-const waitForSandboxReady = async (spaceId) => {
+const waitForSandboxReady = async (spaceId, targetVersion) => {
   const podName = 'sandbox-' + spaceId;
   const startedAt = Date.now();
   let runningAt = null;
@@ -261,7 +281,7 @@ const worker = async (workerId) => {
   while (queue.length > 0) {
     const target = queue.shift();
     if (!target) return;
-    console.error(JSON.stringify({ phase: 'start', workerId, spaceId: target.spaceId, from: target.reportedImageVersion, to: targetVersion }));
+    console.error(JSON.stringify({ phase: 'start', workerId, spaceId: target.spaceId, from: target.reportedImageVersion, to: target.targetVersion }));
     try {
       await reconcileSpaceSandbox({
         spaceId: target.spaceId,
@@ -269,7 +289,7 @@ const worker = async (workerId) => {
         mode: 'replace',
         reason: 'manual_recreate',
       });
-      const ready = await waitForSandboxReady(target.spaceId);
+      const ready = await waitForSandboxReady(target.spaceId, target.targetVersion);
       successes.push({ spaceId: target.spaceId, podName: ready.podName, mode: ready.mode });
       console.error(JSON.stringify({ phase: 'done', workerId, spaceId: target.spaceId, podName: ready.podName, mode: ready.mode }));
     } catch (error) {

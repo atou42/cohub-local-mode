@@ -1806,7 +1806,40 @@ export function createTalesofaiBillingOperations(
     const tokenType = input.tokenType ?? COHUB_BILLING_TOKEN_TYPES.usdMicroCent;
     const page = Math.max(1, Math.floor(input.page ?? 1));
     const limit = Math.min(10, Math.max(1, Math.floor(input.limit ?? 10)));
-    await ensureCustomer({ userId: input.userId });
+    if (input.createCustomer !== false) await ensureCustomer({ userId: input.userId });
+    else if (!await getCustomerCreditsOrEmpty({ sdk, businessKey, userId: input.userId })) {
+      return { userId: input.userId, billing: status, tokenType, unit: getCreditUnit(tokenType), page, limit, items: [], pagination: { hasMore: false, nextPage: null } };
+    }
+    if (input.transactionLedger) {
+      const result = await sdk.admin.credits.listTransactions({
+        business_key: businessKey,
+        external_user_id: input.userId,
+        token_type: tokenType,
+        sorting: "-created_at",
+        include_count: false,
+        page, limit,
+      });
+      const items = result.items.flatMap((transaction): BillingBalanceActivity[] => {
+        if (transaction.type === "consume" || transaction.type === "settlement") {
+          return [{
+            id: `transaction:${transaction.id}`, kind: "usage", tokenType,
+            title: transaction.type === "settlement" ? "Overage settlement" : "Usage",
+            description: transaction.reason ?? null,
+            sourceType: transaction.source_type, sourceId: transaction.source_id,
+            operationId: transaction.operation_id,
+            amountUsd: -amountToUsd(transaction.amount, tokenType), status: "covered",
+            createdAt: transaction.created_at,
+          }];
+        }
+        const activity = mapTransactionActivity(transaction);
+        return activity ? [activity] : [];
+      });
+      const hasMore = result.pagination.has_more;
+      return {
+        userId: input.userId, billing: status, tokenType, unit: getCreditUnit(tokenType), page, limit, items,
+        pagination: { hasMore, nextPage: hasMore ? page + 1 : null },
+      };
+    }
     const [transactions, overages] = await Promise.all([
       listAllPages((nextPage, nextLimit) =>
         sdk.admin.credits.listTransactions({
@@ -2403,6 +2436,7 @@ export function createTalesofaiBillingOperations(
   const purchaseAddon = async (
     input: BillingCheckoutInput,
   ): Promise<BillingCheckoutResult> => {
+    if (input.walletCheckout) return purchaseAddonUnprotected(input);
     return runCheckoutSingleflight(
       {
         kind: "addon",
@@ -2431,7 +2465,7 @@ export function createTalesofaiBillingOperations(
 
     await ensureCustomer({ userId: input.userId });
     const discount = await resolveCheckoutDiscount(input, product);
-    const reusableCheckout = await findReusableAddonCheckout({
+    const reusableCheckout = input.walletCheckout ? null : await findReusableAddonCheckout({
       userId: input.userId,
       productKey: product.key,
       discountId: discount?.discountId ?? null,
@@ -2453,8 +2487,11 @@ export function createTalesofaiBillingOperations(
       product_key: product.key,
       billing_reason: "purchase",
       ...checkoutRedirects(input.returnUrl, input.productKey),
+      ...(input.walletCheckout ? {
+        meta: { space_id: input.walletCheckout.spaceId, actor_user_id: input.walletCheckout.actorUserId, wallet_checkout_id: input.walletCheckout.id },
+      } : {}),
       ...(discount?.createSelector ?? {}),
-    });
+    }, input.walletCheckout ? { idempotencyKey: `space-wallet:${input.walletCheckout.id}` } : undefined);
     return checkoutResultFromOrder({
       userId: input.userId,
       productKey: product.key,
@@ -2824,11 +2861,14 @@ export function createTalesofaiBillingOperations(
     },
 
     async getCreditStatus(
-      input: BillingUserRef & { tokenType?: string },
+      input: BillingUserRef & { tokenType?: string; createCustomer?: boolean },
     ): Promise<BillingCreditStatus> {
       const tokenType =
         input.tokenType ?? COHUB_BILLING_TOKEN_TYPES.usdMicroCent;
-      const state = await getCreditsAfterEnsure(input.userId);
+      const state = input.createCustomer === false
+        ? await getCustomerCreditsOrEmpty({ sdk, businessKey, userId: input.userId })
+        : await getCreditsAfterEnsure(input.userId);
+      if (!state) return { netUsd: 0, globalAvailableUsd: 0, groups: [] };
       const balance = findBalance(state.credits, tokenType);
       const grants = (
         await listAllCreditGrants({ userId: input.userId, tokenType })
@@ -2849,8 +2889,25 @@ export function createTalesofaiBillingOperations(
 
       return {
         netUsd,
+        globalAvailableUsd: !balance ? 0 : typeof balance.raw.global_available_balance === "number"
+          ? amountToUsd(balance.raw.global_available_balance, tokenType)
+          : null,
         groups: groupCreditGrants(grantStatuses),
       };
+    },
+
+    async confirmSpaceWalletOrder(input) {
+      const result = await sdk.admin.orders.list({
+        business_key: businessKey,
+        external_user_id: input.userId,
+        meta_contains: { wallet_checkout_id: input.requestId, actor_user_id: input.actorUserId, space_id: input.spaceId },
+        page: 1, limit: 1, include_count: false,
+      });
+      const order = result.items[0];
+      if (!order || order.external_user_id !== input.userId || order.meta?.actor_user_id !== input.actorUserId || order.meta?.space_id !== input.spaceId || order.meta?.wallet_checkout_id !== input.requestId) {
+        throw billingApiError(404, "Wallet order not found", "wallet_order_not_found");
+      }
+      return { settled: order.status === "paid", pending: order.status === "pending_checkout" };
     },
 
     getCatalog,

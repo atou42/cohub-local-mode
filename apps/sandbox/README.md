@@ -81,6 +81,15 @@ nonce 格式错误仍报错，401 不触发匿名降级，新版服务端始终�
 本次不需要数据库迁移；token 授权一个实例的控制能力，不区分 RPC 方法。
 现有 ws:// 传输和同 UID 执行模型不变，不能将环境清理当作 /proc 隔离。
 
+## 启动脚本
+
+仅云端 Space 在 Workspace bootstrap 完成后，按 User → Mods → Space 的顺序执行
+`.cohub/setup.sh`。Mod 使用现有挂载顺序，本地 Space 不会自动执行任何 setup。
+每个脚本限时 5 分钟；失败停止后续步骤并保留修复入口，不自动重建 Sandbox。
+完整日志保存在 `.cohub/system/setup/`，不参与 Checkpoint。
+
+详见[启动语义、日志和发布顺序](../../docs/space-setup.md)。先发布 API，再更新 Sandbox 镜像。
+
 ## 本地开发与验证
 
 ### 本地检查
@@ -122,8 +131,13 @@ pnpm dev
 在项目根目录执行：
 
 ```bash
+docker buildx bake -f apps/sandbox/docker-bake.hcl --load
+
 docker build -f apps/sandbox/Dockerfile -t cohub-sandbox:latest apps/sandbox
+docker build -f apps/sandbox/Dockerfile --target game -t cohub-sandbox-game:latest apps/sandbox
 ```
+
+`game` 基于同一个 `base` 阶段。在不同 runner 上独立构建且未命中同一缓存时，公共层可能得到不同的 digest，无法去重；同一个 builder 上分次构建仍可复用缓存。CI 使用 `docker-bake.hcl` + `docker-bake.ci.hcl` 在同一个 builder 上构建两个镜像。
 
 Workspace search is optional. New cloud sandboxes enable it by default: at startup the Go runtime first honors `COHUB_SEARCH_BIN` or a preinstalled binary, otherwise resolves `https://public.cohub.live/search/latest.json`, downloads the immutable linux/amd64 release, verifies its SHA-256 checksum, and starts it. Download or process failures leave `fs.search` temporarily unavailable without affecting the rest of the sandbox; the supervisor retries later. Set `COHUB_SEARCH_ENABLED=false` to disable the feature, pin `COHUB_SEARCH_VERSION=vX.Y.Z`, or override `COHUB_SEARCH_CDN_BASE_URL` for staging.
 

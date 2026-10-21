@@ -4,11 +4,125 @@ All notable changes to Cohub are documented in this file.
 
 <!-- Generated from apps/web/src/lib/changelog/entries.json. Do not edit. -->
 
+## v2.75 — 2026-10-21
+
+- **Pixel-exact Board text**: Board text now rasterizes at the exact screen density once the camera rests, steps by powers of two while moving, and refreshes progressively across frames starting nearest the viewport center. The canvas backing store follows the device-pixel content box and the pixel budget now fits 4K displays. Custom renderers gain `BoardRenderContext.textResolution`; `syncTextResolution` is simplified and `createBoardScene` renames `onFarLayerFrame` to `requestFrame`.
+- **Instant Runtime reconnect**: A Local Runtime whose WebSocket drops now reconnects immediately instead of waiting for in-flight Turns to finish. Detached Turns keep running and replay their result on the next connection, half-open sockets are detected and abandoned, and connection diagnostics record close/handshake context, timing, buffered bytes, and the identity of oversized frames.
+- **Sidebar chat rename**: Chats can now be renamed inline from the chats list and sidebar, including cross-space lists — double-click enters rename, with IME-safe submit, accessible inline errors, focus restoration, and unchanged single-tap navigation on touch layouts.
+- **Chats source chip**: The active chats source is now displayed as a text chip beside the filter control, replacing the subtle dot indicator so a non-default source is visible at a glance.
+
+### Bug Fixes
+
+- Shared Codex app-server releases a thread after each Turn ends, letting Codex Desktop continue a conversation Cohub ran or watched; a Turn on a conversation open in another app now reports a clear message instead of a writer-lock error.
+- Native sync no longer re-reads or resends a transcript that hit a size limit until the file actually changes.
+- Gateway shutdown now closes Runtime sockets with 1012 so runtimes reconnect at once, and a sandbox lease claimed by a reconnecting Runtime answers 503 to keep retries on the short schedule.
+
+## v2.74 — 2026-10-21
+
+- **Cursor local harness**: Add `cursor-agent` as a Local Runtime harness — Cohub Turns hand over history and resume natively, and terminal and IDE Cursor chats sync into the Space read-only, joining Claude Code and WorkBuddy transcript sync. Deploy API, Gateway and Agent before the CLI.
+- **Local-first Board opening**: A cached Board renders from IndexedDB before the manifest round trip completes, and space file URLs resolve through a shared memory/IndexedDB cache with batched server reads, background revalidation and fresh retries. Textures, previews and app details load only for live cards, and a changed resource refreshes only the cards that hold it.
+- **Cheaper Board rendering at scale**: Image and video cards now paint as textured fills cut to the card outline instead of stencil-masked sprites, so media-heavy boards batch draws and pan and zoom with far less GPU work. Textures load at their displayed size from the smallest covering CDN variant and sharpen once zooming settles, while DOM views render in world coordinates under a single camera transform with screen-size LOD.
+- **Board SDK 12 breaking changes**: Custom renderers and hosts must migrate — `playbackTimeAt` becomes `playbackClockAt` returning `{ time, advancing }`, view contexts replace `zoom` with `detailed`, `acquireTexture` takes the item, and `requestItem(item, edge)` loads against a computed `boardTextureEdge`. Settled playback no longer drives frames.
+- **Per-Space follow-up delivery**: A Home Space can set `followupDelivery` in `.cohub/agent.json` to claim queued follow-ups `together` (default) or `one_by_one`, with strict validation of path containment, file size and schema; invalid config keeps messages queued and steer messages always run on their own.
+
+### Bug Fixes
+
+- Board pointer input now maps through ancestor CSS `transform`, `rotate`, `scale` and `zoom`, so clicks land correctly in transformed or embedded boards.
+- Mobile chat lists no longer open sessions behind preview windows; compact screens replace the sidebar main window instead.
+- The command palette no longer shows stale Space names after a rename, since the legacy list cache only fills gaps instead of shadowing per-Space records.
+- Board items share one default reading scale: media and task cards take a 480 long edge, and refits preserve the long edge rather than the width.
+
+## v2.73 — 2026-10-20
+
+- **Unified sandbox control**: Space settings now consolidate runtime status, image, compute spec, hibernation policy, and startup scripts into a single sandbox panel with inline diagnostics, optimistic saves, and one **Restart sandbox** action that replaces force recovery.
+- **Role-based text generation**: `cohub generate` accepts repeatable `--text <role>=<text>` inputs for models that require text roles, such as song2, and the positional prompt becomes optional when `--text` is supplied.
+- **Claude Code model catalog**: The local Runtime lists Claude Code's own models, including gateway-discovered models attributed to their gateway provider, with per-model effort levels and a safe fallback to account aliases.
+- **Sharper Boards on high-DPI displays**: The board stage renders at up to 3× density within an 8-megapixel backing-buffer budget, reacts to display and DPR changes without resetting the camera, and caps text textures at 6× with zoom buckets.
+- **Recent-window model availability**: The model selector dot now uses the most recent non-empty traffic window (5m, 10m, 30m, or 60m) and labels the actual window instead of showing a stale 5-minute rate.
+- **Pluggable local harness adapters**: Claude Code and WorkBuddy join Pi and Codex as first-class local executors behind per-harness adapters; a single protocol registry now drives CLI flags, Web picker labels and icons, API validation, read-only enforcement, and native archive formats, so new harnesses no longer require branches in the shared runtime.
+- **Streaming JSON harness integration**: Claude Code and WorkBuddy run one stream-json process per Turn, map read-only access to plan mode with only Read/Glob/Grep, project Cohub history into native transcripts (`~/.claude/projects`, `~/.codebuddy/projects`), and continue sessions with `--resume`; startup probes the CLI's flags so older or unrelated binaries are skipped.
+- **In-app feedback**: the debug log download is replaced by a cfeed feedback dialog with file attachments, paste-to-attach, an optional debug log, and automatic page, environment, viewport, and timezone context.
+- **Faster, leaner sandbox images**: runtime and game images now share one `base` build through Docker Bake, remove duplicate tooling layers, use BuildKit apt/npm/Go cache mounts, and pin Go, Chrome, Bun, and pnpm versions; CI builds and smoke-tests both profiles on a single builder.
+- **Isolated workspace setup**: sandbox startup scripts now come exclusively from `.cohub/setup.sh`; user config publishing exposes only that script through a dedicated read-only projection, so model credentials and other `.cohub` files never enter the sandbox.
+
+### Bug Fixes
+
+- File tree listings recover automatically from `directory_changed` conflicts with short retries, and directory errors now appear inline with a retry action instead of failing the entire tree.
+- Board cards with multiple labels now refresh every text texture, not just the first, when text resolution changes.
+- Space settings section headers keep their labels visible on wider screens.
+- Markdown autolinks now end at Chinese prose punctuation (，。、；：？！…—～「」《》（） etc.) while preserving Chinese path segments and ASCII punctuation inside URLs.
+- Sandbox images include NumPy for Python and Blender GLB asset exports; docs note that Cycles CPU rendering must disable denoising since OpenImageDenoise is not bundled.
+- Unrequested local harnesses that fail their startup check are skipped with a warning instead of aborting startup; explicit requests must all pass.
+
+## v2.72 — 2026-10-19
+
+- **Space wallets**: Spaces can now fund their own Cohub usage — recharge from billing, inspect ledger activity, and have charges settle against the Space balance when it covers the full amount, otherwise falling back to personal billing with no split payments. Exposed end to end via `/api/spaces/:id/wallet` routes, `client.space(id).wallet`, `cohub spaces wallet`, and a new web page; no database migrations required.
+- **Sandbox startup scripts**: Cloud sandboxes now run `.agents/setup.sh` in user → mod → Space order after workspace bootstrap, gated on durable bootstrap state so scripts never race an in-progress import. Each step streams bounded logs to `.cohub/system/setup/<run-id>/`, reports status, exit code, and duration through heartbeats, and is inspectable in Space settings → Sandbox, `cohub spaces setup`, or the SDK. Local Spaces never run them.
+- **Configurable sandbox environments**: New `default` and `game` images (Godot 4.5.2, Blender, Mesa/Vulkan, SDL tooling) with declarative `.cohub/sandbox.json` preferences merged across platform defaults, mods, project, and Space overrides. Images fall back safely when unavailable, compute is capped by entitlement, and the API surfaces requested vs. effective vs. applied state plus pending-restart hints.
+- **Cursor-paginated directory listings**: Space and checkpoint `fs/tree` now support `pagination`, `limit` (1–5000), and opaque cursors with deterministic name ordering, directory-revision binding (409 on change), and bounded stat concurrency. Legacy `files.list()` calls still aggregate all pages transparently, and the web file tree renders an early preview page instead of waiting for full enumeration.
+- **Reliability refactors across sync and billing**: Session and turn caches are now validated against their space/session context to prevent cross-space cache bleed, failed session loads retry on reconnect, and generation billing routes through a shared Space-wallet-aware path. Task fetches also stamp `X-Cohub-Task-Id` and block redirects.
+
+### Bug Fixes
+
+- Failed session loads no longer stay permanently stuck — they retry automatically on transport recovery and reconnect.
+- Sandbox provisioning no longer resets bootstrap state when the worker is already running, and stale provisioning leases can no longer fail a successor's record.
+- Session rename errors are now surfaced to the user instead of failing silently.
+
+## v2.71 — 2026-10-19
+
+- **Board pointer gestures SDK**: `createBoardPointerGestures` is exported from `board/stage` for draggable DOM item views. It tracks active pointers at the document level, keeps mouse drags alive when pointer capture is lost, and cancels gestures on window blur or page hide. Board stage drags and App cards now share the same implementation.
+- **Shorter sandbox idle defaults**: idle sandboxes auto-destroy after 1 hour in production instead of 12, and after 5 minutes in development instead of 10. The API Space policy, `cohub spaces create`, and the settings page all read `getDefaultSandboxIdleTtl`, while Spaces that already store an auto-destroy policy keep their TTL.
+
+### Bug Fixes
+
+- Board mouse drags finish when the pointer release is missed: a move with no buttons pressed ends the gesture at the last tracked position instead of leaving the drag stuck.
+- Pointer capture loss no longer aborts mouse drags on the Board stage or App cards, while touch and pen gestures still end on capture loss.
+
+## v2.70 — 2026-10-16
+
+- **3D models as generation inputs**: `generations.create` accepts `3d` content blocks, and `publicAssets.uploadGenerationInput` accepts GLB, glTF, OBJ, FBX, and STL files whose extension matches the filename. Uploads keep their extension so providers can read the format from the URL. Meshy 3D tasks bill under a new `generation.3d` usage type.
+- **Generation SDK 0.1.39**: upgrades the Generation SDK and adds the `newapi.audioGenerations` adapter for song generation from a style prompt, lyrics, and an optional ABC score.
+- **Provider error classification module**: retry rules for provider errors move out of `session-runtime.ts` into `runtime/provider-errors.ts` with dedicated tests. Generation request validation is also consolidated into one `resolveGenerationRequestParameters` helper shared by the API route and session execution.
+- **Compact side panel tabs**: when the side panel's tabs overflow, the tab bar scrolls horizontally and hides tab icons. A `compactOnOverflow` attachment built on `ResizeObserver` drives this without a re-render loop.
+
+### Bug Fixes
+
+- Agent turns retry upstream HTTP/2 stream failures, while quota, billing, and other terminal errors stay non-retryable.
+- Inline public assets reject `+xml` media types, which browsers can render as scripted XML documents.
+- GLB primitives without materials render with a neutral preview surface, so materialless models are visible. Authored materials keep their colors and surface properties.
+- Generation inputs accept only the 3D formats that providers fetch by URL, and validation errors name the accepted types.
+
+## v2.69 — 2026-10-16
+
+- **3D model previews**: Board file cards for .glb, .gltf, .stl and .obj draw a lazily loaded still and open in an in-place viewer. Model loading is size-bounded, abortable and supports Draco, and the SDK exposes `boardModelFormat`, `isBoardModelItem` and `modelPreviews`.
+- **Per-conversation gateway outbound delivery**: outbound replies move out of `bus.ts` into a dedicated consumer with a bounded scheduler. Each conversation's replies stay ordered while different conversations deliver in parallel, with separate media and per-provider concurrency limits. Each delivery step is checkpointed, so a retry does not resend completed items, and WeChat videos are sent as links.
+- **Single shared MIME table**: four duplicated MIME tables in the API, worker, CDN prewarm and CLI are replaced by `mimeTypeForPath` and `isTextMime` in `@cohub/protocol/fs`. The table now covers 3D formats, so CDN serving and public uploads share one source of truth.
+- **2 GiB uploads with structured errors**: the single-file limit rises from 1 GiB to 2 GiB. Rejections carry a machine-readable `code` (`file_too_large`, `upload_batch_too_large`, `upload_too_many_files`, `upload_rate_limited`), and rate-limit responses include `retryAfterSeconds` and a `Retry-After` header. The SDK exports `UPLOAD_ERROR_*` constants and `batchUploadEntries`, and the web app shows localized messages.
+- **Runtime lifecycle channel**: published Apps emit a versioned `cohub.runtime.lifecycle` message with first-contentful-paint snapshots. A direct parent can subscribe to it, and messages are scoped to the parent's exact HTTP(S) origin and the subscription ID. Containers can reveal content earlier and keep their native-load fallback when Paint Timing is unavailable.
+
+### Bug Fixes
+
+- Board media players stay positioned over their cards.
+- Chapter focus tracks are preserved when combining Board animations, with frame focus as the chapter-start fallback.
+- The mobile side panel tab bar aligns with the column header height.
+- Camera fields in `boards schema camera` describe value types, units and composition, and support field queries.
+
+## v2.68 — 2026-10-15
+
+- **Windows local runtime**: `cohub runtime up` now runs on Windows. The CLI downloads `cohub-sandboxd.exe`, launches npm-installed Pi/Codex through their Node entry instead of `.cmd` shims, and uses named pipes for the sandboxd control channel and Pi extension. It refuses to start from an elevated terminal, and `--display` shares the primary monitor by default. Git for Windows is required (or set `COHUB_BASH`).
+- **Bounded Board export memory**: Board exports release intermediate native Canvas surfaces eagerly and enforce a configurable decoded-image memory budget. Video dimensions are preflighted before rendering, and `NODE_DEBUG=cohub:board-export` exposes render-stage memory diagnostics.
+
+### Bug Fixes
+
+- Space file reads no longer treat sandbox `IO_ERROR` responses as offline; only locally detected transport failures trigger the offline path.
+- Directory delete on a non-empty directory returns a 400 `directory_not_empty` error instead of a generic server error.
+- Script workers initialize fonts the same way as native Board text, so script-drawn text matches exported output.
+- MP4 exports with odd dimensions and video frames with changing dimensions now fail early with a clear message instead of an opaque ffmpeg error.
+
 ## v2.67 — 2026-10-15
 
 - **Live Room connections for CLI agents**: `cohub rooms connect` streams room events and members over realtime, accepts bidirectional NDJSON publish, send, and presence commands on stdin, replays retained events with `--after`, and keeps the participant's seat after disconnect.
 - **Optional RTC media for Rooms**: `cohub rooms rtc` moves media and data channels to an isolated Go/Pion helper (`cohub-rtc`), replacing the native RTC adapter. It supports PCM, Opus, I420, and VP8 inputs with bounded binary or file outputs, and the SDK exposes a pluggable PeerConnection factory with participant-scoped RTC authorization.
-- **Self-describing Board schema**: `cohub boards schema` explains every item, track, animation, and settings field from the protocol schema. `cohub boards schema script` and the SDK's `BOARD_SCRIPT_API` document the script module API, which is type-checked against the script context.
 - **Faster Web shell**: compact screens no longer mount or subscribe the hidden desktop Sidebar, the Chats list is windowed while keeping keyboard focus reachable, and chat timelines reuse message projections for unchanged turns, cutting build time by about 43–50% in a Node microbenchmark.
 - **Example Apps moved out of the repo**: NETA World and Campfire now live in the separate Cohub Example Apps Space, published at the latest SDK version, so their sources are no longer maintained here.
 

@@ -252,6 +252,10 @@ async function connectSandboxOnce(spaceId: string, options?: { timeoutMs?: numbe
     },
   });
   const connection = await waitForSandboxConnection(spaceId, options?.timeoutMs);
+  const setup = connection.heartbeat?.metadata?.setup;
+  if (setup?.status === "waiting" || setup?.status === "running") {
+    throw new Error("Sandbox is not ready for requests yet: workspace setup is pending");
+  }
   touchSandboxConnection(spaceId);
   pruneSandboxConnections({ preserveSpaceId: spaceId });
   return connection;

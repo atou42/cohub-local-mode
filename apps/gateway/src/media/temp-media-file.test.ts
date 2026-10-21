@@ -12,7 +12,7 @@ import {
 } from "./temp-media-file.js";
 
 test("gateway attachments share the durable upload single-file cap", () => {
-  assert.equal(UPLOAD_MAX_FILE_BYTES, 1024 * 1024 * 1024);
+  assert.equal(UPLOAD_MAX_FILE_BYTES, 2 * 1024 * 1024 * 1024);
 });
 
 test("MIME-wrapped base64 is decoded across chunk boundaries and cleaned up", async () => {

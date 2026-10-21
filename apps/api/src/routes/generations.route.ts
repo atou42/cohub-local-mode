@@ -2,7 +2,6 @@ import {
   BillingAccessBlockedError,
   billingOperations,
   contentTypesFromBlocks,
-  createBillingUsageGate,
   generationUsageKind,
   isBillingUsageGateUnavailableError,
   isGenerationModelDiscountFree,
@@ -10,7 +9,7 @@ import {
   serializeBillingWarning,
 } from "@cohub/billing";
 import { Hono, type Context } from "hono";
-import { createGenerationClient, GenerationValidationError } from "@neta-art/generation";
+import { GenerationValidationError } from "@neta-art/generation";
 import {
   GENERATION_TASK_TYPE,
   type CreateGenerationTaskResponse,
@@ -20,23 +19,19 @@ import { useAuth, authzDenied } from "../lib/middleware.js";
 import { billingBlockedResponse } from "../lib/billing-blocked.js";
 import { hasPermission } from "../permissions.js";
 import { loadGenerationDeclaration } from "../generations/declarations.js";
-import { createGenerationTaskRequestSchema } from "../generations/schema.js";
+import { createGenerationTaskRequestSchema, resolveGenerationRequestParameters } from "../generations/schema.js";
 import { getSpaceSessionById } from "../space-sessions.js";
 import { getSessionTurnById } from "../session-turns.js";
 import { enqueueTask } from "../tasks.js";
 import { defaultJobRetention } from "@cohub/infra/bullmq";
 import { createLogger } from "@cohub/infra/logging";
 import { getRequestSource } from "../lib/request-source.js";
+import { spaceWalletBilling } from "../space-wallet-billing.js";
 
 
 const logger = createLogger({ serviceName: "cohub-api" });
 const router = new Hono();
-const billingUsageGate = createBillingUsageGate({
-  operations: billingOperations,
-  onEvaluationError: (error, gateInput) => {
-    logger.warn("[BillingGate] generation billing evaluation failed", { error, gateInput });
-  },
-});
+const billingUsageGate = spaceWalletBilling.gate;
 
 type ErrorStatus = 400 | 401 | 402 | 403 | 404 | 409 | 413 | 422 | 500 | 502 | 503;
 
@@ -90,16 +85,7 @@ router.post("/", async (c) => {
 
   let parameters: Record<string, unknown> | undefined;
   try {
-    const resolved = createGenerationClient({
-      models: [declaration],
-      includeBuiltinModels: false,
-    }).validate({
-      model: request.model,
-      content: request.content,
-      parameters: request.parameters,
-      meta,
-    });
-    parameters = resolved.parameters;
+    parameters = resolveGenerationRequestParameters(declaration, request);
   } catch (error) {
     if (error instanceof GenerationValidationError) {
       return generationError(c, 400, "invalid_generation_input", error.message);

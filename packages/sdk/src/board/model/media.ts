@@ -1,3 +1,7 @@
+import { parseBoardMediaSource } from "@cohub/protocol/board-model";
+import { type ModelFormat, modelFormatForPath } from "@cohub/protocol/fs";
+import type { BoardSceneItem } from "./scene.js";
+
 const IMAGE_EXTENSIONS = new Set([
 	"png",
 	"jpg",
@@ -76,4 +80,24 @@ export function getMediaResourceTitle(value: string) {
 	} catch {
 		return value.split("/").filter(Boolean).pop() || value;
 	}
+}
+
+export function boardModelFormat(
+	src: string,
+	mimeType?: string | null,
+): ModelFormat | null {
+	const source = parseBoardMediaSource(src);
+	if (!source) return null;
+	const path =
+		source.kind === "url" ? (source.value.split(/[?#]/, 1)[0] ?? "") : source.value;
+	return modelFormatForPath(path, mimeType);
+}
+
+export function isBoardModelItem(
+	item: BoardSceneItem | null | undefined,
+): boolean {
+	return (
+		item?.type === "file" &&
+		boardModelFormat(item.props.src, item.props.snapshot?.mimeType) !== null
+	);
 }

@@ -1,12 +1,13 @@
 export {
   RUNTIME_PROTOCOL_VERSION, RUNTIME_MAX_FRAME_BYTES, RUNTIME_RECOVERY_BATCH_SIZE, runtimeCommandSchema, runtimeEventSchema, runtimeReadySchema,
-  contextToPiMessages, selectRuntimeContextMessages, isLocalHarness, resolveHarness,
-  fingerprintProjectionTurns, isProjectionCompaction, projectNativeMessageMeta, projectNativeSession, serializeProjection, serializeProjectionRecords, trimProjectionTurnsToCompaction,
+  contextToPiMessages, selectRuntimeContextMessages, isLocalHarness, resolveHarness, harnessLabel, assertHarnessAccess,
+  LOCAL_HARNESSES, LOCAL_HARNESS_SPECS, harnessSchema, localHarnessSchema,
+  fingerprintProjectionTurns, isProjectionCompaction, isProjectionPendingGeneration, projectNativeMessageMeta, projectNativeSession, serializeProjection, serializeProjectionRecords, trimProjectionTurnsToCompaction,
   RUNTIME_ARCHIVE_SEGMENT_BYTES, harnessArchiveIndexSchema, validateArchiveBoundary,
   nativeTurnCompleteSchema, nativeTurnProgressSchema, nativeIngestTurnSchema, nativeRuntimeEventSchema, runtimeNativeStopSchema, NATIVE_INGEST_MAX_TURNS, SETTLED_TURN_STATUSES, NATIVE_SYNC_SOURCE, isNativeClientTurn,
 } from "@cohub/protocol";
 export type {
-  ContentBlock, HarnessKind, LocalHarness, RuntimeCapabilities, RuntimeCommand, RuntimeContext, RuntimePendingExecution,
+  ContentBlock, HarnessKind, LocalHarness, LocalHarnessSpec, RuntimeCapabilities, RuntimeCommand, RuntimeContext, RuntimePendingExecution,
   RuntimeContextMessage, RuntimeTurnInput, RuntimeTurnUserMessage, RuntimeMessage, RuntimeExecutionEvent, HarnessArchive,
   CanonicalProjectionMessage, CanonicalProjectionTurn, NativeProjection, ProjectionCursor, ProjectionInput, ProjectionRecord, ProjectionTarget, ProjectionWarning,
   RuntimeStatus, RuntimeSessionRecoveryStatus, RuntimeStopConfirmation, HarnessArchiveIndex, RuntimeArchiveSegment, RuntimeArchiveUpload, RuntimeArchivePage,
@@ -56,7 +57,17 @@ export type { ParsedAppRef, AppPublicRef } from "./app-ref.js";
 export { isUuid } from "@cohub/protocol/identifiers";
 export { parseSpaceRef } from "./space-ref.js";
 export { HOME_SPACE_SLUG } from "@cohub/protocol/public-identifiers";
-export { UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_BATCH_FILES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+export {
+  batchUploadEntries,
+  UPLOAD_ERROR_BATCH_TOO_LARGE,
+  UPLOAD_ERROR_FILE_TOO_LARGE,
+  UPLOAD_ERROR_RATE_LIMITED,
+  UPLOAD_ERROR_TOO_MANY_FILES,
+  UPLOAD_MAX_BATCH_BYTES,
+  UPLOAD_MAX_BATCH_FILES,
+  UPLOAD_MAX_FILE_BYTES,
+} from "@cohub/protocol";
+export { isTextMime, mimeTypeForPath } from "@cohub/protocol/fs";
 export type { SpaceRef } from "./space-ref.js";
 export { AppCommerceApi } from "./apis/app-commerce.js";
 export { AppRealtimeApi, AppRoom } from "./apis/app-realtime.js";
@@ -229,6 +240,7 @@ export type {
   SpaceChannelBindingRecord,
   SpaceEventName,
   SpaceFileStream,
+  SpaceSandboxRecord,
   SpaceTurnListOptions,
   WaitForSpaceFsCopyOptions,
   WebSocketConnectionState,

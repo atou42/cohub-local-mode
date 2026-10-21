@@ -1,10 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  UPLOAD_MAX_BATCH_BYTES,
-  UPLOAD_MAX_BATCH_FILES,
-  type CohubHttpClient,
-  type SpaceFsUploadEntry,
-} from "@neta-art/cohub";
+import { batchUploadEntries, type CohubHttpClient, type SpaceFsUploadEntry } from "@neta-art/cohub";
 import { putLocalFile } from "../http-put.js";
 import { createLimiter } from "./limit.js";
 
@@ -18,23 +13,6 @@ export type LocalUploadEntry = {
 
 const PUT_CONCURRENCY = 4;
 
-function batches(entries: LocalUploadEntry[]) {
-  const result: LocalUploadEntry[][] = [];
-  let batch: LocalUploadEntry[] = [];
-  let bytes = 0;
-  for (const entry of entries) {
-    if (batch.length > 0 && (batch.length >= UPLOAD_MAX_BATCH_FILES || bytes + entry.size > UPLOAD_MAX_BATCH_BYTES)) {
-      result.push(batch);
-      batch = [];
-      bytes = 0;
-    }
-    batch.push(entry);
-    bytes += entry.size;
-  }
-  if (batch.length > 0) result.push(batch);
-  return result;
-}
-
 export async function uploadLocalFiles(files: SpaceFiles, entries: LocalUploadEntry[], options: {
   targetDir?: string;
   onUploaded?: (entry: LocalUploadEntry) => void;
@@ -42,7 +20,7 @@ export async function uploadLocalFiles(files: SpaceFiles, entries: LocalUploadEn
   const uploaded: SpaceFsUploadEntry[] = [];
   const uploadIds: string[] = [];
   const limit = createLimiter(PUT_CONCURRENCY);
-  for (const batch of batches(entries)) {
+  for (const batch of batchUploadEntries(entries, (entry) => entry.size)) {
     const byId = new Map<string, LocalUploadEntry>(batch.map((entry) => [randomUUID(), entry]));
     const plan = await files.createUpload({
       destination: { kind: "workspace", targetDir: options.targetDir },

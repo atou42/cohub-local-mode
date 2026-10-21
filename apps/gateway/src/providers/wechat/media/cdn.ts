@@ -14,6 +14,7 @@ import {
   parseWeChatAesKey,
 } from "./crypto.js";
 import { allowedHostFromBaseUrl, safeFetch } from "@cohub/infra/safe-fetch";
+import { setTimeout as delay } from "node:timers/promises";
 
 const logger = createLogger({ serviceName: "cohub-gateway" });
 const CDN_MAX_RETRIES = 3;
@@ -99,6 +100,7 @@ export async function uploadWeChatCdnFile(params: {
   cdnBaseUrl: string;
   aesKey: Buffer;
   label: string;
+  signal?: AbortSignal;
 }) {
   const url = params.uploadFullUrl?.trim() || (params.uploadParam ? buildUploadUrl(params.cdnBaseUrl, params.uploadParam, params.filekey) : "");
   if (!url) throw new Error(`${params.label}: CDN upload URL is missing`);
@@ -108,6 +110,7 @@ export async function uploadWeChatCdnFile(params: {
     createAesEcbEncryptStream(params.aesKey),
     aesEcbPaddedSize(params.file.size),
     `${params.label}-encrypted`,
+    params.signal,
   );
   try {
     const body = await tempMediaBlob(ciphertext);
@@ -121,6 +124,7 @@ export async function uploadWeChatCdnFile(params: {
           timeoutMs: LARGE_MEDIA_TIMEOUT_MS,
           init: {
             method: "POST",
+            signal: params.signal,
             headers: { "Content-Type": "application/octet-stream" },
             body,
           },
@@ -134,8 +138,12 @@ export async function uploadWeChatCdnFile(params: {
         return { downloadParam, ciphertextSize: ciphertext.size };
       } catch (error) {
         lastError = error;
+        params.signal?.throwIfAborted();
         if (error instanceof Error && error.message.includes("client error")) throw error;
-        if (attempt < CDN_MAX_RETRIES) logger.warn(`[WeChat] ${params.label} upload retry ${attempt}`, error);
+        if (attempt < CDN_MAX_RETRIES) {
+          logger.warn(`[WeChat] ${params.label} upload retry ${attempt}`, error);
+          await delay(250 * 2 ** (attempt - 1), undefined, { signal: params.signal });
+        }
       }
     }
     throw lastError instanceof Error ? lastError : new Error(`${params.label}: CDN upload failed`);
@@ -152,6 +160,7 @@ export async function uploadWeChatCdnBuffer(params: {
   cdnBaseUrl: string;
   aesKey: Buffer;
   label: string;
+  signal?: AbortSignal;
 }) {
   const url = params.uploadFullUrl?.trim() || (params.uploadParam ? buildUploadUrl(params.cdnBaseUrl, params.uploadParam, params.filekey) : "");
   if (!url) throw new Error(`${params.label}: CDN upload URL is missing`);
@@ -166,6 +175,7 @@ export async function uploadWeChatCdnBuffer(params: {
         allowedHosts: [allowedHostFromBaseUrl(params.cdnBaseUrl)],
         init: {
           method: "POST",
+          signal: params.signal,
           headers: { "Content-Type": "application/octet-stream" },
           body: new Uint8Array(ciphertext),
         },
@@ -179,8 +189,12 @@ export async function uploadWeChatCdnBuffer(params: {
       return { downloadParam, ciphertextSize: ciphertext.length };
     } catch (error) {
       lastError = error;
+      params.signal?.throwIfAborted();
       if (error instanceof Error && error.message.includes("client error")) throw error;
-      if (attempt < CDN_MAX_RETRIES) logger.warn(`[WeChat] ${params.label} upload retry ${attempt}`, error);
+      if (attempt < CDN_MAX_RETRIES) {
+        logger.warn(`[WeChat] ${params.label} upload retry ${attempt}`, error);
+        await delay(250 * 2 ** (attempt - 1), undefined, { signal: params.signal });
+      }
     }
   }
 

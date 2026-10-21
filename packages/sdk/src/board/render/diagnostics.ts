@@ -56,12 +56,27 @@ export function measureBoardText(props: BoardTextItem["props"]) {
   return { ...layoutBoardText(props), missingCharacters: characters };
 }
 
-export function inspectBoardScene(scene: BoardScene, limit = 100): BoardRenderDiagnostic[] {
+export function inspectBoardItems(scene: BoardScene, ids?: ReadonlySet<string>) {
+  return {
+    diagnostics: inspectBoardScene(scene, 100, ids),
+    items: scene.items
+      .filter((item) => !ids || ids.has(item.id))
+      .map((item) => ({
+        id: item.id,
+        bounds: item.frame,
+        worldBounds: itemBounds(item.frame),
+        opacity: scene.opacity(item.id),
+        ...(item.type === "text" ? { text: measureBoardText(item.props) } : {}),
+      })),
+  };
+}
+
+export function inspectBoardScene(scene: BoardScene, limit = 100, ids?: ReadonlySet<string>): BoardRenderDiagnostic[] {
   ensureBoardTextMeasurement();
   const diagnostics: BoardRenderDiagnostic[] = [];
   const texts = scene.items.filter((item) => item.type === "text" && scene.opacity(item.id) > 0.01);
   const push = (entry: BoardRenderDiagnostic) => {
-    if (diagnostics.length < limit) diagnostics.push(entry);
+    if (diagnostics.length < limit && (!ids || ids.has(entry.item) || Boolean(entry.related && ids.has(entry.related)))) diagnostics.push(entry);
   };
   for (const item of scene.items) {
     if (diagnostics.length >= limit) break;
@@ -71,7 +86,7 @@ export function inspectBoardScene(scene: BoardScene, limit = 100): BoardRenderDi
   let glyphBudget = 256;
   for (const item of texts) {
     if (diagnostics.length >= limit || item.type !== "text") break;
-    if (glyphBudget-- > 0) {
+    if ((!ids || ids.has(item.id)) && glyphBudget-- > 0) {
       const measured = measureBoardText(item.props);
       if (measured.missingCharacters)
         push({ code: "glyph-unavailable", item: item.id, characters: measured.missingCharacters });
@@ -105,6 +120,7 @@ export function inspectBoardScene(scene: BoardScene, limit = 100): BoardRenderDi
       const b = sorted[j];
       if (!b) continue;
       if (b.rect.x >= a.rect.x + a.rect.width) break;
+      if (ids && !ids.has(a.item.id) && !ids.has(b.item.id)) continue;
       if (++comparisons > 10000) return diagnostics;
       if (a.item.parent === b.item.parent && rectsIntersect(a.rect, b.rect))
         push({ code: "text-overlap", item: a.item.id, related: b.item.id });

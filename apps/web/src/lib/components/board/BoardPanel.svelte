@@ -7,14 +7,18 @@ import type {
 import {
 	type BoardMediaItemKind,
 	boardItemOrigin,
+	boardModelFormat,
 	boardOriginKey,
+	boardTaskCardSize,
 	createMediaBoardItem,
 	createTaskResultItems,
+	elementClientToLocal,
 	inferBoardMediaKind,
+	isBoardModelItem,
 	normalizeBoardRemoteUrl,
 	parseBoardDocument,
 	parseBoardMediaSource,
-	screenToWorld,
+	pointToWorld,
 	taskRunArtifacts,
 	type WorldPoint,
 	worldPoint,
@@ -23,7 +27,9 @@ import { defaultBoardTool } from "@neta-art/cohub/board/editor";
 import { nextLocalPlayback } from "@neta-art/cohub/board/player";
 import {
 	type BoardStage as BoardStageController,
+	COMPACT_LRU_BUDGET,
 	createBoardAssetManager,
+	DEFAULT_LRU_BUDGET,
 } from "@neta-art/cohub/board/stage";
 import { onDestroy, onMount, untrack } from "svelte";
 import { createBoardAppItemView } from "$lib/board/board-app-view.svelte";
@@ -36,11 +42,12 @@ import {
 import {
 	generationPromptFromContent,
 	pendingGenerationTaskSnapshot,
-	regeneratedTaskPosition,
+	pendingTaskPosition,
 	regenerationRequestFromTaskRun,
 } from "$lib/board/board-generation";
 import type { BoardStageExportBridge } from "$lib/board/board-image-export";
-import { playableBoardMedia } from "$lib/board/board-media-playback";
+import { opensInPlace } from "$lib/board/board-media-playback";
+import { createBoardModelPreviews } from "$lib/board/board-model";
 import type { BoardBackgroundLoadState } from "$lib/board/board-theme";
 import {
 	type BoardViewPreference,
@@ -51,6 +58,7 @@ import {
 } from "$lib/board/board-view-preferences";
 import { createBoardEditor } from "$lib/board/editor.svelte";
 import type { BoardRuntimeProps } from "$lib/board/runtime/board-runtime";
+import { spaceFileUrls } from "$lib/board/space-file-urls";
 import { canUseUserScopedCache, getCacheUserKey } from "$lib/cache/keys";
 import BoardAppearancePopover from "$lib/components/board/BoardAppearancePopover.svelte";
 import BoardArrowToolbar from "$lib/components/board/BoardArrowToolbar.svelte";
@@ -63,6 +71,7 @@ import BoardGenerationComposer from "$lib/components/board/BoardGenerationCompos
 import BoardLinkPopover from "$lib/components/board/BoardLinkPopover.svelte";
 import BoardMediaPlayer from "$lib/components/board/BoardMediaPlayer.svelte";
 import BoardMobileChrome from "$lib/components/board/BoardMobileChrome.svelte";
+import BoardModelViewer from "$lib/components/board/BoardModelViewer.svelte";
 import BoardScripts from "$lib/components/board/BoardScripts.svelte";
 import BoardSelectionToolbar from "$lib/components/board/BoardSelectionToolbar.svelte";
 import BoardStage from "$lib/components/board/BoardStage.svelte";
@@ -109,13 +118,24 @@ const resolvedAssetSource = $derived(
 	assetSource ?? createSpaceBoardAssetSource(spaceId),
 );
 
-const assets = createBoardAssetManager({
-	loadVideoPreviews:
-		typeof navigator === "undefined" ||
-		!(navigator as Navigator & { connection?: { saveData?: boolean } })
+const saveData =
+	typeof navigator !== "undefined" &&
+	Boolean(
+		(navigator as Navigator & { connection?: { saveData?: boolean } })
 			.connection?.saveData,
-	resolveFileUrl: (path) =>
-		untrack(() => resolvedAssetSource).resolveFileUrl(path),
+	);
+const compactDevice = untrack(() => isMobile);
+const assets = createBoardAssetManager({
+	loadVideoPreviews: !saveData,
+	concurrency: compactDevice ? 4 : 6,
+	lruBudget: compactDevice ? COMPACT_LRU_BUDGET : DEFAULT_LRU_BUDGET,
+	resolveFileUrl: (path, options) =>
+		untrack(() => resolvedAssetSource).resolveFileUrl(path, options),
+	modelPreviews: saveData
+		? undefined
+		: createBoardModelPreviews(() => untrack(() => resolvedAssetSource), {
+				isMobile: untrack(() => isMobile),
+			}),
 });
 const itemViews = [
 	createBoardAppItemView({
@@ -167,7 +187,7 @@ function addLinks(urls: string[], at = editor.viewCenter()) {
 	if (urls.length === 1) {
 		const url = urls[0] as string;
 		const kind = inferBoardMediaKind(url);
-		if (kind === "file" || kind === "text") {
+		if ((kind === "file" || kind === "text") && !boardModelFormat(url)) {
 			openLink(url, at);
 			return;
 		}
@@ -325,6 +345,7 @@ let liveVersion = $state(0);
 let backgroundLoadState = $state<BoardBackgroundLoadState | null>(null);
 let generationSelectionRequest = $state(0);
 let playingId = $state<string | null>(null);
+let modelId = $state<string | null>(null);
 let regeneratingItemId = $state<string | null>(null);
 let regenerationError = $state<string | null>(null);
 let regenerationErrorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -352,14 +373,17 @@ function addSelectionToGeneration() {
 	generationSelectionRequest += 1;
 }
 
-function playMedia(itemId: string) {
+function openInPlace(itemId: string) {
 	const item = editor.itemById(itemId);
-	if (!playableBoardMedia(item, resolvedAssetSource)) return;
-	playingId = itemId;
+	if (!opensInPlace(item, resolvedAssetSource)) return;
+	const model = isBoardModelItem(item);
+	modelId = model ? itemId : null;
+	playingId = model ? null : itemId;
 }
 
-function closeMedia() {
+function closeInPlace() {
 	playingId = null;
+	modelId = null;
 }
 
 function openExport() {
@@ -404,7 +428,11 @@ async function regenerateTask(itemId: string) {
 			prompt: generationPromptFromContent(request.content),
 			model: request.model,
 		});
-		const position = regeneratedTaskPosition(sourceFrame);
+		const aspect = sourceFrame.width / sourceFrame.height;
+		const position = pendingTaskPosition(
+			sourceFrame,
+			boardTaskCardSize(snapshot, aspect),
+		);
 		editor.addTaskWithSources(
 			created.taskRunId,
 			snapshot,
@@ -416,6 +444,7 @@ async function regenerateTask(itemId: string) {
 					sourceItemId: source.id,
 				},
 			},
+			aspect,
 		);
 	} catch (cause) {
 		showRegenerationError(
@@ -617,9 +646,9 @@ function handleReadonlyKeydown(
 			const single =
 				editor.selectedItems.length === 1 ? editor.selectedItems[0] : null;
 			if (!single) return;
-			if (playableBoardMedia(single, resolvedAssetSource)) {
+			if (opensInPlace(single, resolvedAssetSource)) {
 				event.preventDefault();
-				playMedia(single.id);
+				openInPlace(single.id);
 				return;
 			}
 			if (single.type !== "file") return;
@@ -650,9 +679,9 @@ function handleKeydown(event: KeyboardEvent) {
 		}
 		return;
 	}
-	if (event.key === "Escape" && playingId) {
+	if (event.key === "Escape" && (playingId || modelId)) {
 		event.preventDefault();
-		closeMedia();
+		closeInPlace();
 		return;
 	}
 	if (editor.editingId || isEditableTarget(event.target)) return;
@@ -741,8 +770,8 @@ function handleKeydown(event: KeyboardEvent) {
 				editor.selectedItems.length === 1 ? editor.selectedItems[0] : null;
 			if (!single) return;
 			event.preventDefault();
-			if (playableBoardMedia(single, resolvedAssetSource)) {
-				playMedia(single.id);
+			if (opensInPlace(single, resolvedAssetSource)) {
+				openInPlace(single.id);
 				return;
 			}
 			if (single.type === "file") {
@@ -848,8 +877,10 @@ function retrySync() {
 
 function openContextMenuAt(clientX: number, clientY: number) {
 	if (!stageWrap) return;
-	const rect = stageWrap.getBoundingClientRect();
-	const worldPoint = screenToWorld(clientX, clientY, rect, editor.camera);
+	const worldPoint = pointToWorld(
+		elementClientToLocal(stageWrap)(clientX, clientY),
+		editor.camera,
+	);
 	const item = editor.itemAt(worldPoint);
 	if (item && !editor.selection.includes(item.id))
 		editor.setSelection([item.id]);
@@ -899,7 +930,7 @@ onMount(() => {
 $effect(() => {
 	if (active) return;
 	contextMenu = null;
-	playingId = null;
+	closeInPlace();
 	exportOpen = false;
 	generationOpen = false;
 	replayOpen = false;
@@ -907,7 +938,13 @@ $effect(() => {
 	clearSpaceHeld();
 });
 
+const unsubscribeFileUrls = spaceFileUrls.subscribe((change) => {
+	if (!assetSource && change.spaceId === spaceId)
+		assets.invalidatePath(change.path);
+});
+
 onDestroy(() => {
+	unsubscribeFileUrls();
 	if (regenerationErrorTimer) clearTimeout(regenerationErrorTimer);
 	flushViewPreference();
 	window.removeEventListener("paste", handlePaste);
@@ -965,7 +1002,7 @@ onDestroy(() => {
 			assetSource={resolvedAssetSource}
 			onOpenFile={openMediaSource}
 			onAddLinks={addLinks}
-			onPlayMedia={playMedia}
+			onOpenInPlace={openInPlace}
 			onPointerPresence={(cursor) => { if (!readonly) awareness.setCursor(cursor); }}
 			views={itemViews}
 			onSurfaceChange={handleSurfaceChange}
@@ -1006,8 +1043,18 @@ onDestroy(() => {
 			{playingId}
 			{active}
 			surface={surfaceSize}
-			onClose={closeMedia}
+			onClose={closeInPlace}
 		/>
+		{#if modelId}
+			<BoardModelViewer
+				{editor}
+				assetSource={resolvedAssetSource}
+				itemId={modelId}
+				{isMobile}
+				onOpenFile={openMediaSource}
+				onClose={closeInPlace}
+			/>
+		{/if}
 		{#if !readonly && !isMobile}
 			<BoardSelectionToolbar
 				{editor}

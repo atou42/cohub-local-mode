@@ -56,7 +56,7 @@ export async function responseToTempMediaFile(
   response: Response,
   maxBytes: number,
   label: string,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; signal?: AbortSignal },
 ) {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`);
@@ -79,7 +79,7 @@ export async function responseToTempMediaFile(
       source,
       new ByteLimitTransform(maxBytes, label),
       createWriteStream(target.path, { flags: "wx", mode: 0o600 }),
-      { signal: controller.signal },
+      { signal: options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal },
     );
     return await tempFileResult(target.dir, target.path);
   } catch (error) {
@@ -91,7 +91,7 @@ export async function responseToTempMediaFile(
   }
 }
 
-export async function base64ToTempMediaFile(data: string, maxBytes: number, label: string) {
+export async function base64ToTempMediaFile(data: string, maxBytes: number, label: string, signal?: AbortSignal) {
   const target = await createTempTarget(label);
   const handle = await open(target.path, "wx", 0o600);
   const chunkChars = 1024 * 1024;
@@ -101,6 +101,7 @@ export async function base64ToTempMediaFile(data: string, maxBytes: number, labe
   let size = 0;
   try {
     for (let offset = 0; offset < data.length; offset += chunkChars) {
+      signal?.throwIfAborted();
       const end = Math.min(data.length, offset + chunkChars);
       const cleaned = data.slice(offset, end).replace(/\s/g, "");
       encodedChars += cleaned.length;
@@ -134,6 +135,7 @@ export async function transformTempMediaFile(
   transform: TransformStream,
   maxBytes: number,
   label: string,
+  signal?: AbortSignal,
 ) {
   const target = await createTempTarget(label);
   try {
@@ -142,6 +144,7 @@ export async function transformTempMediaFile(
       transform,
       new ByteLimitTransform(maxBytes, label),
       createWriteStream(target.path, { flags: "wx", mode: 0o600 }),
+      { signal },
     );
     return await tempFileResult(target.dir, target.path);
   } catch (error) {
@@ -150,9 +153,9 @@ export async function transformTempMediaFile(
   }
 }
 
-export async function hashTempMediaFile(file: TempMediaFile, algorithm: "md5" | "sha256") {
+export async function hashTempMediaFile(file: TempMediaFile, algorithm: "md5" | "sha256", signal?: AbortSignal) {
   const hash = createHash(algorithm);
-  for await (const chunk of createReadStream(file.path)) hash.update(chunk);
+  for await (const chunk of createReadStream(file.path, { signal })) hash.update(chunk);
   return hash.digest("hex");
 }
 

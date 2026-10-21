@@ -1,4 +1,5 @@
-import { UPLOAD_RATE_MAX_BYTES, UPLOAD_RATE_MAX_FILES, UPLOAD_RATE_WINDOW_SECONDS } from "@cohub/protocol";
+import { UPLOAD_ERROR_RATE_LIMITED, UPLOAD_RATE_MAX_BYTES, UPLOAD_RATE_MAX_FILES, UPLOAD_RATE_WINDOW_SECONDS } from "@cohub/protocol";
+import type { Context } from "hono";
 import type { redisCommandClient } from "./redis.js";
 
 /**
@@ -62,4 +63,9 @@ export const consumeUploadQuota = async (
     UPLOAD_RATE_WINDOW_SECONDS,
   ) as [number, number];
   if (result[0] !== 1) throw new UploadRateLimitError(Math.max(1, result[1]));
+};
+
+export const uploadRateLimitedResponse = (c: Context, error: UploadRateLimitError, message = error.message) => {
+  c.header("Retry-After", String(error.retryAfterSeconds));
+  return c.json({ code: UPLOAD_ERROR_RATE_LIMITED, message, retryAfterSeconds: error.retryAfterSeconds }, 429);
 };

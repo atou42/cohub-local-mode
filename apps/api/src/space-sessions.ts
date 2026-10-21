@@ -1,3 +1,4 @@
+import { resolveWalletMessageEligibility } from "@cohub/core/space-wallet";
 import { createLogger } from "@cohub/infra/logging";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Usage } from "@cohub/protocol/core";
@@ -604,6 +605,7 @@ export const persistMessageNode = async (input: PersistMessageInput & { message:
       messageKind,
       anchorUserMessageId,
       actorUserId: userId,
+      walletBillingEligible: resolveWalletMessageEligibility(),
       providerResponseId: ((input.message.meta as Record<string, unknown> | null)?.responseId as string | undefined) ?? null,
     }),
     idempotencyKey: input.idempotencyKey,

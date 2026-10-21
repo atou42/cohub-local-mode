@@ -1,5 +1,9 @@
+import type { SandboxSetupInfo } from "./setup.js";
 import type { DisplayCapture, DisplayCaptureParams, DisplayInputBatch, DisplayList, DisplayTree, DisplayTreeParams, DisplayVirtualStart, RtcIceServer } from "../display/index.js";
 import type { WORKSPACE_CANDIDATE_INDEX_FAMILY } from "../search/index.js";
+
+export { sandboxSetupInfoSchema, sandboxSetupStepSchema, type SandboxBootstrapGate, type SandboxSetupInfo, type SandboxSetupStep } from "./setup.js";
+export type { SandboxImageId, SandboxPreferenceSpec, SandboxPreferences, SandboxPreferenceSource, SandboxPreferenceStatus } from "./preferences.js";
 
 export const AGENT_SANDBOX_PROTOCOL_VERSION = "1" as const;
 
@@ -21,6 +25,8 @@ export const RPC_METHODS = [
   "fs.write",
   "fs.edit",
   "fs.mkdir",
+  "fs.delete",
+  "fs.move",
   "fs.stat",
   "fs.ls",
   "fs.tree",
@@ -86,6 +92,8 @@ export const RPC_ERROR_CODES = [
   "ALREADY_EXISTS",
   "NOT_DIRECTORY",
   "INVALID_PATH",
+  "INVALID_CURSOR",
+  "DIRECTORY_CHANGED",
   "ACCESS_DENIED",
   "READ_ONLY_FILESYSTEM",
   "CONFLICT",
@@ -99,6 +107,7 @@ export const RPC_ERROR_CODES = [
   "SEARCH_UNAVAILABLE",
   "UNAVAILABLE",
   "BUSY",
+  "DIRECTORY_NOT_EMPTY",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -137,10 +146,14 @@ export type SandboxCapabilities = {
   /** Supports the atomic fs.edit read-apply-write method. */
   fsEdit?: boolean;
   fsMkdir?: boolean;
+  /** Native fs.delete / fs.move, advertised where rm/mv argv are unavailable (Windows). */
+  fsDelete?: boolean;
+  fsMove?: boolean;
   fsStat: boolean;
   fsLs: boolean;
   /** Supports the structured recursive fs.tree method. */
   fsTree?: boolean;
+  fsTreePagination?: boolean;
   fsFind: boolean;
   fsGrep: boolean;
   /** Tantivy-backed candidate search is available in the sandbox. */
@@ -180,14 +193,6 @@ export type SandboxHeartbeat = BaseMessage & {
   };
 };
 
-export type SandboxSetupInfo = {
-  ran: boolean;
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-  duration: string;
-  error?: string;
-};
 
 export type SessionAttach = BaseMessage & {
   type: "session.attach";
@@ -285,6 +290,30 @@ export type FsMkdirResult = {
   mtimeMs?: number;
 };
 
+export type FsDeleteParams = {
+  path: string;
+  cwd?: string;
+  recursive?: boolean;
+};
+
+export type FsDeleteResult = {
+  path: string;
+  deleted: true;
+  nodeType: "file" | "dir";
+};
+
+export type FsMoveParams = {
+  fromPath: string;
+  toPath: string;
+  cwd?: string;
+};
+
+export type FsMoveResult = {
+  fromPath: string;
+  toPath: string;
+  nodeType: "file" | "dir";
+};
+
 export type FsStatParams = {
   path?: string;
   cwd?: string;
@@ -321,8 +350,10 @@ export type FsTreeParams = {
   cwd?: string;
   /** Recursion depth; 1 lists only direct children. Defaults to 1, max 10. */
   depth?: number;
-  /** Total entry cap across the walk. Defaults to 1000, max 5000. */
+  /** Total entry cap, or page size when pagination is enabled. Defaults to 1000, max 5000. */
   limit?: number;
+  pagination?: boolean;
+  cursor?: string;
   /** Apply workspace .gitignore rules (and always hide .git). Defaults to true. */
   respectGitignore?: boolean;
 };
@@ -342,6 +373,7 @@ export type FsTreeResult = {
   /** Flat list in depth-first order; directories sort before recursion. */
   entries: FsTreeEntry[];
   truncated?: boolean;
+  nextCursor?: string | null;
 };
 
 export type FsFindParams = {
@@ -480,6 +512,14 @@ export type RpcRequestMap = {
   "fs.mkdir": {
     params: FsMkdirParams;
     result: FsMkdirResult;
+  };
+  "fs.delete": {
+    params: FsDeleteParams;
+    result: FsDeleteResult;
+  };
+  "fs.move": {
+    params: FsMoveParams;
+    result: FsMoveResult;
   };
   "fs.stat": {
     params: FsStatParams;
