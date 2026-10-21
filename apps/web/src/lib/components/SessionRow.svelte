@@ -1,3 +1,8 @@
+<script lang="ts" module>
+// Single-click navigation waits this long so a double click can enter rename.
+export const SESSION_ROW_NAVIGATE_DELAY_MS = 120;
+</script>
+
 <script lang="ts">
 import type { SessionRecord } from "@neta-art/cohub";
 import { Check, Link2Off, Pencil, TextCursorInput, X } from "lucide-svelte";
@@ -15,6 +20,7 @@ import SidebarActionButton from "$lib/components/sidebar/SidebarActionButton.sve
 import UserAvatar from "$lib/components/UserAvatar.svelte";
 import { formatElapsedMs } from "$lib/format-duration";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { isComposingKeyboardEvent } from "$lib/keyboard";
 import { m } from "$lib/paraglide/messages.js";
 import {
 	getSessionRowStatus,
@@ -339,7 +345,7 @@ function visibleParticipants(list: Participant[], viewer: string | null) {
 				disabled={renameSaving}
 				oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
 				onkeydown={(event) => {
-					if (renameSaving || event.isComposing) return;
+					if (renameSaving || isComposingKeyboardEvent(event)) return;
 					if (event.key === "Enter") {
 						event.preventDefault();
 						onSubmitRename?.(session);

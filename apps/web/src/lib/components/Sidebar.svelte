@@ -62,7 +62,9 @@ import { clearCachedPaletteOverview } from "$lib/command-palette/palette-overvie
 import { APP_AREA_ICONS, appAreaLabel } from "$lib/components/app-area";
 import ChannelProviderIcon from "$lib/components/ChannelProviderIcon.svelte";
 import NewLabelPopover from "$lib/components/NewLabelPopover.svelte";
-import SessionRow from "$lib/components/SessionRow.svelte";
+import SessionRow, {
+	SESSION_ROW_NAVIGATE_DELAY_MS,
+} from "$lib/components/SessionRow.svelte";
 import SidebarFlyout from "$lib/components/SidebarFlyout.svelte";
 import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
 import Spinner from "$lib/components/Spinner.svelte";
@@ -352,7 +354,6 @@ let createSessionError = $state("");
 const sidebarFlyoutPreviewLimit = 24;
 
 // Session rename state
-const SESSION_ROW_NAVIGATE_DELAY_MS = 120;
 let renamingSessionId = $state<string | null>(null);
 let renameTitleValue = $state("");
 let renameSaving = $state(false);

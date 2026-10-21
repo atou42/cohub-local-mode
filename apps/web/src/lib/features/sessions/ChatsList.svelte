@@ -9,7 +9,9 @@ import {
 	LIST_ROW_AVATAR,
 	LIST_ROW_HEIGHT,
 } from "$lib/components/list-page/list-row";
-import SessionRow from "$lib/components/SessionRow.svelte";
+import SessionRow, {
+	SESSION_ROW_NAVIGATE_DELAY_MS,
+} from "$lib/components/SessionRow.svelte";
 import SpaceAvatar from "$lib/components/SpaceAvatar.svelte";
 import {
 	type ChatsView,
@@ -208,11 +210,10 @@ function open(event: MouseEvent, session: UserSessionListItem) {
 		navigate(session);
 		return;
 	}
-	// Let a double click enter rename before opening another Space.
 	navigateTimer = setTimeout(() => {
 		navigateTimer = null;
 		navigate(session);
-	}, 250);
+	}, SESSION_ROW_NAVIGATE_DELAY_MS);
 }
 
 function navigate(session: UserSessionListItem) {
