@@ -467,7 +467,7 @@ onDestroy(() => {
 {#if softNotice && !open && phase !== "capturing"}
 	<div
 		use:portal
-		class="mark-soft-notice"
+		class="mark-soft-notice toast-surface"
 		role="status"
 		aria-live="polite"
 		in:fade={TRANSITION_IN}
@@ -600,17 +600,12 @@ onDestroy(() => {
 		z-index: var(--z-mark);
 		transform: translateX(-50%);
 		max-width: min(360px, calc(100vw - 32px));
-		border: 1px solid var(--border-subtle);
-		border-radius: 8px;
-		background: var(--bg-content);
 		padding: 8px 12px;
 		color: var(--text-secondary);
 		font-size: 12px;
 		font-weight: 500;
 		line-height: 1.35;
 		text-align: center;
-		box-shadow: 0 8px 24px
-			color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
 	}
 
 	.mark-overlay {

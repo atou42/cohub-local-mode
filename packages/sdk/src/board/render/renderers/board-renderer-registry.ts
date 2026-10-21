@@ -13,6 +13,7 @@ import { frameCardRenderer } from "./frame-card-renderer.js";
 import { shapeCardRenderer } from "./shape-card-renderer.js";
 import { customCardRenderer } from "./custom-card-renderer.js";
 import { imageCardRenderer } from "./image-card-renderer.js";
+import { modelCardRenderer } from "./model-card-renderer.js";
 import { taskCardRenderer } from "./task-card-renderer.js";
 import { textCardRenderer } from "./text-card-renderer.js";
 import { unknownCardRenderer } from "./unknown-card-renderer.js";
@@ -35,7 +36,7 @@ export type BoardScriptHost = {
 	document?: (document: BoardDocument, time: number) => BoardDocument;
 	ready?: (id: string) => boolean;
 	revision?: (id: string) => number;
-	frame: (item: SceneItem<BoardCustomItem>, time: number, resolution: number) => Texture | null;
+	frame: (item: SceneItem<BoardCustomItem>, time: number) => Texture | null;
 	error: (id: string) => string | null;
 	release: (id: string) => void;
 };
@@ -80,7 +81,7 @@ export type BoardRenderContext = {
 	getTexture: (key: string) => Texture | null;
 	hasError: (key: string) => boolean;
 	fileState: (path: string) => "ok" | "missing" | "unavailable";
-	acquireTexture: (key: string) => void;
+	acquireTexture: (key: string, item: BoardSceneItem) => void;
 	releaseTexture: (key: string) => void;
 };
 
@@ -97,6 +98,8 @@ export type BoardCardRenderer = {
 		item: BoardSceneItem,
 		context: BoardRenderContext,
 	) => void;
+	/** Called only when the zoom bucket or display density changes. */
+	resolution?: (container: Container, item: BoardSceneItem, context: BoardRenderContext) => void;
 	/** Runs on every zoom step; only update transforms and visibility. */
 	zoom?: (container: Container, zoom: number) => void;
 	renderFar?: (
@@ -117,6 +120,7 @@ const builtinCardRenderers: readonly BoardCardRenderer[] = [
 	imageCardRenderer,
 	videoCardRenderer,
 	audioCardRenderer,
+	modelCardRenderer,
 	fileCardRenderer,
 	taskCardRenderer,
 	shapeCardRenderer,

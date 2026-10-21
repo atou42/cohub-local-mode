@@ -1,3 +1,4 @@
+import type { DirectoryListing } from "$lib/space-fs-list";
 import type { SpaceFsEntry } from "@neta-art/cohub";
 import { deleteCacheDatabase } from "$lib/cache/db";
 import { canUseUserScopedCache, getCacheUserKeyAsync } from "$lib/cache/keys";
@@ -81,7 +82,7 @@ export function onSpaceFsDirCacheUpdated(
 export async function fetchSpaceFsDirWithCache(
 	spaceId: string,
 	dirPath: string,
-	fetcher: () => Promise<SpaceFsEntry[]>,
+	fetcher: () => Promise<SpaceFsEntry[] | DirectoryListing>,
 	options?: { force?: boolean },
 ): Promise<SpaceFsEntry[]> {
 	await getCacheUserKeyAsync();
@@ -90,10 +91,22 @@ export async function fetchSpaceFsDirWithCache(
 		const cached = await spaceFsRepo.getDir(spaceId, dirPath);
 		if (cached && !cached.stale) return cached.entries;
 	}
-	if (!canCache) return fetcher();
+	const read = async () => {
+		const result = await fetcher();
+		return Array.isArray(result) ? { entries: result, truncated: false } : result;
+	};
+	const preservePartial = async (entries: SpaceFsEntry[]) => {
+		const cached = canCache ? await spaceFsRepo.getDir(spaceId, dirPath) : null;
+		const merged = new Map(
+			[...(cached?.entries ?? []), ...entries].map((entry) => [entry.path, entry]),
+		);
+		return [...merged.values()];
+	};
+	if (!canCache) return (await read()).entries;
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const epoch = await spaceFsRepo.getEpoch(spaceId);
-		const entries = await fetcher();
+		const { entries, truncated } = await read();
+		if (truncated) return preservePartial(entries);
 		const result = await spaceFsRepo.setDirIfEpoch(
 			spaceId,
 			dirPath,
@@ -104,5 +117,6 @@ export async function fetchSpaceFsDirWithCache(
 	}
 	// Sustained filesystem churn should not block the UI. Return one uncached,
 	// authoritative read and let the next invalidation refresh it again.
-	return fetcher();
+	const result = await read();
+	return result.truncated ? preservePartial(result.entries) : result.entries;
 }

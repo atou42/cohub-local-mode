@@ -161,12 +161,10 @@ export function isSupportedComposerAttachmentFile(file: File) {
 	return supportedTextExtensions.has(getFileExtension(file.name));
 }
 
+/** Callers keep files over {@link MAX_COMPOSER_TEXT_ATTACHMENT_BYTES} as file attachments. */
 export async function readComposerTextAttachment(
 	file: File,
 ): Promise<ComposerTextAttachment> {
-	if (file.size > MAX_COMPOSER_TEXT_ATTACHMENT_BYTES) {
-		throw new Error(`Text file "${file.name}" exceeds 200 KB.`);
-	}
 	const text = await file.text();
 	return {
 		kind: "text",

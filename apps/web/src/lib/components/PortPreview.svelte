@@ -223,7 +223,7 @@ onDestroy(() => {
 				<div class="mb-1 text-sm font-medium text-text-primary">{m.port_closed_title({ port }, { locale })}</div>
 				<div class="mb-4 text-xs leading-5 text-text-tertiary">{m.port_closed_hint({}, { locale })}</div>
 				<div class="flex items-center justify-center gap-2">
-					<button type="button" class="preview-action-btn" onclick={refresh}>{m.files_refresh({}, { locale })}</button>
+					<button type="button" class="secondary-key" onclick={refresh}>{m.files_refresh({}, { locale })}</button>
 					<a class="primary-key" href={url} target="_blank" rel="noreferrer">{m.port_open_external({}, { locale })}</a>
 				</div>
 			</div>
@@ -294,26 +294,12 @@ onDestroy(() => {
 		border-radius: 7px;
 	}
 
-	.preview-action-btn,
+	.secondary-key,
 	.primary-key {
 		min-height: 32px;
 		padding: 0 10px;
 		font-size: 12px;
 		text-decoration: none;
-	}
-	.preview-action-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 6px;
-		border: 1px solid var(--border-subtle);
-		background: var(--bg-hover);
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-	.preview-action-btn:hover {
-		border-color: var(--border-strong);
-		color: var(--text-primary);
 	}
 
 	@container preview-header (max-width: 460px) {

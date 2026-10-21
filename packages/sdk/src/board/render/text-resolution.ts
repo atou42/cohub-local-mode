@@ -1,9 +1,17 @@
 import type { Text } from "pixi.js";
 
-const MAX_BOARD_RESOLUTION = 2;
+const MAX_BOARD_RESOLUTION = 3;
+const MAX_BOARD_PIXELS = 8_000_000;
+const MAX_TEXT_RESOLUTION = 6;
 
-export function getBoardResolution() {
-	return Math.min(globalThis.devicePixelRatio || 1, MAX_BOARD_RESOLUTION);
+export function getBoardResolution(
+	size?: { width: number; height: number },
+	devicePixelRatio = globalThis.devicePixelRatio,
+) {
+	const density = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+	const pixels = size ? size.width * size.height : 0;
+	const budget = pixels > 0 ? Math.sqrt(MAX_BOARD_PIXELS / pixels) : MAX_BOARD_RESOLUTION;
+	return Math.min(density, MAX_BOARD_RESOLUTION, budget);
 }
 
 /**
@@ -30,7 +38,7 @@ export function textResolutionForZoom(zoom: number): number {
 	const bucket = textZoomBucket(zoom);
 	return Math.min(
 		getBoardResolution() * Math.max(1, bucket),
-		MAX_BOARD_RESOLUTION * 3,
+		MAX_TEXT_RESOLUTION,
 	);
 }
 
@@ -41,7 +49,7 @@ export function syncTextResolution(
 	zoom: number,
 ) {
 	const resolution = textResolutionForZoom(zoom);
-	if (resolution === state.resolution) return;
+	if (resolution === state.resolution && resolution === text.resolution) return;
 	text.resolution = resolution;
 	state.resolution = resolution;
 }

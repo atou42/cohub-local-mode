@@ -47,7 +47,7 @@ function onKeydown(event: KeyboardEvent) {
 {#if open}
 	<div
 		use:portal
-		class="fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center lg:items-center lg:p-4"
+		class="dialog-backdrop fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center lg:items-center lg:p-4"
 		in:fade={FADE_IN}
 		out:fade={FADE_OUT}
 		role="dialog"
@@ -55,9 +55,8 @@ function onKeydown(event: KeyboardEvent) {
 		tabindex="-1"
 		onkeydown={onKeydown}
 	>
-		<!-- Backdrop -->
 		<div
-			class="absolute inset-0 bg-overlay-scrim"
+			class="absolute inset-0"
 			onclick={onClose}
 			aria-hidden="true"
 		></div>
@@ -65,7 +64,7 @@ function onKeydown(event: KeyboardEvent) {
 		{#if mobile}
 			<!-- Desktop: centered panel -->
 			<div
-				class="relative hidden w-full overflow-hidden rounded-[12px] border border-border-subtle bg-bg-primary shadow-2xl lg:flex lg:flex-col"
+				class="dialog-surface relative hidden w-full lg:flex lg:flex-col"
 				style="max-width: {maxWidth}; max-height: 88vh"
 				in:scale|local={SCALE_IN}
 				out:scale|local={SCALE_OUT}
@@ -75,7 +74,7 @@ function onKeydown(event: KeyboardEvent) {
 
 			<!-- Mobile: bottom sheet -->
 			<div
-				class="relative w-full max-w-[480px] overflow-hidden rounded-t-[12px] border-t border-border-subtle bg-bg-primary shadow-2xl lg:hidden"
+				class="dialog-surface is-sheet relative w-full max-w-[480px] lg:hidden"
 				in:slide|local={{ axis: "y", ...FADE_IN }}
 				out:slide|local={{ axis: "y", ...FADE_OUT }}
 			>
@@ -87,7 +86,7 @@ function onKeydown(event: KeyboardEvent) {
 		{:else}
 			<!-- Desktop-only centered panel -->
 			<div
-				class="relative w-full overflow-hidden rounded-[12px] border border-border-subtle bg-bg-primary shadow-2xl"
+				class="dialog-surface relative w-full"
 				style="max-width: {maxWidth}; max-height: 88vh"
 				in:scale|local={SCALE_IN}
 				out:scale|local={SCALE_OUT}

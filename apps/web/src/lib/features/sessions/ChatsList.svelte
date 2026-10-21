@@ -18,8 +18,9 @@ import {
 	chatsInbox,
 } from "$lib/features/sessions/chats-inbox.svelte";
 import { chatsWorkspaceScope } from "$lib/features/sessions/chats-workspace-scope";
-import { withCurrentWindow } from "$lib/features/space/modules/window-route";
+import { withSidebarMainWindow } from "$lib/features/space/modules/window-route";
 import { getLocale } from "$lib/i18n/locale.svelte";
+import { useCompactShell } from "$lib/layout/compact-shell.svelte";
 import { scrollListToTop } from "$lib/layout/list-scroll-top";
 import { scrollMemory } from "$lib/layout/scroll-memory";
 import { m } from "$lib/paraglide/messages.js";
@@ -55,6 +56,7 @@ const LOAD_MORE_THRESHOLD_PX = 480;
 const OVERSCAN_ROWS = 6;
 
 const locale = $derived(getLocale());
+const isMobile = $derived(useCompactShell());
 const isPage = $derived(variant === "page");
 const scoped = $derived(Boolean(filter.space));
 const density = $derived<FixedListRowDensity>(
@@ -226,7 +228,7 @@ function navigate(session: UserSessionListItem) {
 	const sameSpace =
 		chatsWorkspaceScope.spaceAt(new URL(window.location.href)) ===
 		session.spaceId;
-	void goto(sameSpace ? withCurrentWindow(href) : href, {
+	void goto(sameSpace ? withSidebarMainWindow(href, { isMobile }) : href, {
 		keepFocus: true,
 		noScroll: true,
 	});

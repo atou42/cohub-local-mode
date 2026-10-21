@@ -4,7 +4,7 @@ import { AppRoomStore } from "@cohub/infra/app-room";
 import { createLogger } from "@cohub/infra/logging";
 import { getTracer, extractTrace } from "@cohub/infra/tracing/propagator";
 import { gatewayInboundEventSchema, type GatewayInboundEvent } from "@cohub/protocol/gateway";
-import { UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
+import { UPLOAD_ERROR_BATCH_TOO_LARGE, UPLOAD_ERROR_FILE_TOO_LARGE, UPLOAD_MAX_BATCH_BYTES, UPLOAD_MAX_FILE_BYTES } from "@cohub/protocol";
 import { parseRealtimeRoom } from "@cohub/protocol/realtime";
 import { dispatchSpacePresenceUpdated } from "../../realtime-events.js";
 import { getSpacePresenceSnapshot } from "../../space-presence.js";
@@ -54,7 +54,7 @@ import {
   saveSpaceUploadManifest,
   type SpaceUploadManifestEntry,
 } from "../../space-upload-storage.js";
-import { consumeUploadQuota, UploadRateLimitError } from "../../upload-quota.js";
+import { consumeUploadQuota, UploadRateLimitError, uploadRateLimitedResponse } from "../../upload-quota.js";
 import { enqueueSandboxUploadFilesJob } from "../../sandbox-bash-queue.js";
 import { db } from "../../db/index.js";
 import { eq } from "drizzle-orm";
@@ -83,8 +83,7 @@ const safeUploadPath = (value: string) => {
 
 const attachmentPlanErrorResponse = (error: unknown) => {
   if (error instanceof PublicAssetValidationError) {
-    const status = error.message.includes("too large") ? 413 : 400;
-    return { status, body: { message: error.message } };
+    return { status: error.code ? 413 : 400, body: { ...(error.code ? { code: error.code } : {}), message: error.message } };
   }
   if (error instanceof PublicAssetConfigError || error instanceof UserUploadConfigError) {
     return { status: 503, body: { message: "public asset storage is not configured" } };
@@ -453,7 +452,7 @@ router.post("/attachments/plan", async (c) => {
     for (const file of files) {
       if (!/^[a-zA-Z0-9_-]{1,80}$/.test(file.id) || seenFileIds.has(file.id)) return c.json({ message: "file ids must be unique safe strings" }, 400);
       seenFileIds.add(file.id);
-      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) return c.json({ message: "file too large" }, 413);
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) return c.json({ code: UPLOAD_ERROR_FILE_TOO_LARGE, message: "file too large" }, 413);
       const relativePath = safeUploadPath(file.relativePath?.trim() || file.name);
       if (!relativePath) return c.json({ message: "invalid upload path" }, 400);
       if (seenRelativePaths.has(relativePath)) return c.json({ message: "duplicate upload path" }, 400);
@@ -480,8 +479,7 @@ router.post("/attachments/plan", async (c) => {
     });
   } catch (error) {
     if (!(error instanceof UploadRateLimitError)) throw error;
-    c.header("Retry-After", String(error.retryAfterSeconds));
-    return c.json({ message: error.message }, 429);
+    return uploadRateLimitedResponse(c, error);
   }
   if (uploadId && fileEntries.length > 0) {
     await saveSpaceUploadManifest({
@@ -562,13 +560,13 @@ router.post("/attachments/materialize", async (c) => {
       if (seenPaths.has(relativePath)) return c.json({ message: "duplicate upload path" }, 400);
       seenPaths.add(relativePath);
       if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > UPLOAD_MAX_FILE_BYTES) {
-        return c.json({ message: "file too large" }, 413);
+        return c.json({ code: UPLOAD_ERROR_FILE_TOO_LARGE, message: "file too large" }, 413);
       }
       if (typeof file.downloadUrl !== "string" || !isAllowedPublicAssetDownloadUrl(file.downloadUrl)) {
         return c.json({ message: "invalid download url" }, 400);
       }
       totalBytes += file.size;
-      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ message: "upload too large" }, 413);
+      if (totalBytes > UPLOAD_MAX_BATCH_BYTES) return c.json({ code: UPLOAD_ERROR_BATCH_TOO_LARGE, message: "upload too large" }, 413);
       prepared.push({
         id: typeof file.id === "string" ? file.id : null,
         relativePath,
@@ -618,10 +616,7 @@ router.post("/attachments/materialize", async (c) => {
 
     return c.json({ ok: true, uploaded: result.uploaded, pathById });
   } catch (error) {
-    if (error instanceof UploadRateLimitError) {
-      c.header("Retry-After", String(error.retryAfterSeconds));
-      return c.json({ message: error.message }, 429);
-    }
+    if (error instanceof UploadRateLimitError) return uploadRateLimitedResponse(c, error);
     logger.error("[GatewayAttachment] failed to materialize remote files", error, { spaceId });
     return c.json({ message: "failed to materialize" }, 500);
   }

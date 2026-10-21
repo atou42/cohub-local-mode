@@ -22,6 +22,14 @@
 		color-mix(in srgb, var(--overlay-scrim-strong) 14%, transparent);
 	--indicator-radius: 999px;
 	--indicator-easing: ease-in-out;
+	--menu-radius: 8px;
+	--tab-key-selected-bg: var(--bg-elevated);
+	--toast-shadow: 0 8px 24px
+		color-mix(in srgb, var(--overlay-scrim-strong) 18%, transparent);
+	--dialog-radius: 12px;
+	--dialog-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+	--dialog-backdrop-filter: none;
+	--chat-user-message-border: transparent;
 	--board-bg: var(--bg-primary);
 	--board-card: var(--bg-surface);
 	--board-selection-accent: var(--brand);

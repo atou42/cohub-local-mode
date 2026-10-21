@@ -7,6 +7,7 @@ import type {
   UpdateSessionInfoInput,
 } from "@cohub/protocol/model";
 import type { ContentBlock } from "@cohub/protocol/core";
+import type { HarnessKind } from "@cohub/protocol/runtime";
 import {
   getSpaceById,
   getSpaceSessionById,
@@ -29,7 +30,9 @@ import { isSandboxReportTokenValid } from "../../crypto.js";
 import { sandboxWsEndpoint } from "@cohub/sandbox-client";
 import { k8sCoreApi } from "../../k8s.js";
 import { sessionsNamespace } from "../../config.js";
-import { normalizeSandboxLifecycleStatus, normalizeSandboxRuntimeStatus } from "@cohub/sandbox-controller";
+import { getSandboxBootstrapGate, normalizeSandboxLifecycleStatus, normalizeSandboxRuntimeStatus } from "@cohub/sandbox-controller";
+import { sandboxSetupInfoSchema } from "@cohub/protocol/sandbox";
+import { dispatchSpaceListChanged } from "../../space-list-events.js";
 import {
   ensureInternalRequest,
   getRequestRemoteAddress,
@@ -71,6 +74,8 @@ function sanitizeSandboxMeta(input: Record<string, unknown> | null | undefined) 
       output[key] = value;
     }
   }
+  const setup = sandboxSetupInfoSchema.safeParse(input.setup);
+  if (setup.success) output.setup = setup.data;
   return Object.keys(output).length > 0 ? output : null;
 }
 
@@ -162,6 +167,9 @@ router.post("/:id/sandbox-report", async (c) => {
   }
 
   if (sandbox.provider !== "cloud" || !sandbox.podName) return c.json({ message: "forbidden" }, 403);
+  if (body.meta?.setup !== undefined && !sandboxSetupInfoSchema.safeParse(body.meta.setup).success) {
+    return c.json({ message: "invalid sandbox setup report" }, 400);
+  }
   let pod: Awaited<ReturnType<typeof k8sCoreApi.readNamespacedPod>>;
   try {
     pod = await k8sCoreApi.readNamespacedPod({ name: sandbox.podName, namespace: sessionsNamespace });
@@ -206,6 +214,9 @@ router.post("/:id/sandbox-report", async (c) => {
     },
   });
   if (!updatedSandbox) return c.json({ message: "sandbox instance changed" }, 403);
+  if (safeMeta?.setup && JSON.stringify(sandboxMeta?.setup) !== JSON.stringify(safeMeta.setup)) {
+    await dispatchSpaceListChanged(spaceId).catch((error) => logger.warn("[SandboxSetup] failed to publish status change", { spaceId, error }));
+  }
 
   if (safeMeta?.requiresPodRecreate === true && safeMeta.errorClass === "stale_mount") {
     void recoverSpaceSandbox({
@@ -217,7 +228,7 @@ router.post("/:id/sandbox-report", async (c) => {
     }).catch((error) => logger.error(`[SandboxRecovery] auto recovery failed spaceId=${spaceId}`, error));
   }
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, bootstrap: getSandboxBootstrapGate(space.meta) });
 });
 
 // POST /internal/spaces/:id/sandbox/recover
@@ -422,7 +433,7 @@ router.post("/:spaceId/sessions/:sessionId/prompt", async (c) => {
       source?: string | null;
       model?: string | null;
       provider?: string | null;
-      harness?: "cohub" | "pi" | "codex" | null;
+      harness?: HarnessKind | null;
       thinkingLevel?: string | null;
       accessMode?: PromptAccessMode | null;
       env?: unknown;

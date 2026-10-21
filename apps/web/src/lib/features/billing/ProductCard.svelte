@@ -76,9 +76,9 @@ const unit = $derived(
 	onclick={() => onselect(product)}
 >
 	{#if recommended && !current}
-		<span class="flag">{m.purchase_most_popular({}, { locale })}</span>
+		<span class="flag badge" data-tone="promo">{m.purchase_most_popular({}, { locale })}</span>
 	{:else if current}
-		<span class="flag flag-muted">{m.purchase_current_plan({}, { locale })}</span>
+		<span class="flag badge" data-tone="muted">{m.purchase_current_plan({}, { locale })}</span>
 	{/if}
 
 	<header class="head">
@@ -188,19 +188,6 @@ const unit = $derived(
 		position: absolute;
 		top: -9px;
 		left: 16px;
-		padding: 2px 7px;
-		border-radius: 4px;
-		background: var(--brand);
-		color: var(--brand-contrast-fg);
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		line-height: 14px;
-	}
-	.flag-muted {
-		background: var(--bg-elevated);
-		color: var(--text-secondary);
 	}
 
 	.head {

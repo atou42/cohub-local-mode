@@ -10,12 +10,14 @@ export type AppConfig = {
   redisUrl: string;
   talesofaiBillingBaseUrl?: string;
   talesofaiBillingBusinessKey?: string;
+  talesofaiBillingSpaceWalletBusinessKey?: string;
   talesofaiBillingAdminApiKey?: string;
   env: "dev" | "prod";
   appEncryptionKey: string;
   /** Optional checkpoint to bootstrap first-time Home spaces from; blank when unset. */
   homeBootstrapCheckpointId?: string;
   sandboxImage: string;
+  sandboxGameImage?: string;
   sandboxImagePullSecret?: string;
   sandboxSearchEnabled: boolean;
   sandboxSearchVersion: string;
@@ -189,12 +191,14 @@ export const config: AppConfig = {
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   talesofaiBillingBaseUrl: process.env.TALESOFAI_BILLING_BASE_URL?.replace(/\/+$/, ""),
   talesofaiBillingBusinessKey: process.env.TALESOFAI_BILLING_BUSINESS_KEY,
+  talesofaiBillingSpaceWalletBusinessKey: process.env.TALESOFAI_BILLING_SPACE_WALLET_BUSINESS_KEY,
   talesofaiBillingAdminApiKey: process.env.TALESOFAI_BILLING_ADMIN_API_KEY,
   env,
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY ?? "",
   homeBootstrapCheckpointId: process.env.HOME_BOOTSTRAP_CHECKPOINT_ID?.trim() || undefined,
   sandboxImage:
     process.env.SANDBOX_IMAGE ?? getDefaultSandboxImage(env),
+  sandboxGameImage: process.env.SANDBOX_GAME_IMAGE?.trim() || undefined,
   sandboxImagePullSecret: (process.env.SANDBOX_IMAGE_PULL_SECRET ?? "gitea-registry").trim() || undefined,
   sandboxSearchEnabled: process.env.SANDBOX_SEARCH_ENABLED?.trim().toLowerCase() !== "false",
   sandboxSearchVersion: process.env.SANDBOX_SEARCH_VERSION?.trim() || "latest",

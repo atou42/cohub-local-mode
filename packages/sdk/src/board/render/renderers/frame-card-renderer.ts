@@ -78,6 +78,10 @@ export const frameCardRenderer: BoardCardRenderer = {
 	update: (container, item, context) => {
 		if (item.type === "frame") sync(container, item as SceneItem<BoardFrameItem>, context);
 	},
+	resolution: (container, _item, context) => {
+		const parts = partsByContainer.get(container);
+		if (parts) syncTextResolution(parts.label, parts, context.zoom);
+	},
 	renderFar: (graphics, item, context) => {
 		if (item.type !== "frame" || item.props.decoration === "none") return;
 		drawFarPlate(graphics, item.frame, {

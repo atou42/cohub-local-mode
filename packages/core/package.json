@@ -40,6 +40,10 @@
       "types": "./dist/sessions/service.d.ts",
       "default": "./dist/sessions/service.js"
     },
+    "./space-wallet": {
+      "types": "./dist/space-wallet/index.d.ts",
+      "default": "./dist/space-wallet/index.js"
+    },
     "./space-mods": {
       "types": "./dist/space-mods/index.d.ts",
       "default": "./dist/space-mods/index.js"

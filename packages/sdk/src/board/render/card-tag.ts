@@ -3,7 +3,7 @@ import type { BoardRenderContext } from "./renderers/board-renderer-registry.js"
 import { fitTextToWidth } from "./text-fit.js";
 import { syncTextResolution, textResolutionForZoom } from "./text-resolution.js";
 
-export type CardGlyph = "image" | "video" | "audio" | "file" | "task";
+export type CardGlyph = "image" | "video" | "audio" | "model" | "file" | "task";
 
 export const CARD_TAG_SIZE = 11;
 const ICON = 12;
@@ -26,6 +26,7 @@ const PIXEL_GLYPHS: Record<CardGlyph, readonly string[]> = {
 	image: ["######", "#....#", "#.#..#", "#.##.#", "######", "......"],
 	video: ["######", "#.#..#", "#.##.#", "#.#..#", "######", "......"],
 	audio: ["...#..", "...##.", "...#.#", "...#..", ".###..", ".###.."],
+	model: ["..#...", ".###..", "#####.", "#####.", ".###..", "..#..."],
 	file: ["####..", "#..##.", "#...##", "#....#", "#....#", "######"],
 	task: ["..#...", ".###..", "#####.", ".###..", "..#...", "......"],
 };
@@ -46,6 +47,9 @@ function drawLineGlyph(graphics: Graphics, glyph: CardGlyph, color: number) {
 				graphics.moveTo(x, 6 - height / 2).lineTo(x, 6 + height / 2);
 			graphics.stroke(line);
 			return;
+		case "model":
+			traceCube(graphics, 6, 6, 4.5).stroke(line);
+			return;
 		case "file":
 			graphics.poly([2.5, 1, 7.5, 1, 9.5, 3, 9.5, 11, 2.5, 11]).stroke(line);
 			graphics.moveTo(7.5, 1).lineTo(7.5, 3).lineTo(9.5, 3).stroke(line);
@@ -54,6 +58,19 @@ function drawLineGlyph(graphics: Graphics, glyph: CardGlyph, color: number) {
 			graphics.poly([6, 1, 7.3, 4.7, 11, 6, 7.3, 7.3, 6, 11, 4.7, 7.3, 1, 6, 4.7, 4.7]).fill({ color });
 			return;
 	}
+}
+
+export function traceCube(graphics: Graphics, cx: number, cy: number, radius: number) {
+	const dx = radius * 0.866;
+	const dy = radius / 2;
+	graphics
+		.poly([cx, cy - radius, cx + dx, cy - dy, cx + dx, cy + dy, cx, cy + radius, cx - dx, cy + dy, cx - dx, cy - dy])
+		.moveTo(cx - dx, cy - dy)
+		.lineTo(cx, cy)
+		.lineTo(cx + dx, cy - dy)
+		.moveTo(cx, cy)
+		.lineTo(cx, cy + radius);
+	return graphics;
 }
 
 export function drawCardGlyph(graphics: Graphics, glyph: CardGlyph, color: number, pixel: boolean) {

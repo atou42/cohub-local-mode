@@ -134,11 +134,11 @@ const CAMERA_PROPERTIES: Record<string, BoardPropertySpec> = {
 		schema: z.union([
 			z.string().min(1),
 			z.object({ x: z.number().finite(), y: z.number().finite(), width: z.number().finite().positive(), height: z.number().finite().positive() }).strict(),
-		]),
+		]).describe("Item id or world-space rect to fit with 48 px padding; holds until the next focus keyframe."),
 	},
-	zoom: { kind: "number", schema: z.number().finite().positive(), multiplicative: true },
-	center: { kind: "vec2", schema: BoardVec2Schema },
-	shake: { kind: "number", schema: z.number().finite().nonnegative() },
+	zoom: { kind: "number", schema: z.number().finite().positive().describe("Pixels per world unit; overrides the zoom computed by focus."), multiplicative: true },
+	center: { kind: "vec2", schema: BoardVec2Schema.describe("World-space viewport center; overrides focus positioning using the resolved zoom.") },
+	shake: { kind: "number", schema: z.number().finite().nonnegative().describe("Shake amplitude in screen pixels, applied after focus, zoom and center.") },
 };
 
 const ANIMATION_PROPERTIES: Record<string, BoardPropertySpec> = {

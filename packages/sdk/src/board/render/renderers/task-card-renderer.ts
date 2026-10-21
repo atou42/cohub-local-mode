@@ -330,7 +330,7 @@ function sync(
 	if (key !== parts.assetKey) {
 		if (parts.assetKey) context.releaseTexture(parts.assetKey);
 		parts.assetKey = key;
-		if (key) context.acquireTexture(key);
+		if (key) context.acquireTexture(key, item);
 	}
 	const texture = key ? context.getTexture(key) : null;
 	const previewFailed = Boolean(key && !texture && context.hasError(key));
@@ -418,7 +418,7 @@ function sync(
 		artifact?.type ?? "none",
 		artifact?.id ?? "none",
 		item.props.taskRunId,
-		texture ? `${texture.width}x${texture.height}` : "none",
+		texture?.uid ?? "none",
 		context.themeKey,
 	].join("|");
 
@@ -606,6 +606,9 @@ export const taskCardRenderer: BoardCardRenderer = {
 	tick: (container, clock) => {
 		const parts = partsByContainer.get(container);
 		return parts ? advance(parts, clock) : null;
+	},
+	resolution: (container, item, context) => {
+		if (item.type === "task") sync(container, item, context);
 	},
 	zoom: (container, zoom) => {
 		const tag = partsByContainer.get(container)?.tag;

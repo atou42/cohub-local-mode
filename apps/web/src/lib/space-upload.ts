@@ -1,9 +1,11 @@
+import { batchUploadEntries } from "@cohub/protocol";
 import type { SpaceFsUploadDestination } from "@neta-art/cohub";
 import { sdk } from "$lib/sdk";
 import {
 	type LocalUploadEntry,
 	sanitizeRelativePath,
 } from "$lib/upload-entries";
+import { UploadTransferError } from "$lib/upload-errors";
 import { isBrowserManagedUploadHeader } from "$lib/upload-headers";
 
 export type SpaceUploadStage = "preparing" | "uploading" | "importing" | "done";
@@ -99,9 +101,9 @@ function putWithProgress(
 		};
 		xhr.onload = () => {
 			if (xhr.status >= 200 && xhr.status < 300) finish(resolve);
-			else finish(() => reject(new Error(`Upload failed (${xhr.status})`)));
+			else finish(() => reject(new UploadTransferError(xhr.status)));
 		};
-		xhr.onerror = () => finish(() => reject(new Error("Upload failed")));
+		xhr.onerror = () => finish(() => reject(new UploadTransferError(0)));
 		xhr.onabort = () => finish(() => reject(createAbortError()));
 		signal?.addEventListener("abort", handleAbort, { once: true });
 		xhr.send(file);
@@ -144,6 +146,18 @@ export type MaterializeSpaceEntriesOptions = {
 	entries: MaterializeSpaceEntry[];
 };
 
+const toUploadedFile = (file: {
+	path: string;
+	name: string;
+	size: number;
+	mimeType: string | null;
+}): SpaceUploadedFile => ({
+	path: file.path,
+	name: file.name,
+	size: file.size,
+	mimeType: file.mimeType,
+});
+
 /**
  * Materialize already-uploaded durable public URLs into sandbox/workspace.
  * Uses the same createUpload/complete pipeline with entry.downloadUrl (no client PUT).
@@ -178,12 +192,7 @@ export async function materializeSpaceEntries({
 		.files.completeUpload(plan.uploadId, {
 			entries: ids.map((id) => ({ id })),
 		});
-	return complete.uploaded.map((file) => ({
-		path: file.path,
-		name: file.name,
-		size: file.size,
-		mimeType: file.mimeType,
-	}));
+	return complete.uploaded.map(toUploadedFile);
 }
 
 export async function uploadSpaceEntries({
@@ -206,113 +215,94 @@ export async function uploadSpaceEntries({
 		0,
 	);
 	const ids = safeEntries.map(() => crypto.randomUUID());
+	const batches = batchUploadEntries(safeEntries, (entry) => entry.file.size);
 
-	onProgress?.({
-		stage: "preparing",
-		uploadedBytes: 0,
-		totalBytes,
-		completedFiles: 0,
-		activeFileUploadedBytes: 0,
-		importedFiles: 0,
-		totalFiles,
-	});
-	throwIfAborted(signal);
-
-	const plan = await sdk.space(spaceId).files.createUpload(
-		{
-			destination: uploadDestination,
-			entries: safeEntries.map((entry, index) => ({
-				id: ids[index],
-				name: entry.file.name,
-				relativePath: entry.relativePath,
-				size: entry.file.size,
-				mimeType: entry.file.type || null,
-				lastModified: entry.file.lastModified,
-			})),
-		},
-		{ signal },
-	);
-	throwIfAborted(signal);
-	const planById = new Map(plan.entries.map((entry) => [entry.id, entry]));
+	let completedFiles = 0;
 	let completedBytes = 0;
+	let importedFiles = 0;
+	const report = (info: {
+		stage: SpaceUploadStage;
+		activeIndex?: number;
+		activeFileUploadedBytes?: number;
+	}) => {
+		const activeFileUploadedBytes = info.activeFileUploadedBytes ?? 0;
+		onProgress?.({
+			stage: info.stage,
+			uploadedBytes: Math.min(
+				totalBytes,
+				completedBytes + activeFileUploadedBytes,
+			),
+			totalBytes,
+			completedFiles,
+			activeFileIndex: info.activeIndex,
+			activeFileUploadedBytes,
+			importedFiles,
+			totalFiles,
+		});
+	};
 
-	for (const [index, entry] of safeEntries.entries()) {
+	report({ stage: "preparing" });
+	throwIfAborted(signal);
+
+	const uploaded: SpaceUploadedFile[] = [];
+
+	for (const batch of batches) {
+		const batchIds = ids.slice(importedFiles, importedFiles + batch.length);
+		const plan = await sdk.space(spaceId).files.createUpload(
+			{
+				destination: uploadDestination,
+				entries: batch.map((entry, index) => ({
+					id: batchIds[index],
+					name: entry.file.name,
+					relativePath: entry.relativePath,
+					size: entry.file.size,
+					mimeType: entry.file.type || null,
+					lastModified: entry.file.lastModified,
+				})),
+			},
+			{ signal },
+		);
 		throwIfAborted(signal);
-		const id = ids[index];
-		const planned = planById.get(id);
-		if (!planned) throw new Error("Upload plan missing file");
-		onProgress?.({
-			stage: "uploading",
-			uploadedBytes: completedBytes,
-			totalBytes,
-			completedFiles: index,
-			activeFileIndex: index,
-			activeFileUploadedBytes: 0,
-			importedFiles: 0,
-			totalFiles,
-		});
-		if (planned.uploadUrl) {
-			await putWithProgress(
-				entry.file,
-				planned.uploadUrl,
-				planned.headers,
-				(loaded) => {
-					onProgress?.({
-						stage: "uploading",
-						uploadedBytes: Math.min(totalBytes, completedBytes + loaded),
-						totalBytes,
-						completedFiles: index,
-						activeFileIndex: index,
-						activeFileUploadedBytes: Math.min(entry.file.size, loaded),
-						importedFiles: 0,
-						totalFiles,
-					});
-				},
-				signal,
-			);
+		const planById = new Map(plan.entries.map((entry) => [entry.id, entry]));
+
+		for (const [index, entry] of batch.entries()) {
+			throwIfAborted(signal);
+			const globalIndex = importedFiles + index;
+			const planned = planById.get(batchIds[index]);
+			if (!planned) throw new Error("Upload plan missing file");
+			report({ stage: "uploading", activeIndex: globalIndex });
+			if (planned.uploadUrl) {
+				await putWithProgress(
+					entry.file,
+					planned.uploadUrl,
+					planned.headers,
+					(loaded) => {
+						report({
+							stage: "uploading",
+							activeIndex: globalIndex,
+							activeFileUploadedBytes: Math.min(entry.file.size, loaded),
+						});
+					},
+					signal,
+				);
+			}
+			completedFiles += 1;
+			completedBytes += entry.file.size;
+			report({ stage: "uploading" });
 		}
-		completedBytes += entry.file.size;
-		onProgress?.({
-			stage: "uploading",
-			uploadedBytes: completedBytes,
-			totalBytes,
-			completedFiles: index + 1,
-			activeFileUploadedBytes: 0,
-			importedFiles: 0,
-			totalFiles,
-		});
+
+		throwIfAborted(signal);
+		report({ stage: "importing" });
+		const complete = await sdk
+			.space(spaceId)
+			.files.completeUpload(plan.uploadId, {
+				entries: batchIds.map((id) => ({ id })),
+			});
+		uploaded.push(...complete.uploaded.map(toUploadedFile));
+		importedFiles += batch.length;
+		report({ stage: "importing" });
 	}
 
-	throwIfAborted(signal);
-	onProgress?.({
-		stage: "importing",
-		uploadedBytes: totalBytes,
-		totalBytes,
-		completedFiles: totalFiles,
-		activeFileUploadedBytes: 0,
-		importedFiles: 0,
-		totalFiles,
-	});
-	const complete = await sdk
-		.space(spaceId)
-		.files.completeUpload(plan.uploadId, {
-			entries: ids.map((id) => ({ id })),
-		});
-
-	onProgress?.({
-		stage: "done",
-		uploadedBytes: totalBytes,
-		totalBytes,
-		completedFiles: totalFiles,
-		activeFileUploadedBytes: 0,
-		importedFiles: totalFiles,
-		totalFiles,
-	});
-
-	return complete.uploaded.map((file) => ({
-		path: file.path,
-		name: file.name,
-		size: file.size,
-		mimeType: file.mimeType,
-	}));
+	report({ stage: "done" });
+	return uploaded;
 }

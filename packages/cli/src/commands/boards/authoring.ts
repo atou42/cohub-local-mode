@@ -8,8 +8,7 @@ import {
   buildBoardScene,
   createBoardAnimationSampler,
   createNodeBoardRenderer,
-  inspectBoardScene,
-  measureBoardText,
+  inspectBoardItems,
 } from "../../board-kernel.js";
 import { parseBoardTimes } from "../../board-time.js";
 import { handleHttp, json as outJson } from "../../output.js";
@@ -20,9 +19,14 @@ export function registerBoardAuthoringCommands(boards: Command) {
     .command("inspect <board>")
     .description("Measure items and report visible layout hints without changing the Board")
     .option("--animation <id>", "Animation to sample")
-    .option("--at <times>", "Time, comma-separated times, or start:end:step", "0")
+    .option("--at <times>", "Time, comma-separated times, or start:end:step (up to 100 samples)", "0")
     .option("--items <ids>", "Limit measurements to comma-separated item ids")
     .option("--json", "Output as JSON")
+    .addHelpText("after", `
+Without --animation, inspects the static document, not playback.
+Bounds use world units with x/y at the top left; worldBounds includes rotation.
+Checks native layout only, not camera cropping or content drawn inside scripts.
+Example: cohub boards inspect lesson.board --animation lecture --at 0:20s:1s --json`)
     .action(async (target: string, options: { animation?: string; at: string; items?: string }) => {
       try {
         const { document } = await loadBoardDocument(await resolveSpace(boards), target);
@@ -32,20 +36,13 @@ export function registerBoardAuthoringCommands(boards: Command) {
         try {
           const ids = options.items ? new Set(options.items.split(",")) : null;
           outJson({
-            samples: times.map((time) => {
-              const scene = sampler?.at(time).scene ?? buildBoardScene(document);
-              return {
-                time,
-                diagnostics: inspectBoardScene(scene),
-                items: scene.items
-                  .filter((item) => !ids || ids.has(item.id))
-                  .map((item) => ({
-                    id: item.id,
-                    bounds: item.frame,
-                    ...(item.type === "text" ? { text: measureBoardText(item.props) } : {}),
-                  })),
-              };
-            }),
+            mode: sampler ? "animation" : "static",
+            animation: options.animation ?? null,
+            coverage: "Native layout in world coordinates; excludes camera cropping and script-drawn content.",
+            samples: times.map((time) => ({
+              time,
+              ...inspectBoardItems(sampler?.at(time).scene ?? buildBoardScene(document), ids ?? undefined),
+            })),
           });
         } finally {
           renderer.destroy();

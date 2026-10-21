@@ -82,7 +82,7 @@ const updateBootstrap = async (input: {
       ...("initialCheckpointTaskRunId" in input ? { initialCheckpointTaskRunId: input.initialCheckpointTaskRunId } : {}),
     },
   };
-  const [updated] = await db.update(spaces).set({ meta: nextMeta, updatedAt: new Date() }).where(eq(spaces.id, input.space.id)).returning();
+  const [updated] = await db.update(spaces).set({ meta: sql`coalesce(${spaces.meta}, '{}'::jsonb) || ${JSON.stringify({ bootstrap: nextMeta.bootstrap })}::jsonb`, updatedAt: new Date() }).where(eq(spaces.id, input.space.id)).returning();
   if (!updated) throw new Error("failed to update bootstrap state");
   return updated;
 };

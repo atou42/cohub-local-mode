@@ -234,6 +234,18 @@ export async function publishConfigFromWorkspace(input: {
     await mkdir(join(tmpDir, ".cohub"), { recursive: true, mode: DIR_MODE });
     await writeFile(join(tmpDir, ".cohub", "config-meta.json"), JSON.stringify(meta, null, 2));
 
+    const setupDir = join(tmpDir, ".sandbox-setup");
+    await mkdir(setupDir, { mode: DIR_MODE });
+    const setupScript = join(tmpDir, ".cohub", "setup.sh");
+    const setupInfo = await lstat(setupScript).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (setupInfo) {
+      if (!setupInfo.isFile()) throw new Error("User setup must be a regular file");
+      await copyFile(setupScript, join(setupDir, "setup.sh"));
+    }
+
     await syncDirectoryContents(tmpDir, input.targetDir);
     await normalizePermissions(input.targetDir);
 
