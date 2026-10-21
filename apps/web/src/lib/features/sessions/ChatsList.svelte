@@ -58,6 +58,8 @@ const OVERSCAN_ROWS = 6;
 const locale = $derived(getLocale());
 const isMobile = $derived(useCompactShell());
 const isPage = $derived(variant === "page");
+// Touch layouts open on a single tap, so rename stays desktop-only.
+const canRename = $derived(!isPage && !isMobile);
 const scoped = $derived(Boolean(filter.space));
 const density = $derived<FixedListRowDensity>(
 	isPage ? "comfortable" : "compact",
@@ -208,7 +210,7 @@ function open(event: MouseEvent, session: UserSessionListItem) {
 		return;
 	event.preventDefault();
 	cancelPendingNavigation();
-	if (isPage || event.detail === 0) {
+	if (!canRename || event.detail === 0) {
 		navigate(session);
 		return;
 	}
@@ -367,13 +369,13 @@ function onScroll(event: Event) {
 						tree={row.tree}
 						tooltip={tooltipFor(row)}
 						showInsert={false}
-						showRename={!isPage}
+						showRename={canRename}
 						renaming={renamingId === session.id}
 						{renameValue}
 						{renameSaving}
 						{renameError}
 						onNavigate={open}
-						onDoubleClick={isPage ? undefined : (event, target) => {
+						onDoubleClick={!canRename ? undefined : (event, target) => {
 							if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
 							event.preventDefault();
 							event.stopPropagation();
