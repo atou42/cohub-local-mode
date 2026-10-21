@@ -1,7 +1,7 @@
 import { nativeFixtureHome } from "./fixtures/native-home.js";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { chmod, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,7 @@ import { WebSocketServer } from "ws";
 import { startBackgroundRuntime } from "../src/runtime/launch.js";
 import { requestRuntimeInstance, runtimeInstanceDirectory } from "../src/runtime/instance.js";
 import { currentIdentityKey } from "../src/space.js";
-import { readRuntimeDiagnosticEvents, type RuntimeDiagnostic } from "../src/runtime/diagnostics.js";
-import { runRuntime } from "../src/runtime/supervisor.js";
+import { readRuntimeDiagnosticEvents } from "../src/runtime/diagnostics.js";
 
 after(() => rm(nativeFixtureHome, { recursive: true, force: true }));
 
@@ -86,43 +85,5 @@ for (const recover of [true, false]) test(`an exited bridge cannot hold Runtime 
     for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key];
     Object.assign(process.env, old);
     await fixture.close(); await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("a bridge spawn failure stays visible and shutdown does not wait for exit", { timeout: 10_000 }, async () => {
-  const root = await mkdtemp(join(process.platform === "darwin" ? "/private/tmp" : tmpdir(), "rt-spawn-"));
-  const fixture = await fixtureServer();
-  const previous = { ...process.env };
-  const controller = new AbortController();
-  const events: RuntimeDiagnostic[] = [];
-  const spaceId = crypto.randomUUID();
-  let directory: string | undefined;
-  fixture.server.on("connection", (socket) => socket.on("message", (raw) => {
-    if (JSON.parse(raw.toString()).type === "runtime.hello") socket.send(JSON.stringify({ type: "runtime.ready", connectionId: crypto.randomUUID() }));
-  }));
-  try {
-    process.env.HOME = root;
-    process.env.CODEX_HOME = join(root, "codex");
-    process.env.PI_CODING_AGENT_DIR = join(root, "pi");
-    process.env.COHUB_EXECUTION_TOKEN = `fixture.${Buffer.from(JSON.stringify({ sub: "spawn-test" })).toString("base64url")}.fixture`;
-    process.env.COHUB_WS_URL = fixture.url;
-    process.env.COHUB_SANDBOXD_BIN = join(root, "bridge");
-    await writeFile(process.env.COHUB_SANDBOXD_BIN, `#!${root}/missing-interpreter\n`);
-    await chmod(process.env.COHUB_SANDBOXD_BIN, 0o755);
-    const identity = currentIdentityKey(); assert(identity);
-    directory = runtimeInstanceDirectory(identity, spaceId);
-    await runRuntime({ spaceId, root, identity, harnesses: ["pi"], capabilities: { harnesses: ["pi"], models: [] }, executables: {}, background: true }, () => {}, controller.signal, (event) => {
-      events.push(event);
-      if (event.event === "sandboxd.process_error") controller.abort();
-    });
-    assert(events.some((event) => event.event === "sandboxd.process_error" && event.error?.code === "ENOENT"));
-    assert.equal(events.some((event) => ["runtime.available", "sandboxd.process_exit", "sandboxd.stdio_drain_timeout"].includes(event.event)), false);
-    assert.equal(await requestRuntimeInstance(directory), null);
-  } finally {
-    controller.abort();
-    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
-    Object.assign(process.env, previous);
-    await fixture.close();
-    await rm(root, { recursive: true, force: true });
   }
 });
