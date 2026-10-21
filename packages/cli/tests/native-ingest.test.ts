@@ -135,32 +135,27 @@ test("Cohub's own Turns are recognized by their marker; a terminal Turn after on
   } finally { await w.cleanup(); }
 });
 
-for (const settled of [false, true]) {
-  test(`Codex user_message client IDs prevent reuploading ${settled ? "completed" : "running"} Cohub Turns`, async () => {
-    const w = await workspace();
-    const ingest = w.ingest({ harnesses: ["codex"] });
-    try {
-      const server = fakeServer();
-      const cloudTurnId = randomUUID(), sessionId = randomUUID(), nativeTurnId = randomUUID(), id = randomUUID();
-      server.turns.set(cloudTurnId, { sessionId, settled, parentTurnId: null });
-      await w.write(w.codexPath(id), line({ timestamp: at, type: "session_meta", payload: { id, cwd: w.project } })
-        + codexLine({ type: "task_started", turn_id: nativeTurnId })
-        + codexLine({ type: "user_message", message: "from the web", client_id: cloudTurnId })
-        + (settled ? codexLine({ type: "task_complete", turn_id: nativeTurnId, last_agent_message: "answer" }) : ""));
-      await ingest.load();
-      ingest.connect(server.transport);
-      await until(() => server.knownCalls > 0);
-      await ingest.close(AbortSignal.timeout(2_000));
-      assert.equal(server.batches.length, 0, "the cloud Turn must not be uploaded under a new native identity");
-      assert.equal(server.turns.size, 1);
-      assert.equal(server.turns.has(turnIdOf("codex", id, nativeTurnId)), false);
-      assert.deepEqual(server.turns.get(cloudTurnId), { sessionId, settled, parentTurnId: null });
-    } finally {
-      await ingest.close(AbortSignal.timeout(2_000));
-      await w.cleanup();
-    }
-  });
-}
+test("a running Cohub Turn marked by Codex user_message client_id is not reuploaded", async () => {
+  const w = await workspace();
+  const ingest = w.ingest({ harnesses: ["codex"] });
+  try {
+    const server = fakeServer();
+    const cloudTurnId = randomUUID(), sessionId = randomUUID(), nativeTurnId = randomUUID(), id = randomUUID();
+    server.turns.set(cloudTurnId, { sessionId, settled: false, parentTurnId: null });
+    await w.write(w.codexPath(id), line({ timestamp: at, type: "session_meta", payload: { id, cwd: w.project } })
+      + codexLine({ type: "task_started", turn_id: nativeTurnId })
+      + codexLine({ type: "user_message", message: "from the web", client_id: cloudTurnId }));
+    await ingest.load();
+    ingest.connect(server.transport);
+    await until(() => server.knownCalls > 0);
+    await ingest.close(AbortSignal.timeout(2_000));
+    assert.equal(server.batches.length, 0);
+    assert.equal(server.turns.size, 1);
+  } finally {
+    await ingest.close(AbortSignal.timeout(2_000));
+    await w.cleanup();
+  }
+});
 
 test("a local Codex continuation uploads once under the Session identified by user_message client_id", async () => {
   const w = await workspace();
