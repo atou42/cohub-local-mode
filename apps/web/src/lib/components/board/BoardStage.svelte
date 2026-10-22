@@ -8,6 +8,7 @@ import type {
 	WorldPoint,
 } from "@neta-art/cohub/board";
 import {
+	boardTextureEdge,
 	createMediaBoardItem,
 	isBoardModelItem,
 	parseBoardMediaSource,
@@ -16,6 +17,7 @@ import {
 } from "@neta-art/cohub/board";
 import type { BoardPointerEvent } from "@neta-art/cohub/board/editor";
 import {
+	type BoardLod,
 	type BoardRenderLabels,
 	traceCardOutline,
 } from "@neta-art/cohub/board/render";
@@ -92,6 +94,7 @@ const {
 	onBackgroundLoadStateChange,
 	onLongPress,
 	relatedIds,
+	lod,
 }: {
 	editor: BoardEditor;
 	playback?: BoardPlaybackSnapshot | null;
@@ -121,6 +124,7 @@ const {
 	) => void;
 	onLongPress?: (point: { x: number; y: number }) => void;
 	relatedIds?: readonly string[];
+	lod?: BoardLod;
 } = $props();
 
 const locale = $derived(getLocale());
@@ -128,7 +132,7 @@ const locale = $derived(getLocale());
 let host: HTMLDivElement | null = $state(null);
 let stage: BoardStage | null = null;
 let dropActive = $state(false);
-let visibleIds = $state.raw<ReadonlySet<string> | null>(null);
+let liveIds = $state.raw<ReadonlySet<string> | null>(null);
 let customThemeVersion = $state(0);
 let previewVersion = $state(filePreviewVersion());
 let backdropLoadState = $state<BoardBackgroundLoadState | null>(null);
@@ -200,7 +204,7 @@ $effect(() => {
 	if (readonly) return;
 	previewVersion;
 	const targets: Array<{ id: string; path: string }> = [];
-	for (const id of visibleIds ?? []) {
+	for (const id of liveIds ?? []) {
 		const item = untrack(() => editor.itemById(id));
 		if (item?.type !== "file") continue;
 		const path = item.props.src;
@@ -209,34 +213,55 @@ $effect(() => {
 		const unenriched = item.props.snapshot?.mtimeMs === undefined;
 		if (stale || unenriched) targets.push({ id: item.id, path });
 	}
-	if (targets.length > 0) void enrichFileCards(targets);
+	if (targets.length > 0) enrichFileCards(targets);
 });
 
-async function enrichFileCards(targets: Array<{ id: string; path: string }>) {
-	const resolved = await Promise.all(
-		targets.map(async ({ id, path }) => {
-			const item = editor.itemById(id);
-			if (
-				item?.type !== "file" ||
-				item.props.src !== path ||
-				parseBoardMediaSource(path)?.kind !== "file"
-			)
-				return null;
-			const snapshot = (item.props as { snapshot?: BoardFileSnapshotFacts })
-				.snapshot;
-			const result = await loadFilePreview(spaceId, {
-				path,
-				mimeType: snapshot?.mimeType,
-				size: snapshot?.size,
-				mtimeMs: snapshot?.mtimeMs,
-			});
-			const current = editor.itemById(id);
-			if (current?.type !== "file" || current.props.src !== path) return null;
-			return { id, snapshot: result.facts, replace: result.complete };
-		}),
-	);
-	const updates = resolved.filter((entry) => entry !== null);
-	if (updates.length > 0) editor.applyFileSnapshots(updates);
+type FileSnapshotUpdate = {
+	id: string;
+	snapshot: BoardFileSnapshotFacts;
+	replace: boolean;
+};
+let snapshotUpdates: FileSnapshotUpdate[] = [];
+let snapshotFrame = 0;
+
+function queueFileSnapshot(update: FileSnapshotUpdate) {
+	snapshotUpdates.push(update);
+	snapshotFrame ||= requestAnimationFrame(() => {
+		snapshotFrame = 0;
+		const updates = snapshotUpdates;
+		snapshotUpdates = [];
+		editor.applyFileSnapshots(updates);
+	});
+}
+
+const enriching = new Set<string>();
+
+function enrichFileCards(targets: Array<{ id: string; path: string }>) {
+	for (const { id, path } of targets) {
+		const item = editor.itemById(id);
+		if (item?.type !== "file" || item.props.src !== path) continue;
+		const key = `${id}\u0000${path}`;
+		if (enriching.has(key)) continue;
+		enriching.add(key);
+		const snapshot = (item.props as { snapshot?: BoardFileSnapshotFacts })
+			.snapshot;
+		void loadFilePreview(spaceId, {
+			path,
+			mimeType: snapshot?.mimeType,
+			size: snapshot?.size,
+			mtimeMs: snapshot?.mtimeMs,
+		})
+			.then((result) => {
+				const current = editor.itemById(id);
+				if (current?.type !== "file" || current.props.src !== path) return;
+				queueFileSnapshot({
+					id,
+					snapshot: result.facts,
+					replace: result.complete,
+				});
+			})
+			.finally(() => enriching.delete(key));
+	}
 }
 
 function remotePreviews(): Map<string, BoardItem> {
@@ -494,9 +519,10 @@ onMount(() => {
 		onPointer: handlePointer,
 		onDoubleClick: handleDoubleClick,
 		onSurfaceChange: (size) => onSurfaceChange?.(size),
-		onVisibleChange: (ids) => {
-			visibleIds = ids;
+		onLiveChange: (ids) => {
+			liveIds = ids;
 		},
+		lod: () => lod,
 	});
 	stage = mounted;
 	onStageReady?.(mounted);
@@ -519,7 +545,10 @@ onMount(() => {
 				return { palette, colors, colorScheme, style };
 			},
 			assetKey: assets.assetKey,
-			withTextures: (items, use) => assets.withTextures(items, use),
+			withTextures: (items, scale, use) =>
+				assets.withTextures(items, use, {
+					edge: (item) => boardTextureEdge(item, scale),
+				}),
 		});
 	});
 	window.addEventListener(CUSTOM_THEME_CHANGED_EVENT, handleCustomThemeChanged);
@@ -563,6 +592,7 @@ $effect(() => {
 $effect(() => {
 	playback;
 	relatedIds;
+	lod;
 	awarenessVersion;
 	backdropReady;
 	getResolvedTheme();
@@ -583,6 +613,7 @@ onDestroy(() => {
 		handleCustomThemeChanged,
 	);
 	unsubscribePreviews();
+	cancelAnimationFrame(snapshotFrame);
 	liveTasks.destroy();
 	stage?.destroy();
 	stage = null;

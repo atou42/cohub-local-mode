@@ -9,14 +9,16 @@ import {
 	boardItemOrigin,
 	boardModelFormat,
 	boardOriginKey,
+	boardTaskCardSize,
 	createMediaBoardItem,
 	createTaskResultItems,
+	elementClientToLocal,
 	inferBoardMediaKind,
 	isBoardModelItem,
 	normalizeBoardRemoteUrl,
 	parseBoardDocument,
 	parseBoardMediaSource,
-	screenToWorld,
+	pointToWorld,
 	taskRunArtifacts,
 	type WorldPoint,
 	worldPoint,
@@ -24,8 +26,14 @@ import {
 import { defaultBoardTool } from "@neta-art/cohub/board/editor";
 import { nextLocalPlayback } from "@neta-art/cohub/board/player";
 import {
+	COMPACT_BOARD_LOD,
+	DEFAULT_BOARD_LOD,
+} from "@neta-art/cohub/board/render";
+import {
 	type BoardStage as BoardStageController,
+	COMPACT_LRU_BUDGET,
 	createBoardAssetManager,
+	DEFAULT_LRU_BUDGET,
 } from "@neta-art/cohub/board/stage";
 import { onDestroy, onMount, untrack } from "svelte";
 import { createBoardAppItemView } from "$lib/board/board-app-view.svelte";
@@ -38,7 +46,7 @@ import {
 import {
 	generationPromptFromContent,
 	pendingGenerationTaskSnapshot,
-	regeneratedTaskPosition,
+	pendingTaskPosition,
 	regenerationRequestFromTaskRun,
 } from "$lib/board/board-generation";
 import type { BoardStageExportBridge } from "$lib/board/board-image-export";
@@ -54,6 +62,7 @@ import {
 } from "$lib/board/board-view-preferences";
 import { createBoardEditor } from "$lib/board/editor.svelte";
 import type { BoardRuntimeProps } from "$lib/board/runtime/board-runtime";
+import { spaceFileUrls } from "$lib/board/space-file-urls";
 import { canUseUserScopedCache, getCacheUserKey } from "$lib/cache/keys";
 import BoardAppearancePopover from "$lib/components/board/BoardAppearancePopover.svelte";
 import BoardArrowToolbar from "$lib/components/board/BoardArrowToolbar.svelte";
@@ -101,6 +110,8 @@ const {
 	onViewStateChange,
 	onOpenFile,
 	onOpenTask,
+	lod,
+	onStageReady,
 }: BoardRuntimeProps & {
 	onOpenTask?: (taskRunId: string) => void;
 } = $props();
@@ -119,16 +130,22 @@ const saveData =
 		(navigator as Navigator & { connection?: { saveData?: boolean } })
 			.connection?.saveData,
 	);
+const compactDevice = untrack(() => isMobile);
 const assets = createBoardAssetManager({
 	loadVideoPreviews: !saveData,
-	resolveFileUrl: (path) =>
-		untrack(() => resolvedAssetSource).resolveFileUrl(path),
+	concurrency: compactDevice ? 4 : 6,
+	lruBudget: compactDevice ? COMPACT_LRU_BUDGET : DEFAULT_LRU_BUDGET,
+	resolveFileUrl: (path, options) =>
+		untrack(() => resolvedAssetSource).resolveFileUrl(path, options),
 	modelPreviews: saveData
 		? undefined
 		: createBoardModelPreviews(() => untrack(() => resolvedAssetSource), {
 				isMobile: untrack(() => isMobile),
 			}),
 });
+const boardLod = $derived(
+	lod ?? (compactDevice ? COMPACT_BOARD_LOD : DEFAULT_BOARD_LOD),
+);
 const itemViews = [
 	createBoardAppItemView({
 		shell: () => shell,
@@ -420,7 +437,11 @@ async function regenerateTask(itemId: string) {
 			prompt: generationPromptFromContent(request.content),
 			model: request.model,
 		});
-		const position = regeneratedTaskPosition(sourceFrame);
+		const aspect = sourceFrame.width / sourceFrame.height;
+		const position = pendingTaskPosition(
+			sourceFrame,
+			boardTaskCardSize(snapshot, aspect),
+		);
 		editor.addTaskWithSources(
 			created.taskRunId,
 			snapshot,
@@ -432,6 +453,7 @@ async function regenerateTask(itemId: string) {
 					sourceItemId: source.id,
 				},
 			},
+			aspect,
 		);
 	} catch (cause) {
 		showRegenerationError(
@@ -864,8 +886,10 @@ function retrySync() {
 
 function openContextMenuAt(clientX: number, clientY: number) {
 	if (!stageWrap) return;
-	const rect = stageWrap.getBoundingClientRect();
-	const worldPoint = screenToWorld(clientX, clientY, rect, editor.camera);
+	const worldPoint = pointToWorld(
+		elementClientToLocal(stageWrap)(clientX, clientY),
+		editor.camera,
+	);
 	const item = editor.itemAt(worldPoint);
 	if (item && !editor.selection.includes(item.id))
 		editor.setSelection([item.id]);
@@ -923,7 +947,13 @@ $effect(() => {
 	clearSpaceHeld();
 });
 
+const unsubscribeFileUrls = spaceFileUrls.subscribe((change) => {
+	if (!assetSource && change.spaceId === spaceId)
+		assets.invalidatePath(change.path);
+});
+
 onDestroy(() => {
+	unsubscribeFileUrls();
 	if (regenerationErrorTimer) clearTimeout(regenerationErrorTimer);
 	flushViewPreference();
 	window.removeEventListener("paste", handlePaste);
@@ -969,7 +999,11 @@ onDestroy(() => {
 		{/if}
 
 		<BoardStage
-			onStageReady={(stage) => { scriptStage = stage; }}
+			onStageReady={(stage) => {
+				scriptStage = stage;
+				onStageReady?.(stage);
+			}}
+			lod={boardLod}
 			{editor}
 			playback={activePlayback}
 			{assets}

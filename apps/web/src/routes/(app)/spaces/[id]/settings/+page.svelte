@@ -1168,8 +1168,8 @@ $effect(() => {
 			<HeaderAction label={m.space_back({}, { locale })} icon={ArrowLeft} onclick={goBack} />
 			<h1 class="min-w-0 truncate text-[15px] font-semibold tracking-tight text-text-primary lg:text-[13px]">{m.space_title({}, { locale })}</h1>
 			{#snippet actions()}
-				<HeaderAction label={m.wallet_title({}, { locale })} icon={Wallet} href={`/spaces/${spaceId}/wallet`} />
-				<HeaderAction label={m.space_section_commerce({}, { locale })} icon={PackagePlus} href={`/spaces/${spaceId}/settings/commerce`} />
+				<HeaderAction label={m.wallet_title({}, { locale })} icon={Wallet} href={`/spaces/${spaceId}/wallet`} showLabel />
+				<HeaderAction label={m.space_section_commerce({}, { locale })} icon={PackagePlus} href={`/spaces/${spaceId}/settings/commerce`} showLabel />
 			{/snippet}
 		</ListHeader>
 		<div class="lg:hidden">

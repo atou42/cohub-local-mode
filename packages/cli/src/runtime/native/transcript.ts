@@ -30,6 +30,8 @@ export type NativeTranscriptTurn = {
   boundaries: Record<number, string>;
   sha256: string;
   result: NativeTurnComplete | null;
+  /** The file itself recorded this Turn's end, so it settles without waiting for a quiet period. */
+  ended?: boolean;
   path?: string;
   rolloutId?: string;
   sequence?: number;
@@ -43,18 +45,25 @@ export type NativeTranscript = {
   lineagePaths?: string[];
   lineageRolloutIds?: string[];
 };
-type Line = { value: JsonRecord; startBytes: number; endBytes: number; sha256: string };
+export type TranscriptLine = { value: JsonRecord; startBytes: number; endBytes: number; sha256: string };
+type Line = TranscriptLine;
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-const iso = (value: unknown) => {
+export const iso = (value: unknown) => {
   const date = new Date(typeof value === "number" || typeof value === "string" ? value : 0);
   if (!Number.isFinite(date.getTime())) throw new Error("Invalid native timestamp");
   return date.toISOString();
 };
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
+/** A size limit that the same bytes will hit again; retrying before the file changes is wasted work. */
+export class SizeLimitError extends Error {
+  override name = "SizeLimitError";
+}
 export const NATIVE_MAX_RECORD_BYTES = 256 * 1024 * 1024;
 export const NATIVE_MAX_TRANSCRIPT_BYTES = 1024 * 1024 * 1024;
 const NATIVE_HEADER_MAX_BYTES = 1024 * 1024;
+/** Formats without a header line are searched this far for the record naming the session's project. */
+const NATIVE_HEADER_SCAN_MAX_BYTES = 16 * 1024 * 1024;
 const CODEX_HISTORY_MAX_DEPTH = 64;
 const CODEX_ROLLOUT_INDEX_TTL_MS = 2_000;
 const CODEX_ROLLOUT_NAME = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f-]{36})(?:_([0-9a-f-]{36}))?\.(?:jsonl|jsonl\.zst)$/;
@@ -100,6 +109,27 @@ export async function readFirstRecord(stream: AsyncIterable<Buffer>): Promise<Js
     if (buffered > NATIVE_HEADER_MAX_BYTES) throw new Error("Native session header is too large");
   }
   throw new Error("Native transcript is empty");
+}
+
+/** The first record a format without a header line identifies its session by; `null` when none is found early. */
+export async function readFirstMatchingRecord(stream: AsyncIterable<Buffer>, match: (value: JsonRecord) => boolean): Promise<JsonRecord | null> {
+  let fragments: Buffer[] = [], scanned = 0;
+  for await (const chunk of stream) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    let start = 0;
+    for (let end = bytes.indexOf(10, start); end >= 0; end = bytes.indexOf(10, start)) {
+      const line = Buffer.concat([...fragments, bytes.subarray(start, end)]);
+      fragments = []; start = end + 1;
+      if (!line.length) continue;
+      let value: JsonRecord;
+      try { value = record(JSON.parse(line.toString("utf8"))); } catch { return null; }
+      if (match(value)) return value;
+    }
+    fragments.push(bytes.subarray(start));
+    scanned += bytes.length;
+    if (scanned > NATIVE_HEADER_SCAN_MAX_BYTES) return null;
+  }
+  return null;
 }
 
 async function readCodexHeader(path: string, signal?: AbortSignal): Promise<{ threadId: string; cwd: string; historyBase?: CodexHistoryBase }> {
@@ -157,11 +187,17 @@ async function scanCodexRollouts(signal?: AbortSignal): Promise<Map<string, stri
   return index;
 }
 
+async function* compressedCodexRolloutBytes(path: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
+  const decoder = createZstdDecompress();
+  // pipeline keeps error listeners attached, so stopping at a header or prefix cannot crash with an unhandled decoder error.
+  const pumping = pipeline(createReadStream(path), decoder, { signal }).catch(() => {});
+  try { yield* decoder; } finally { decoder.destroy(); await pumping; }
+}
+
 /** Raw JSONL bytes of a rollout, transparently decompressing `.zst` and honoring a lineage cutoff. */
 export async function* codexRolloutBytes(path: string, endBytes: number | null, signal?: AbortSignal): AsyncGenerator<Buffer> {
-  // compose (not pipe) so a source error propagates and early exit destroys both streams.
   const stream = path.endsWith(".zst")
-    ? createReadStream(path, { signal }).compose(createZstdDecompress())
+    ? compressedCodexRolloutBytes(path, signal)
     : createReadStream(path, endBytes != null ? { end: endBytes - 1, signal } : { signal });
   let total = 0, last = -1;
   for await (const chunk of stream) {
@@ -196,7 +232,7 @@ export async function ensurePlainCodexRollout(path: string, cacheDirectory: stri
     const bounded = new Transform({
       transform(chunk, _encoding, push) {
         written += chunk.length;
-        if (written > maxBytes) { push(new Error("Decompressed rollout exceeds the local limit")); return; }
+        if (written > maxBytes) { push(new SizeLimitError("Decompressed rollout exceeds the local limit")); return; }
         push(null, chunk);
       },
     });
@@ -209,7 +245,7 @@ export async function ensurePlainCodexRollout(path: string, cacheDirectory: stri
 type TranscriptLines = { lines: Line[]; prefixes: Map<number, string> };
 
 /** Newline framing with exact byte offsets and rolling checksums; a partial tail stays unparsed. */
-async function readTranscriptLines(stream: AsyncIterable<Buffer>): Promise<TranscriptLines> {
+export async function readTranscriptLines(stream: AsyncIterable<Buffer>): Promise<TranscriptLines> {
   const lines: Line[] = [];
   const prefixes = new Map<number, string>();
   let fragments: Buffer[] = [], pendingBytes = 0, offset = 0;
@@ -217,8 +253,8 @@ async function readTranscriptLines(stream: AsyncIterable<Buffer>): Promise<Trans
   const append = (bytes: Buffer) => {
     if (!bytes.length) return;
     fragments.push(bytes); pendingBytes += bytes.length; checksum.update(bytes);
-    if (pendingBytes > NATIVE_MAX_RECORD_BYTES) throw new Error("Native record exceeds the 256 MiB local parse limit; original retained");
-    if (offset + pendingBytes > NATIVE_MAX_TRANSCRIPT_BYTES) throw new Error("Native transcript exceeds the 1 GiB local parse limit; original retained");
+    if (pendingBytes > NATIVE_MAX_RECORD_BYTES) throw new SizeLimitError("Native record exceeds the 256 MiB local parse limit; original retained");
+    if (offset + pendingBytes > NATIVE_MAX_TRANSCRIPT_BYTES) throw new SizeLimitError("Native transcript exceeds the 1 GiB local parse limit; original retained");
   };
   for await (const chunk of stream) {
     let start = 0;
@@ -440,9 +476,10 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
         calls.get(id)?.content.push({ type: "tool_result", tool_use_id: id, content: typeof payload.output === "string" ? payload.output : JSON.stringify(payload.output ?? null) });
       }
     }
+    // Cohub tags a Turn it starts with its own cloud Turn id (`client_id`), so the file itself records
+    // which Turns already belong to a cloud Turn and must not be ingested twice. Older Codex writes it
+    // on `item_completed`'s UserMessage, newer Codex on `user_message`.
     if (entry.type === "event_msg" && payload.type === "item_completed") {
-      // Cohub tags a Turn it starts with its own cloud Turn id, so the file itself records which
-      // Turns already belong to a cloud Turn (and must not be ingested twice).
       const item = record(payload.item);
       if (item.type === "UserMessage") {
         const clientId = text(item.client_id);
@@ -454,6 +491,8 @@ function parseCodexLines(lines: Line[], segment: CodexLineageSegment): { turns: 
       }
     }
     if (entry.type === "event_msg" && payload.type === "user_message") {
+      const clientId = text(payload.client_id);
+      if (clientId) current.cloudTurnId = clientId;
       if (!userFromResponse) current.userContent = [{ type: "text", text: text(payload.message) }];
       userFromResponse = true;
       current.userFinal = true;

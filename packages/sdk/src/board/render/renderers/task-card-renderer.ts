@@ -6,11 +6,8 @@ import {
 import { type BoardTaskItem, featuredTaskArtifact } from "@cohub/protocol";
 import { Container, FillGradient, Graphics, Sprite, Text } from "pixi.js";
 import { drawAudioWaveform } from "../audio-waveform.js";
-import {
-	boardCardDetailed,
-	syncTextResolution,
-	textResolutionForZoom,
-} from "../text-resolution.js";
+import { boardCardDetailed } from "../lod.js";
+import { syncTextResolution } from "../text-resolution.js";
 import { type CardTag, createCardTag, formatBoardDuration, syncCardTag, zoomCardTag } from "../card-tag.js";
 import { cardElevation, containRect, drawCardSurface, traceCardOutline } from "../surface.js";
 import { positionShell } from "./base-card-renderer.js";
@@ -19,7 +16,7 @@ import type {
 	BoardRenderContext,
 } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
-import { fitTextToLines } from "../text-fit.js";
+import { fitTextToLines, fitTextToWidth } from "../text-fit.js";
 
 const PADDING = 12;
 const META_HEIGHT = 28;
@@ -48,7 +45,6 @@ type TaskParts = {
 	assetKey: string | null;
 	visualSig: string;
 	textSig: string;
-	resolution: number;
 	motion: {
 		itemId: string;
 		width: number;
@@ -295,7 +291,7 @@ function advance(parts: TaskParts, clock: number): number | null {
 		const elapsed = formatBoardDuration(elapsedMs);
 		if (elapsed !== motion.elapsed) {
 			motion.elapsed = elapsed;
-			parts.body.text = `${motion.label} · ${elapsed}`;
+			fitTextToWidth(parts.body, `${motion.label} · ${elapsed}`, Math.max(24, motion.width - PADDING * 2));
 		}
 		const untilNextSecond = SECOND - (Math.max(0, elapsedMs) % SECOND);
 		next = next === null ? untilNextSecond : Math.min(next, untilNextSecond);
@@ -330,7 +326,7 @@ function sync(
 	if (key !== parts.assetKey) {
 		if (parts.assetKey) context.releaseTexture(parts.assetKey);
 		parts.assetKey = key;
-		if (key) context.acquireTexture(key);
+		if (key) context.acquireTexture(key, item);
 	}
 	const texture = key ? context.getTexture(key) : null;
 	const previewFailed = Boolean(key && !texture && context.hasError(key));
@@ -362,10 +358,6 @@ function sync(
 	const textArtifact = kind === "text" && artifact?.type === "text";
 	const bodyText = textArtifact ? artifact.textExcerpt : counting ? `${label} · ${elapsed}` : label;
 
-	syncTextResolution(parts.body, parts, context.zoom);
-	syncTextResolution(parts.detail, parts, context.zoom);
-	syncTextResolution(parts.meta, parts, context.zoom);
-	syncTextResolution(parts.badge, parts, context.zoom);
 
 	const textSig = [
 		counting ? label : bodyText,
@@ -381,6 +373,7 @@ function sync(
 		context.palette.text,
 		context.palette.muted,
 		context.style.font,
+		context.themeKey,
 	].join("|");
 	if (textSig !== parts.textSig) {
 		parts.textSig = textSig;
@@ -402,6 +395,7 @@ function sync(
 		parts.badge.style.fill = context.palette.text;
 		if (parts.badge.text !== count) parts.badge.text = count;
 	}
+	for (const text of [parts.body, parts.detail, parts.meta, parts.badge]) syncTextResolution(text, context.textResolution);
 	const badgeWidth = Math.max(22, parts.badge.width + 12);
 
 	const visualSig = [
@@ -418,7 +412,7 @@ function sync(
 		artifact?.type ?? "none",
 		artifact?.id ?? "none",
 		item.props.taskRunId,
-		texture ? `${texture.width}x${texture.height}` : "none",
+		texture?.uid ?? "none",
 		context.themeKey,
 	].join("|");
 
@@ -544,19 +538,17 @@ export const taskCardRenderer: BoardCardRenderer = {
 		const previewMask = new Graphics();
 		const shimmer = new Graphics();
 		const previewArt = new Graphics();
-		const resolution = textResolutionForZoom(context.zoom);
 		const text = (fontFamily: string, fontSize: number, fontWeight: "400" | "500") =>
 			new Text({
 				text: "",
-				style: { fontFamily, fontSize, fontWeight, wordWrap: true, breakWords: true },
-				resolution,
+				style: { fontFamily, fontSize, fontWeight },
+				resolution: context.textResolution,
 				roundPixels: true,
 			});
 		const body = text(BOARD_FONT_STACK, 11.5, "500");
 		const detail = text(BOARD_FONT_STACK, 10.5, "400");
 		const meta = text(BOARD_MONO_FONT_STACK, 10, "500");
 		const badge = text(BOARD_MONO_FONT_STACK, 10, "500");
-		badge.style.wordWrap = false;
 		badge.anchor.set(0.5);
 		detail.anchor.set(0.5, 0);
 		detail.style.align = "center";
@@ -584,7 +576,6 @@ export const taskCardRenderer: BoardCardRenderer = {
 			assetKey: null,
 			visualSig: "",
 			textSig: "",
-			resolution,
 			motion: {
 				itemId: "",
 				width: 0,
@@ -606,6 +597,9 @@ export const taskCardRenderer: BoardCardRenderer = {
 	tick: (container, clock) => {
 		const parts = partsByContainer.get(container);
 		return parts ? advance(parts, clock) : null;
+	},
+	resolution: (container, item, context) => {
+		if (item.type === "task") sync(container, item, context);
 	},
 	zoom: (container, zoom) => {
 		const tag = partsByContainer.get(container)?.tag;

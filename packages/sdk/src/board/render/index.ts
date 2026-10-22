@@ -1,6 +1,7 @@
 
 export * from "./sampling.js";
 export * from "./diagnostics.js";
+export * from "./lod.js";
 export * from "./board-background.js";
 export * from "./card-tag.js";
 export * from "./clip.js";
@@ -13,6 +14,7 @@ export * from "./script-export.js";
 export * from "./stroke.js";
 export * from "./style.js";
 export * from "./surface.js";
+export * from "./theme.js";
 export { BOARD_EFFECT_MAX_PARTICLES } from "./renderers/effect-card-renderer.js";
 export * from "./text-fit.js";
 export * from "./text-measurement.js";

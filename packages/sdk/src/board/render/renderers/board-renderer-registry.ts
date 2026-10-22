@@ -3,6 +3,7 @@ import type { BoardSettings, BoardCustomItem, BoardFrame, BoardDocument, BoardTa
 import type { BoardShapeColors } from "../../model/palette.js";
 import type { BoardScene, BoardSceneItem, SceneItem } from "../../model/scene.js";
 import type { BoardRenderStyle } from "../style.js";
+import type { BoardLodKind } from "../lod.js";
 import { ensureBoardTextMeasurement } from "../text-measurement.js";
 import { arrowCardRenderer } from "./arrow-card-renderer.js";
 import { audioCardRenderer } from "./audio-card-renderer.js";
@@ -36,7 +37,7 @@ export type BoardScriptHost = {
 	document?: (document: BoardDocument, time: number) => BoardDocument;
 	ready?: (id: string) => boolean;
 	revision?: (id: string) => number;
-	frame: (item: SceneItem<BoardCustomItem>, time: number, resolution: number) => Texture | null;
+	frame: (item: SceneItem<BoardCustomItem>, time: number) => Texture | null;
 	error: (id: string) => string | null;
 	release: (id: string) => void;
 };
@@ -64,6 +65,7 @@ export type BoardRenderContext = {
 	hoveredId: string | null;
 	resizingIds: Set<string>;
 	liftedIds: ReadonlySet<string>;
+	editingId?: string | null;
 	palette: BoardRenderPalette;
 	colors: BoardShapeColors;
 	colorScheme: "dark" | "light";
@@ -71,6 +73,8 @@ export type BoardRenderContext = {
 	themeKey: string;
 	rendererType: "gpu" | "canvas";
 	zoom: number;
+	/** Texture pixels per world unit for text; see `boardTextResolution`. */
+	textResolution: number;
 	time: number;
 	reducedMotion: boolean;
 	labels: BoardRenderLabels;
@@ -81,7 +85,7 @@ export type BoardRenderContext = {
 	getTexture: (key: string) => Texture | null;
 	hasError: (key: string) => boolean;
 	fileState: (path: string) => "ok" | "missing" | "unavailable";
-	acquireTexture: (key: string) => void;
+	acquireTexture: (key: string, item: BoardSceneItem) => void;
 	releaseTexture: (key: string) => void;
 };
 
@@ -98,8 +102,15 @@ export type BoardCardRenderer = {
 		item: BoardSceneItem,
 		context: BoardRenderContext,
 	) => void;
+	/** Called when the zoom bucket or text resolution changes. */
+	resolution?: (container: Container, item: BoardSceneItem, context: BoardRenderContext) => void;
 	/** Runs on every zoom step; only update transforms and visibility. */
 	zoom?: (container: Container, zoom: number) => void;
+	/**
+	 * Level of detail for `renderFar`: `size` is the world-unit measure kept
+	 * legible (default: the long edge), held against the `BoardLod[kind]` threshold.
+	 */
+	lod?: { kind: BoardLodKind; size?: (item: BoardSceneItem) => number };
 	renderFar?: (
 		graphics: Graphics,
 		item: BoardSceneItem,

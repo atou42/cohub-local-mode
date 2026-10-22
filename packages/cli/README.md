@@ -57,12 +57,15 @@ Sign in once for each custom server, or supply `COHUB_EXECUTION_TOKEN`.
 
 ## Board export resources
 
-Board exports keep the requested resolution and source image quality. Before rendering,
+Board exports keep the requested resolution. Previews are fetched and decoded at the size
+the export needs: Cohub-hosted media (Space files included) provide resized images and
+video first frames, and larger sources are scaled down before decoding. Before rendering,
 `boards export` prints the output dimensions and frame count (except with `--json`).
 Decoded image textures, including background and script output images, share a 256 MiB
-budget. Oversized images fail before native decoding rather than silently becoming
-placeholders. Use `--image-memory <MiB>` to raise the budget when the environment has
-sufficient memory; it is an image budget, not a limit on total process memory.
+budget. Previews beyond it are drawn as placeholders with a warning; a background image
+that does not fit fails the export before native decoding. Use `--image-memory <MiB>` to raise the budget
+when the environment has sufficient memory; it is an image budget, not a limit on total
+process memory.
 `--size` controls the viewport only with `--camera`.
 
 ```bash
@@ -137,8 +140,8 @@ cohub -s home spaces files ls
 
 ## Local Runtime
 
-Connect one local workspace to a Space and select Pi, Codex, Claude Code or WorkBuddy per turn.
-Claude Code (`claude`) and WorkBuddy (`codebuddy`) run Cohub Turns only; terminal sync covers Pi and Codex.
+Connect one local workspace to a Space and select Pi, Codex, Claude Code, WorkBuddy or Cursor per turn.
+Terminal conversations of every harness sync to the Space; Claude Code (`claude`), WorkBuddy (`codebuddy`) and Cursor (`cursor-agent`) sync read-only.
 Without `--harness`, every installed harness is tried; one that cannot start is skipped with a warning.
 
 To keep using native terminals with ordinary Cohub Chats / Turns:
@@ -181,7 +184,7 @@ are never uploaded automatically. Use `runtime logs --json` to export a failure 
 events carry the local `runtimeId` plus server `requestId` / `traceparent` when a turn has
 reached the Agent trace.
 
-The Runtime uses WebSockets, native Pi RPC / Codex app-server / Claude Code stream-json, and existing cloud
+The Runtime uses WebSockets, native Pi RPC / Codex app-server / Claude Code and Cursor stream-json, and existing cloud
 streaming. Local executables and credentials are required. `sandbox up` has been
 removed. Reconnection and result reconciliation are automatic; no recovery command is needed.
 When a result genuinely cannot be determined, the affected Chat offers an explicit stop
@@ -319,7 +322,7 @@ Use the filters so a large Board is not read whole:
 ```bash
 cohub -s <spaceId> boards get <boardId> --items title,note
 cohub -s <spaceId> boards get <boardId> --within s1
-cohub -s <spaceId> boards get <boardId> --rect 0,0,1600,900
+cohub -s <spaceId> boards get <boardId> --rect 0,0,960,540
 ```
 
 Start from an example and write it with `apply`, a JSON Merge Patch where fields
@@ -601,6 +604,17 @@ cohub cron-jobs delete <cronJobId>
 ```
 
 Confirm before enabling, disabling, or deleting recurring scheduled prompts.
+
+## Feedback
+
+```bash
+cohub feedback "runtime up hangs after sign-in"
+cohub feedback "Board export is blurry" -f board.png -f export.log
+cohub feedback --runtime-logs "Codex chats stopped syncing"
+cat report.md | cohub feedback
+```
+
+Sends feedback to the Cohub team. CLI version, OS, environment, account, and `COHUB_*` Space/Chat context are attached; the working directory is not. `--runtime-logs` attaches recent local Runtime diagnostics for the target Space.
 
 ## Safety
 

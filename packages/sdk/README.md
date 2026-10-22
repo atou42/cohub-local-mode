@@ -242,11 +242,14 @@ const renderer = await createNodeBoardRenderer();
 const result = exportBoardImageBytes(renderer, document, { format: "png", scale: 2 });
 ```
 
-Text metrics follow the same split. The renderers measure through a real canvas
-and set that up themselves. Called straight off `@neta-art/cohub/board` with no
-renderer in play, `measureBoardText` returns a per-character estimate — fine
-for laying out a board on a server; call `installBoardTextMeasurement` from
-`board/render` first if the numbers have to match what the editor draws.
+Text layout follows the same split. The renderers measure through a real canvas
+and break lines where the browser breaks them in a `<textarea>`
+(`white-space: pre-wrap; overflow-wrap: break-word`), so canvas, editor and
+selection agree. Called straight off `@neta-art/cohub/board` with no renderer in
+play, `layoutBoardText` estimates widths per character — fine for laying out a
+board on a server; call `installBoardTextMeasurement` from `board/render` first
+if the lines have to match what the editor draws. In a browser, call it again
+when a web font Board text uses finishes loading (the stage does this itself).
 
 ## Session subscriptions
 

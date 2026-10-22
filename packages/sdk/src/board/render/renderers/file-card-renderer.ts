@@ -10,7 +10,8 @@ import {
 	Text,
 	Texture,
 } from "pixi.js";
-import { boardCardDetailed, syncTextResolution } from "../text-resolution.js";
+import { boardCardDetailed } from "../lod.js";
+import { syncTextResolution } from "../text-resolution.js";
 import type { BoardFileItem, } from "@cohub/protocol";
 import {
 	fileCategory,
@@ -60,9 +61,6 @@ type FileParts = {
 	excerpt: Text;
 	visualSig: string;
 	textSig: string;
-	titleRes: { resolution: number };
-	excerptRes: { resolution: number };
-	typeMarkRes: { resolution: number };
 };
 
 const partsByContainer = new WeakMap<Container, FileParts>();
@@ -105,6 +103,11 @@ function sync(
 ) {
 	const parts = partsByContainer.get(container);
 	if (!parts) return;
+	syncContent(parts, item, context);
+	for (const text of [parts.title, parts.excerpt, parts.typeMark]) syncTextResolution(text, context.textResolution);
+}
+
+function syncContent(parts: FileParts, item: SceneItem<BoardFileItem>, context: BoardRenderContext) {
 	positionShell(parts.root, item);
 
 	const { width, height } = item.frame;
@@ -120,17 +123,13 @@ function sync(
 	const category = fileCategory(item.props.src, item.props.snapshot?.mimeType);
 	const accent = fileCategoryAccent(category, context.palette);
 
-	syncTextResolution(parts.title, parts.titleRes, context.zoom);
-	syncTextResolution(parts.excerpt, parts.excerptRes, context.zoom);
-	syncTextResolution(parts.typeMark, parts.typeMarkRes, context.zoom);
-
 	const visualSig = [
 		key ?? "",
 		width,
 		height,
 		detail,
 		elevation,
-		texture ? `${texture.width}x${texture.height}` : "none",
+		texture?.uid ?? "none",
 		coverFailed,
 		fileState,
 		kind,
@@ -205,6 +204,7 @@ function sync(
 		context.palette.text,
 		context.palette.muted,
 		context.style.font,
+		context.themeKey,
 		accent,
 	].join("|");
 	if (textSig === parts.textSig) return;
@@ -268,7 +268,7 @@ export const fileCardRenderer: BoardCardRenderer = {
 		const cover = new Sprite(Texture.EMPTY);
 		const coverMask = new Graphics();
 		cover.mask = coverMask;
-		const resolution = 1;
+		const resolution = context.textResolution;
 
 		const title = new Text({
 			text: "",
@@ -277,8 +277,6 @@ export const fileCardRenderer: BoardCardRenderer = {
 				fontFamily: BOARD_FONT_STACK,
 				fontSize: TITLE_SIZE,
 				fontWeight: "600",
-				wordWrap: true,
-				breakWords: true,
 				lineHeight: TITLE_LINE,
 			},
 			resolution,
@@ -291,8 +289,6 @@ export const fileCardRenderer: BoardCardRenderer = {
 				fontFamily: BOARD_FONT_STACK,
 				fontSize: EXCERPT_SIZE,
 				fontWeight: "400",
-				wordWrap: true,
-				breakWords: true,
 				lineHeight: EXCERPT_LINE,
 			},
 			resolution,
@@ -327,14 +323,14 @@ export const fileCardRenderer: BoardCardRenderer = {
 			excerpt,
 			visualSig: "",
 			textSig: "",
-			titleRes: { resolution },
-			excerptRes: { resolution },
-			typeMarkRes: { resolution },
 		});
 		if (item.type === "file") sync(root, item, context);
 		return root;
 	},
 	update: (container, item, context) => {
+		if (item.type === "file") sync(container, item, context);
+	},
+	resolution: (container, item, context) => {
 		if (item.type === "file") sync(container, item, context);
 	},
 	zoom: (container, zoom) => {

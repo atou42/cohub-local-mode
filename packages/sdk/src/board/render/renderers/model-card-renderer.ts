@@ -5,7 +5,7 @@ import { isBoardModelItem } from "../../model/media.js";
 import type { SceneItem } from "../../model/scene.js";
 import { type CardTag, createCardTag, syncCardTag, traceCube, zoomCardTag } from "../card-tag.js";
 import { cardElevation, containRect, drawCardSurface } from "../surface.js";
-import { boardCardDetailed } from "../text-resolution.js";
+import { boardCardDetailed } from "../lod.js";
 import { positionShell } from "./base-card-renderer.js";
 import type { BoardCardRenderer, BoardRenderContext } from "./board-renderer-registry.js";
 import { drawFarPlate } from "./far-plate.js";
@@ -48,7 +48,7 @@ function sync(container: Container, item: SceneItem<BoardFileItem>, context: Boa
 	const elevation = cardElevation(context, item.id);
 	const sig = [
 		key ?? "",
-		texture ? `${texture.width}x${texture.height}` : "none",
+		texture?.uid ?? "none",
 		failed,
 		width,
 		height,
@@ -107,6 +107,9 @@ export const modelCardRenderer: BoardCardRenderer = {
 		return root;
 	},
 	update: (container, item, context) => {
+		if (item.type === "file") sync(container, item, context);
+	},
+	resolution: (container, item, context) => {
 		if (item.type === "file") sync(container, item, context);
 	},
 	zoom: (container, zoom) => {

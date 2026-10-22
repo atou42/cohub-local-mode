@@ -4,7 +4,7 @@ import { degToRad, rotatePointAround, type WorldPoint, worldPoint } from "../mod
 import { audioKeyCenter } from "./renderers/audio-card-renderer.js";
 import { modelKeyCenter } from "./renderers/model-card-renderer.js";
 import { featuredTaskArtifact } from "@cohub/protocol";
-import { boardCardDetailed } from "./text-resolution.js";
+import { boardCardDetailed } from "./lod.js";
 
 export type BoardMediaAction = {
 	action: "play-media";

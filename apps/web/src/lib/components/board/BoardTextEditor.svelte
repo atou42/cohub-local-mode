@@ -1,5 +1,12 @@
 <script lang="ts">
-import { type BoardSceneItem, layoutBoardText, resolveSceneArrow } from "@neta-art/cohub/board";
+import {
+	type BoardSceneItem,
+	layoutBoardText,
+	layoutShapeLabel,
+	resolveSceneArrow,
+	SHAPE_LABEL_PADDING,
+} from "@neta-art/cohub/board";
+import { boardTextStyle } from "@neta-art/cohub/board/render";
 import { tick, untrack } from "svelte";
 import type { BoardEditor } from "$lib/board/editor.svelte";
 import { getLocale } from "$lib/i18n/locale.svelte";
@@ -12,7 +19,7 @@ const locale = $derived(getLocale());
 let textarea: HTMLTextAreaElement | null = $state(null);
 let draft = $state("");
 
-type TextProps = { text?: string; label?: string; fontSize: number; fontWeight: number; font: string; lineHeight: number; width?: number; align?: "left" | "center" | "right" };
+type TextProps = { fontSize: number; fontWeight: number; font: string; lineHeight: number; width?: number; align?: "left" | "center" | "right" };
 
 function editableText(item: BoardSceneItem): string | null {
 	const props = item.props as { text?: string; label?: string };
@@ -31,49 +38,69 @@ const layout = $derived.by(() => {
 	const item = editingItem;
 	if (!item) return null;
 	const { x, y, zoom } = editor.camera;
-	const left = (worldX: number) => worldX * zoom + x;
-	const top = (worldY: number) => worldY * zoom + y;
 	const rotation = item.frame.rotation || 0;
-	const plain = item.type === "text";
 	const props = item.props as TextProps;
-	const fontSize = item.type === "text" || item.type === "shape" ? props.fontSize : 14;
 	if (item.type === "frame" || item.type === "arrow") {
+		const fontSize = 14;
 		const height = 20;
-		const width = Math.max(fontSize * 4, (props.label?.length ?? 0) * fontSize * 0.62 + 16);
-		const anchor =
-			item.type === "frame"
-				? { x: item.frame.x + 2, y: item.frame.y - 10 }
-				: resolveSceneArrow(item, editor.scene).mid;
+		const width = Math.max(fontSize * 4, (editableText(item)?.length ?? 0) * fontSize * 0.62 + 16);
+		const anchor = item.type === "frame"
+			? { x: item.frame.x + 2, y: item.frame.y - 10 }
+			: resolveSceneArrow(item, editor.scene).mid;
 		return {
-			left: left(anchor.x) - width / 2,
-			top: top(anchor.y) - height / 2,
+			left: anchor.x * zoom + x - width / 2,
+			top: anchor.y * zoom + y - height / 2,
 			width,
 			height,
+			padding: "0",
+			scale: 1,
 			rotation,
+			fontFamily: null,
 			fontSize: fontSize * zoom,
+			fontWeight: "500",
 			lineHeight: height * zoom,
-			fontWeight: 500,
 			textAlign: "center",
-			padding: 0,
+			whiteSpace: "pre-wrap",
 			plain: false,
 		};
 	}
-	const scale = plain ? item.frame.height / Math.max(1, layoutBoardText({ ...props, text: props.text ?? "" }).height) : 1;
-	const lineHeight = fontSize * scale * (plain ? props.lineHeight : 1.4);
-	const width = item.frame.width * zoom;
-	const height = item.frame.height * zoom;
-	return {
-		left: left(item.frame.x),
-		top: top(item.frame.y),
-		width: Math.max(width, plain ? 24 * zoom : width),
-		height: Math.max(height, plain ? lineHeight * zoom : height),
+	const center = {
+		x: (item.frame.x + item.frame.width / 2) * zoom + x,
+		y: (item.frame.y + item.frame.height / 2) * zoom + y,
+	};
+	const place = (width: number, height: number, scale: number, inset: { x: number; y: number }) => ({
+		left: center.x - width / 2 - inset.x,
+		top: center.y - height / 2 - inset.y,
+		width,
+		height,
+		padding: `${inset.y}px ${inset.x}px`,
+		scale,
 		rotation,
-		fontSize: fontSize * scale * zoom,
-		lineHeight: lineHeight * zoom,
-		fontWeight: plain ? props.fontWeight : 500,
-		textAlign: plain ? ((item.props as { align?: string }).align ?? "left") : "center",
-		padding: plain ? 0 : 12 * zoom,
-		plain,
+	});
+	if (item.type === "text") {
+		const text = layoutBoardText({ ...props, text: draft });
+		const scale = (zoom * item.frame.width) / text.width;
+		return {
+			...place(text.width, text.height, scale, { x: 1 / scale, y: 0 }),
+			...boardTextStyle(props),
+			lineHeight: text.lineHeight,
+			textAlign: props.align ?? "left",
+			whiteSpace: props.width ? "pre-wrap" : "pre",
+			plain: true,
+		};
+	}
+	const { width, height } = item.frame;
+	const label = layoutShapeLabel({ text: draft, fontSize: props.fontSize }, width);
+	return {
+		...place(width - SHAPE_LABEL_PADDING * 2, Math.min(height, label.height), zoom, {
+			x: SHAPE_LABEL_PADDING,
+			y: Math.max(0, (height - label.height) / 2),
+		}),
+		...boardTextStyle({ font: "sans", fontSize: props.fontSize, fontWeight: 500 }),
+		lineHeight: label.lineHeight,
+		textAlign: props.align ?? "center",
+		whiteSpace: "pre-wrap",
+		plain: false,
 	};
 });
 
@@ -105,10 +132,7 @@ function handleInput(event: Event & { currentTarget: HTMLTextAreaElement }) {
 
 function handleKeydown(event: KeyboardEvent) {
 	event.stopPropagation();
-	if (
-		event.key === "Escape" ||
-		(event.key === "Enter" && (event.metaKey || event.ctrlKey))
-	) {
+	if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
 		event.preventDefault();
 		commit();
 	}
@@ -124,12 +148,15 @@ function handleKeydown(event: KeyboardEvent) {
 		style:top="{layout.top}px"
 		style:width="{layout.width}px"
 		style:height="{layout.height}px"
-		style:transform="rotate({layout.rotation}deg)"
+		style:transform="rotate({layout.rotation}deg) scale({layout.scale})"
+		style:--board-text-editor-scale={layout.scale}
+		style:font-family={layout.fontFamily}
 		style:font-size="{layout.fontSize}px"
-		style:line-height="{layout.lineHeight}px"
 		style:font-weight={layout.fontWeight}
+		style:line-height="{layout.lineHeight}px"
 		style:text-align={layout.textAlign}
-		style:padding="{layout.padding}px"
+		style:padding={layout.padding}
+		style:white-space={layout.whiteSpace}
 		class:board-text-editor--plain={layout.plain}
 		oninput={handleInput}
 		onblur={commit}
@@ -140,27 +167,37 @@ function handleKeydown(event: KeyboardEvent) {
 
 <style>
 	.board-text-editor {
+		--board-text-editor-scale: 1;
 		position: absolute;
 		z-index: 30;
+		box-sizing: content-box;
+		margin: 0;
 		transform-origin: center center;
 		resize: none;
 		overflow: hidden;
-		border: 1px solid var(--brand-border);
-		border-radius: 10px;
+		border: 0;
+		border-radius: calc(10px / var(--board-text-editor-scale));
+		outline: calc(1px / var(--board-text-editor-scale)) solid var(--brand-border);
 		background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
 		color: var(--text-primary);
 		font-family: var(--font-sans);
-		line-height: 1.35;
-		outline: none;
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 18%, transparent);
+		box-shadow: 0 0 0 calc(2px / var(--board-text-editor-scale)) color-mix(in srgb, var(--brand) 18%, transparent);
+		overflow-wrap: break-word;
+		word-break: normal;
+		letter-spacing: 0;
+		word-spacing: 0;
+		font-kerning: auto;
+		font-feature-settings: normal;
+		font-variant: normal;
+		text-rendering: auto;
+		tab-size: 1;
 	}
 
 	.board-text-editor--plain {
-		border: 0;
 		border-radius: 0;
+		outline: none;
 		background: transparent;
 		box-shadow: none;
 		caret-color: var(--brand);
-		font-family: "Geist", system-ui, -apple-system, "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
 	}
 </style>

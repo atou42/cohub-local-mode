@@ -8,6 +8,7 @@ on:
       - 'v*.*.*'
     paths:
       - 'apps/sandbox/**'
+      - 'scripts/prewarm-sandbox.py'
       - '.github/workflows/sandbox-docker-build-push.yml'
   workflow_dispatch:
     inputs:
@@ -68,7 +69,7 @@ jobs:
             exit 0
           fi
 
-          CHANGED_FILES=$(git diff --name-only "$PREV_TAG" "$TAG" -- apps/sandbox .github/workflows/sandbox-docker-build-push.yml || true)
+          CHANGED_FILES=$(git diff --name-only "$PREV_TAG" "$TAG" -- apps/sandbox scripts/prewarm-sandbox.py .github/workflows/sandbox-docker-build-push.yml || true)
 
           if [[ -z "$CHANGED_FILES" ]]; then
             echo "No sandbox-related changes detected between $PREV_TAG and $TAG."
@@ -230,6 +231,13 @@ jobs:
         run: |
           echo "sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
 
+      - name: Prewarm sandbox images
+        continue-on-error: true
+        run: |
+          python3 scripts/prewarm-sandbox.py --env dev \
+            --image '${{ env.REGISTRY }}/${{ env.NAMESPACE }}/cohub-sandbox:sha-${{ steps.get-sha.outputs.sha }}' \
+            --image '${{ env.REGISTRY }}/${{ env.NAMESPACE }}/cohub-sandbox-game:sha-${{ steps.get-sha.outputs.sha }}'
+
       - name: Patch sandbox image config
         run: |
           kubectl patch configmap cohub-api-dev-config -n cohub-dev --type=merge \
@@ -245,6 +253,11 @@ jobs:
     if: ${{ (startsWith(github.ref, 'refs/tags/v') && needs.build-and-push.outputs.sandbox_release_changed == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy-prod == 'true') }}
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
       - name: Setup kubectl
         uses: azure/setup-kubectl@v5
         with:
@@ -268,6 +281,13 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Prewarm sandbox images
+        continue-on-error: true
+        run: |
+          python3 scripts/prewarm-sandbox.py --env prod \
+            --image '${{ env.REGISTRY }}/${{ env.NAMESPACE }}/cohub-sandbox:${{ steps.get-tag.outputs.tag }}' \
+            --image '${{ env.REGISTRY }}/${{ env.NAMESPACE }}/cohub-sandbox-game:${{ steps.get-tag.outputs.tag }}'
 
       - name: Patch sandbox image config
         run: |

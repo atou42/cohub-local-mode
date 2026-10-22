@@ -9,16 +9,13 @@ const ACCENT_RATIO = 0.14;
 const ACCENT_MIN = 2;
 const ACCENT_MAX = 10;
 
-function traceFrame(
-	graphics: Graphics,
-	frame: BoardFrame,
-	inset = 0,
-	heightOverride?: number,
-) {
-	const x = frame.x + inset;
-	const y = frame.y + inset;
-	const width = Math.max(0, frame.width - inset * 2);
-	const height = Math.max(0, (heightOverride ?? frame.height) - inset * 2);
+type LocalRect = { x: number; y: number; width: number; height: number };
+
+function traceLocal(graphics: Graphics, frame: BoardFrame, rect: LocalRect) {
+	const x = frame.x + rect.x;
+	const y = frame.y + rect.y;
+	const width = Math.max(0, rect.width);
+	const height = Math.max(0, rect.height);
 	if (!frame.rotation) {
 		graphics.rect(x, y, width, height);
 		return;
@@ -58,15 +55,26 @@ export function drawFarPlate(
 	style: FarPlateStyle,
 ) {
 	if (frame.width <= 0 || frame.height <= 0) return;
-	traceFrame(graphics, frame);
+	traceLocal(graphics, frame, { x: 0, y: 0, width: frame.width, height: frame.height });
 	graphics.fill({ color: style.fill, alpha: style.fillAlpha ?? 1 });
 	if (style.accent === undefined) return;
 	const band = Math.min(
 		ACCENT_MAX,
 		Math.max(ACCENT_MIN, frame.height * ACCENT_RATIO),
 	);
-	traceFrame(graphics, frame, 0, band);
+	traceLocal(graphics, frame, { x: 0, y: 0, width: frame.width, height: band });
 	graphics.fill({ color: style.accent, alpha: style.accentAlpha ?? 0.9 });
+}
+
+export function drawFarBars(
+	graphics: Graphics,
+	frame: BoardFrame,
+	bars: readonly LocalRect[],
+	style: { color: number; alpha: number },
+) {
+	if (bars.length === 0) return;
+	for (const bar of bars) traceLocal(graphics, frame, bar);
+	graphics.fill({ color: style.color, alpha: style.alpha });
 }
 
 export function farStrokeSamples<T>(points: readonly T[]): readonly T[] {

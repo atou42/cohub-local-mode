@@ -14,6 +14,7 @@ import {
 	boardTaskSource,
 	diffMergePatch,
 	featuredTaskArtifact,
+	fitBoardMediaSize,
 	isUuid,
 	mergePatch,
 	taskRunToBoardTaskSnapshot,
@@ -27,6 +28,8 @@ type JsonRecord = Record<string, unknown>;
 export type BoardTaskRunAccess = { id: string; sessionId: string | null; userUuid: string | null };
 
 export type BoardTaskViewer = (run: BoardTaskRunAccess) => boolean | Promise<boolean>;
+
+export type BoardTaskArtifactSizes = ReadonlyMap<string, { width: number; height: number }>;
 
 const isRecord = (value: unknown): value is JsonRecord => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -121,6 +124,7 @@ export async function resolveBoardTaskSnapshots(
 		current: (id: string) => BoardItem | undefined;
 		viewer?: BoardTaskViewer;
 		whole?: boolean;
+		artifactSizes?: BoardTaskArtifactSizes;
 	},
 ): Promise<BoardTaskResolution> {
 	type Candidate = {
@@ -186,7 +190,10 @@ export async function resolveBoardTaskSnapshots(
 			continue;
 		}
 		const observed = supplied === undefined ? undefined : BoardTaskSnapshotSchema.safeParse(mergePatch(candidate.previous ?? {}, supplied));
-		const snapshot = withObservedArtifactFacts(snapshotOf(run), observed?.success ? observed.data : candidate.previous);
+		const snapshot = withArtifactSizes(
+			withObservedArtifactFacts(snapshotOf(run), observed?.success ? observed.data : candidate.previous),
+			input.artifactSizes,
+		);
 		const change = candidate.base ? diffMergePatch(candidate.base, snapshot) : snapshot;
 		const size = candidate.value.size === undefined ? fittedSize(input.current(candidate.id), candidate.previous, snapshot) : undefined;
 		items[candidate.id] = {
@@ -198,6 +205,21 @@ export async function resolveBoardTaskSnapshots(
 	return { ok: true, patch: { ...input.patch, items } };
 }
 
+function withArtifactSizes(snapshot: BoardTaskSnapshot, sizes: BoardTaskArtifactSizes | undefined): BoardTaskSnapshot {
+	if (!sizes?.size) return snapshot;
+	const artifacts = snapshot.artifacts.map((artifact) => {
+		const size = (artifact.type === "image" || artifact.type === "video") && !(artifact.naturalWidth && artifact.naturalHeight) && sizes.get(artifact.url);
+		return size ? { ...artifact, naturalWidth: size.width, naturalHeight: size.height } : artifact;
+	});
+	return { ...snapshot, artifacts };
+}
+
+export async function readUnsizedTaskVisual(db: Executor, input: { spaceId: string; taskRunId: string }) {
+	const run = (await loadTaskRuns(db, input.spaceId, [input.taskRunId])).get(input.taskRunId);
+	const artifact = run && visual(snapshotOf(run));
+	return artifact && !(artifact.naturalWidth && artifact.naturalHeight) ? { type: artifact.type, url: artifact.url } : null;
+}
+
 function visual(snapshot: BoardTaskSnapshot | undefined) {
 	const artifact = snapshot ? featuredTaskArtifact(snapshot.artifacts) : undefined;
 	return artifact && (artifact.type === "image" || artifact.type === "video") ? artifact : undefined;
@@ -206,8 +228,8 @@ function visual(snapshot: BoardTaskSnapshot | undefined) {
 function fittedSize(item: BoardItem | undefined, before: BoardTaskSnapshot | undefined, after: BoardTaskSnapshot) {
 	const next = visual(after);
 	if (item?.type !== "task" || !next?.naturalWidth || !next.naturalHeight || visual(before)?.url === next.url) return undefined;
-	const height = Math.round((item.size.width * next.naturalHeight) / next.naturalWidth);
-	return height > 0 && height !== item.size.height ? { width: item.size.width, height } : undefined;
+	const size = fitBoardMediaSize({ width: next.naturalWidth, height: next.naturalHeight }, Math.max(item.size.width, item.size.height));
+	return size && (size.width !== item.size.width || size.height !== item.size.height) ? size : undefined;
 }
 
 export async function listTaskBoards(db: Executor, input: { spaceId: string; taskRunId: string; limit?: number }) {

@@ -85,6 +85,38 @@ export async function unloadBoardImageTexture(
 	if (!texture?.destroyed) texture?.destroy(true);
 }
 
+function fit(width: number, height: number, edge: number) {
+	const scale = edge / Math.max(width, height);
+	return scale < 1
+		? { resizeWidth: Math.max(1, Math.round(width * scale)), resizeHeight: Math.max(1, Math.round(height * scale)) }
+		: null;
+}
+
+/**
+ * Decode an image no larger than `edge` along its long side, for sources
+ * without CDN variants. The texture is unshared; destroy it to release it.
+ */
+export async function loadFittedImageTexture(url: string, edge: number): Promise<Texture> {
+	const response = await fetch(url);
+	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	const image = await createImageBitmap(await response.blob());
+	const size = fit(image.width, image.height, edge);
+	if (!size) return Texture.from(image, true);
+	try {
+		return Texture.from(await createImageBitmap(image, { ...size, resizeQuality: "high" }), true);
+	} finally {
+		image.close();
+	}
+}
+
+/** A smaller unshared copy of a decoded texture, or null when it cannot be read back. */
+export async function shrinkBoardTexture(texture: Texture, edge: number): Promise<Texture | null> {
+	const resource = texture.source.resource as ImageBitmapSource | undefined;
+	const size = fit(texture.width, texture.height, edge);
+	if (!resource || !size || typeof createImageBitmap !== "function") return null;
+	return Texture.from(await createImageBitmap(resource, { ...size, resizeQuality: "medium" }), true);
+}
+
 /**
  * Share image textures by resolved URL without sharing Board ownership.
  *

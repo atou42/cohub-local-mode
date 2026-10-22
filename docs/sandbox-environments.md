@@ -81,6 +81,20 @@ CI builds and smoke-tests both targets on the same builder before publishing. Sh
 
 `apps/sandbox/docker-bake.ci.hcl` adds GitHub Actions cache settings on top of the local Bake file, so local builds never require Actions cache credentials. Tool versions in the Dockerfile (Go, Chrome for Testing, Bun, pnpm) are pinned and bumped deliberately; `@neta-art/cohub-cli` intentionally tracks npm `latest` and is refreshed with `COHUB_CLI_REFRESH`.
 
+### Release-time image prewarming
+
+Before patching the API image configuration, CI runs `scripts/prewarm-sandbox.py` for both images. It creates a temporary DaemonSet in `cohub-sessions[-dev]` on the API's `SANDBOX_NODE_SELECTOR` / `SANDBOX_TOLERATIONS` nodes, waits until every node is ready, then deletes it. Each Pod runs two unprivileged `/bin/sleep` containers with the exact images and `IfNotPresent`; no sandbox process or PVC is involved. The step is best-effort (`continue-on-error`) and times out after 600 seconds.
+
+```bash
+python3 scripts/prewarm-sandbox.py --env dev \
+  --image REGISTRY/cohub-sandbox:VERSION \
+  --image REGISTRY/cohub-sandbox-game:VERSION --dry-run
+```
+
+Settings must come from ConfigMaps or literal env values; an empty node selector is rejected. The CI identity needs DaemonSet create/get/delete and Pod/event read access in the sessions namespace. Nodes added later pull on first use. Use fresh tags or digests. If a killed runner leaves a DaemonSet, delete that printed name only.
+
+### Verification and rollout
+
 Smoke tests verify sandbox health, installed runtimes, NumPy, Godot import and software-rendered editor startup, OpenGL availability, Blender CPU rendering and GLB export. Record compressed image size and cold-start timings in the deployment environment before production rollout; these depend on registry and node cache state.
 
 ```bash

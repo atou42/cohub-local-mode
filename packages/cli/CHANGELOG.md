@@ -1,5 +1,90 @@
 # @neta-art/cohub-cli
 
+## 10.10.0
+
+### Minor Changes
+
+- 3962c30: Add `cohub feedback` to send feedback to the Cohub team from the terminal, with file attachments, optional local Runtime diagnostics, and automatic CLI, OS, account, and Space/Chat context. 新增 `cohub feedback`，可在终端向 Cohub 团队提交反馈，支持附件、可选的本地 Runtime 诊断日志，并自动附带 CLI、系统、账号与 Space/Chat 上下文。
+
+## 10.9.0
+
+### Minor Changes
+
+- d8256d6: Board views and CLI writes now use one media-sizing rule. Exports match the Cohub app's colors, card styles, fonts and previews, including video covers from Cohub-hosted media. Texture selection follows a decoded-memory budget instead of a 64-image cap. Emoji render in color, and Node exports use the variable Geist fonts.
+  
+  Breaking for direct export callers: `selectBoardExportAssets` now takes `{ scale, maxBytes? }`; `boardImageKeySource` is replaced by `boardAssetKeySource`, and `boardAssetKey` / `boardTextureEdge` move from `board/stage` to `board`. The SDK adds `boardRenderTheme`, `BOARD_THEME_IDS`, `settleBoardMediaSizes` and media probe helpers.
+
+### Patch Changes
+
+- 58a8e66: Board text wraps where the browser wraps it. Chinese, Japanese and Korean text no longer breaks early after a dash or overflows its selection box, punctuation such as `，` and `。` never starts a line, and long URLs break instead of running past their box. The canvas, the in-place editor and `cohub boards export` lay text out once, with the same lines, so editing no longer shifts text or shows it twice, and typing animations reveal text without reflowing. Shape labels align to their padding when left- or right-aligned.
+  
+  SDK: `setBoardTextLayouter` replaces `setBoardTextMeasurer`, taking a whole text and returning its lines. `board/render` adds `layoutTextLines`, `boardTextStyle` and `onBoardTextFontsChange`; `board` adds `layoutShapeLabel`; the editor adds `relayoutText()`. `syncTextWrapWidth` is removed.
+- Updated dependencies [276874d]
+- Updated dependencies [d8256d6]
+- Updated dependencies [58a8e66]
+  - @neta-art/cohub@12.2.0
+
+## 10.8.3
+
+### Patch Changes
+
+- 37e7d36: Fix `cohub boards export` drawing images, video posters, and task previews at their native pixel size, tiled or clipped, instead of fitted to their box. The Node renderer now provides the `DOMMatrix` that texture fills need.
+- 8da08b3: Prevent compressed Codex history reads from crashing when stopping at a session header or history boundary. Preserve archive errors and caller cancellation.
+- 5aae8f8: Recognize cloud turn IDs in current Codex user-message records so native sync does not duplicate Cohub-started turns or create spurious conversation forks. Genuine local continuations still sync normally.
+- 5c65685: `cohub runtime up` now offers shared Codex sessions to a folder that already syncs natively, instead of only on first consent; the folder's sync settings and history stay as they are. 已开启原生同步的目录，重新运行 `cohub runtime up` 时也会询问是否开启 Codex 共享会话，而不只在首次授权时询问；该目录的同步设置和历史保持不变。
+- 6e8d0a6: Allow a local Runtime to recover or stop after its file bridge exits, even when descendants keep inherited pipes open.
+- Updated dependencies [37e7d36]
+- Updated dependencies [ec1426c]
+  - @neta-art/cohub@12.1.1
+
+## 10.8.2
+
+### Patch Changes
+
+- 4cb0d2b: The shared Codex app-server no longer holds a conversation after its Turn ends, so Codex Desktop can continue a conversation that Cohub ran or watched (immediately with Codex 0.164+, after Codex's idle timeout before that). A Cohub Turn on a conversation open in another app now says so instead of failing with a writer-lock error. 共享 Codex app-server 在 Turn 结束后不再占用会话，Codex 桌面端可以继续 Cohub 运行或观察过的会话（Codex 0.164+ 立即释放，更早版本在 Codex 空闲超时后释放）。会话在其他应用中打开时，Cohub Turn 会明确提示，而不是报写锁错误。
+
+## 10.8.1
+
+### Patch Changes
+
+- 16dfdef: Local Runtime reconnects immediately after a dropped WebSocket instead of staying offline until in-flight Turns finish; detached Turns keep running and replay their result on the new connection. Native sync no longer re-reads or resends a transcript that hit a size limit until the file changes. Connection diagnostics record close and handshake context and the identity of oversized frames. 本地 Runtime 在 WebSocket 断开后立即重连，不再等进行中的 Turn 结束才恢复在线；断开期间的 Turn 继续执行，并在新连接上回放结果。原生同步遇到超出大小限制的会话时，在文件变化前不再反复读取和重发。连接诊断新增关闭/握手上下文与超限帧标识。
+- Updated dependencies [e4e8b58]
+  - @neta-art/cohub@12.1.0
+
+## 10.8.0
+
+### Minor Changes
+
+- 89be906: Sync terminal Claude Code and WorkBuddy conversations to the Space, read-only, like Pi and Codex. Every harness adapter now requires a transcript reader. Rerun `cohub runtime up` to consent for the new harnesses.
+- 1df0409: Add Cursor (`cursor-agent`) as a local harness: Cohub Turns hand over history and resume natively, and terminal and IDE Cursor chats sync read-only. Deploy API, Gateway and Agent before the CLI.
+
+### Patch Changes
+
+- d6bc322: Give Board items one reading scale. Schema defaults now match the sizes the web creates, media and task cards take a 480 long edge from every entry, and refits keep the long edge instead of the width. `boardTaskCardSize` exposes the task card sizing. `boards schema` lists the scale, and the slide examples use 960×540 pages.
+- 1063e2f: Upgrade Generation SDK to 0.1.40. Seedance declarations now use the upstream resolution values: Seedance 2.0 exposes 480p, 720p, 1080p and 4k; Seedance 2.0 Fast exposes 480p and 720p; Seedance 2.5 exposes 480p, 720p and 1080p. The unsupported 2K resolution and the 3:2 and 2:3 aspect ratios are removed.
+- Updated dependencies [3cdf904]
+- Updated dependencies [6623e23]
+- Updated dependencies [bdc38af]
+- Updated dependencies [d6bc322]
+- Updated dependencies [fa7e272]
+- Updated dependencies [02d0414]
+- Updated dependencies [e0a660e]
+- Updated dependencies [1df0409]
+- Updated dependencies [1063e2f]
+  - @neta-art/cohub@12.0.0
+
+## 10.7.0
+
+### Minor Changes
+
+- 4fee251: List Claude Code's own model catalog, including gateway-discovered models with their gateway as provider.
+- 3eb3713: Add repeatable `--text <role>=<text>` to `cohub generate` for models that require text roles, such as `song2`. The positional prompt is optional when `--text` is given and stays first when both are used.
+
+### Patch Changes
+
+- Updated dependencies [451b5d3]
+  - @neta-art/cohub@11.5.1
+
 ## 10.6.0
 
 ### Minor Changes

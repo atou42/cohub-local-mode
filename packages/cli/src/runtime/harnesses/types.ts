@@ -42,7 +42,8 @@ export type NativeSessionFormat = {
   project(input: ProjectionInput): NativeProjection;
   /** Rewrite the session identity of a full projection. */
   rebind(records: ProjectionRecord[], nativeSessionId: string): ProjectionRecord[];
-  archive: {
+  /** Absent when the native state is not one file Cohub can carry; history is then projected again. */
+  archive?: {
     /** Working-copy path of a restored archive; `id` is fresh, `nativeSessionId` the archived one. */
     target(input: { id: string; nativeSessionId: string; cwd: string }): string;
     /** Copy raw archive bytes to `target`, adjusting only the header; returns the copy's session id. */
@@ -52,7 +53,7 @@ export type NativeSessionFormat = {
 
 export type NativeArchiveImport = { source: string; target: string; nativeSessionId: string; id: string; cwd: string; signal?: AbortSignal };
 
-/** Reading a harness's own transcripts. Required for native sync and receipt-less recovery. */
+/** Reading a harness's own transcripts: native sync, import and receipt-less recovery. */
 export type NativeTranscriptFormat = {
   roots(): string[];
   /** Whether a directory found under a root can hold transcripts of `cwd`. */
@@ -72,6 +73,11 @@ export type NativeTranscriptFormat = {
   userFinalMarked: boolean;
   /** Turn keys are unique across sessions (forks share their history's Turns). */
   globalTurnKeys: boolean;
+  /**
+   * A Turn Cohub runs carries its Cohub Turn id in the file (`cloudTurnId`). Otherwise the ledger
+   * records which Turn Cohub is running, and a Cohub file's Turns up to its end are taken as the server's.
+   */
+  marksCohubTurns: boolean;
   /** Plain JSONL bytes for archival when the file itself is stored differently. */
   archiveSource?(path: string, cacheDirectory: string): Promise<string>;
 };
@@ -84,7 +90,6 @@ export type LocalHarnessAdapter = {
   models(executable: string, cwd: string): Promise<HarnessModel[]>;
   run(executor: Executor, turn: HarnessTurn): Promise<HarnessRun>;
   session: NativeSessionFormat;
-  transcript?: NativeTranscriptFormat;
-  /** Terminal conversations can be synced to the Space (requires `transcript`). */
-  nativeSync: boolean;
+  /** Every harness reads its own transcripts, so terminal conversations sync to the Space. */
+  transcript: NativeTranscriptFormat;
 };

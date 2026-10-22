@@ -47,16 +47,23 @@ export function defaultBoardRenderStyle(mode: "dark" | "light"): BoardRenderStyl
 	return { ...BASE, selection: { ...BASE.selection }, shadow: { ...SHADOW[mode] } };
 }
 
+/** Theme overrides of the default style; a shadow without positive alpha is none. */
+export type BoardRenderStyleInput = Partial<Omit<BoardRenderStyle, "shadow" | "selection">> & {
+	shadow?: Partial<BoardShadowStyle> | null;
+	selection?: Partial<BoardSelectionStyle>;
+};
+
 export function resolveBoardRenderStyle(
 	mode: "dark" | "light",
-	style?: Partial<BoardRenderStyle>,
+	style?: BoardRenderStyleInput,
 ): BoardRenderStyle {
 	const base = defaultBoardRenderStyle(mode);
 	if (!style) return base;
+	const shadow = style.shadow === null ? null : { ...SHADOW[mode], ...style.shadow };
 	return {
 		...base,
 		...style,
 		selection: { ...base.selection, ...style.selection },
-		shadow: style.shadow === undefined ? base.shadow : style.shadow,
+		shadow: shadow && shadow.alpha > 0 ? shadow : null,
 	};
 }

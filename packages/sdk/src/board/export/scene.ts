@@ -2,13 +2,13 @@
 import { Container, Graphics, Sprite, TilingSprite, type Texture } from "pixi.js";
 import type { BoardShapeColors } from "../model/palette.js";
 import { buildFallbackShapeColors } from "../model/palette.js";
-import { imageAssetKey } from "../model/image-key.js";
+import { boardAssetKey } from "../model/asset-key.js";
 import {
   type BoardCardRendererResolver,
   type BoardRenderContext,
   type BoardRenderPalette,
   DEFAULT_BOARD_RENDER_LABELS,
-  type BoardRenderStyle,
+  type BoardRenderStyleInput,
   defaultBoardPalette,
   getBoardCardRenderer,
   resolveBoardRenderStyle,
@@ -29,7 +29,7 @@ export type BoardExportSceneInput = {
   colorScheme: "dark" | "light";
   palette?: Partial<BoardRenderPalette>;
   colors?: BoardShapeColors;
-  style?: Partial<BoardRenderStyle>;
+  style?: BoardRenderStyleInput;
   textures?: Map<string, Texture>;
   scripts?: BoardRenderContext["scripts"];
   assetKey?: (item: BoardSceneItem) => string | null;
@@ -72,11 +72,12 @@ function buildContext(input: BoardExportSceneInput): {
     themeKey: "export",
     rendererType: "canvas",
     zoom: input.scale,
+    textResolution: input.scale,
     reducedMotion: true,
     labels: DEFAULT_BOARD_RENDER_LABELS,
     taskRun: () => null,
     scripts: input.scripts,
-    assetKey: input.assetKey ?? imageAssetKey,
+    assetKey: input.assetKey ?? boardAssetKey,
     getTexture: (key) => textures.get(key) ?? null,
     hasError: (key) => {
       if (!textures.has(key)) missing.add(key);

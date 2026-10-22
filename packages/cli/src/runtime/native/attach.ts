@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { LOCAL_HARNESS_SPECS } from "@neta-art/cohub";
 import { serializeDiagnosticError } from "../diagnostics.js";
-import { nativeSyncHarnesses } from "../harnesses/index.js";
 import type { HarnessExecutables } from "../harnesses/types.js";
 import type { Harness } from "./adapters.js";
 import { CODEX_SHARED_MIN_VERSION, sharedServerAvailable, supportsSharedServer } from "./codex-link.js";
@@ -36,28 +35,25 @@ async function defaultAsk(question: string) {
  * Enable native sync after consent. Native history may contain secrets, so nothing is read before
  * the user agrees; a failure here never blocks the Runtime, it only leaves sessions read-only.
  */
-export async function ensureNativeSync(requested: Input, log: (line: string) => void = (line) => process.stderr.write(line), ask: Ask = defaultAsk): Promise<NativeSyncReport> {
-  // A harness without a native integration runs Cohub Turns only.
-  const input = { ...requested, harnesses: nativeSyncHarnesses(requested.harnesses) };
+export async function ensureNativeSync(input: Input, log: (line: string) => void = (line) => process.stderr.write(line), ask: Ask = defaultAsk): Promise<NativeSyncReport> {
   if (!input.harnesses.length) return { enabled: false, harnesses: [], codexShared: false, importHistory: false, note: "unsupported" };
   const stateRoot = runtimeStateRoot(input.spaceId);
   const previous = await readNativeConfig(stateRoot, input.identity).catch(() => null);
-  if (previous && nativeSyncSatisfied(previous, input)) {
-    await maintain(previous, log, input.executables?.pi);
-    return { enabled: true, harnesses: previous.harnesses, codexShared: previous.codexShared, importHistory: false };
-  }
+  const alreadySynced = previous && nativeSyncSatisfied(previous, input);
   const interactive = process.stdin.isTTY === true;
   const confirm: Ask = async (question) => input.yes ? true : interactive ? await ask(question) : false;
-  if (!input.yes && !interactive) {
-    log("Native sync off · rerun interactively or with --yes to enable\n");
-    return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "non-interactive" };
-  }
-  const names = input.harnesses.map((harness) => LOCAL_HARNESS_SPECS[harness].label).join(" and ");
-  if (!await confirm(`Sync ${names} chats in this folder to this Space so they continue on the web? Their history may contain secrets. [Y/n] `)) {
-    return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "declined" };
+  if (!alreadySynced) {
+    if (!input.yes && !interactive) {
+      log("Native sync off · rerun interactively or with --yes to enable\n");
+      return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "non-interactive" };
+    }
+    const names = input.harnesses.map((harness) => LOCAL_HARNESS_SPECS[harness].label).join(" and ");
+    if (!await confirm(`Sync ${names} chats in this folder to this Space so they continue on the web? Their history may contain secrets. [Y/n] `)) {
+      return { enabled: false, harnesses: input.harnesses, codexShared: false, importHistory: false, note: "declined" };
+    }
   }
   let codexShared = previous?.codexShared ?? false;
-  if (input.harnesses.includes("codex") && !codexShared) {
+  if (input.harnesses.includes("codex") && !codexShared && (input.yes || interactive)) {
     const version = await harnessVersion(input.executables?.codex || "codex");
     if (!sharedServerAvailable) {
       log("Shared Codex sessions are unavailable on Windows; terminal Codex chats sync read-only\n");
@@ -66,6 +62,16 @@ export async function ensureNativeSync(requested: Input, log: (line: string) => 
     } else {
       codexShared = await confirm("Let terminal Codex and the web drive the same live sessions? Cohub starts Codex's shared app-server, which keeps running in the background. [Y/n] ");
     }
+  }
+  if (previous && alreadySynced) {
+    if (codexShared !== previous.codexShared) {
+      await writeNativeConfig(stateRoot, { ...previous, codexShared }).catch((error: unknown) => {
+        log(`Shared Codex sessions unavailable; Runtime continues without them — ${serializeDiagnosticError(error).message}\n`);
+        codexShared = previous.codexShared;
+      });
+    }
+    await maintain(previous, log, input.executables?.pi);
+    return { enabled: true, harnesses: previous.harnesses, codexShared, importHistory: false };
   }
   const harnesses = [...new Set([...(previous?.root === input.root ? previous.harnesses : []), ...input.harnesses])];
   const config: NativeConfig = {

@@ -253,7 +253,7 @@ cohub runtime up --display xvfb:1920x1080
 `-d` 返回 Space 链接、进程 ID 和日志位置后在后台运行；30 秒内尚未就绪时返回退出码 2，进程继续连接。
 `--yes` 用于非交互执行授权。`down` 保留所有数据，存在未确认执行时需加 `--yes`。
 断网会自动重连，但不会自动重跑模型或工具；断连不代表任务已经停止。
-本地 Harness 包括 Pi、Codex、Claude Code（`claude`）和 WorkBuddy（`codebuddy`）。未指定 `--harness` 时
+本地 Harness 包括 Pi、Codex、Claude Code（`claude`）、WorkBuddy（`codebuddy`）和 Cursor（`cursor-agent`）。未指定 `--harness` 时
 会尝试所有已安装的 Harness，无法启动的会告警并跳过。
 
 ### Displays
@@ -303,14 +303,14 @@ cohub -s <spaceId> boards apply <boardId> -i - < changes.json
 `boards schema` 会说明每个字段的含义；`boards preset` 会把预设动效输出为轨迹——带 `--animation` 时是一份可直接 `apply` 的 patch，不带时是纯 `tracks`：
 
 ```bash
-cohub -s <spaceId> boards schema                 # 单位、item 类型、颜色、可动画属性
+cohub -s <spaceId> boards schema                 # 单位、尺度、item 类型、颜色、可动画属性
 cohub -s <spaceId> boards schema arrow           # 指定一个 target
 cohub -s <spaceId> boards examples lesson > lesson.json
 cohub -s <spaceId> boards preset rise --targets a,b --animation intro | cohub boards apply <boardId> -i -
 cohub -s <spaceId> boards preset float --targets ship   # 纯 tracks，可自行折进动画
 ```
 
-`boards history` 列出历史版本或恢复到某个版本。播放对所有观看者同步（`play`、`pause`、`resume`、`seek`、`next`、`stop`），`boards export` 渲染图片和视频，`boards watch` 会流式输出变更与播放状态。
+`boards history` 列出历史版本或恢复到某个版本。播放对所有观看者同步（`play`、`pause`、`resume`、`seek`、`next`、`stop`），`boards export` 渲染图片和视频（`--theme` 可选任一内置主题），`boards watch` 会流式输出变更与播放状态。
 
 `video` 和 `audio` item 支持以毫秒为单位的 `props.time`，可以直接用动画轨迹驱动：
 

@@ -384,6 +384,10 @@ export function createBoardEditor(options: BoardEditorOptions) {
 		commitTextEdit: creation.commitTextEdit,
 		updateText: creation.updateText,
 		previewTextLayout: creation.previewTextLayout,
+		relayoutText: () => {
+			const ids = state.scene.items.filter((item) => item.type === "text").map((item) => item.id);
+			if (ids.length > 0) document.rescene(ids);
+		},
 		deleteSelection: deletion.deleteSelection,
 		deleteItem: deletion.deleteItem,
 		duplicateSelection: copy.duplicateSelection,

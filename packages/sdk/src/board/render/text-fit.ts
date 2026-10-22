@@ -1,4 +1,5 @@
-import { CanvasTextMetrics, type Text } from "pixi.js";
+import { CanvasTextMetrics, fontStringFromTextStyle, type Text } from "pixi.js";
+import { layoutTextLines } from "./text-measurement.js";
 
 export function ellipsizeWrappedLines(
 	lines: string[],
@@ -46,7 +47,7 @@ export function fitTextToLines(
 	wrapWidth: number,
 ): void {
 	const width = Math.max(1, wrapWidth);
-	text.style.wordWrapWidth = width;
+	text.style.wordWrap = false;
 	if (!value || maxLines <= 0) {
 		if (text.text !== "") text.text = "";
 		return;
@@ -54,23 +55,16 @@ export function fitTextToLines(
 
 	const charCap = Math.max(maxLines * Math.ceil(width), maxLines * 4);
 	const sample = value.length > charCap ? value.slice(0, charCap) : value;
-	const metrics = CanvasTextMetrics.measureText(sample, text.style);
-	const overflowed = metrics.lines.length > maxLines || sample !== value;
-	if (!overflowed) {
-		if (text.text !== value) text.text = value;
-		return;
+	const { lines } = layoutTextLines(sample, fontStringFromTextStyle(text.style), width);
+	const kept = lines.slice(0, maxLines);
+	if (lines.length > maxLines || sample !== value) {
+		const lastIndex = kept.length - 1;
+		kept[lastIndex] = fitLineWithEllipsis(
+			kept[lastIndex] ?? "",
+			width,
+			(candidate) => CanvasTextMetrics.measureText(candidate, text.style).width,
+		);
 	}
-
-	const keptCount = Math.min(maxLines, metrics.lines.length);
-	const kept = metrics.lines.slice(0, keptCount);
-	const lastIndex = kept.length - 1;
-	const probe = text.style.clone();
-	probe.wordWrap = false;
-	kept[lastIndex] = fitLineWithEllipsis(
-		kept[lastIndex] ?? "",
-		width,
-		(candidate) => CanvasTextMetrics.measureText(candidate, probe).width,
-	);
 	const fitted = kept.join("\n");
 	if (text.text !== fitted) text.text = fitted;
 }
