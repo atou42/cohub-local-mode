@@ -157,6 +157,8 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
           bridge.stdin?.on("error", () => undefined);
           const closed = new Promise<void>((resolve) => {
             bridge.once("error", (error) => diagnostics.log("error", "sandboxd.process_error", { error: serializeDiagnosticError(error) }));
+            // Inherited stdio can delay "close"; the process itself is gone at "exit".
+            bridge.once("exit", () => { childStopped = true; clearTimeout(recoveryTimer); recoveryTimer = undefined; });
             bridge.once("close", (code, exitSignal) => {
               childStopped = true;
               if (!signal.aborted) diagnostics.log("warn", "sandboxd.process_exit", { code, signal: exitSignal });
@@ -217,6 +219,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
           const terminate = () => {
             if (terminating || childStopped) return;
             terminating = true;
+            clearTimeout(recoveryTimer); recoveryTimer = undefined;
             // Windows has no SIGTERM; closing the managed stdin lets sandboxd stop gracefully.
             if (process.platform === "win32") bridge.stdin?.end();
             else bridge.kill("SIGTERM");
