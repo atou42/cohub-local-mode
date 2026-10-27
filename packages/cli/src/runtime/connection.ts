@@ -44,6 +44,7 @@ export type RuntimeConnectionOptions = {
   cwd: string;
   url: string;
   capabilities: RuntimeCapabilities;
+  discoverCapabilities?: () => Promise<RuntimeCapabilities>;
   token: (forceRefresh?: boolean) => Promise<string>;
   signal: AbortSignal;
   executor: Executor;
@@ -67,6 +68,9 @@ export async function serveRuntime(options: RuntimeConnectionOptions) {
   const executions = new Map<string, Execution>();
   const seen = new Set<string>();
   const announce: Announce = { current: null };
+  const capabilities = { ...options.capabilities };
+  const reconnect: { current: (() => void) | null } = { current: null };
+  let refreshing = false;
   const uploads = new AbortController();
   const uploadSignal = AbortSignal.any([options.signal, uploads.signal]);
   const log = (
@@ -84,6 +88,19 @@ export async function serveRuntime(options: RuntimeConnectionOptions) {
   const timer = setInterval(() => {
     void flush();
   }, 10_000);
+  const catalogTimer = setInterval(async () => {
+    if (!options.discoverCapabilities || refreshing || options.signal.aborted) return;
+    refreshing = true;
+    try {
+      const next = await options.discoverCapabilities();
+      if (options.signal.aborted || JSON.stringify(next) === JSON.stringify(capabilities)) return;
+      Object.assign(capabilities, next);
+      // A fresh hello updates the registration; reconnecting preserves active executions.
+      reconnect.current?.();
+    } catch (error) {
+      log("warn", "runtime.catalog_refresh_failed", { error: serializeDiagnosticError(error) });
+    } finally { refreshing = false; }
+  }, 60 * 60 * 1000);
   void flush();
   log("info", "runtime.started", {
     runtimeId,
@@ -100,6 +117,8 @@ export async function serveRuntime(options: RuntimeConnectionOptions) {
       try {
         outcome = await connect({
           ...options,
+          capabilities,
+          reconnect,
           runtimeId,
           attempt,
           executions,
@@ -139,6 +158,7 @@ export async function serveRuntime(options: RuntimeConnectionOptions) {
       backoff = Math.min(30_000, backoff * 2);
     }
   } finally {
+    clearInterval(catalogTimer);
     for (const execution of executions.values()) execution.controller.abort();
     await Promise.allSettled([...executions.values()].map((entry) => entry.promise));
     clearInterval(timer);
@@ -149,6 +169,7 @@ export async function serveRuntime(options: RuntimeConnectionOptions) {
 }
 
 type ConnectOptions = RuntimeConnectionOptions & {
+  reconnect: { current: (() => void) | null };
   runtimeId: string;
   attempt: number;
   executions: Map<string, Execution>;
@@ -262,6 +283,7 @@ async function connect(options: ConnectOptions): Promise<ConnectOutcome> {
     socket.send(data);
   };
   const closeTransport = () => socket.close();
+  options.reconnect.current = closeTransport;
   const shutdown = () => {
     for (const execution of active.values()) execution.controller.abort();
     closeTransport();
@@ -723,6 +745,7 @@ async function connect(options: ConnectOptions): Promise<ConnectOutcome> {
   try {
     await closed;
   } finally {
+    if (options.reconnect.current === closeTransport) options.reconnect.current = null;
     clearTimeout(readyTimer);
     clearInterval(heartbeat);
     options.signal.removeEventListener("abort", shutdown);

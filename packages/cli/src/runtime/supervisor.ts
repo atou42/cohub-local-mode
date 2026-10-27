@@ -280,6 +280,7 @@ export async function runRuntime(config: RuntimeLaunch, onState: (status: Runtim
     let importRequested = Boolean(config.importHistory);
     await serveRuntime({
       spaceId: config.spaceId, cwd: config.root, url: url.toString(), capabilities,
+      discoverCapabilities: () => discoverHarnesses(config.harnesses, config.executables, config.root),
       runtimeId: status.runtimeId, diagnostics, token, signal, executor: native.executor,
       onReady: () => { update({ harnessConnected: true }); retryDisconnectedBridge?.(); },
       onDisconnected: () => { native.connect(null); update({ harnessConnected: false }); retryDisconnectedBridge?.(); },
