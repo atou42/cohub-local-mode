@@ -96,3 +96,21 @@ test("custom Codex providers retain an unlisted configured model without guessin
     { harness: "codex", provider: "custom", id: "listed", name: "listed" },
   ]);
 });
+
+test("Codex speed tier metadata survives discovery and capability validation without private fields", () => {
+  const models = codexModelCatalog({}, [{
+    id: "test", additionalSpeedTiers: ["fast", null],
+    serviceTiers: [
+      { id: "priority", name: "Fast", description: "1.5x speed", headers: { Authorization: "secret" } },
+      { id: "default", name: "Standard" },
+      null, { id: 42, name: "Invalid" },
+    ],
+  }]);
+  const expected = [{
+    harness: "codex", provider: "openai", id: "test", name: "test",
+    additionalSpeedTiers: ["fast"],
+    serviceTiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }, { id: "default", name: "Standard" }],
+  }];
+  assert.deepEqual(models, expected);
+  assert.deepEqual(runtimeCapabilitiesSchema.parse({ harnesses: ["codex"], models }).models, expected);
+});

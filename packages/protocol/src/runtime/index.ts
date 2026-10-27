@@ -99,6 +99,12 @@ export const runtimeCapabilitiesSchema = z.object({
     reasoning: z.boolean().optional(),
     defaultThinkingLevel: runtimeThinkingLevelSchema.optional(),
     thinkingLevelMap: z.partialRecord(runtimeThinkingLevelSchema, z.string().max(100).nullable()).optional(),
+    additionalSpeedTiers: z.array(z.string().max(100)).max(100).optional(),
+    serviceTiers: z.array(z.object({
+      id: z.string().min(1).max(100),
+      name: z.string().max(255),
+      description: z.string().max(2000).optional(),
+    })).max(100).optional(),
   })).max(2000),
 });
 export type RuntimeCapabilities = z.infer<typeof runtimeCapabilitiesSchema>;

@@ -63,7 +63,19 @@ export function codexModelCatalog(configResponse: JsonRecord, entries: unknown[]
     if (!id || model.hidden) return [];
     // A configured model replaces the catalog's own default.
     const isDefault = configuredModel ? id === configuredModel : model.isDefault === true;
-    return [{ harness: "codex", provider, id, name: typeof model.displayName === "string" ? model.displayName : id, ...(isDefault ? { isDefault } : {}), ...codexThinking(model, config.model_reasoning_effort) }];
+    const additionalSpeedTiers = Array.isArray(model.additionalSpeedTiers)
+      ? model.additionalSpeedTiers.filter((tier): tier is string => typeof tier === "string") : undefined;
+    const serviceTiers = Array.isArray(model.serviceTiers) ? model.serviceTiers.flatMap((entry) => {
+      const tier = record(entry);
+      if (typeof tier.id !== "string" || !tier.id || typeof tier.name !== "string") return [];
+      return [{ id: tier.id, name: tier.name, ...(typeof tier.description === "string" ? { description: tier.description } : {}) }];
+    }) : undefined;
+    return [{
+      harness: "codex", provider, id, name: typeof model.displayName === "string" ? model.displayName : id,
+      ...(isDefault ? { isDefault } : {}), ...codexThinking(model, config.model_reasoning_effort),
+      ...(additionalSpeedTiers ? { additionalSpeedTiers } : {}),
+      ...(serviceTiers ? { serviceTiers } : {}),
+    }];
   });
   if (configuredModel && !models.some((model) => model.id === configuredModel)) models.unshift({ harness: "codex", provider, id: configuredModel, name: configuredModel, isDefault: true });
   return models;
