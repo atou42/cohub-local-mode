@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileWatcherStatusSchema, runtimeClientFrameSchema, runtimeCommandSchema, runtimeReadySchema, parseRuntimeRegistration, contextToPiMessages, RUNTIME_MAX_BATCH_MESSAGES } from "./src/runtime/index.js";
-import { getSessionStreamSnapshotKey, SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA } from "./src/realtime/index.js";
+import { getSessionStreamSnapshotKey, SESSION_STREAM_SNAPSHOT_CLEAR_TURN_LUA, wsClientEventSchema } from "./src/realtime/index.js";
+
+test("WebSocket session prompts accept ultra and reject unknown thinking levels", () => {
+  const payload = { spaceId: crypto.randomUUID(), sessionId: crypto.randomUUID(), harness: "codex", content: [{ type: "text", text: "Hello" }] };
+  const parse = (thinkingLevel: string) => wsClientEventSchema.safeParse({ type: "session.message.create", payload: { ...payload, thinkingLevel } });
+  assert(parse("ultra").success);
+  assert(parse("max").success);
+  assert(!parse("future").success);
+});
 
 test("file watcher telemetry validates codes and drops local details", () => {
   const value = { backend: "fsevents", state: "running", observedAt: new Date().toISOString() };

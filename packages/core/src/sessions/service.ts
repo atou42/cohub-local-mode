@@ -57,7 +57,7 @@ export type SessionServices = ReturnType<typeof createSessionServices>;
 
 const imagePreviewLabel = (count: number) => (count === 1 ? "Image" : `${count} images`);
 
-const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVELS = new Set<ModelThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 const toSessionTurnRecord = (row: typeof sessionTurns.$inferSelect): SessionTurnRecord => {
   const meta = row.meta && typeof row.meta === "object" && !Array.isArray(row.meta)

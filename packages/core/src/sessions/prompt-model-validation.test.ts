@@ -59,3 +59,18 @@ test("mismatched prevalidated model still validates the requested model", async 
 
   assert.deepEqual(validatedInput, { userId: "user-1", provider: "cohub", model: "model-1" });
 });
+
+test("local prompts retain ultra in turn metadata and still discard unknown levels", async () => {
+  for (const thinkingLevel of ["ultra", "future"]) {
+    let meta: Record<string, unknown> | undefined;
+    await submitSessionPrompt({
+      ...createDeps(async () => true),
+      validateLocalHarness: async () => undefined,
+      createSessionTurn: async (turn) => {
+        meta = turn.meta;
+        return { id: "turn-id", spaceId: "space-1" };
+      },
+    }, { ...input, harness: "codex", thinkingLevel });
+    assert.equal(meta?.requestedThinkingLevel, thinkingLevel === "ultra" ? "ultra" : undefined);
+  }
+});

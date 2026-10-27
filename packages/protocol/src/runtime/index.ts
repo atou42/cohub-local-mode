@@ -86,7 +86,7 @@ export type RuntimeTraceContext = {
   traceparent?: string | null;
 };
 
-const runtimeThinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const runtimeThinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 export const runtimeCapabilitiesSchema = z.object({
   harnesses: z.array(localHarnessSchema).max(LOCAL_HARNESSES.length),
   models: z.array(z.object({

@@ -6,13 +6,13 @@ import { getModelDefaultThinkingLevel, getSupportedThinkingLevels, toLocalModelC
 
 test("Codex reasoning choices survive discovery and the server capability schema", () => {
   const models = codexModelCatalog({ config: { model_provider: "openai" } }, [{
-    id: "test", displayName: "Test", defaultReasoningEffort: "medium",
-    supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"].map((reasoningEffort) => ({ reasoningEffort })),
+    id: "test", displayName: "Test", defaultReasoningEffort: "ultra",
+    supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max", "ultra"].map((reasoningEffort) => ({ reasoningEffort })),
   }]);
   const [item] = toLocalModelCatalog(runtimeCapabilitiesSchema.parse({ harnesses: ["codex"], models }).models);
   assert(item);
-  assert.deepEqual(getSupportedThinkingLevels(item), ["off", "low", "medium", "high", "xhigh"]);
-  assert.equal(getModelDefaultThinkingLevel(item), "medium");
+  assert.deepEqual(getSupportedThinkingLevels(item), ["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  assert.equal(getModelDefaultThinkingLevel(item), "ultra");
 });
 
 test("Pi reasoning metadata reaches the picker without provider configuration", () => {
@@ -35,16 +35,16 @@ test("Pi reasoning metadata reaches the picker without provider configuration", 
 });
 
 test("Codex honors a supported configured effort and filters unknown native efforts", () => {
-  for (const [configured, expected] of [["low", "low"], ["none", "off"], ["unknown", "medium"], ["xhigh", "medium"]]) {
+  for (const [configured, expected] of [["low", "low"], ["none", "off"], ["ultra", "ultra"], ["unknown", "medium"], ["xhigh", "medium"]]) {
     const [model] = codexModelCatalog({ config: { model_reasoning_effort: configured } }, [{
       id: "test", defaultReasoningEffort: "medium",
-      supportedReasoningEfforts: ["none", "low", "medium", "high", "future"].map((reasoningEffort) => ({ reasoningEffort })),
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "ultra", "future"].map((reasoningEffort) => ({ reasoningEffort })),
     }]);
     assert(model);
     assert.equal(model.defaultThinkingLevel, expected);
     const [item] = toLocalModelCatalog([model]);
     assert(item);
-    assert.deepEqual(getSupportedThinkingLevels(item), ["off", "low", "medium", "high"]);
+    assert.deepEqual(getSupportedThinkingLevels(item), ["off", "low", "medium", "high", "ultra"]);
   }
 });
 

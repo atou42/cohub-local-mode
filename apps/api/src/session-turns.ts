@@ -32,7 +32,7 @@ const toIso = (value: Date | string | null | undefined) => {
 const normalizeRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVEL_SET = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 /** Extracts the effective thinking level from turn meta, if present. */
 function extractThinkingLevel(meta: unknown): ModelThinkingLevel | null {

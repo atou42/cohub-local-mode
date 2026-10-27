@@ -139,7 +139,7 @@ const normalizeSpacePromptIntent = (value: unknown): SpacePromptIntent | null =>
   return value === "followup" || value === "steer" ? value : null;
 };
 
-const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const VALID_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 const normalizePromptThinkingLevel = (value: unknown): string | null | undefined => {
   if (value === undefined || value === null) return undefined;
@@ -1992,7 +1992,7 @@ router.post("/:id/prompt", async (c) => {
   const promptIntent = normalizeSpacePromptIntent(body.intent);
   if (!promptIntent) return c.json({ message: "intent must be one of: followup, steer" }, 400);
   const promptThinkingLevel = normalizePromptThinkingLevel(body.thinkingLevel);
-  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max" }, 400);
+  if (promptThinkingLevel === null) return c.json({ message: "thinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max, ultra" }, 400);
   if (body.harness !== undefined && body.harness !== null && !harnessSchema.safeParse(body.harness).success) {
     return c.json({ message: `harness must be one of: ${harnessSchema.options.join(", ")}` }, 400);
   }

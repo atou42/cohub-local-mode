@@ -3,6 +3,8 @@ import { test } from "node:test";
 import type { RuntimeCapabilities } from "@neta-art/cohub";
 import { resolveLocalModelFromTurns } from "../lib/features/session-chat/session-utils.ts";
 import {
+	clampThinkingLevel,
+	formatThinkingLevelFull,
 	getSupportedThinkingLevels,
 	resolveLocalModel,
 	toLocalModelCatalog,
@@ -123,6 +125,32 @@ test("a model without a level choice sends no level", () => {
 			thinkingLevel: "high",
 		}),
 		{ provider: "openai", id: "plain", name: "Plain" },
+	);
+});
+
+test("ultra is opt-in, clamps for older models, and restores from local requests", () => {
+	const model = { provider: "openai", id: "test", model: { reasoning: true } };
+	assert(!getSupportedThinkingLevels(model).includes("ultra"));
+	assert.equal(clampThinkingLevel(model, "ultra"), "high");
+	assert(
+		getSupportedThinkingLevels({
+			...model,
+			model: { reasoning: true, thinkingLevelMap: { ultra: "ultra" } },
+		}).includes("ultra"),
+	);
+	assert(
+		!getSupportedThinkingLevels({
+			...model,
+			model: { reasoning: true, thinkingLevelMap: { ultra: null } },
+		}).includes("ultra"),
+	);
+	assert.equal(formatThinkingLevelFull("ultra"), "Ultra");
+	assert.equal(
+		resolveLocalModelFromTurns(
+			[turn(1, "codex", { model: "codex-model", thinkingLevel: "ultra" })],
+			"codex",
+		)?.thinkingLevel,
+		"ultra",
 	);
 });
 

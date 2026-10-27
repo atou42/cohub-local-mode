@@ -13,7 +13,8 @@ export type ModelThinkingLevel =
 	| "medium"
 	| "high"
 	| "xhigh"
-	| "max";
+	| "max"
+	| "ultra";
 
 export type LocalModelSelection = {
 	provider: string;
@@ -88,6 +89,7 @@ const THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ]);
 
 /** Read only an explicitly requested level; effective defaults are intentionally ignored. */
@@ -133,6 +135,8 @@ export function formatThinkingLevelFull(level: ModelThinkingLevel): string {
 			return "Extra high";
 		case "max":
 			return "Max";
+		case "ultra":
+			return "Ultra";
 	}
 }
 
@@ -144,6 +148,7 @@ const ALL_THINKING_LEVELS: ModelThinkingLevel[] = [
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ];
 
 export function isModelHidden(item: ModelCatalogItem): boolean {
@@ -153,7 +158,7 @@ export function isModelHidden(item: ModelCatalogItem): boolean {
 /**
  * Returns the thinking levels supported by a model, mirroring pi-ai's
  * getSupportedThinkingLevels. Non-reasoning models only support "off".
- * xhigh/max are opt-in and require an explicit non-null thinkingLevelMap entry.
+ * xhigh/max/ultra are opt-in and require an explicit non-null thinkingLevelMap entry.
  */
 export function getSupportedThinkingLevels(
 	item: ModelCatalogItem,
@@ -164,10 +169,11 @@ export function getSupportedThinkingLevels(
 		| Partial<Record<ModelThinkingLevel, string | null>>
 		| undefined;
 	return ALL_THINKING_LEVELS.filter((level) => {
-		if (!map) return level !== "xhigh" && level !== "max";
+		if (!map) return level !== "xhigh" && level !== "max" && level !== "ultra";
 		const mapped = map[level];
 		if (mapped === null) return false;
-		if (level === "xhigh" || level === "max") return mapped !== undefined;
+		if (level === "xhigh" || level === "max" || level === "ultra")
+			return mapped !== undefined;
 		return true;
 	});
 }
@@ -197,6 +203,7 @@ const CLAMP_ORDER: ModelThinkingLevel[] = [
 	"high",
 	"xhigh",
 	"max",
+	"ultra",
 ];
 
 /**

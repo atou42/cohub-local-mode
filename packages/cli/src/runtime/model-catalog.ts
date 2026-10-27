@@ -3,7 +3,7 @@ import { record, type JsonRecord } from "./json-rpc.js";
 
 type Model = RuntimeCapabilities["models"][number];
 type ThinkingLevel = NonNullable<Model["defaultThinkingLevel"]>;
-const thinkingLevels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const thinkingLevels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const thinkingLevel = (value: unknown): ThinkingLevel | undefined =>
   thinkingLevels.includes(value as ThinkingLevel) ? value as ThinkingLevel : undefined;
 
